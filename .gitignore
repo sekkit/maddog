@@ -1,0 +1,9 @@
+# Generated code-graph index cache (large, derived artifact)
+.codegraph/
+
+# macOS
+.DS_Store
+
+# Editor / OS cruft
+*.swp
+*~
