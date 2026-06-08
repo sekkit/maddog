@@ -159,6 +159,40 @@ func TestSetPlannerModel(t *testing.T) {
 	}
 }
 
+func TestSetFrontierRoute(t *testing.T) {
+	c := Default()
+	if err := c.SetFrontierRoute("deepseek-pro", true, 4, 123456); err != nil {
+		t.Fatalf("set frontier route: %v", err)
+	}
+	if c.Agent.FrontierModel != "deepseek-pro" {
+		t.Errorf("frontier_model = %q, want deepseek-pro", c.Agent.FrontierModel)
+	}
+	if !c.Agent.UpgradeEnabled {
+		t.Error("upgrade_enabled = false, want true")
+	}
+	if c.Agent.UpgradeThreshold != 4 {
+		t.Errorf("upgrade_threshold = %d, want 4", c.Agent.UpgradeThreshold)
+	}
+	if c.Agent.FrontierBudget != 123456 {
+		t.Errorf("frontier_budget = %d, want 123456", c.Agent.FrontierBudget)
+	}
+	if err := c.SetFrontierRoute("", false, 0, 0); err != nil {
+		t.Fatalf("clear frontier route: %v", err)
+	}
+	if c.Agent.FrontierModel != "" || c.Agent.UpgradeEnabled || c.Agent.UpgradeThreshold != 0 || c.Agent.FrontierBudget != 0 {
+		t.Fatalf("frontier route should clear to disabled zero values: %+v", c.Agent)
+	}
+	if err := c.SetFrontierRoute("ghost", true, 3, 500000); err == nil {
+		t.Error("expected error for unknown frontier model")
+	}
+	if err := c.SetFrontierRoute("deepseek-pro", true, -1, 500000); err == nil {
+		t.Error("expected error for negative upgrade threshold")
+	}
+	if err := c.SetFrontierRoute("deepseek-pro", true, 3, -1); err == nil {
+		t.Error("expected error for negative frontier budget")
+	}
+}
+
 func TestSetAutoPlan(t *testing.T) {
 	c := Default()
 	for _, mode := range []string{"on", "off"} {
@@ -638,6 +672,9 @@ func TestSaveToRoundTrips(t *testing.T) {
 	if err := c.SetPlannerModel("deepseek-pro"); err != nil {
 		t.Fatal(err)
 	}
+	if err := c.SetFrontierRoute("deepseek-pro", true, 5, 600000); err != nil {
+		t.Fatal(err)
+	}
 	if err := c.UpsertProvider(ProviderEntry{Name: "local", Kind: "openai", BaseURL: "http://localhost:1234/v1", Model: "llama"}); err != nil {
 		t.Fatal(err)
 	}
@@ -676,6 +713,9 @@ func TestSaveToRoundTrips(t *testing.T) {
 	}
 	if got.Agent.PlannerModel != "deepseek-pro" {
 		t.Errorf("planner_model = %q", got.Agent.PlannerModel)
+	}
+	if got.Agent.FrontierModel != "deepseek-pro" {
+		t.Errorf("frontier_model = %q", got.Agent.FrontierModel)
 	}
 	if _, ok := got.Provider("local"); !ok {
 		t.Error("added provider 'local' missing after round-trip")
@@ -920,6 +960,7 @@ func TestUpsertProviderNormalizesCustomEffortFields(t *testing.T) {
 		Model:             "m",
 		Effort:            " HIGH ",
 		ReasoningProtocol: " OPENAI ",
+		WireAPI:           " RESPONSES ",
 		SupportedEfforts:  []string{"Low", "MEDIUM", "medium", "auto"},
 		DefaultEffort:     " LOW ",
 	}); err != nil {
@@ -932,6 +973,9 @@ func TestUpsertProviderNormalizesCustomEffortFields(t *testing.T) {
 	if got.ReasoningProtocol != "openai" {
 		t.Fatalf("reasoning_protocol = %q, want openai", got.ReasoningProtocol)
 	}
+	if got.WireAPI != "responses" {
+		t.Fatalf("wire_api = %q, want responses", got.WireAPI)
+	}
 	wantSupported := []string{"low", "medium"}
 	if len(got.SupportedEfforts) != len(wantSupported) {
 		t.Fatalf("supported_efforts = %v, want %v", got.SupportedEfforts, wantSupported)
@@ -940,6 +984,20 @@ func TestUpsertProviderNormalizesCustomEffortFields(t *testing.T) {
 		if got.SupportedEfforts[i] != want {
 			t.Fatalf("supported_efforts[%d] = %q, want %q", i, got.SupportedEfforts[i], want)
 		}
+	}
+}
+
+func TestUpsertProviderRejectsInvalidWireAPI(t *testing.T) {
+	c := &Config{}
+	err := c.UpsertProvider(ProviderEntry{
+		Name:    "custom",
+		Kind:    "openai",
+		BaseURL: "https://example.com",
+		Model:   "m",
+		WireAPI: "realtime",
+	})
+	if err == nil || !strings.Contains(err.Error(), "wire_api") {
+		t.Fatalf("UpsertProvider error = %v, want wire_api validation", err)
 	}
 }
 

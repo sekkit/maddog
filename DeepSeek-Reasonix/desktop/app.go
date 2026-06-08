@@ -47,11 +47,6 @@ import (
 // `data:` frames.
 const eventChannel = "agent:event"
 
-// singleInstanceID is used by Wails to route a second desktop launch back to the
-// running instance. Keep it stable across releases so launcher/Dock/taskbar
-// reopen behavior remains predictable on every platform.
-const singleInstanceID = "com.reasonix.desktop"
-
 // App is the Wails-bound application object: the desktop frontend's command
 // surface. Its exported methods (Submit/Cancel/Approve/…) are generated into JS
 // bindings. The app manages multiple WorkspaceTabs — each with its own controller
@@ -539,7 +534,7 @@ func (a *App) bindControllerDisplayRecorder(ctrl *control.Controller) {
 	ctrl.SetDisplayRecorder(func(content, display string) {
 		dir := ctrl.SessionDir()
 		if dir == "" {
-			dir = config.SessionDir()
+			dir = desktopSessionDir()
 		}
 		_ = recordSessionDisplay(dir, ctrl.SessionPath(), content, display)
 	})
@@ -853,7 +848,7 @@ type WorkspaceMeta struct {
 // marking the one the current conversation is writing to and attaching any
 // user-chosen titles.
 func (a *App) ListSessions() []SessionMeta {
-	dir := config.SessionDir()
+	dir := desktopSessionDir()
 	infos, err := agent.ListSessions(dir)
 	if err != nil {
 		return []SessionMeta{}
@@ -872,7 +867,7 @@ func (a *App) ListSessions() []SessionMeta {
 // ListTrashedSessions returns sessions that were moved to the local trash,
 // newest-deleted first. These can be previewed, restored, or permanently purged.
 func (a *App) ListTrashedSessions() []SessionMeta {
-	dir := config.SessionDir()
+	dir := desktopSessionDir()
 	paths, err := listTrashedSessionFiles(dir)
 	if err != nil {
 		return []SessionMeta{}
@@ -918,7 +913,7 @@ func sessionMetaFromInfo(s agent.SessionInfo, title string, current, open bool, 
 // DeleteSession moves a saved session to the local trash. It refuses any open
 // session because tab auto-save would recreate or append to the file later.
 func (a *App) DeleteSession(path string) error {
-	dir := config.SessionDir()
+	dir := desktopSessionDir()
 	sessionPath, key, err := validateSessionPath(dir, path)
 	if err != nil {
 		return err
@@ -969,7 +964,7 @@ func (a *App) activeSessionPath(dir string) string {
 
 // RestoreSession moves a trashed session back into the saved-session list.
 func (a *App) RestoreSession(path string) error {
-	dir := config.SessionDir()
+	dir := desktopSessionDir()
 	_, key, _, err := validateTrashedSessionPath(dir, path)
 	if err != nil {
 		return err
@@ -987,13 +982,13 @@ func (a *App) RestoreSession(path string) error {
 // PurgeTrashedSession permanently removes a trashed session and its title/display
 // sidecars.
 func (a *App) PurgeTrashedSession(path string) error {
-	return purgeTrashedSessionFile(config.SessionDir(), path)
+	return purgeTrashedSessionFile(desktopSessionDir(), path)
 }
 
 // RenameSession sets a custom display name for a session (empty clears it back to
 // the preview). It only affects the history panel; the file on disk is unchanged.
 func (a *App) RenameSession(path, title string) error {
-	return setSessionTitle(config.SessionDir(), path, title)
+	return setSessionTitle(desktopSessionDir(), path, title)
 }
 
 // ResumeSession snapshots the current conversation, then loads the session at
@@ -1027,7 +1022,7 @@ func (a *App) ResumeSessionForTab(tabID, path string) ([]HistoryMessage, error) 
 // PreviewSession reads a saved session for display only. It does not snapshot or
 // swap the active controller, so the history drawer can call it while a turn runs.
 func (a *App) PreviewSession(path string) ([]HistoryMessage, error) {
-	return previewSessionMessages(config.SessionDir(), path)
+	return previewSessionMessages(desktopSessionDir(), path)
 }
 
 // PickWorkspace opens a folder chooser and, on a pick, opens a new project tab
@@ -1126,6 +1121,17 @@ func (a *App) RemoveWorkspace(dir string) error {
 	forgetWorkspace(dir)
 	if err := removeProject(dir); err != nil {
 		return err
+	}
+	// If the removed workspace was the active one, clear the pointer
+	// so we don't leave a stale reference to a deleted project.
+	if loadWorkspace() == dir {
+		if remaining := loadProjectsFile(); len(remaining.Projects) > 0 {
+			// Fall back to the first remaining project
+			saveWorkspace(remaining.Projects[0].Root)
+		} else {
+			// No projects left; clear the active pointer entirely
+			clearWorkspace()
+		}
 	}
 	a.emitProjectTreeChanged()
 	return nil
@@ -1231,7 +1237,11 @@ func (a *App) HistoryForTab(tabID string) []HistoryMessage {
 		return []HistoryMessage{}
 	}
 	msgs := ctrl.History()
-	return historyMessages(msgs, sessionDisplayResolver(config.SessionDir(), ctrl.SessionPath()))
+	dir := ctrl.SessionDir()
+	if dir == "" {
+		dir = desktopSessionDir()
+	}
+	return historyMessages(msgs, sessionDisplayResolver(dir, ctrl.SessionPath()))
 }
 
 func historyMessages(msgs []provider.Message, resolveUserContent func(string) string) []HistoryMessage {
@@ -2737,7 +2747,7 @@ func (a *App) ModelsForTab(tabID string) []ModelInfo {
 		if !modelProviderAccessAllowed(access, p.Name) || !p.Configured() {
 			continue
 		}
-		for _, m := range p.ModelList() {
+		for _, m := range p.ChatModelList() {
 			ref := p.Name + "/" + m
 			out = append(out, ModelInfo{Ref: ref, Provider: p.Name, Model: m, Current: ref == curModel})
 		}
@@ -2804,13 +2814,13 @@ func (a *App) SetModelForTab(tabID, name string) error {
 		tab.Ctrl.Close()
 	}
 
-	newCtrl, err := boot.Build(a.bootContext(), boot.Options{
+	newCtrl, err := boot.Build(a.bootContext(), desktopBootOptions(boot.Options{
 		Model:          name,
 		RequireKey:     false,
 		Sink:           tab.sink,
 		WorkspaceRoot:  tab.WorkspaceRoot,
 		EffortOverride: cloneStringPtr(effortOverride),
-	})
+	}))
 	if err != nil {
 		return err
 	}
@@ -2895,13 +2905,13 @@ func (a *App) SetEffortForTab(tabID, level string) error {
 		carried = tab.Ctrl.History()
 		tab.Ctrl.Close()
 	}
-	newCtrl, err := boot.Build(a.bootContext(), boot.Options{
+	newCtrl, err := boot.Build(a.bootContext(), desktopBootOptions(boot.Options{
 		Model:          tab.model,
 		RequireKey:     false,
 		Sink:           tab.sink,
 		WorkspaceRoot:  tab.WorkspaceRoot,
 		EffortOverride: &effort,
-	})
+	}))
 	if err != nil {
 		return err
 	}
@@ -2983,6 +2993,7 @@ type WorkspaceChangesView struct {
 	Files        []WorkspaceChangeView `json:"files"`
 	GitAvailable bool                  `json:"gitAvailable"`
 	GitErr       string                `json:"gitErr,omitempty"`
+	GitBranch    string                `json:"gitBranch,omitempty"`
 }
 
 // workspaceNoiseNames are local cache/vendor entries hidden from the file tree

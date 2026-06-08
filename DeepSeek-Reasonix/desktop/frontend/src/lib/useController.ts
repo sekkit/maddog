@@ -6,6 +6,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { asArray } from "./array";
 import { app, onEvent, onReady } from "./bridge";
+import { createRafBatch } from "./rafBatch";
 import { t } from "./i18n";
 import type {
   BalanceInfo,
@@ -20,6 +21,7 @@ import type {
   SessionMeta,
   TabMeta,
   WireApproval,
+  WireAdvisor,
   WireAsk,
   WireEvent,
   WireUsage,
@@ -37,6 +39,7 @@ export type Item =
   | { kind: "phase"; id: string; text: string }
   | { kind: "notice"; id: string; level: "info" | "warn"; text: string }
   | { kind: "runtime_event"; id: string; event: "upgrade" | "skill_generated" | "budget_exceeded" | "skill_promoted"; level: "info" | "warn"; text: string }
+  | { kind: "advisor"; id: string; level: "info" | "warn"; text: string; advisor: WireAdvisor }
   | {
       kind: "compaction";
       id: string;
@@ -333,6 +336,8 @@ function applyEvent(s: State, e: WireEvent): State {
     }
     case "notice":
       return { ...s, running: s.turnActive ? s.running : false, seq: s.seq + 1, items: [...s.items, { kind: "notice", id: `n${s.seq}`, level: e.level ?? "info", text: e.text ?? "" }] };
+    case "mcp_surface_ready":
+      return { ...s, running: s.turnActive ? s.running : false, seq: s.seq + 1, items: [...s.items, { kind: "notice", id: `mcp${s.seq}`, level: "info", text: e.text ?? "" }] };
     case "upgrade":
     case "skill_generated":
     case "budget_exceeded":
@@ -349,6 +354,13 @@ function applyEvent(s: State, e: WireEvent): State {
         items: [...s.items, { kind: "runtime_event", id: `rt${s.seq}`, event: e.kind, level: e.level ?? "info", text }],
       };
     }
+    case "advisor":
+      return {
+        ...s,
+        running: s.turnActive ? s.running : false,
+        seq: s.seq + 1,
+        items: [...s.items, { kind: "advisor", id: `adv${s.seq}`, level: e.level ?? "info", text: e.text ?? "", advisor: e.advisor ?? {} }],
+      };
     case "phase":
       return { ...s, seq: s.seq + 1, items: [...s.items, { kind: "phase", id: `p${s.seq}`, text: e.text ?? "" }] };
     case "compaction_started":
@@ -580,10 +592,18 @@ export function useController() {
   }, [dispatchTo, loadSessionDataForTab]);
 
   useEffect(() => {
+    const textBatch = createRafBatch<{ tabId: string; e: WireEvent }>((batch) => {
+      for (const { tabId, e } of batch) dispatchTo(tabId, { type: "event", e });
+    });
     const off = onEvent((e) => {
       const targetTabId = e.tabId || activeTabIdRef.current;
       if (!targetTabId) return;
-      dispatchTo(targetTabId, { type: "event", e });
+      if (e.kind === "text" || e.kind === "reasoning") {
+        textBatch.push({ tabId: targetTabId, e });
+      } else {
+        textBatch.drain();
+        dispatchTo(targetTabId, { type: "event", e });
+      }
       if (e.kind === "turn_done") {
         app
           .ContextUsageForTab(targetTabId)
@@ -609,7 +629,7 @@ export function useController() {
 
     void syncActiveTabFromBackend();
 
-    return () => { off(); offReady(); };
+    return () => { textBatch.drain(); off(); offReady(); };
   }, [dispatchTo, loadSessionDataForTab, refreshCheckpoints, syncActiveTabFromBackend]);
 
   const send = useCallback((displayText: string, submitText = displayText) => {

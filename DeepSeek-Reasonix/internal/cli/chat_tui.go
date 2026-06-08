@@ -2857,7 +2857,7 @@ func (m *chatTUI) ingestEvent(e event.Event) {
 			m.commitLine(line)
 		}
 
-	case event.Notice, event.Upgrade, event.SkillGenerated, event.BudgetExceeded, event.SkillPromoted:
+	case event.Notice, event.Upgrade, event.SkillGenerated, event.BudgetExceeded, event.SkillPromoted, event.Advisor:
 		glyph := "·"
 		if e.Level == event.LevelWarn {
 			glyph = "!"

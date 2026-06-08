@@ -288,6 +288,44 @@ api_key_env = "DEEPSEEK_API_KEY"
 	}
 }
 
+func TestSettingsFrontierRouteRoundTrip(t *testing.T) {
+	isolateDesktopUserDirs(t)
+	t.Setenv("DEEPSEEK_API_KEY", "sk-test")
+	if err := os.MkdirAll(filepath.Dir(config.UserConfigPath()), 0o755); err != nil {
+		t.Fatalf("mkdir config dir: %v", err)
+	}
+	if err := os.WriteFile(config.UserConfigPath(), []byte(`
+default_model = "deepseek/deepseek-v4-flash"
+
+[[providers]]
+name = "deepseek"
+kind = "openai"
+base_url = "https://api.deepseek.com"
+models = ["deepseek-v4-flash", "deepseek-v4-pro"]
+default = "deepseek-v4-flash"
+api_key_env = "DEEPSEEK_API_KEY"
+`), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	app := NewApp()
+	if err := app.SetFrontierRoute("deepseek/deepseek-v4-pro", true, 4, 123456); err != nil {
+		t.Fatalf("SetFrontierRoute: %v", err)
+	}
+
+	got := app.Settings()
+	if got.FrontierModel != "deepseek/deepseek-v4-pro" || !got.UpgradeEnabled || got.UpgradeThreshold != 4 || got.FrontierBudget != 123456 {
+		t.Fatalf("frontier settings = model:%q enabled:%v threshold:%d budget:%d", got.FrontierModel, got.UpgradeEnabled, got.UpgradeThreshold, got.FrontierBudget)
+	}
+	cfg := config.LoadForEdit(config.UserConfigPath())
+	if cfg.Agent.FrontierModel != "deepseek/deepseek-v4-pro" || !cfg.Agent.UpgradeEnabled || cfg.Agent.UpgradeThreshold != 4 || cfg.Agent.FrontierBudget != 123456 {
+		t.Fatalf("saved config = model:%q enabled:%v threshold:%d budget:%d", cfg.Agent.FrontierModel, cfg.Agent.UpgradeEnabled, cfg.Agent.UpgradeThreshold, cfg.Agent.FrontierBudget)
+	}
+	if err := app.SetFrontierRoute("ghost/model", true, 4, 123456); err == nil {
+		t.Fatal("expected unknown frontier model to be rejected")
+	}
+}
+
 func TestSettingsSurfacesOfficialProviderTemplatesSeparately(t *testing.T) {
 	isolateDesktopUserDirs(t)
 
@@ -670,6 +708,47 @@ func TestSaveProviderPersistsReasoningProtocol(t *testing.T) {
 	t.Fatalf("Settings() missing saved provider: %+v", view.Providers)
 }
 
+func TestSaveProviderPersistsAuthMode(t *testing.T) {
+	isolateDesktopUserDirs(t)
+	t.Setenv("ANTHROPIC_AUTH_TOKEN", "token")
+
+	app := NewApp()
+	if err := app.SaveProvider(ProviderView{
+		Name:         "claude-wif",
+		Kind:         "anthropic",
+		BaseURL:      "https://api.anthropic.com",
+		Models:       []string{"claude-opus-4-8"},
+		Default:      "claude-opus-4-8",
+		AuthType:     "workload_identity",
+		AuthTokenEnv: "ANTHROPIC_AUTH_TOKEN",
+	}); err != nil {
+		t.Fatalf("SaveProvider: %v", err)
+	}
+
+	cfg := config.LoadForEdit(config.UserConfigPath())
+	got, ok := cfg.Provider("claude-wif")
+	if !ok {
+		t.Fatal("saved provider not found")
+	}
+	if got.AuthType != "workload_identity" || got.AuthTokenEnv != "ANTHROPIC_AUTH_TOKEN" {
+		t.Fatalf("saved provider auth = type %q token env %q", got.AuthType, got.AuthTokenEnv)
+	}
+	if !got.Configured() {
+		t.Fatal("saved provider should be configured from auth_token_env")
+	}
+
+	view := app.Settings()
+	for _, p := range view.Providers {
+		if p.Name == "claude-wif" {
+			if p.AuthType != "workload_identity" || p.AuthTokenEnv != "ANTHROPIC_AUTH_TOKEN" || !p.KeySet {
+				t.Fatalf("settings provider auth = %+v", p)
+			}
+			return
+		}
+	}
+	t.Fatalf("Settings() missing saved provider: %+v", view.Providers)
+}
+
 func TestDeleteProviderMigratesConfigAndOpenTabs(t *testing.T) {
 	isolateDesktopUserDirs(t)
 	t.Setenv("REASONIX_TEST_KEY", "sk-test")
@@ -970,7 +1049,7 @@ func TestFileRefsUseActiveTabWorkspaceRoot(t *testing.T) {
 func TestDeleteSessionRejectsActiveRelativePath(t *testing.T) {
 	isolateDesktopUserDirs(t)
 
-	dir := config.SessionDir()
+	dir := desktopSessionDir()
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatalf("mkdir session dir: %v", err)
 	}
@@ -998,7 +1077,7 @@ func TestDeleteSessionRejectsActiveRelativePath(t *testing.T) {
 func TestDeleteSessionRejectsInactiveOpenTab(t *testing.T) {
 	isolateDesktopUserDirs(t)
 
-	dir := config.SessionDir()
+	dir := desktopSessionDir()
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatalf("mkdir session dir: %v", err)
 	}
@@ -1070,7 +1149,7 @@ func (r *appendingDesktopRunner) Run(_ context.Context, input string) error {
 
 func TestSubmitToTabHistoryDisplaysRawInputAfterMemoryCompose(t *testing.T) {
 	isolateDesktopUserDirs(t)
-	dir := config.SessionDir()
+	dir := desktopSessionDir()
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -1123,7 +1202,7 @@ func TestForkCreatesActiveTabWithoutSwitchingSourceController(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(workspace, "reasonix.toml"), []byte("[codegraph]\nenabled = false\n"), 0o644); err != nil {
 		t.Fatalf("write workspace config: %v", err)
 	}
-	dir := config.SessionDir()
+	dir := desktopSessionDir()
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatalf("mkdir session dir: %v", err)
 	}
@@ -1517,7 +1596,7 @@ tier = "lazy"
 
 func TestUpdateMCPServerSplitsPastedCommandLine(t *testing.T) {
 	isolateDesktopUserDirs(t)
-	dir := t.TempDir()
+	dir := robustTempDir(t)
 	t.Chdir(dir)
 	if err := os.WriteFile(filepath.Join(dir, "reasonix.toml"), []byte(`
 [codegraph]
@@ -1538,7 +1617,7 @@ args = ["-y", "@playwright/mcp"]
 	if err := app.UpdateMCPServer("playwright", MCPServerInput{
 		Name:      "playwright",
 		Transport: "stdio",
-		Command:   "npx -y @modelcontextprotocol/server-filesystem .",
+		Command:   "node missing-server.js --root .",
 	}); err != nil {
 		t.Fatalf("UpdateMCPServer: %v", err)
 	}
@@ -1547,10 +1626,10 @@ args = ["-y", "@playwright/mcp"]
 		t.Fatal(err)
 	}
 	p := cfg.Plugins[0]
-	if p.Command != "npx" {
-		t.Fatalf("command = %q, want npx", p.Command)
+	if p.Command != "node" {
+		t.Fatalf("command = %q, want node", p.Command)
 	}
-	if got := strings.Join(p.Args, "\x00"); got != strings.Join([]string{"-y", "@modelcontextprotocol/server-filesystem", "."}, "\x00") {
+	if got := strings.Join(p.Args, "\x00"); got != strings.Join([]string{"missing-server.js", "--root", "."}, "\x00") {
 		t.Fatalf("args = %v", p.Args)
 	}
 }

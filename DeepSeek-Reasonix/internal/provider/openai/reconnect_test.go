@@ -53,7 +53,7 @@ func TestStreamReconnectsOnEarlyConnReset(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	p, err := New(provider.Config{Name: "deepseek", BaseURL: srv.URL, Model: "deepseek-v4", APIKey: "k"})
+	p, err := New(testProviderConfig("deepseek", srv.URL, "deepseek-v4", "k", nil))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -90,7 +90,7 @@ func TestStreamDoesNotReplayAfterOutput(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	p, err := New(provider.Config{Name: "deepseek", BaseURL: srv.URL, Model: "deepseek-v4", APIKey: "k"})
+	p, err := New(testProviderConfig("deepseek", srv.URL, "deepseek-v4", "k", nil))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}

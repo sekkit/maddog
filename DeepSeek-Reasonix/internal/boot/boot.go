@@ -74,6 +74,12 @@ type Options struct {
 	// so each tab loads its own config/skills/hooks without changing the process
 	// cwd — enabling concurrent multi-project sessions.
 	WorkspaceRoot string
+	// SessionDir, ArchiveDir, and MemoryUserDir let an embedding frontend keep
+	// its runtime state separate from the default Reasonix CLI state tree. Empty
+	// values preserve the shared defaults from internal/config.
+	SessionDir    string
+	ArchiveDir    string
+	MemoryUserDir string
 	// ExtraPlugins are session-scoped MCP servers supplied by a host transport
 	// (for example ACP session/new). They are connected eagerly for this
 	// controller but are not persisted to reasonix.toml.
@@ -95,6 +101,9 @@ func Build(ctx context.Context, opts Options) (*control.Controller, error) {
 			root = wd
 		}
 	}
+	sessionDir := firstNonEmpty(opts.SessionDir, config.SessionDir())
+	archiveDir := firstNonEmpty(opts.ArchiveDir, config.ArchiveDir())
+	memoryUserDir := firstNonEmpty(opts.MemoryUserDir, config.MemoryUserDir())
 	// One-time import of v1/v0.5 legacy config — runs before Load so the freshly
 	// written config + ~/.env are picked up this same boot. CLI Run also calls this
 	// before config-only commands; this call stays as the shared frontend fallback.
@@ -134,13 +143,13 @@ func Build(ctx context.Context, opts Options) (*control.Controller, error) {
 	} else if migrated != nil {
 		sink.Emit(event.Event{Kind: event.Notice, Level: event.LevelInfo, Text: migrated.Notice()})
 	}
-	migrateLegacySessionSources(sink)
+	migrateLegacySessionSources(sink, sessionDir)
 
 	// A resolvable model whose API key env is unset would otherwise build fine
 	// (RequireKey is false so the UI stays reachable) and then fail silently on the
 	// first request, showing as an empty/dead model. Surface the cause up front.
-	if !opts.RequireKey && entry.APIKeyEnv != "" && entry.APIKey() == "" {
-		sink.Emit(event.Event{Kind: event.Notice, Text: fmt.Sprintf("model %q is selected but its API key %s is not set — requests will fail until you set it", modelName, entry.APIKeyEnv)})
+	if !opts.RequireKey && entry.AuthEnvName() != "" && !entry.Configured() {
+		sink.Emit(event.Event{Kind: event.Notice, Text: fmt.Sprintf("model %q is selected but its auth env %s is not set — requests will fail until you set it", modelName, entry.AuthEnvName())})
 	}
 	jm := jobs.NewManager(sink)
 
@@ -161,6 +170,7 @@ func Build(ctx context.Context, opts Options) (*control.Controller, error) {
 	var frontierPricing *provider.Pricing
 	var frontierContextWindow int
 	var frontierTarget string
+	var frontierEntryForAdvisor *config.ProviderEntry
 	var upgradePolicy agent.UpgradePolicy
 	var frontierTokens atomic.Int64
 	if cfg.Agent.UpgradeEnabled && strings.TrimSpace(cfg.Agent.FrontierModel) != "" && cfg.Agent.UpgradeThreshold > 0 {
@@ -168,9 +178,9 @@ func Build(ctx context.Context, opts Options) (*control.Controller, error) {
 		if !ok {
 			sink.Emit(event.Event{Kind: event.Notice, Level: event.LevelWarn,
 				Text: fmt.Sprintf("frontier_model %q is not configured — automatic upgrade disabled", cfg.Agent.FrontierModel)})
-		} else if frontierEntry.APIKeyEnv != "" && frontierEntry.APIKey() == "" {
+		} else if frontierEntry.AuthEnvName() != "" && !frontierEntry.Configured() {
 			sink.Emit(event.Event{Kind: event.Notice, Level: event.LevelWarn,
-				Text: fmt.Sprintf("frontier_model %q selected but %s is not set — automatic upgrade disabled", cfg.Agent.FrontierModel, frontierEntry.APIKeyEnv)})
+				Text: fmt.Sprintf("frontier_model %q selected but %s is not set — automatic upgrade disabled", cfg.Agent.FrontierModel, frontierEntry.AuthEnvName())})
 		} else {
 			fp, ferr := NewProviderWithProxy(frontierEntry, proxySpec)
 			if ferr != nil {
@@ -181,6 +191,7 @@ func Build(ctx context.Context, opts Options) (*control.Controller, error) {
 				frontierPricing = frontierEntry.Price
 				frontierContextWindow = frontierEntry.ContextWindow
 				frontierTarget = cfg.Agent.FrontierModel
+				frontierEntryForAdvisor = frontierEntry
 				upgradePolicy = agent.ThresholdUpgradePolicy{
 					Threshold:   cfg.Agent.UpgradeThreshold,
 					BudgetLimit: cfg.Agent.FrontierBudget,
@@ -207,7 +218,7 @@ func Build(ctx context.Context, opts Options) (*control.Controller, error) {
 	// durable, cache-stable prefix every turn reuses, so memory costs nothing per
 	// turn. Mid-session changes never touch this prefix — they ride the
 	// controller's transient turn-injection and fold in on the next session.
-	mem := memory.Load(memory.Options{CWD: root, UserDir: config.MemoryUserDir()})
+	mem := memory.Load(memory.Options{CWD: root, UserDir: memoryUserDir})
 	projectChecks := instruction.ExtractHostChecks(mem.Docs)
 	sysPrompt = memory.Compose(sysPrompt, mem)
 
@@ -498,7 +509,7 @@ func Build(ctx context.Context, opts Options) (*control.Controller, error) {
 	taskEffort := firstNonEmpty(cfg.Agent.SubagentEfforts["task"], cfg.Agent.SubagentEffort)
 	reg.Add(agent.NewTaskTool(execProv, entry.Price, reg, maxSteps,
 		entry.ContextWindow, cfg.Agent.SoftCompactRatio, cfg.Agent.CompactRatio, cfg.Agent.CompactForceRatio,
-		cfg.Agent.Temperature, config.ArchiveDir(), "", headlessGate,
+		cfg.Agent.Temperature, archiveDir, "", headlessGate,
 		taskModel, taskEffort, resolveSubagentProvider))
 
 	// The `remember` tool lets the model persist durable facts to the project's
@@ -543,7 +554,7 @@ func Build(ctx context.Context, opts Options) (*control.Controller, error) {
 			Pricing:       price,
 			Gate:          headlessGate,
 			ContextWindow: ctxWin,
-			ArchiveDir:    config.ArchiveDir(),
+			ArchiveDir:    archiveDir,
 		}, agent.NestedSink(sctx, event.Discard))
 	}
 	skillProfile := func(sk skill.Skill) *event.Profile {
@@ -552,6 +563,24 @@ func Build(ctx context.Context, opts Options) (*control.Controller, error) {
 			return nil
 		}
 		return &event.Profile{Model: model, Effort: effort}
+	}
+	var advisorRunner agent.AdvisorRunner
+	if cfg.Agent.AdvisorMaxUsesPerTurn > 0 && frontierProv != nil {
+		advisorRunner = func(sctx context.Context, req agent.AdvisorRequest) (string, error) {
+			sk, ok := skillStore.Read("advisor")
+			if !ok {
+				return "", fmt.Errorf("advisor skill is not available")
+			}
+			return skillRunner(sctx, sk, agent.FormatAdvisorTask(req))
+		}
+	}
+	var nativeAdvisor *provider.NativeAdvisorConfig
+	if cfg.Agent.AdvisorNativeEnabled && entry.Kind == "anthropic" && frontierEntryForAdvisor != nil && frontierEntryForAdvisor.Kind == "anthropic" {
+		nativeAdvisor = &provider.NativeAdvisorConfig{
+			Model:     frontierEntryForAdvisor.Model,
+			MaxUses:   cfg.Agent.AdvisorMaxUsesPerTurn,
+			MaxTokens: cfg.Agent.AdvisorNativeMaxTokens,
+		}
 	}
 	reg.Add(skill.NewRunSkillTool(skillStore, skillRunner, skillProfile))
 	reg.Add(skill.NewInstallSkillTool(skillStore, nil))
@@ -614,15 +643,23 @@ func Build(ctx context.Context, opts Options) (*control.Controller, error) {
 		FrontierPricing:       frontierPricing,
 		FrontierContextWindow: frontierContextWindow,
 		FrontierTarget:        frontierTarget,
-		Gate:                  headlessGate,
-		Hooks:                 hookRunner,
-		Jobs:                  jm,
-		ProjectChecks:         projectChecks,
-		ContextWindow:         entry.ContextWindow,
-		SoftCompactRatio:      cfg.Agent.SoftCompactRatio,
-		CompactRatio:          cfg.Agent.CompactRatio,
-		CompactForceRatio:     cfg.Agent.CompactForceRatio,
-		ArchiveDir:            config.ArchiveDir(),
+		Advisor: agent.AdvisorConfig{
+			MaxUsesPerTurn:     cfg.Agent.AdvisorMaxUsesPerTurn,
+			MaxUsesPerSession:  cfg.Agent.AdvisorMaxUsesPerSession,
+			MaxContextMessages: cfg.Agent.AdvisorMaxContextMessages,
+			MaxContextChars:    cfg.Agent.AdvisorMaxContextChars,
+		},
+		AdvisorRunner:     advisorRunner,
+		NativeAdvisor:     nativeAdvisor,
+		Gate:              headlessGate,
+		Hooks:             hookRunner,
+		Jobs:              jm,
+		ProjectChecks:     projectChecks,
+		ContextWindow:     entry.ContextWindow,
+		SoftCompactRatio:  cfg.Agent.SoftCompactRatio,
+		CompactRatio:      cfg.Agent.CompactRatio,
+		CompactForceRatio: cfg.Agent.CompactForceRatio,
+		ArchiveDir:        archiveDir,
 	}, sink)
 
 	// Custom slash commands (.reasonix/commands + user dir). Best-effort: a malformed
@@ -680,7 +717,7 @@ func Build(ctx context.Context, opts Options) (*control.Controller, error) {
 				SoftCompactRatio:  cfg.Agent.SoftCompactRatio,
 				CompactRatio:      cfg.Agent.CompactRatio,
 				CompactForceRatio: cfg.Agent.CompactForceRatio,
-				ArchiveDir:        config.ArchiveDir(),
+				ArchiveDir:        archiveDir,
 			}, executor, cfg.Agent.Temperature, sink, control.TaskWarrantsPlanner)
 			label = entry.Model + " + planner " + pe.Model
 		}
@@ -705,7 +742,7 @@ func Build(ctx context.Context, opts Options) (*control.Controller, error) {
 		Policy:            policy,
 		Label:             label,
 		SystemPrompt:      sysPrompt,
-		SessionDir:        config.SessionDir(),
+		SessionDir:        sessionDir,
 		Host:              pluginHost,
 		Commands:          cmds,
 		Skills:            skills,
@@ -734,8 +771,7 @@ func Build(ctx context.Context, opts Options) (*control.Controller, error) {
 	return control.New(ctrlOpts), nil
 }
 
-func migrateLegacySessionSources(sink event.Sink) {
-	dest := config.SessionDir()
+func migrateLegacySessionSources(sink event.Sink, dest string) {
 	if strings.TrimSpace(dest) == "" {
 		return
 	}
@@ -890,15 +926,17 @@ func NewProviderWithProxy(e *config.ProviderEntry, proxy netclient.ProxySpec) (p
 		Name:    e.Name,
 		BaseURL: e.BaseURL,
 		Model:   e.Model,
-		APIKey:  e.APIKey(),
+		APIKey:  e.AuthToken(),
 		// Pass the key's env var so auth failures can name where to fix it, plus
 		// provider-kind-specific knobs. EffectiveEffort applies a configured
 		// default_effort when the user has not explicitly selected /effort.
 		Extra: map[string]any{
-			"api_key_env":        e.APIKeyEnv,
+			"api_key_env":        e.AuthEnvName(),
+			"auth":               e.AuthConfig(),
 			"thinking":           e.Thinking,
 			"effort":             config.EffectiveEffort(e),
 			"reasoning_protocol": config.ReasoningProtocolForEntry(e),
+			"wire_api":           e.WireAPI,
 			"proxy_spec":         proxy,
 		},
 	})

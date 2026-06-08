@@ -11,6 +11,7 @@ import (
 	"reasonix/internal/mcpdiag"
 	"reasonix/internal/netclient"
 	"reasonix/internal/permission"
+	"reasonix/internal/provider"
 )
 
 // edit.go is the programmatic mutation surface a settings UI drives: change the
@@ -51,6 +52,29 @@ func (c *Config) SetPlannerModel(name string) error {
 		return fmt.Errorf("set planner: no provider %q (configured: %s)", name, c.providerNames())
 	}
 	c.Agent.PlannerModel = name
+	return nil
+}
+
+// SetFrontierRoute updates the automatic frontier-upgrade route. An empty model
+// clears the route; a non-empty model may be a provider name, bare model, or
+// provider/model ref that ResolveModel can resolve.
+func (c *Config) SetFrontierRoute(model string, enabled bool, threshold int, budget int64) error {
+	model = strings.TrimSpace(model)
+	if threshold < 0 {
+		return fmt.Errorf("set frontier route: upgrade threshold must be >= 0")
+	}
+	if budget < 0 {
+		return fmt.Errorf("set frontier route: frontier budget must be >= 0")
+	}
+	if model != "" {
+		if _, ok := c.ResolveModel(model); !ok {
+			return fmt.Errorf("set frontier route: no model %q (configured: %s)", model, c.providerNames())
+		}
+	}
+	c.Agent.FrontierModel = model
+	c.Agent.UpgradeEnabled = enabled
+	c.Agent.UpgradeThreshold = threshold
+	c.Agent.FrontierBudget = budget
 	return nil
 }
 
@@ -228,7 +252,8 @@ func (c *Config) modelRefTargetsProvider(ref, name string) bool {
 // RemoveProvider deletes the named provider. References to the removed provider
 // are migrated to the first remaining configured provider when possible. The
 // default model is required, so removal is refused when no fallback exists;
-// optional planner/subagent refs are cleared instead of being left dangling.
+// optional planner/subagent/frontier refs are cleared or disabled instead of
+// being left dangling.
 func (c *Config) RemoveProvider(name string) error {
 	name = strings.TrimSpace(name)
 	idx := -1
@@ -245,6 +270,7 @@ func (c *Config) RemoveProvider(name string) error {
 	defaultRefsProvider := c.modelRefTargetsProvider(c.DefaultModel, name)
 	plannerRefsProvider := c.modelRefTargetsProvider(c.Agent.PlannerModel, name)
 	subagentRefsProvider := c.modelRefTargetsProvider(c.Agent.SubagentModel, name)
+	frontierRefsProvider := c.modelRefTargetsProvider(c.Agent.FrontierModel, name)
 	subagentModelRefsProvider := map[string]bool{}
 	for skill, ref := range c.Agent.SubagentModels {
 		if c.modelRefTargetsProvider(ref, name) {
@@ -253,7 +279,7 @@ func (c *Config) RemoveProvider(name string) error {
 	}
 
 	fallback := ""
-	if defaultRefsProvider || plannerRefsProvider || subagentRefsProvider || len(subagentModelRefsProvider) > 0 {
+	if defaultRefsProvider || plannerRefsProvider || subagentRefsProvider || frontierRefsProvider || len(subagentModelRefsProvider) > 0 {
 		fallback = c.providerRemovalFallback(name)
 	}
 	if defaultRefsProvider && fallback == "" {
@@ -270,6 +296,12 @@ func (c *Config) RemoveProvider(name string) error {
 	}
 	if subagentRefsProvider {
 		c.Agent.SubagentModel = fallback
+	}
+	if frontierRefsProvider {
+		c.Agent.FrontierModel = fallback
+		if fallback == "" {
+			c.Agent.UpgradeEnabled = false
+		}
 	}
 	for skill := range subagentModelRefsProvider {
 		if fallback != "" {
@@ -294,6 +326,8 @@ func (c *Config) providerRemovalFallback(name string) string {
 
 // validateProvider checks the fields a provider can't function without.
 func validateProvider(e ProviderEntry) error {
+	authType := e.NormalizedAuthType()
+	wireAPI := normalizeWireAPI(e.WireAPI)
 	switch {
 	case strings.TrimSpace(e.Name) == "":
 		return fmt.Errorf("provider: name is required")
@@ -303,6 +337,14 @@ func validateProvider(e ProviderEntry) error {
 		return fmt.Errorf("provider %q: base_url is required", e.Name)
 	case !providerHasAnyModel(e):
 		return fmt.Errorf("provider %q: model is required", e.Name)
+	case authType != provider.AuthTypeAPIKey && authType != provider.AuthTypeBearer && authType != provider.AuthTypeWorkloadIdentity:
+		return fmt.Errorf("provider %q: auth_type must be api_key|bearer|workload_identity", e.Name)
+	case strings.TrimSpace(e.WireAPI) != "" && wireAPI != "responses":
+		return fmt.Errorf("provider %q: wire_api must be chat or responses", e.Name)
+	case authType == provider.AuthTypeBearer && strings.TrimSpace(e.AuthTokenEnv) == "" && strings.TrimSpace(e.APIKeyEnv) == "":
+		return fmt.Errorf("provider %q: auth_token_env is required for bearer auth", e.Name)
+	case authType == provider.AuthTypeWorkloadIdentity && strings.TrimSpace(e.AuthTokenEnv) == "" && strings.TrimSpace(e.IdentityEnv) == "" && strings.TrimSpace(e.IdentityFile) == "":
+		return fmt.Errorf("provider %q: auth_token_env or identity_env is required for workload identity auth", e.Name)
 	}
 	return nil
 }

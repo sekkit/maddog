@@ -7,7 +7,6 @@ import (
 	"testing"
 
 	"reasonix/internal/agent"
-	"reasonix/internal/config"
 	"reasonix/internal/control"
 	"reasonix/internal/event"
 	"reasonix/internal/provider"
@@ -116,7 +115,7 @@ func TestPreviewSessionMessagesIncludesProcessEvents(t *testing.T) {
 
 func TestResumeSessionForTabTargetsSpecifiedTab(t *testing.T) {
 	isolateDesktopUserDirs(t)
-	dir := config.SessionDir()
+	dir := desktopSessionDir()
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatalf("mkdir session dir: %v", err)
 	}

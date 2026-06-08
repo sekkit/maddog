@@ -191,6 +191,14 @@ func RenderTOMLForScope(c *Config, scope RenderScope) string {
 	} else {
 		b.WriteString("# subagent_efforts = { review = \"max\", task = \"high\" }   # per-tool/skill effort overrides\n")
 	}
+	if c.Agent.FrontierModel != "" {
+		fmt.Fprintf(&b, "frontier_model = %q   # automatic upgrade target after repeated tool failures\n", c.Agent.FrontierModel)
+	} else {
+		b.WriteString("# frontier_model = \"deepseek-pro\"   # optional automatic upgrade target\n")
+	}
+	fmt.Fprintf(&b, "upgrade_enabled = %t   # enable automatic frontier routing when frontier_model is set\n", c.Agent.UpgradeEnabled)
+	fmt.Fprintf(&b, "upgrade_threshold = %d   # consecutive tool failures before upgrading; 0 disables\n", c.Agent.UpgradeThreshold)
+	fmt.Fprintf(&b, "frontier_budget = %d   # session output-token budget for frontier calls; 0 = unlimited\n", c.Agent.FrontierBudget)
 	if c.Agent.OutputStyle != "" {
 		fmt.Fprintf(&b, "output_style = %q   # persona/tone folded into the prompt\n", c.Agent.OutputStyle)
 	} else {
@@ -215,7 +223,39 @@ func RenderTOMLForScope(c *Config, scope RenderScope) string {
 			if p.ModelsURL != "" {
 				fmt.Fprintf(&b, "models_url  = %q   # auto-fetch models from this URL on startup\n", p.ModelsURL)
 			}
-			fmt.Fprintf(&b, "api_key_env = %q\n", p.APIKeyEnv)
+			if p.APIKeyEnv != "" {
+				fmt.Fprintf(&b, "api_key_env = %q\n", p.APIKeyEnv)
+			}
+			if p.AuthType != "" {
+				fmt.Fprintf(&b, "auth_type   = %q   # api_key|bearer|workload_identity\n", p.AuthType)
+			}
+			if p.AuthTokenEnv != "" {
+				fmt.Fprintf(&b, "auth_token_env = %q\n", p.AuthTokenEnv)
+			}
+			if p.AuthHeader != "" {
+				fmt.Fprintf(&b, "auth_header = %q\n", p.AuthHeader)
+			}
+			if p.AuthScheme != "" {
+				fmt.Fprintf(&b, "auth_scheme = %q\n", p.AuthScheme)
+			}
+			if p.IdentityEnv != "" {
+				fmt.Fprintf(&b, "identity_env = %q   # workload identity JWT/OIDC assertion env var\n", p.IdentityEnv)
+			}
+			if p.IdentityFile != "" {
+				fmt.Fprintf(&b, "identity_file = %q   # workload identity JWT/OIDC assertion file\n", p.IdentityFile)
+			}
+			if p.FederationID != "" {
+				fmt.Fprintf(&b, "federation_rule_id = %q\n", p.FederationID)
+			}
+			if p.Organization != "" {
+				fmt.Fprintf(&b, "organization_id = %q\n", p.Organization)
+			}
+			if p.ServiceAcctID != "" {
+				fmt.Fprintf(&b, "service_account_id = %q\n", p.ServiceAcctID)
+			}
+			if p.WorkspaceID != "" {
+				fmt.Fprintf(&b, "workspace_id = %q\n", p.WorkspaceID)
+			}
 			if p.BalanceURL != "" {
 				fmt.Fprintf(&b, "balance_url = %q   # optional; wallet-balance endpoint shown in the status bar\n", p.BalanceURL)
 			}
@@ -234,6 +274,9 @@ func RenderTOMLForScope(c *Config, scope RenderScope) string {
 			}
 			if p.ReasoningProtocol != "" {
 				fmt.Fprintf(&b, "reasoning_protocol = %q   # auto|deepseek|openai|none; overrides model/endpoint reasoning detection\n", p.ReasoningProtocol)
+			}
+			if p.WireAPI != "" {
+				fmt.Fprintf(&b, "wire_api = %q   # chat|responses; OpenAI transport wire\n", p.WireAPI)
 			}
 			if len(p.SupportedEfforts) > 0 {
 				fmt.Fprintf(&b, "supported_efforts = %s   # custom /effort levels exposed by this provider; overrides the built-in Kind/BaseURL default\n", renderStringArray(p.SupportedEfforts))
@@ -272,6 +315,8 @@ func RenderTOMLForScope(c *Config, scope RenderScope) string {
 		b.WriteString("# path       = \"\"   # empty = cache, then PATH, then a bundle beside reasonix\n")
 	}
 	b.WriteString("\n")
+
+	renderLSPConfig(&b, c.LSP)
 
 	b.WriteString("[skills]\n")
 	if len(c.Skills.Paths) > 0 {
@@ -413,6 +458,68 @@ func shouldRenderSystemPrompt(c, defaults *Config, scope RenderScope) bool {
 		return true
 	}
 	return strings.TrimSpace(c.Agent.SystemPrompt) != "" && c.Agent.SystemPrompt != defaults.Agent.SystemPrompt
+}
+
+func renderLSPConfig(b *strings.Builder, cfg LSPConfig) {
+	b.WriteString("[lsp]\n")
+	fmt.Fprintf(b, "enabled = %v   # language server tools; servers launch lazily when used\n", cfg.Enabled)
+	if len(cfg.Servers) == 0 {
+		b.WriteString("# [lsp.servers.go]\n")
+		b.WriteString("# command = \"gopls\"\n")
+		b.WriteString("# args = []\n")
+		b.WriteString("# extensions = [\".go\"]\n\n")
+		return
+	}
+	b.WriteString("\n")
+
+	langs := make([]string, 0, len(cfg.Servers))
+	for lang := range cfg.Servers {
+		langs = append(langs, lang)
+	}
+	sort.Strings(langs)
+	for _, lang := range langs {
+		srv := cfg.Servers[lang]
+		fmt.Fprintf(b, "[lsp.servers.%s]\n", renderTOMLKeyPart(lang))
+		if srv.Command != "" {
+			fmt.Fprintf(b, "command = %q\n", srv.Command)
+		}
+		if len(srv.Args) > 0 {
+			fmt.Fprintf(b, "args = %s\n", renderStringArray(srv.Args))
+		}
+		if len(srv.Env) > 0 {
+			fmt.Fprintf(b, "env = %s\n", renderStringMap(srv.Env))
+		}
+		if srv.LanguageID != "" {
+			fmt.Fprintf(b, "language_id = %q\n", srv.LanguageID)
+		}
+		if len(srv.Extensions) > 0 {
+			fmt.Fprintf(b, "extensions = %s\n", renderStringArray(srv.Extensions))
+		}
+		if srv.InstallHint != "" {
+			fmt.Fprintf(b, "install_hint = %q\n", srv.InstallHint)
+		}
+		b.WriteString("\n")
+	}
+}
+
+func renderTOMLKeyPart(key string) string {
+	if isBareTOMLKey(key) {
+		return key
+	}
+	return strconv.Quote(key)
+}
+
+func isBareTOMLKey(key string) bool {
+	if key == "" {
+		return false
+	}
+	for _, r := range key {
+		if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '_' || r == '-' {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 // renderStringArray renders a []string as a TOML inline array.

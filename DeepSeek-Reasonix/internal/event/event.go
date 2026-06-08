@@ -93,6 +93,9 @@ const (
 	BudgetExceeded
 	// SkillPromoted reports that offline evaluation promoted a skill revision.
 	SkillPromoted
+	// Advisor reports an automatic advisor consultation and its guidance. Text is
+	// a compact summary; Advisor carries the structured payload for rich UIs.
+	Advisor
 )
 
 // Level classifies a Notice so sinks can style or filter it.
@@ -107,6 +110,19 @@ const (
 type Profile struct {
 	Model  string
 	Effort string
+}
+
+// AdvisorConsultation describes one automatic advisor intervention.
+type AdvisorConsultation struct {
+	Reason               string
+	Question             string
+	Advice               string
+	UsesThisTurn         int
+	UsesThisSession      int
+	RemainingThisTurn    int
+	RemainingThisSession int
+	MaxUsesPerTurn       int
+	MaxUsesPerSession    int
 }
 
 // Tool describes a tool call for ToolDispatch / ToolResult events. On dispatch
@@ -228,8 +244,9 @@ type Event struct {
 	Ask          Ask        // AskRequest
 	Err          error      // TurnDone: non-nil on failure
 	Compaction   Compaction // Compaction
-	RetryAttempt int        // Retrying: 1-based attempt about to be made
-	RetryMax     int        // Retrying: total attempts before giving up
+	Advisor      AdvisorConsultation
+	RetryAttempt int // Retrying: 1-based attempt about to be made
+	RetryMax     int // Retrying: total attempts before giving up
 }
 
 // ReadinessAuditSink is an optional sink capability. Sinks that do not care

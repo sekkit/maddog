@@ -34,6 +34,16 @@ type ProviderView struct {
 	ModelsURL         string   `json:"modelsUrl"`
 	Default           string   `json:"default"`
 	APIKeyEnv         string   `json:"apiKeyEnv"`
+	AuthType          string   `json:"authType"`
+	AuthTokenEnv      string   `json:"authTokenEnv"`
+	AuthHeader        string   `json:"authHeader"`
+	AuthScheme        string   `json:"authScheme"`
+	IdentityEnv       string   `json:"identityEnv"`
+	IdentityFile      string   `json:"identityFile"`
+	FederationID      string   `json:"federationRuleId"`
+	Organization      string   `json:"organizationId"`
+	ServiceAcctID     string   `json:"serviceAccountId"`
+	WorkspaceID       string   `json:"workspaceId"`
 	KeySet            bool     `json:"keySet"` // the env var currently resolves to a non-empty value
 	BalanceURL        string   `json:"balanceUrl"`
 	ContextWindow     int      `json:"contextWindow"`
@@ -83,6 +93,10 @@ type SettingsView struct {
 	PlannerModel      string          `json:"plannerModel"`
 	SubagentModel     string          `json:"subagentModel"`
 	SubagentEffort    string          `json:"subagentEffort"`
+	FrontierModel     string          `json:"frontierModel"`
+	UpgradeEnabled    bool            `json:"upgradeEnabled"`
+	UpgradeThreshold  int             `json:"upgradeThreshold"`
+	FrontierBudget    int64           `json:"frontierBudget"`
 	AutoPlan          string          `json:"autoPlan"`
 	Providers         []ProviderView  `json:"providers"`
 	OfficialProviders []ProviderView  `json:"officialProviders"`
@@ -183,9 +197,19 @@ func removeProviderAccess(c *config.Config, names ...string) {
 func providerViewFromEntry(p config.ProviderEntry, builtIn, added bool) ProviderView {
 	return ProviderView{
 		Name: p.Name, BuiltIn: builtIn, Added: added, Kind: p.Kind, BaseURL: p.BaseURL,
-		Models: nonNil(p.ModelList()), ModelsURL: p.ModelsURL, Default: p.DefaultModel(),
+		Models: nonNil(p.ChatModelList()), ModelsURL: p.ModelsURL, Default: p.DefaultModel(),
 		APIKeyEnv:         p.APIKeyEnv,
-		KeySet:            p.APIKeyEnv != "" && os.Getenv(p.APIKeyEnv) != "",
+		AuthType:          p.AuthType,
+		AuthTokenEnv:      p.AuthTokenEnv,
+		AuthHeader:        p.AuthHeader,
+		AuthScheme:        p.AuthScheme,
+		IdentityEnv:       p.IdentityEnv,
+		IdentityFile:      p.IdentityFile,
+		FederationID:      p.FederationID,
+		Organization:      p.Organization,
+		ServiceAcctID:     p.ServiceAcctID,
+		WorkspaceID:       p.WorkspaceID,
+		KeySet:            p.Configured(),
 		BalanceURL:        p.BalanceURL,
 		ContextWindow:     p.ContextWindow,
 		ReasoningProtocol: p.ReasoningProtocol,
@@ -239,6 +263,10 @@ func (a *App) Settings() SettingsView {
 		PlannerModel:      cfg.Agent.PlannerModel,
 		SubagentModel:     cfg.Agent.SubagentModel,
 		SubagentEffort:    cfg.Agent.SubagentEffort,
+		FrontierModel:     cfg.Agent.FrontierModel,
+		UpgradeEnabled:    cfg.Agent.UpgradeEnabled,
+		UpgradeThreshold:  cfg.Agent.UpgradeThreshold,
+		FrontierBudget:    cfg.Agent.FrontierBudget,
 		AutoPlan:          desktopAutoPlanMode(cfg.Agent.AutoPlan),
 		Providers:         []ProviderView{},
 		OfficialProviders: []ProviderView{},
@@ -429,12 +457,12 @@ func (a *App) rebuild() error {
 			model = resolved
 		}
 	}
-	ctrl, err := boot.Build(a.bootContext(), boot.Options{
+	ctrl, err := boot.Build(a.bootContext(), desktopBootOptions(boot.Options{
 		Model: model, RequireKey: false,
 		Sink:           tab.sink,
 		WorkspaceRoot:  tab.WorkspaceRoot,
 		EffortOverride: cloneStringPtr(tab.effort),
-	})
+	}))
 	if err != nil {
 		a.mu.Lock()
 		tab.StartupErr = err.Error()
@@ -587,6 +615,21 @@ func (a *App) SetSubagentEffort(level string) error {
 	})
 }
 
+// SetFrontierRoute sets the automatic upgrade target and guardrail knobs.
+func (a *App) SetFrontierRoute(ref string, enabled bool, threshold int, budget int64) error {
+	return a.applyConfigChange(func(c *config.Config) error {
+		ref = strings.TrimSpace(ref)
+		if ref != "" {
+			resolved, err := selectableDesktopModelRef(c, ref)
+			if err != nil {
+				return err
+			}
+			ref = resolved
+		}
+		return c.SetFrontierRoute(ref, enabled, threshold, budget)
+	})
+}
+
 // SetAutoPlan updates the automatic plan-mode gate (off|on).
 func (a *App) SetAutoPlan(mode string) error {
 	return a.applyConfigChange(func(c *config.Config) error { return c.SetAutoPlan(mode) })
@@ -657,6 +700,16 @@ func (a *App) SaveProvider(p ProviderView) error {
 		e.BaseURL = p.BaseURL
 		e.ModelsURL = p.ModelsURL
 		e.APIKeyEnv = p.APIKeyEnv
+		e.AuthType = p.AuthType
+		e.AuthTokenEnv = p.AuthTokenEnv
+		e.AuthHeader = p.AuthHeader
+		e.AuthScheme = p.AuthScheme
+		e.IdentityEnv = p.IdentityEnv
+		e.IdentityFile = p.IdentityFile
+		e.FederationID = p.FederationID
+		e.Organization = p.Organization
+		e.ServiceAcctID = p.ServiceAcctID
+		e.WorkspaceID = p.WorkspaceID
 		e.BalanceURL = strings.TrimSpace(p.BalanceURL)
 		e.ContextWindow = p.ContextWindow
 		e.ReasoningProtocol = p.ReasoningProtocol
@@ -711,10 +764,16 @@ func (a *App) AddOfficialProviderAccess(kind, key string) error {
 // it never touches chat request serialization or provider-visible prompt data.
 func (a *App) FetchProviderModels(p ProviderView) ([]string, error) {
 	e := config.ProviderEntry{
-		Name:      p.Name,
-		BaseURL:   p.BaseURL,
-		ModelsURL: p.ModelsURL,
-		APIKeyEnv: p.APIKeyEnv,
+		Name:         p.Name,
+		BaseURL:      p.BaseURL,
+		ModelsURL:    p.ModelsURL,
+		APIKeyEnv:    p.APIKeyEnv,
+		AuthType:     p.AuthType,
+		AuthTokenEnv: p.AuthTokenEnv,
+		AuthHeader:   p.AuthHeader,
+		AuthScheme:   p.AuthScheme,
+		IdentityEnv:  p.IdentityEnv,
+		IdentityFile: p.IdentityFile,
 	}
 	ctx, cancel := context.WithTimeout(a.reqCtx(), 15*time.Second)
 	defer cancel()
@@ -779,6 +838,12 @@ func retargetProviderReferences(c *config.Config, name, fallbackRef string) {
 	}
 	if desktopModelRefsProvider(c, c.Agent.SubagentModel, name) {
 		c.Agent.SubagentModel = fallbackRef
+	}
+	if desktopModelRefsProvider(c, c.Agent.FrontierModel, name) {
+		c.Agent.FrontierModel = fallbackRef
+		if fallbackRef == "" {
+			c.Agent.UpgradeEnabled = false
+		}
 	}
 	for skill, ref := range c.Agent.SubagentModels {
 		if desktopModelRefsProvider(c, ref, name) {

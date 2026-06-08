@@ -110,15 +110,20 @@ var forbiddenTaskPatterns = compileSafetyPatterns([]string{
 	`/etc/sudoers`,
 	`/boot/`,
 	`/sys/`,
+	`maddog\.md`,
 	`reasonix\.md`,
 	`agents\.md`,
+	`claude\.md`,
 	`system\.md`,
 })
 
 var forbiddenBodyPatterns = compileSafetyPatterns([]string{
+	`#\s*maddog`,
+	`maddog\.md`,
 	`#\s*reasonix`,
 	`reasonix\.md`,
 	`agents\.md`,
+	`claude\.md`,
 	`system\.md`,
 	`system[_ -]?prompt`,
 	`override\s+(all\s+)?(system|developer|host|memory|instructions?)`,

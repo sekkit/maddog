@@ -902,7 +902,9 @@ es.onmessage=ev=>{setConnState('connected');
         if(typeof usageCost==='number'&&usageCost>0){const sp=el('span','item');sp.innerHTML=__('cost')+' <span class="v">'+fmtMoney(usageCost,e.usage.currency)+'</span>';strip.appendChild(sp);}
         log.appendChild(strip);scrollDown();
       } break;
-    case 'notice': log.appendChild(el('div','notice'+(e.level==='warn'?' notice--warn':''),(e.level==='warn'?'! ':'')+(e.text||'')));scrollDown();break;
+    case 'notice':
+    case 'mcp_surface_ready':
+      log.appendChild(el('div','notice'+(e.level==='warn'?' notice--warn':''),(e.level==='warn'?'! ':'')+(e.text||'')));scrollDown();break;
     case 'phase': finalizeMsg(); log.appendChild(el('div','phase',e.text||''));scrollDown();break;
     case 'approval_request': if(e.approval)showApproval(e.approval); break;
     case 'ask_request': if(e.ask)showAsk(e.ask); break;

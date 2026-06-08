@@ -18,10 +18,12 @@ export type EventKind =
   | "compaction_started"
   | "compaction_done"
   | "retrying"
+  | "mcp_surface_ready"
   | "upgrade"
   | "skill_generated"
   | "budget_exceeded"
-  | "skill_promoted";
+  | "skill_promoted"
+  | "advisor";
 
 export interface WireCompaction {
   trigger?: string; // "auto" | "manual"
@@ -66,6 +68,18 @@ export interface WireUsage {
   costUsd?: number;
 }
 
+export interface WireAdvisor {
+  reason?: string;
+  question?: string;
+  advice?: string;
+  usesThisTurn?: number;
+  usesThisSession?: number;
+  remainingThisTurn?: number;
+  remainingThisSession?: number;
+  maxUsesPerTurn?: number;
+  maxUsesPerSession?: number;
+}
+
 export interface WireApproval {
   id: string;
   tool: string;
@@ -103,6 +117,7 @@ export interface WireEvent {
   level?: "info" | "warn";
   tool?: WireTool;
   usage?: WireUsage;
+  advisor?: WireAdvisor;
   approval?: WireApproval;
   ask?: WireAsk;
   compaction?: WireCompaction;
@@ -325,6 +340,7 @@ export interface WorkspaceChangesView {
   files: WorkspaceChangeView[];
   gitAvailable: boolean;
   gitErr?: string;
+  gitBranch?: string;
 }
 
 export interface ComposerInsertRequest {
@@ -466,6 +482,16 @@ export interface ProviderView {
   modelsUrl: string; // optional override for model discovery; empty derives from baseUrl
   default: string;
   apiKeyEnv: string;
+  authType: string; // api_key|bearer|workload_identity; empty = api_key
+  authTokenEnv: string;
+  authHeader: string;
+  authScheme: string;
+  identityEnv: string;
+  identityFile: string;
+  federationRuleId: string;
+  organizationId: string;
+  serviceAccountId: string;
+  workspaceId: string;
   keySet: boolean; // the env var currently resolves to a value
   balanceUrl: string; // optional wallet-balance endpoint; "" disables the readout
   contextWindow: number;
@@ -532,6 +558,10 @@ export interface SettingsView {
   plannerModel: string;
   subagentModel: string;
   subagentEffort: string;
+  frontierModel: string;
+  upgradeEnabled: boolean;
+  upgradeThreshold: number;
+  frontierBudget: number;
   autoPlan: string;
   providers: ProviderView[];
   officialProviders: ProviderView[];

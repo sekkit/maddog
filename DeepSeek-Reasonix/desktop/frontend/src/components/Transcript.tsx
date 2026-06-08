@@ -2,10 +2,11 @@ import { createContext, memo, type CSSProperties, type MouseEvent as ReactMouseE
 import type { Item, LiveStream } from "../lib/useController";
 import type { CheckpointMeta } from "../lib/types";
 import { useT } from "../lib/i18n";
+import { replaceAttachmentRefsForDisplay } from "../lib/attachmentDisplay";
 import { AssistantMessage, TurnActions, UserMessage } from "./Message";
 import { ProcessCard, ProcessCompactIcon, ProcessInfoIcon, ProcessPhaseIcon, ProcessStatusIcon } from "./ProcessCard";
 import { ToolCard } from "./ToolCard";
-import { ChevronRight, GitPullRequestArrow, Route, ShieldAlert, Sparkles } from "lucide-react";
+import { ChevronRight, GitPullRequestArrow, MessagesSquare, Route, ShieldAlert, Sparkles } from "lucide-react";
 import { Welcome } from "./Welcome";
 
 type ToolItem = Extract<Item, { kind: "tool" }>;
@@ -46,7 +47,7 @@ function questionAnchorId(id: string): string {
 }
 
 function compactQuestionText(text: string): string {
-  const cleaned = text.replace(/@\.reasonix\/attachments\/[^\s]+/g, "[image]").replace(/\s+/g, " ").trim();
+  const cleaned = replaceAttachmentRefsForDisplay(text).replace(/\s+/g, " ").trim();
   if (cleaned.length <= 80) return cleaned;
   return cleaned.slice(0, 80);
 }
@@ -84,7 +85,7 @@ function repinIfWasPinned(
 
 // Summarise a warm turn for its compact card.
 function warmUserPreview(text: string): string {
-  const cleaned = text.replace(/@\.reasonix\/attachments\/[^\s]+/g, "[image]").replace(/\s+/g, " ").trim();
+  const cleaned = replaceAttachmentRefsForDisplay(text).replace(/\s+/g, " ").trim();
   return cleaned.length <= 80 ? cleaned : cleaned.slice(0, 77) + "...";
 }
 
@@ -391,6 +392,7 @@ export function Transcript({
         case "phase": out.push(<PhaseCard key={it.id} text={it.text} />); break;
         case "notice": out.push(<NoticeCard key={it.id} level={it.level} text={it.text} />); break;
         case "runtime_event": out.push(<RuntimeEventCard key={it.id} event={it.event} level={it.level} text={it.text} />); break;
+        case "advisor": out.push(<AdvisorCard key={it.id} item={it} />); break;
         case "compaction": out.push(<CompactionCard key={it.id} item={it} />); break;
       }
     }
@@ -651,6 +653,7 @@ function WarmTurnItems({
       case "phase": nodes.push(<PhaseCard key={it.id} text={it.text} />); break;
       case "notice": nodes.push(<NoticeCard key={it.id} level={it.level} text={it.text} />); break;
       case "runtime_event": nodes.push(<RuntimeEventCard key={it.id} event={it.event} level={it.level} text={it.text} />); break;
+      case "advisor": nodes.push(<AdvisorCard key={it.id} item={it} />); break;
       case "compaction": nodes.push(<CompactionCard key={it.id} item={it} />); break;
     }
   }
@@ -834,6 +837,7 @@ function QuestionJumpBar({ questions, onJump }: { questions: QuestionAnchor[]; o
 type CompactionItem = Extract<Item, { kind: "compaction" }>;
 type NoticeItem = Extract<Item, { kind: "notice" }>;
 type RuntimeEventItem = Extract<Item, { kind: "runtime_event" }>;
+type AdvisorItem = Extract<Item, { kind: "advisor" }>;
 
 function PhaseCard({ text }: { text: string }) {
   return (
@@ -881,6 +885,60 @@ function RuntimeEventCard({ event, level, text }: { event: RuntimeEventItem["eve
       <div className="notice__body">{text || t("runtimeEvent.noDetail")}</div>
     </ProcessCard>
   );
+}
+
+function AdvisorCard({ item }: { item: AdvisorItem }) {
+  const t = useT();
+  const a = item.advisor;
+  const reason = a.reason || item.text;
+  const remaining = formatAdvisorRemaining(a.remainingThisTurn, a.maxUsesPerTurn, a.remainingThisSession, a.maxUsesPerSession, t);
+  return (
+    <ProcessCard
+      tone={item.level === "warn" ? "warning" : "violet"}
+      icon={<MessagesSquare size={12} />}
+      kind={t("advisor.kind")}
+      name={t(item.level === "warn" ? "advisor.failed" : "advisor.title")}
+      meta={remaining ? <span>{remaining}</span> : undefined}
+      defaultOpen
+      className={`notice notice--${item.level} advisor advisor--${item.level}`}
+    >
+      <div className="advisor__body">
+        {reason && (
+          <div className="advisor__section">
+            <div className="advisor__label">{t("advisor.reason")}</div>
+            <div className="advisor__text">{reason}</div>
+          </div>
+        )}
+        {a.question && (
+          <div className="advisor__section">
+            <div className="advisor__label">{t("advisor.question")}</div>
+            <div className="advisor__text">{a.question}</div>
+          </div>
+        )}
+        <div className="advisor__section">
+          <div className="advisor__label">{t("advisor.advice")}</div>
+          <div className="advisor__advice">{a.advice || item.text || t("runtimeEvent.noDetail")}</div>
+        </div>
+      </div>
+    </ProcessCard>
+  );
+}
+
+function formatAdvisorRemaining(
+  remainingTurn: number | undefined,
+  maxTurn: number | undefined,
+  remainingSession: number | undefined,
+  maxSession: number | undefined,
+  t: ReturnType<typeof useT>,
+): string {
+  const parts: string[] = [];
+  if (typeof remainingTurn === "number" && typeof maxTurn === "number" && maxTurn > 0) {
+    parts.push(t("advisor.turnBudget", { remaining: remainingTurn, max: maxTurn }));
+  }
+  if (typeof remainingSession === "number" && typeof maxSession === "number" && maxSession > 0) {
+    parts.push(t("advisor.sessionBudget", { remaining: remainingSession, max: maxSession }));
+  }
+  return parts.join(" · ");
 }
 
 function runtimeEventSpec(event: RuntimeEventItem["event"], level: RuntimeEventItem["level"], t: ReturnType<typeof useT>) {

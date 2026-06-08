@@ -175,8 +175,20 @@ func normalizeProviderEffortFields(e *ProviderEntry) {
 		e.Effort = ""
 	}
 	e.ReasoningProtocol = normalizeReasoningProtocol(e.ReasoningProtocol)
+	e.WireAPI = normalizeWireAPI(e.WireAPI)
 	e.DefaultEffort = normalizeEffortLevel(e.DefaultEffort)
 	e.SupportedEfforts = normalizedSupportedEfforts(e)
+}
+
+func normalizeWireAPI(raw string) string {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "", "chat", "chat_completions", "chat-completions":
+		return ""
+	case "responses", "response":
+		return "responses"
+	default:
+		return strings.ToLower(strings.TrimSpace(raw))
+	}
 }
 
 // ReasoningProtocolForEntry resolves the provider request shape for reasoning

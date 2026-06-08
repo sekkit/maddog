@@ -42,23 +42,26 @@ func (p ThresholdUpgradePolicy) Evaluate(sig evidence.FailureSignal, turn int, f
 	}
 	if sig.ConsecutiveErrors >= p.Threshold {
 		return UpgradeDecision{
-			ShouldUpgrade: true,
-			Reason:        fmt.Sprintf("%d consecutive tool failures", sig.ConsecutiveErrors),
-			TargetModel:   target,
+			ShouldUpgrade:  true,
+			Reason:         fmt.Sprintf("%d consecutive tool failures", sig.ConsecutiveErrors),
+			TargetModel:    target,
+			TriggerAdvisor: true,
 		}
 	}
 	if sig.ErrorStreak >= p.Threshold*2 {
 		return UpgradeDecision{
-			ShouldUpgrade: true,
-			Reason:        fmt.Sprintf("%d tool failures in this turn", sig.ErrorStreak),
-			TargetModel:   target,
+			ShouldUpgrade:  true,
+			Reason:         fmt.Sprintf("%d tool failures in this turn", sig.ErrorStreak),
+			TargetModel:    target,
+			TriggerAdvisor: true,
 		}
 	}
 	if sig.ErrorStreak > 0 && sig.HealthScore > 0 && sig.HealthScore < 0.3 {
 		return UpgradeDecision{
-			ShouldUpgrade: true,
-			Reason:        fmt.Sprintf("tool health %.0f%%", sig.HealthScore*100),
-			TargetModel:   target,
+			ShouldUpgrade:  true,
+			Reason:         fmt.Sprintf("tool health %.0f%%", sig.HealthScore*100),
+			TargetModel:    target,
+			TriggerAdvisor: true,
 		}
 	}
 	return UpgradeDecision{}

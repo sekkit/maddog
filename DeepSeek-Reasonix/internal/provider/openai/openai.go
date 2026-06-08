@@ -36,7 +36,11 @@ func New(cfg provider.Config) (provider.Provider, error) {
 	if name == "" {
 		name = "openai"
 	}
+	if wire, _ := cfg.Extra["wire_api"].(string); normalizeWireAPI(wire) == "responses" {
+		return newResponsesClient(cfg, name)
+	}
 	keyEnv, _ := cfg.Extra["api_key_env"].(string) // for actionable auth errors
+	auth := provider.AuthConfigFromExtra(cfg.Extra, cfg.APIKey, keyEnv)
 	effort, _ := cfg.Extra["effort"].(string)
 	protocol, _ := cfg.Extra["reasoning_protocol"].(string)
 	protocol = normalizeReasoningProtocol(protocol)
@@ -74,6 +78,7 @@ func New(cfg provider.Config) (provider.Provider, error) {
 		name:     name,
 		apiKey:   cfg.APIKey,
 		keyEnv:   keyEnv,
+		auth:     auth,
 		baseURL:  strings.TrimRight(cfg.BaseURL, "/"),
 		model:    cfg.Model,
 		deepseek: deepseek,
@@ -96,6 +101,7 @@ type client struct {
 	name     string
 	apiKey   string
 	keyEnv   string // api_key_env name, surfaced in auth errors
+	auth     provider.AuthConfig
 	baseURL  string
 	model    string
 	http     *http.Client
@@ -120,6 +126,15 @@ func normalizeReasoningProtocol(raw string) string {
 		return strings.ToLower(strings.TrimSpace(raw))
 	default:
 		return ""
+	}
+}
+
+func normalizeWireAPI(raw string) string {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "responses", "response":
+		return "responses"
+	default:
+		return "chat"
 	}
 }
 
@@ -148,7 +163,7 @@ func (c *client) Stream(ctx context.Context, req provider.Request) (<-chan provi
 			return nil, err
 		}
 		httpReq.Header.Set("Content-Type", "application/json")
-		httpReq.Header.Set("Authorization", "Bearer "+c.apiKey)
+		c.auth.Header(httpReq, "Authorization")
 		httpReq.Header.Set("Accept", "text/event-stream")
 		return httpReq, nil
 	}

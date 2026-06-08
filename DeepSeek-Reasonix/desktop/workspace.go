@@ -5,8 +5,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-
-	"reasonix/internal/config"
 )
 
 // The desktop is a GUI app: launched from Finder or `open`, it starts with the
@@ -16,10 +14,9 @@ import (
 // into it at startup, falling back to the home directory when there's none and
 // cwd isn't writable.
 
-// workspaceStatePath is where the last working folder is remembered (under the
-// user config dir, shared with the rest of Reasonix's state).
+// workspaceStatePath is where the last working folder is remembered.
 func workspaceStatePath() string {
-	dir := config.MemoryUserDir() // …/reasonix
+	dir := desktopConfigDir()
 	if dir == "" {
 		return ""
 	}
@@ -27,7 +24,7 @@ func workspaceStatePath() string {
 }
 
 func workspaceListPath() string {
-	dir := config.MemoryUserDir()
+	dir := desktopConfigDir()
 	if dir == "" {
 		return ""
 	}
@@ -44,6 +41,16 @@ func saveWorkspace(dir string) {
 		return
 	}
 	_ = os.WriteFile(p, []byte(dir), 0o644)
+}
+
+// clearWorkspace removes the active workspace pointer file so that no stale
+// reference remains after the current workspace is deleted.
+func clearWorkspace() {
+	p := workspaceStatePath()
+	if p == "" {
+		return
+	}
+	_ = os.Remove(p)
 }
 
 // loadWorkspace returns the remembered working folder, or "" if none.

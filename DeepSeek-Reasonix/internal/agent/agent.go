@@ -136,6 +136,11 @@ type Agent struct {
 	onFrontier            bool
 	frontierReceiptStart  int
 	frontierTokens        atomic.Int64
+	advisor               AdvisorConfig
+	advisorRunner         AdvisorRunner
+	nativeAdvisor         *provider.NativeAdvisorConfig
+	advisorTurnUses       int
+	advisorSessionUses    int
 
 	// sink receives the turn's typed event stream (reasoning/text deltas, tool
 	// dispatch/results, usage, notices). The agent no longer formats output
@@ -364,6 +369,9 @@ type Options struct {
 	FrontierPricing       *provider.Pricing
 	FrontierContextWindow int
 	FrontierTarget        string
+	Advisor               AdvisorConfig
+	AdvisorRunner         AdvisorRunner
+	NativeAdvisor         *provider.NativeAdvisorConfig
 }
 
 // New constructs an Agent. MaxSteps <= 0 means no cap — the run loop continues
@@ -406,6 +414,9 @@ func New(prov provider.Provider, tools *tool.Registry, session *Session, opts Op
 		frontierPricing:       opts.FrontierPricing,
 		frontierContextWindow: opts.FrontierContextWindow,
 		frontierTarget:        opts.FrontierTarget,
+		advisor:               opts.Advisor,
+		advisorRunner:         opts.AdvisorRunner,
+		nativeAdvisor:         cloneNativeAdvisor(opts.NativeAdvisor),
 		sink:                  sink,
 		gate:                  gate,
 		hooks:                 hooks,
@@ -447,7 +458,7 @@ func (a *Agent) Run(ctx context.Context, input string) error {
 			prevPrefixShape = prefixShape
 		}
 
-		text, reasoning, signature, calls, usage, interrupted, partialToolStarted, err := a.stream(ctx, step+1)
+		text, reasoning, signature, nativeBlocks, calls, usage, interrupted, partialToolStarted, err := a.stream(ctx, step+1)
 		if err != nil {
 			if a.onFrontier {
 				a.downgradeFromFrontier()
@@ -463,6 +474,7 @@ func (a *Agent) Run(ctx context.Context, input string) error {
 					a.session.Add(provider.Message{
 						Role:               provider.RoleAssistant,
 						Content:            text,
+						NativeBlocks:       nativeBlocks,
 						ReasoningContent:   reasoning,
 						ReasoningSignature: signature,
 					})
@@ -507,6 +519,7 @@ func (a *Agent) Run(ctx context.Context, input string) error {
 		a.session.Add(provider.Message{
 			Role:               provider.RoleAssistant,
 			Content:            text,
+			NativeBlocks:       nativeBlocks,
 			ReasoningContent:   reasoning,
 			ReasoningSignature: signature,
 			ToolCalls:          calls,
@@ -554,7 +567,7 @@ func (a *Agent) Run(ctx context.Context, input string) error {
 				Name:       call.Name,
 			})
 		}
-		a.evaluateRoutingAfterTools(step + 1)
+		a.evaluateRoutingAfterTools(ctx, step+1)
 
 		// The prompt only grows from here; compact before the next turn so it
 		// stays within the model's window.
@@ -570,6 +583,7 @@ func (a *Agent) resetRoutingForTurn() {
 	a.upgraded = false
 	a.onFrontier = false
 	a.frontierReceiptStart = 0
+	a.advisorTurnUses = 0
 	if a.defaultProv != nil {
 		a.prov = a.defaultProv
 		a.pricing = a.defaultPricing
@@ -577,7 +591,7 @@ func (a *Agent) resetRoutingForTurn() {
 	}
 }
 
-func (a *Agent) evaluateRoutingAfterTools(turn int) {
+func (a *Agent) evaluateRoutingAfterTools(ctx context.Context, turn int) {
 	if a.upgradePolicy == nil || a.evidence == nil {
 		return
 	}
@@ -595,6 +609,9 @@ func (a *Agent) evaluateRoutingAfterTools(turn int) {
 	if !decision.ShouldUpgrade {
 		return
 	}
+	if decision.TriggerAdvisor {
+		a.consultAdvisor(ctx, a.evidence.FailureSignal(), decision)
+	}
 	a.switchToFrontier(decision)
 	target := strings.TrimSpace(decision.TargetModel)
 	if target == "" {
@@ -608,6 +625,43 @@ func (a *Agent) evaluateRoutingAfterTools(turn int) {
 		text += ": " + strings.TrimSpace(decision.Reason)
 	}
 	a.sink.Emit(event.Event{Kind: event.Upgrade, Level: event.LevelInfo, Text: text})
+}
+
+func (a *Agent) consultAdvisor(ctx context.Context, sig evidence.FailureSignal, d UpgradeDecision) {
+	if a.advisorRunner == nil {
+		return
+	}
+	turnRemaining, sessionRemaining := a.advisorRemaining()
+	if turnRemaining <= 0 || sessionRemaining == 0 {
+		return
+	}
+	req := a.buildAdvisorRequest(sig, d)
+	advice, err := a.advisorRunner(ctx, req)
+	if err != nil {
+		a.sink.Emit(event.Event{Kind: event.Advisor, Level: event.LevelWarn, Text: "advisor consultation failed: " + err.Error(),
+			Advisor: event.AdvisorConsultation{Reason: req.Reason, Question: req.Question}})
+		return
+	}
+	advice = strings.TrimSpace(advice)
+	if advice == "" {
+		return
+	}
+	a.advisorTurnUses++
+	a.advisorSessionUses++
+	turnRemaining, sessionRemaining = a.advisorRemaining()
+	payload := event.AdvisorConsultation{
+		Reason:               req.Reason,
+		Question:             req.Question,
+		Advice:               advice,
+		UsesThisTurn:         a.advisorTurnUses,
+		UsesThisSession:      a.advisorSessionUses,
+		RemainingThisTurn:    turnRemaining,
+		RemainingThisSession: sessionRemaining,
+		MaxUsesPerTurn:       a.advisor.MaxUsesPerTurn,
+		MaxUsesPerSession:    a.advisor.MaxUsesPerSession,
+	}
+	a.sink.Emit(event.Event{Kind: event.Advisor, Level: event.LevelInfo, Text: "advisor consulted: " + req.Reason, Advisor: payload})
+	a.session.Add(provider.Message{Role: provider.RoleUser, Content: FormatAdvisorGuidance(req, advice, turnRemaining, sessionRemaining)})
 }
 
 func (a *Agent) switchToFrontier(d UpgradeDecision) {
@@ -807,17 +861,18 @@ func streamRecoveryMessage(hasPartialText, hadPartialTool bool) string {
 // stream so a sink can re-render the streamed raw text as styled markdown. The
 // accumulated text and reasoning are also returned so the caller can round-trip
 // reasoning on the next turn.
-func (a *Agent) stream(ctx context.Context, turn int) (string, string, string, []provider.ToolCall, *provider.Usage, bool, bool, error) {
+func (a *Agent) stream(ctx context.Context, turn int) (string, string, string, []json.RawMessage, []provider.ToolCall, *provider.Usage, bool, bool, error) {
 	ctx = provider.WithRetryNotify(ctx, func(info provider.RetryInfo) {
 		a.sink.Emit(event.Event{Kind: event.Retrying, RetryAttempt: info.Attempt, RetryMax: info.Max})
 	})
 	ch, err := a.prov.Stream(ctx, provider.Request{
-		Messages:    a.session.Messages,
-		Tools:       a.tools.Schemas(),
-		Temperature: a.temperature,
+		Messages:      a.session.Messages,
+		Tools:         a.tools.Schemas(),
+		Temperature:   a.temperature,
+		NativeAdvisor: a.nativeAdvisorForRequest(),
 	})
 	if err != nil {
-		return "", "", "", nil, nil, false, false, err
+		return "", "", "", nil, nil, nil, false, false, err
 	}
 
 	// A PostLLMCall hook rewrites the whole reasoning block, so when one is wired
@@ -828,6 +883,7 @@ func (a *Agent) stream(ctx context.Context, turn int) (string, string, string, [
 
 	var text, reasoning strings.Builder
 	var signature string // provider-issued proof for the reasoning (Anthropic thinking)
+	var nativeBlocks []json.RawMessage
 	var calls []provider.ToolCall
 	var usage *provider.Usage
 	var partialToolStarted bool
@@ -881,9 +937,15 @@ func (a *Agent) stream(ctx context.Context, turn int) (string, string, string, [
 		case provider.ChunkError:
 			if provider.IsStreamInterrupted(chunk.Err) {
 				stored, _ := finishReasoning()
-				return text.String(), stored, signature, calls, usage, true, partialToolStarted, chunk.Err
+				return text.String(), stored, signature, nativeBlocks, calls, usage, true, partialToolStarted, chunk.Err
 			}
-			return "", "", "", nil, nil, false, false, chunk.Err
+			return "", "", "", nil, nil, nil, false, false, chunk.Err
+		case provider.ChunkNativeBlock:
+			if len(chunk.NativeBlock) > 0 {
+				block := make(json.RawMessage, len(chunk.NativeBlock))
+				copy(block, chunk.NativeBlock)
+				nativeBlocks = append(nativeBlocks, block)
+			}
 		}
 	}
 	// With a PostLLMCall hook, the live stream was suppressed above; transform the
@@ -902,7 +964,7 @@ func (a *Agent) stream(ctx context.Context, turn int) (string, string, string, [
 	if text.Len() > 0 || display != "" {
 		a.sink.Emit(event.Event{Kind: event.Message, Text: text.String(), Reasoning: display})
 	}
-	return text.String(), stored, signature, calls, usage, false, false, nil
+	return text.String(), stored, signature, nativeBlocks, calls, usage, false, false, nil
 }
 
 func (a *Agent) capturePrefixShape(schemas []provider.ToolSchema) PrefixShape {

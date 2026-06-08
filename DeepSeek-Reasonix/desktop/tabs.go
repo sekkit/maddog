@@ -300,6 +300,7 @@ func (a *App) OpenProjectTab(workspaceRoot, topicID string) (TabMeta, error) {
 	if abs, err := filepath.Abs(workspaceRoot); err == nil {
 		workspaceRoot = abs
 	}
+	saveWorkspace(workspaceRoot)
 
 	a.mu.Lock()
 	// If already open, just activate.
@@ -531,13 +532,13 @@ func (a *App) buildTabController(tab *WorkspaceTab) {
 		tab.sink.ctx = wailsCtx
 	}
 
-	ctrl, err := boot.Build(buildCtx, boot.Options{
+	ctrl, err := boot.Build(buildCtx, desktopBootOptions(boot.Options{
 		Model:          model,
 		RequireKey:     false,
 		Sink:           tab.sink,
 		WorkspaceRoot:  root,
 		EffortOverride: cloneStringPtr(tab.effort),
-	})
+	}))
 	if err != nil {
 		a.mu.Lock()
 		tab.StartupErr = err.Error()
@@ -884,17 +885,11 @@ type desktopTabsFile struct {
 	ActiveTab string            `json:"activeTab"`
 }
 
-func desktopConfigDir() string {
-	dir, err := os.UserConfigDir()
-	if err != nil {
-		home, _ := os.UserHomeDir()
-		return filepath.Join(home, ".reasonix")
-	}
-	return filepath.Join(dir, "reasonix")
-}
-
 func (a *App) saveTabsLocked() {
 	dir := desktopConfigDir()
+	if dir == "" {
+		return
+	}
 	os.MkdirAll(dir, 0o755)
 	var entries []desktopTabEntry
 	for _, id := range a.orderedTabIDsLocked() {
@@ -953,7 +948,11 @@ func (a *App) removeTabOrderLocked(tabID string) {
 }
 
 func loadTabsFile() desktopTabsFile {
-	path := filepath.Join(desktopConfigDir(), tabsFileName)
+	dir := desktopConfigDir()
+	if dir == "" {
+		return desktopTabsFile{}
+	}
+	path := filepath.Join(dir, tabsFileName)
 	b, err := os.ReadFile(path)
 	if err != nil {
 		return desktopTabsFile{}
@@ -964,7 +963,11 @@ func loadTabsFile() desktopTabsFile {
 }
 
 func loadProjectsFile() desktopProjectFile {
-	path := filepath.Join(desktopConfigDir(), desktopProjectsFile)
+	dir := desktopConfigDir()
+	if dir == "" {
+		return desktopProjectFile{}
+	}
+	path := filepath.Join(dir, desktopProjectsFile)
 	b, err := os.ReadFile(path)
 	if err != nil {
 		return desktopProjectFile{}
@@ -976,6 +979,9 @@ func loadProjectsFile() desktopProjectFile {
 
 func saveProjectsFile(f desktopProjectFile) error {
 	dir := desktopConfigDir()
+	if dir == "" {
+		return nil
+	}
 	os.MkdirAll(dir, 0o755)
 	f = normalizeProjectsFile(f)
 	b, err := json.MarshalIndent(f, "", "  ")
@@ -1825,7 +1831,7 @@ func (a *App) findTopicLocation(topicID string) (string, string, bool) {
 	}
 	a.mu.RUnlock()
 
-	infos, err := agent.ListSessions(config.SessionDir())
+	infos, err := agent.ListSessions(desktopSessionDir())
 	if err != nil {
 		return "", "", false
 	}
@@ -1862,7 +1868,7 @@ func (a *App) updateTopicSessionTitles(topicID, title string) {
 	if strings.TrimSpace(topicID) == "" || strings.TrimSpace(title) == "" {
 		return
 	}
-	infos, err := agent.ListSessions(config.SessionDir())
+	infos, err := agent.ListSessions(desktopSessionDir())
 	if err != nil {
 		return
 	}
@@ -1938,7 +1944,7 @@ func (a *App) TrashTopic(topicID string) error {
 	if strings.TrimSpace(topicID) == "" {
 		return fmt.Errorf("topicID is required")
 	}
-	dir := config.SessionDir()
+	dir := desktopSessionDir()
 
 	type topicTab struct {
 		id            string
@@ -2052,7 +2058,8 @@ func (a *App) TrashTopic(topicID string) error {
 // ListProjectTree builds the sidebar tree: project folders each containing
 // their topics, plus a Global section.
 func (a *App) ListProjectTree() []ProjectNode {
-	migrateLegacySessionsIntoGlobalTopics(config.SessionDir())
+	sessionDir := desktopSessionDir()
+	migrateLegacySessionsIntoGlobalTopics(sessionDir)
 	f := loadProjectsFile()
 	out := []ProjectNode{}
 	type topicSummary struct {
@@ -2060,7 +2067,7 @@ func (a *App) ListProjectTree() []ProjectNode {
 		lastActivityAt int64
 	}
 	topicSummaries := map[string]topicSummary{}
-	if infos, err := agent.ListSessions(config.SessionDir()); err == nil {
+	if infos, err := agent.ListSessions(sessionDir); err == nil {
 		for _, info := range infos {
 			if strings.TrimSpace(info.TopicID) == "" {
 				continue
@@ -2322,12 +2329,11 @@ func newTopicID() string {
 }
 
 func globalWorkspaceRoot() string {
-	dir, err := os.UserConfigDir()
-	if err != nil {
-		home, _ := os.UserHomeDir()
-		return filepath.Join(home, ".reasonix", "global-workspace")
+	dir := desktopConfigDir()
+	if dir == "" {
+		return ""
 	}
-	return filepath.Join(dir, "reasonix", "global-workspace")
+	return filepath.Join(dir, "global-workspace")
 }
 
 func ensureGlobalWorkspaceRoot() (string, error) {
@@ -2385,7 +2391,7 @@ func canonicalTabSessionPath(path string) string {
 	if path == "" {
 		return ""
 	}
-	if validPath, _, err := validateSessionPath(config.SessionDir(), path); err == nil {
+	if validPath, _, err := validateSessionPath(desktopSessionDir(), path); err == nil {
 		return validPath
 	}
 	return path

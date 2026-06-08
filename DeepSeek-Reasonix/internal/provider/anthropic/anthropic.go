@@ -22,9 +22,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"sync"
+	"time"
 
 	"reasonix/internal/netclient"
 	"reasonix/internal/provider"
@@ -33,6 +35,8 @@ import (
 const (
 	// anthropicVersion is the required API version header value.
 	anthropicVersion = "2023-06-01"
+	// advisorBetaHeader enables Anthropic's advisor server-side tool beta.
+	advisorBetaHeader = "advisor-tool-2026-03-01"
 	// defaultBaseURL is the first-party endpoint; config may override it (e.g. a
 	// gateway). Bedrock/Vertex use a different request shape and are out of scope.
 	defaultBaseURL = "https://api.anthropic.com"
@@ -61,6 +65,7 @@ func New(cfg provider.Config) (provider.Provider, error) {
 		baseURL = defaultBaseURL
 	}
 	keyEnv, _ := cfg.Extra["api_key_env"].(string) // for actionable auth errors
+	auth := provider.AuthConfigFromExtra(cfg.Extra, cfg.APIKey, keyEnv)
 	thinking, _ := cfg.Extra["thinking"].(string)
 	effort, _ := cfg.Extra["effort"].(string)
 	httpClient, err := newHTTPClient(cfg)
@@ -71,6 +76,7 @@ func New(cfg provider.Config) (provider.Provider, error) {
 		name:     name,
 		apiKey:   cfg.APIKey,
 		keyEnv:   keyEnv,
+		auth:     auth,
 		baseURL:  strings.TrimRight(baseURL, "/"),
 		model:    cfg.Model,
 		thinking: thinking,
@@ -88,11 +94,14 @@ type client struct {
 	name     string
 	apiKey   string
 	keyEnv   string // api_key_env name, surfaced in auth errors
+	auth     provider.AuthConfig
 	baseURL  string
 	model    string
 	thinking string // "adaptive" enables extended thinking; "" = off (config-driven)
 	effort   string // output_config.effort: low|medium|high|xhigh|max; "" = provider default
 	http     *http.Client
+	authMu   sync.Mutex
+	authExp  time.Time
 }
 
 func (c *client) Name() string { return c.name }
@@ -115,14 +124,21 @@ func (c *client) Stream(ctx context.Context, req provider.Request) (<-chan provi
 	bufPool.Put(buf)
 
 	newReq := func(ctx context.Context) (*http.Request, error) {
+		auth, err := c.requestAuth(ctx)
+		if err != nil {
+			return nil, err
+		}
 		httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/v1/messages", bytes.NewReader(body))
 		if err != nil {
 			return nil, err
 		}
 		httpReq.Header.Set("Content-Type", "application/json")
 		httpReq.Header.Set("Accept", "text/event-stream")
-		httpReq.Header.Set("x-api-key", c.apiKey)
+		auth.Header(httpReq, "x-api-key")
 		httpReq.Header.Set("anthropic-version", anthropicVersion)
+		if req.NativeAdvisor != nil {
+			httpReq.Header.Set("anthropic-beta", advisorBetaHeader)
+		}
 		return httpReq, nil
 	}
 	resp, err := provider.SendWithRetry(ctx, c.http, c.name, c.keyEnv, newReq)
@@ -133,6 +149,92 @@ func (c *client) Stream(ctx context.Context, req provider.Request) (<-chan provi
 	out := make(chan provider.Chunk)
 	go c.readStream(resp, out)
 	return out, nil
+}
+
+func (c *client) requestAuth(ctx context.Context) (provider.AuthConfig, error) {
+	auth := c.auth
+	if auth.Token == "" {
+		auth.Token = c.apiKey
+	}
+	if auth.TokenEnv == "" {
+		auth.TokenEnv = c.keyEnv
+	}
+	if auth.NormalizedType() != provider.AuthTypeWorkloadIdentity || auth.Token != "" {
+		return auth, nil
+	}
+	token, exp, err := c.exchangeWorkloadIdentity(ctx, auth)
+	if err != nil {
+		return auth, err
+	}
+	auth.Token = token
+	c.authMu.Lock()
+	c.auth.Token = token
+	c.authExp = exp
+	c.authMu.Unlock()
+	return auth, nil
+}
+
+func (c *client) exchangeWorkloadIdentity(ctx context.Context, auth provider.AuthConfig) (string, time.Time, error) {
+	c.authMu.Lock()
+	if c.auth.Token != "" && (c.authExp.IsZero() || time.Until(c.authExp) > time.Minute) {
+		token, exp := c.auth.Token, c.authExp
+		c.authMu.Unlock()
+		return token, exp, nil
+	}
+	c.authMu.Unlock()
+
+	assertion := strings.TrimSpace(auth.IdentityToken)
+	if assertion == "" {
+		return "", time.Time{}, fmt.Errorf("%s: workload identity auth requires identity token", c.name)
+	}
+	body := map[string]string{
+		"grant_type": "urn:ietf:params:oauth:grant-type:jwt-bearer",
+		"assertion":  assertion,
+	}
+	for _, key := range []string{"federation_rule_id", "organization_id", "service_account_id", "workspace_id"} {
+		if v := strings.TrimSpace(auth.Extra[key]); v != "" {
+			body[key] = v
+		}
+	}
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(body); err != nil {
+		return "", time.Time{}, fmt.Errorf("%s: workload identity auth: marshal token request: %w", c.name, err)
+	}
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/v1/oauth/token", &buf)
+	if err != nil {
+		return "", time.Time{}, err
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Accept", "application/json")
+	resp, err := c.http.Do(httpReq)
+	if err != nil {
+		return "", time.Time{}, fmt.Errorf("%s: workload identity auth: token exchange failed: %w", c.name, err)
+	}
+	defer resp.Body.Close()
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, 256*1024))
+	if err != nil {
+		return "", time.Time{}, fmt.Errorf("%s: workload identity auth: read token response: %w", c.name, err)
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "", time.Time{}, fmt.Errorf("%s: workload identity auth: token exchange status %d: %s", c.name, resp.StatusCode, strings.TrimSpace(string(respBody)))
+	}
+	var decoded struct {
+		AccessToken string `json:"access_token"`
+		ExpiresIn   int64  `json:"expires_in"`
+		TokenType   string `json:"token_type"`
+	}
+	if err := json.Unmarshal(respBody, &decoded); err != nil {
+		return "", time.Time{}, fmt.Errorf("%s: workload identity auth: decode token response: %w", c.name, err)
+	}
+	token := strings.TrimSpace(decoded.AccessToken)
+	if token == "" {
+		return "", time.Time{}, fmt.Errorf("%s: workload identity auth: token response missing access_token", c.name)
+	}
+	var exp time.Time
+	if decoded.ExpiresIn > 0 {
+		exp = time.Now().Add(time.Duration(decoded.ExpiresIn) * time.Second)
+	}
+	return token, exp, nil
 }
 
 // buildRequest converts the transport-agnostic Request into the Messages API shape:
@@ -174,6 +276,10 @@ func (c *client) buildRequest(req provider.Request) anthRequest {
 			}
 			appendBlocks("user", contentBlock{Type: "tool_result", ToolUseID: m.ToolCallID, Content: content})
 		case provider.RoleAssistant:
+			if len(m.NativeBlocks) > 0 && req.NativeAdvisor != nil {
+				appendBlocks("assistant", nativeContentBlocks(m.NativeBlocks)...)
+				continue
+			}
 			var blocks []contentBlock
 			// Replay the signed thinking block first (Anthropic requires it precede
 			// the tool_use it led to). Only when thinking is on and we have both the
@@ -204,6 +310,19 @@ func (c *client) buildRequest(req provider.Request) anthRequest {
 		}
 		tools = append(tools, anthTool{Name: t.Name, Description: t.Description, InputSchema: schema})
 	}
+	if na := req.NativeAdvisor; na != nil {
+		maxTokens := na.MaxTokens
+		if maxTokens > 0 && maxTokens < 1024 {
+			maxTokens = 1024
+		}
+		tools = append(tools, anthTool{
+			Type:      "advisor_20260301",
+			Name:      "advisor",
+			Model:     na.Model,
+			MaxUses:   na.MaxUses,
+			MaxTokens: maxTokens,
+		})
+	}
 
 	// Prompt-cache breakpoints (ephemeral, prefix-match). Render order is
 	// tools → system → messages, so a marker on the last system block caches
@@ -212,8 +331,8 @@ func (c *client) buildRequest(req provider.Request) anthRequest {
 	// incrementally as turns are appended. Max 4 breakpoints; we use ≤2.
 	if n := len(system); n > 0 {
 		system[n-1].CacheControl = ephemeral()
-	} else if n := len(tools); n > 0 {
-		tools[n-1].CacheControl = ephemeral()
+	} else if i := lastCacheableToolIndex(tools); i >= 0 {
+		tools[i].CacheControl = ephemeral()
 	}
 	if n := len(msgs); n > 0 {
 		if k := len(msgs[n-1].Content); k > 0 {
@@ -245,6 +364,21 @@ func (c *client) buildRequest(req provider.Request) anthRequest {
 	return r
 }
 
+func nativeContentBlocks(raw []json.RawMessage) []contentBlock {
+	blocks := make([]contentBlock, 0, len(raw))
+	for _, rb := range raw {
+		if len(rb) == 0 {
+			continue
+		}
+		var block contentBlock
+		if err := json.Unmarshal(rb, &block); err != nil {
+			continue
+		}
+		blocks = append(blocks, block)
+	}
+	return blocks
+}
+
 // readStream parses the Messages API SSE stream into Chunks. Text deltas emit live;
 // each tool_use content block emits a ChunkToolCallStart when its id+name are known
 // and a complete ChunkToolCall when the block closes; usage is assembled from
@@ -255,6 +389,10 @@ func (c *client) readStream(resp *http.Response, out chan<- provider.Chunk) {
 	defer close(out)
 
 	tools := map[int]*provider.ToolCall{} // tool_use blocks, keyed by content index
+	textBlocks := map[int]*strings.Builder{}
+	serverBlocks := map[int]*wireContentBlock{}
+	var nativeBlocks []json.RawMessage
+	preserveNative := false
 	var inTok, outTok, cacheCreate, cacheRead int
 	var stopReason string
 	haveUsage := false
@@ -289,10 +427,24 @@ func (c *client) readStream(resp *http.Response, out chan<- provider.Chunk) {
 				haveUsage = true
 			}
 		case "content_block_start":
-			if ev.ContentBlock != nil && ev.ContentBlock.Type == "tool_use" {
+			if ev.ContentBlock == nil {
+				continue
+			}
+			switch ev.ContentBlock.Type {
+			case "text":
+				textBlocks[ev.Index] = &strings.Builder{}
+			case "tool_use":
 				tc := &provider.ToolCall{ID: ev.ContentBlock.ID, Name: ev.ContentBlock.Name}
 				tools[ev.Index] = tc
 				out <- provider.Chunk{Type: provider.ChunkToolCallStart, ToolCall: &provider.ToolCall{ID: tc.ID, Name: tc.Name}}
+			case "server_tool_use":
+				preserveNative = true
+				serverBlocks[ev.Index] = ev.ContentBlock
+			case "advisor_tool_result":
+				preserveNative = true
+				if block := marshalNativeBlock(ev.ContentBlock); len(block) > 0 {
+					nativeBlocks = append(nativeBlocks, block)
+				}
 			}
 		case "content_block_delta":
 			if ev.Delta == nil {
@@ -301,6 +453,9 @@ func (c *client) readStream(resp *http.Response, out chan<- provider.Chunk) {
 			switch ev.Delta.Type {
 			case "text_delta":
 				if ev.Delta.Text != "" {
+					if b := textBlocks[ev.Index]; b != nil {
+						b.WriteString(ev.Delta.Text)
+					}
 					out <- provider.Chunk{Type: provider.ChunkText, Text: ev.Delta.Text}
 				}
 			case "thinking_delta":
@@ -317,9 +472,24 @@ func (c *client) readStream(resp *http.Response, out chan<- provider.Chunk) {
 				}
 			}
 		case "content_block_stop":
+			if b := textBlocks[ev.Index]; b != nil {
+				if block := marshalTextNativeBlock(b.String()); len(block) > 0 {
+					nativeBlocks = append(nativeBlocks, block)
+				}
+				delete(textBlocks, ev.Index)
+			}
 			if tc := tools[ev.Index]; tc != nil {
+				if block := marshalToolUseNativeBlock(tc); len(block) > 0 {
+					nativeBlocks = append(nativeBlocks, block)
+				}
 				out <- provider.Chunk{Type: provider.ChunkToolCall, ToolCall: tc}
 				delete(tools, ev.Index)
+			}
+			if block := serverBlocks[ev.Index]; block != nil {
+				if raw := marshalNativeBlock(block); len(raw) > 0 {
+					nativeBlocks = append(nativeBlocks, raw)
+				}
+				delete(serverBlocks, ev.Index)
 			}
 		case "message_delta":
 			if ev.Delta != nil && ev.Delta.StopReason != "" {
@@ -346,6 +516,11 @@ func (c *client) readStream(resp *http.Response, out chan<- provider.Chunk) {
 		return
 	}
 
+	if preserveNative {
+		for _, block := range nativeBlocks {
+			out <- provider.Chunk{Type: provider.ChunkNativeBlock, NativeBlock: block}
+		}
+	}
 	if haveUsage {
 		out <- provider.Chunk{Type: provider.ChunkUsage, Usage: &provider.Usage{
 			PromptTokens:     inTok + cacheCreate + cacheRead,
@@ -422,18 +597,31 @@ type contentBlock struct {
 	Thinking     string          `json:"thinking,omitempty"`    // thinking
 	Signature    string          `json:"signature,omitempty"`   // thinking
 	ID           string          `json:"id,omitempty"`          // tool_use
-	Name         string          `json:"name,omitempty"`        // tool_use
+	Name         string          `json:"name,omitempty"`        // tool_use / server_tool_use
 	Input        json.RawMessage `json:"input,omitempty"`       // tool_use
 	ToolUseID    string          `json:"tool_use_id,omitempty"` // tool_result
-	Content      string          `json:"content,omitempty"`     // tool_result
+	Content      any             `json:"content,omitempty"`     // tool_result / server tool result
 	CacheControl *cacheControl   `json:"cache_control,omitempty"`
 }
 
 type anthTool struct {
 	Name         string          `json:"name"`
+	Type         string          `json:"type,omitempty"`
 	Description  string          `json:"description,omitempty"`
-	InputSchema  json.RawMessage `json:"input_schema"`
+	InputSchema  json.RawMessage `json:"input_schema,omitempty"`
+	Model        string          `json:"model,omitempty"`
+	MaxUses      int             `json:"max_uses,omitempty"`
+	MaxTokens    int             `json:"max_tokens,omitempty"`
 	CacheControl *cacheControl   `json:"cache_control,omitempty"`
+}
+
+func lastCacheableToolIndex(tools []anthTool) int {
+	for i := len(tools) - 1; i >= 0; i-- {
+		if tools[i].Type == "" {
+			return i
+		}
+	}
+	return -1
 }
 
 // streamEvent is the discriminated SSE event; read the fields matching Type.
@@ -443,12 +631,8 @@ type streamEvent struct {
 	Message *struct {
 		Usage *wireUsage `json:"usage"`
 	} `json:"message"`
-	ContentBlock *struct {
-		Type string `json:"type"`
-		ID   string `json:"id"`
-		Name string `json:"name"`
-	} `json:"content_block"`
-	Delta *struct {
+	ContentBlock *wireContentBlock `json:"content_block"`
+	Delta        *struct {
 		Type        string `json:"type"`         // text_delta | thinking_delta | signature_delta | input_json_delta
 		Text        string `json:"text"`         // text_delta
 		Thinking    string `json:"thinking"`     // thinking_delta
@@ -461,6 +645,63 @@ type streamEvent struct {
 		Type    string `json:"type"`
 		Message string `json:"message"`
 	} `json:"error"`
+}
+
+type wireContentBlock struct {
+	Type      string          `json:"type"`
+	ID        string          `json:"id,omitempty"`
+	Name      string          `json:"name,omitempty"`
+	Text      string          `json:"text,omitempty"`
+	Input     json.RawMessage `json:"input,omitempty"`
+	ToolUseID string          `json:"tool_use_id,omitempty"`
+	Content   json.RawMessage `json:"content,omitempty"`
+}
+
+func marshalTextNativeBlock(text string) json.RawMessage {
+	if text == "" {
+		return nil
+	}
+	return marshalNativeBlock(&wireContentBlock{Type: "text", Text: text})
+}
+
+func marshalToolUseNativeBlock(tc *provider.ToolCall) json.RawMessage {
+	if tc == nil {
+		return nil
+	}
+	input := json.RawMessage(tc.Arguments)
+	if len(input) == 0 {
+		input = json.RawMessage("{}")
+	}
+	return marshalNativeBlock(&wireContentBlock{Type: "tool_use", ID: tc.ID, Name: tc.Name, Input: input})
+}
+
+func marshalNativeBlock(block *wireContentBlock) json.RawMessage {
+	if block == nil || block.Type == "" {
+		return nil
+	}
+	if (block.Type == "server_tool_use" || block.Type == "tool_use") && len(block.Input) == 0 {
+		block = cloneWireContentBlock(block)
+		block.Input = json.RawMessage("{}")
+	}
+	b, err := json.Marshal(block)
+	if err != nil {
+		return nil
+	}
+	return b
+}
+
+func cloneWireContentBlock(block *wireContentBlock) *wireContentBlock {
+	if block == nil {
+		return nil
+	}
+	cp := *block
+	if len(block.Input) > 0 {
+		cp.Input = append(json.RawMessage(nil), block.Input...)
+	}
+	if len(block.Content) > 0 {
+		cp.Content = append(json.RawMessage(nil), block.Content...)
+	}
+	return &cp
 }
 
 type wireUsage struct {

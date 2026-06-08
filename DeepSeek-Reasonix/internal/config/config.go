@@ -458,19 +458,25 @@ func (c *Config) BashMode() string {
 // each model's prompt prefix stays cache-stable). SubagentModel is the optional
 // default for runAs=subagent skills; SubagentModels overrides it per skill name.
 type AgentConfig struct {
-	SystemPrompt     string            `toml:"system_prompt"`
-	SystemPromptFile string            `toml:"system_prompt_file"`
-	MaxSteps         int               `toml:"max_steps"` // tool-call rounds per turn; 0 = unlimited
-	Temperature      float64           `toml:"temperature"`
-	PlannerModel     string            `toml:"planner_model"`
-	SubagentModel    string            `toml:"subagent_model"`
-	SubagentModels   map[string]string `toml:"subagent_models"`
-	SubagentEffort   string            `toml:"subagent_effort"`
-	SubagentEfforts  map[string]string `toml:"subagent_efforts"`
-	FrontierModel    string            `toml:"frontier_model"`
-	UpgradeThreshold int               `toml:"upgrade_threshold"`
-	FrontierBudget   int64             `toml:"frontier_budget"`
-	UpgradeEnabled   bool              `toml:"upgrade_enabled"`
+	SystemPrompt              string            `toml:"system_prompt"`
+	SystemPromptFile          string            `toml:"system_prompt_file"`
+	MaxSteps                  int               `toml:"max_steps"` // tool-call rounds per turn; 0 = unlimited
+	Temperature               float64           `toml:"temperature"`
+	PlannerModel              string            `toml:"planner_model"`
+	SubagentModel             string            `toml:"subagent_model"`
+	SubagentModels            map[string]string `toml:"subagent_models"`
+	SubagentEffort            string            `toml:"subagent_effort"`
+	SubagentEfforts           map[string]string `toml:"subagent_efforts"`
+	FrontierModel             string            `toml:"frontier_model"`
+	UpgradeThreshold          int               `toml:"upgrade_threshold"`
+	FrontierBudget            int64             `toml:"frontier_budget"`
+	UpgradeEnabled            bool              `toml:"upgrade_enabled"`
+	AdvisorMaxUsesPerTurn     int               `toml:"advisor_max_uses_per_turn"`
+	AdvisorMaxUsesPerSession  int               `toml:"advisor_max_uses_per_session"`
+	AdvisorMaxContextMessages int               `toml:"advisor_max_context_messages"`
+	AdvisorMaxContextChars    int               `toml:"advisor_max_context_chars"`
+	AdvisorNativeEnabled      bool              `toml:"advisor_native_enabled"`
+	AdvisorNativeMaxTokens    int               `toml:"advisor_native_max_tokens"`
 	// OutputStyle selects a persona/tone block folded into the system prompt at
 	// startup (a built-in like "explanatory"/"learning"/"concise", or a custom
 	// .reasonix/output-styles/<name>.md). Empty = the unmodified prompt.
@@ -500,6 +506,16 @@ type ProviderEntry struct {
 	ModelsURL     string            `toml:"models_url"` // auto-fetch models from this URL on startup
 	Default       string            `toml:"default"`    // default model when Models is set (else Models[0])
 	APIKeyEnv     string            `toml:"api_key_env"`
+	AuthType      string            `toml:"auth_type"`      // api_key (default), bearer, or workload_identity
+	AuthTokenEnv  string            `toml:"auth_token_env"` // bearer/access-token env var; API key auth falls back to api_key_env
+	AuthHeader    string            `toml:"auth_header"`    // optional override; defaults to provider-specific header
+	AuthScheme    string            `toml:"auth_scheme"`    // optional override; bearer modes default to Bearer
+	IdentityEnv   string            `toml:"identity_env"`   // WIF OIDC/JWT assertion env var
+	IdentityFile  string            `toml:"identity_file"`  // WIF OIDC/JWT assertion file
+	FederationID  string            `toml:"federation_rule_id"`
+	Organization  string            `toml:"organization_id"`
+	ServiceAcctID string            `toml:"service_account_id"`
+	WorkspaceID   string            `toml:"workspace_id"`
 	BalanceURL    string            `toml:"balance_url"` // optional; a provider-specific wallet-balance endpoint (DeepSeek: https://api.deepseek.com/user/balance). Empty = no balance readout.
 	ContextWindow int               `toml:"context_window"`
 	Price         *provider.Pricing `toml:"price"`
@@ -515,6 +531,10 @@ type ProviderEntry struct {
 	// models. Empty/auto uses the model capability registry plus endpoint
 	// heuristics; none disables automatic reasoning controls for this provider.
 	ReasoningProtocol string `toml:"reasoning_protocol"`
+	// WireAPI selects the OpenAI transport wire. Empty/chat uses
+	// /chat/completions; responses uses /responses for GPT-5 Codex/frontier
+	// models that no longer support the chat endpoint.
+	WireAPI string `toml:"wire_api"`
 	// SupportedEfforts lists the /effort levels this provider/model exposes.
 	// When non-empty, it overrides the built-in defaults derived from
 	// Kind/BaseURL and makes /effort configurable. "auto" is the implicit
@@ -539,6 +559,74 @@ func (e *ProviderEntry) ModelList() []string {
 		return []string{e.Model}
 	}
 	return nil
+}
+
+// IsLikelyChatModel reports whether a model ID looks like a chat/completion
+// model rather than a specialised audio/vision/embedding model. It applies a
+// conservative name-based heuristic — the OpenAI-compatible /models API does
+// not return capability/modality metadata, so this is the most reliable
+// fallback until providers add such fields.
+//
+// The heuristic works in two passes:
+//  1. Multi-word substring check for compound terms that span separators
+//     (e.g. "text-embedding", "text-to-speech").
+//  2. Token-level check: the model ID is split on common separators (- _ . / :)
+//     and each token is compared against a set of known non-chat keywords.
+//
+// "voice" is intentionally absent from the non-chat set because it is too
+// broad — legitimate future chat models may include it in their name.
+func IsLikelyChatModel(model string) bool {
+	model = strings.TrimSpace(model)
+	if model == "" {
+		return false
+	}
+	lower := strings.ToLower(model)
+
+	// Pass 1: compound terms that span separator boundaries.
+	var compoundNonChat = []string{
+		"text-embedding", "text-to-speech", "speech-to-text",
+	}
+	for _, c := range compoundNonChat {
+		if strings.Contains(lower, c) {
+			return false
+		}
+	}
+
+	// Pass 2: token-level check.
+	tokens := strings.FieldsFunc(lower, func(r rune) bool {
+		return r == '-' || r == '_' || r == '.' || r == '/' || r == ':'
+	})
+	var nonChatTokens = map[string]bool{
+		"asr": true, "stt": true, "tts": true,
+		"whisper": true, "embedding": true,
+		"moderation": true, "rerank": true, "dall": true,
+		"transcription": true,
+	}
+	for _, tok := range tokens {
+		if nonChatTokens[tok] {
+			return false
+		}
+	}
+	return true
+}
+
+// ChatModelList returns ModelList filtered to likely chat/completion models.
+// Non-chat models (TTS, STT, ASR, embedding, etc.) are excluded so they do
+// not appear in the chat model picker. Use ModelList() only when the full
+// raw provider model list is needed, such as config serialization, provider
+// diagnostics, or model-fetch editing.
+func (e *ProviderEntry) ChatModelList() []string {
+	raw := e.ModelList()
+	if len(raw) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(raw))
+	for _, m := range raw {
+		if IsLikelyChatModel(m) {
+			out = append(out, m)
+		}
+	}
+	return out
 }
 
 // DefaultModel returns the provider's default model: the explicit `default`, else
@@ -711,14 +799,20 @@ func Default() *Config {
 			// the user cancels, or the provider errors. Context stays bounded by
 			// compaction, not by a round count. Set a positive agent.max_steps only
 			// if you want a hard guard against runaway.
-			MaxSteps:          0,
-			AutoPlan:          "off",
-			UpgradeEnabled:    true,
-			UpgradeThreshold:  3,
-			FrontierBudget:    500000,
-			SoftCompactRatio:  0.5,
-			CompactRatio:      0.8,
-			CompactForceRatio: 0.9,
+			MaxSteps:                  0,
+			AutoPlan:                  "off",
+			UpgradeEnabled:            true,
+			UpgradeThreshold:          3,
+			FrontierBudget:            500000,
+			AdvisorMaxUsesPerTurn:     1,
+			AdvisorMaxUsesPerSession:  10,
+			AdvisorMaxContextMessages: 12,
+			AdvisorMaxContextChars:    12000,
+			AdvisorNativeEnabled:      false,
+			AdvisorNativeMaxTokens:    1024,
+			SoftCompactRatio:          0.5,
+			CompactRatio:              0.8,
+			CompactForceRatio:         0.9,
 		},
 		Skills: SkillsConfig{
 			RuntimeOrchestration: true,
@@ -1237,6 +1331,16 @@ func officialProviderFromLegacy(entry ProviderEntry, old *ProviderEntry) Provide
 	entry.BaseURL = old.BaseURL
 	entry.ModelsURL = old.ModelsURL
 	entry.APIKeyEnv = old.APIKeyEnv
+	entry.AuthType = old.AuthType
+	entry.AuthTokenEnv = old.AuthTokenEnv
+	entry.AuthHeader = old.AuthHeader
+	entry.AuthScheme = old.AuthScheme
+	entry.IdentityEnv = old.IdentityEnv
+	entry.IdentityFile = old.IdentityFile
+	entry.FederationID = old.FederationID
+	entry.Organization = old.Organization
+	entry.ServiceAcctID = old.ServiceAcctID
+	entry.WorkspaceID = old.WorkspaceID
 	entry.BalanceURL = old.BalanceURL
 	entry.ContextWindow = old.ContextWindow
 	entry.Price = old.Price
@@ -1568,6 +1672,78 @@ func (c *Config) ResolveModelWithFallback(ref string) (resolvedRef string, fallb
 	return "", false, false
 }
 
+// NormalizedAuthType reports the configured auth mode. Empty preserves the
+// historical API-key behavior.
+func (e *ProviderEntry) NormalizedAuthType() string {
+	return provider.AuthConfig{Type: e.AuthType}.NormalizedType()
+}
+
+// AuthEnvName returns the credential env var used by the current auth mode.
+func (e *ProviderEntry) AuthEnvName() string {
+	switch e.NormalizedAuthType() {
+	case provider.AuthTypeBearer:
+		if strings.TrimSpace(e.AuthTokenEnv) != "" {
+			return strings.TrimSpace(e.AuthTokenEnv)
+		}
+		return strings.TrimSpace(e.APIKeyEnv)
+	case provider.AuthTypeWorkloadIdentity:
+		if strings.TrimSpace(e.AuthTokenEnv) != "" {
+			return strings.TrimSpace(e.AuthTokenEnv)
+		}
+		if strings.TrimSpace(e.IdentityEnv) != "" {
+			return strings.TrimSpace(e.IdentityEnv)
+		}
+		return strings.TrimSpace(e.APIKeyEnv)
+	default:
+		return strings.TrimSpace(e.APIKeyEnv)
+	}
+}
+
+// AuthToken resolves the entry's request token from env. API key auth reads
+// api_key_env; bearer auth reads auth_token_env with api_key_env as a legacy
+// fallback; workload identity reads a pre-minted access token when present.
+func (e *ProviderEntry) AuthToken() string {
+	env := e.AuthEnvName()
+	if env == "" {
+		return ""
+	}
+	return os.Getenv(env)
+}
+
+// IdentityToken resolves an OIDC/JWT assertion for Anthropic workload identity.
+func (e *ProviderEntry) IdentityToken() string {
+	if env := strings.TrimSpace(e.IdentityEnv); env != "" {
+		if v := strings.TrimSpace(os.Getenv(env)); v != "" {
+			return v
+		}
+	}
+	if path := strings.TrimSpace(e.IdentityFile); path != "" {
+		if b, err := os.ReadFile(path); err == nil {
+			return strings.TrimSpace(string(b))
+		}
+	}
+	return ""
+}
+
+// AuthConfig returns the provider-layer authentication contract for this entry.
+func (e *ProviderEntry) AuthConfig() provider.AuthConfig {
+	return provider.AuthConfig{
+		Type:          e.AuthType,
+		Token:         e.AuthToken(),
+		TokenEnv:      e.AuthEnvName(),
+		HeaderName:    e.AuthHeader,
+		HeaderScheme:  e.AuthScheme,
+		IdentityToken: e.IdentityToken(),
+		IdentityEnv:   strings.TrimSpace(e.IdentityEnv),
+		Extra: map[string]string{
+			"federation_rule_id": strings.TrimSpace(e.FederationID),
+			"organization_id":    strings.TrimSpace(e.Organization),
+			"service_account_id": strings.TrimSpace(e.ServiceAcctID),
+			"workspace_id":       strings.TrimSpace(e.WorkspaceID),
+		},
+	}
+}
+
 // APIKey resolves the entry's API key from its api_key_env.
 func (e *ProviderEntry) APIKey() string {
 	if e.APIKeyEnv == "" {
@@ -1576,10 +1752,13 @@ func (e *ProviderEntry) APIKey() string {
 	return os.Getenv(e.APIKeyEnv)
 }
 
-// Configured reports whether the provider's api_key_env is set — the same check
-// Validate enforces, so pickers can filter on it.
+// Configured reports whether the provider's configured auth material is
+// present — the same check Validate enforces, so pickers can filter on it.
 func (e *ProviderEntry) Configured() bool {
-	return e.APIKey() != ""
+	if e.AuthToken() != "" {
+		return true
+	}
+	return e.NormalizedAuthType() == provider.AuthTypeWorkloadIdentity && e.IdentityToken() != ""
 }
 
 // ResolveSystemPrompt returns the system prompt, reading system_prompt_file if set.
@@ -1609,8 +1788,11 @@ func (c *Config) Validate(model string) error {
 	if e.BaseURL == "" {
 		return fmt.Errorf("provider %q: base_url is required", model)
 	}
-	if e.APIKey() == "" {
-		return fmt.Errorf("provider %q: missing env %s", model, e.APIKeyEnv)
+	if !e.Configured() {
+		if env := e.AuthEnvName(); env != "" {
+			return fmt.Errorf("provider %q: missing env %s", model, env)
+		}
+		return fmt.Errorf("provider %q: missing auth material", model)
 	}
 	return nil
 }

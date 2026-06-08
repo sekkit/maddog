@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"reasonix/internal/event"
+	"reasonix/internal/netclient"
 	"reasonix/internal/provider"
 	"reasonix/internal/provider/openai"
 	"reasonix/internal/tool"
@@ -56,7 +57,13 @@ func TestAgentEmitsRetryingThenStreams(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	prov, err := openai.New(provider.Config{Name: "deepseek", BaseURL: srv.URL, Model: "deepseek-v4", APIKey: "k"})
+	prov, err := openai.New(provider.Config{
+		Name:    "deepseek",
+		BaseURL: srv.URL,
+		Model:   "deepseek-v4",
+		APIKey:  "k",
+		Extra:   map[string]any{"proxy_spec": netclient.ProxySpec{Mode: netclient.ModeOff}},
+	})
 	if err != nil {
 		t.Fatalf("New provider: %v", err)
 	}
