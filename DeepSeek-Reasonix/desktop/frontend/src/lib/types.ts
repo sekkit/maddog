@@ -548,6 +548,10 @@ export interface SettingsView {
   plannerModel: string;
   subagentModel: string;
   subagentEffort: string;
+  frontierModel: string;
+  upgradeEnabled: boolean;
+  upgradeThreshold: number;
+  frontierBudget: number;
   autoPlan: string;
   providers: ProviderView[];
   officialProviders: ProviderView[];

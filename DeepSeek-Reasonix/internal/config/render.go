@@ -191,6 +191,14 @@ func RenderTOMLForScope(c *Config, scope RenderScope) string {
 	} else {
 		b.WriteString("# subagent_efforts = { review = \"max\", task = \"high\" }   # per-tool/skill effort overrides\n")
 	}
+	if c.Agent.FrontierModel != "" {
+		fmt.Fprintf(&b, "frontier_model = %q   # automatic upgrade target after repeated tool failures\n", c.Agent.FrontierModel)
+	} else {
+		b.WriteString("# frontier_model = \"deepseek-pro\"   # optional automatic upgrade target\n")
+	}
+	fmt.Fprintf(&b, "upgrade_enabled = %t   # enable automatic frontier routing when frontier_model is set\n", c.Agent.UpgradeEnabled)
+	fmt.Fprintf(&b, "upgrade_threshold = %d   # consecutive tool failures before upgrading; 0 disables\n", c.Agent.UpgradeThreshold)
+	fmt.Fprintf(&b, "frontier_budget = %d   # session output-token budget for frontier calls; 0 = unlimited\n", c.Agent.FrontierBudget)
 	if c.Agent.OutputStyle != "" {
 		fmt.Fprintf(&b, "output_style = %q   # persona/tone folded into the prompt\n", c.Agent.OutputStyle)
 	} else {

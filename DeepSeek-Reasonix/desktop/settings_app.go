@@ -83,6 +83,10 @@ type SettingsView struct {
 	PlannerModel      string          `json:"plannerModel"`
 	SubagentModel     string          `json:"subagentModel"`
 	SubagentEffort    string          `json:"subagentEffort"`
+	FrontierModel     string          `json:"frontierModel"`
+	UpgradeEnabled    bool            `json:"upgradeEnabled"`
+	UpgradeThreshold  int             `json:"upgradeThreshold"`
+	FrontierBudget    int64           `json:"frontierBudget"`
 	AutoPlan          string          `json:"autoPlan"`
 	Providers         []ProviderView  `json:"providers"`
 	OfficialProviders []ProviderView  `json:"officialProviders"`
@@ -239,6 +243,10 @@ func (a *App) Settings() SettingsView {
 		PlannerModel:      cfg.Agent.PlannerModel,
 		SubagentModel:     cfg.Agent.SubagentModel,
 		SubagentEffort:    cfg.Agent.SubagentEffort,
+		FrontierModel:     cfg.Agent.FrontierModel,
+		UpgradeEnabled:    cfg.Agent.UpgradeEnabled,
+		UpgradeThreshold:  cfg.Agent.UpgradeThreshold,
+		FrontierBudget:    cfg.Agent.FrontierBudget,
 		AutoPlan:          desktopAutoPlanMode(cfg.Agent.AutoPlan),
 		Providers:         []ProviderView{},
 		OfficialProviders: []ProviderView{},
@@ -587,6 +595,21 @@ func (a *App) SetSubagentEffort(level string) error {
 	})
 }
 
+// SetFrontierRoute sets the automatic upgrade target and guardrail knobs.
+func (a *App) SetFrontierRoute(ref string, enabled bool, threshold int, budget int64) error {
+	return a.applyConfigChange(func(c *config.Config) error {
+		ref = strings.TrimSpace(ref)
+		if ref != "" {
+			resolved, err := selectableDesktopModelRef(c, ref)
+			if err != nil {
+				return err
+			}
+			ref = resolved
+		}
+		return c.SetFrontierRoute(ref, enabled, threshold, budget)
+	})
+}
+
 // SetAutoPlan updates the automatic plan-mode gate (off|on).
 func (a *App) SetAutoPlan(mode string) error {
 	return a.applyConfigChange(func(c *config.Config) error { return c.SetAutoPlan(mode) })
@@ -779,6 +802,12 @@ func retargetProviderReferences(c *config.Config, name, fallbackRef string) {
 	}
 	if desktopModelRefsProvider(c, c.Agent.SubagentModel, name) {
 		c.Agent.SubagentModel = fallbackRef
+	}
+	if desktopModelRefsProvider(c, c.Agent.FrontierModel, name) {
+		c.Agent.FrontierModel = fallbackRef
+		if fallbackRef == "" {
+			c.Agent.UpgradeEnabled = false
+		}
 	}
 	for skill, ref := range c.Agent.SubagentModels {
 		if desktopModelRefsProvider(c, ref, name) {

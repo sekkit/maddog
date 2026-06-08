@@ -168,6 +168,7 @@ export interface AppBindings {
   SetPlannerModel(ref: string): Promise<void>;
   SetSubagentModel(ref: string): Promise<void>;
   SetSubagentEffort(level: string): Promise<void>;
+  SetFrontierRoute(ref: string, enabled: boolean, threshold: number, budget: number): Promise<void>;
   SetAutoPlan(mode: string): Promise<void>;
   SaveProvider(p: ProviderView): Promise<void>;
   AddOfficialProviderAccess(kind: string, key: string): Promise<void>;
@@ -547,6 +548,10 @@ function makeMockApp(): AppBindings {
     plannerModel: "",
     subagentModel: "",
     subagentEffort: "",
+    frontierModel: "",
+    upgradeEnabled: true,
+    upgradeThreshold: 3,
+    frontierBudget: 500000,
     autoPlan: "off",
     providers: [
       { name: "deepseek", builtIn: true, added: false, kind: "openai", baseUrl: "https://api.deepseek.com", modelsUrl: "", models: ["deepseek-v4-flash"], default: "deepseek-v4-flash", apiKeyEnv: "DEEPSEEK_API_KEY", keySet: true, balanceUrl: "https://api.deepseek.com/user/balance", contextWindow: 1_000_000, reasoningProtocol: "", supportedEfforts: [], defaultEffort: "" },
@@ -1469,6 +1474,12 @@ function makeMockApp(): AppBindings {
     },
     async SetSubagentEffort(level: string) {
       settings.subagentEffort = level;
+    },
+    async SetFrontierRoute(ref: string, enabled: boolean, threshold: number, budget: number) {
+      settings.frontierModel = ref;
+      settings.upgradeEnabled = enabled;
+      settings.upgradeThreshold = threshold;
+      settings.frontierBudget = budget;
     },
     async SetAutoPlan(mode: string) {
       settings.autoPlan = mode;

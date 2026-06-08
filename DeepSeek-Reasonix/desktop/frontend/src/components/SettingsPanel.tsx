@@ -386,6 +386,16 @@ function normalizeAutoPlan(mode: string | undefined): AutoPlanMode {
   return mode === "ask" || mode === "on" ? "on" : "off";
 }
 
+function sanitizeInteger(value: number, min: number): number {
+  if (!Number.isFinite(value)) return min;
+  return Math.max(min, Math.floor(value));
+}
+
+function formatBudgetLabel(value: number | undefined, t: ReturnType<typeof useT>): string {
+  const n = sanitizeInteger(value ?? 0, 0);
+  return n > 0 ? t("settings.frontierBudgetValue", { n }) : t("settings.frontierBudgetUnlimited");
+}
+
 function normalizeReasoningProtocol(protocol: string | undefined): string {
   return REASONING_PROTOCOLS.includes(protocol ?? "") ? protocol ?? "" : "";
 }
@@ -428,6 +438,10 @@ function normalizeSettingsView(view: SettingsView | null | undefined): SettingsV
       proxy: network.proxy ?? { type: "socks5", server: "", port: 0, username: "", password: "" },
     },
     agent,
+    frontierModel: view.frontierModel ?? "",
+    upgradeEnabled: Boolean(view.upgradeEnabled),
+    upgradeThreshold: sanitizeInteger(view.upgradeThreshold ?? 0, 0),
+    frontierBudget: sanitizeInteger(view.frontierBudget ?? 0, 0),
     autoPlan: normalizeAutoPlan(view.autoPlan),
     desktopLanguage: normalizeLangPref(view.desktopLanguage),
     desktopTheme: normalizeThemePreference(view.desktopTheme),
@@ -655,13 +669,24 @@ function ModelsSection({ s, busy, apply, backgroundApply }: ModelsSectionProps) 
   const defaultRef = toRef(s.defaultModel, s);
   const plannerRef = toRef(s.plannerModel, s);
   const subagentRef = toRef(s.subagentModel, s);
+  const frontierRef = toRef(s.frontierModel, s);
   const plannerSelectRef = plannerRef === defaultRef ? "" : plannerRef;
   const [defaultProvider, defaultModel] = defaultRef.split("/");
   const defaultProviderView = s.providers.find((p) => p.name === defaultProvider);
   const currentModelLabel = defaultModel || defaultRef || t("common.none");
   const providerLabel = defaultProvider ? modelProviderLabel(defaultProvider, defaultProviderView, t) : t("common.none");
   const plannerLabel = plannerSelectRef || t("settings.plannerNone");
+  const subagentLabel = subagentRef || t("settings.subagentModelDefault");
+  const frontierLabel = frontierRef || t("settings.frontierModelNone");
+  const upgradeLabel = s.upgradeEnabled && frontierRef ? t("settings.frontierEnabled") : t("settings.frontierDisabled");
   const keyStatusLabel = defaultProviderView?.keySet ? t("settings.keySet") : t("settings.noKey");
+  const setFrontierRoute = (next: Partial<Pick<SettingsView, "frontierModel" | "upgradeEnabled" | "upgradeThreshold" | "frontierBudget">>) => {
+    const model = next.frontierModel !== undefined ? next.frontierModel : s.frontierModel;
+    const enabled = next.upgradeEnabled !== undefined ? next.upgradeEnabled : s.upgradeEnabled;
+    const threshold = sanitizeInteger(next.upgradeThreshold !== undefined ? next.upgradeThreshold : s.upgradeThreshold, 0);
+    const budget = sanitizeInteger(next.frontierBudget !== undefined ? next.frontierBudget : s.frontierBudget, 0);
+    return app.SetFrontierRoute(model, enabled, threshold, budget);
+  };
 
   useEffect(() => {
     if (subtab !== "usage") return;
@@ -713,6 +738,7 @@ function ModelsSection({ s, busy, apply, backgroundApply }: ModelsSectionProps) 
       </div>
 
       {subtab === "usage" ? (
+        <>
         <SettingsSection title={t("settings.modelUsage")}>
           <SettingsField label={t("settings.defaultModel")}>
             <ModelPicker
@@ -735,7 +761,7 @@ function ModelsSection({ s, busy, apply, backgroundApply }: ModelsSectionProps) 
             />
           </SettingsField>
 
-          <SettingsField label={t("settings.subagentModel")}>
+          <SettingsField label={t("settings.subagentModel")} hint={t("settings.subagentModelHint")}>
             <ModelPicker
               s={s}
               refs={refs}
@@ -771,10 +797,92 @@ function ModelsSection({ s, busy, apply, backgroundApply }: ModelsSectionProps) 
             <div className="settings-model-current__meta">
               <span>{providerLabel}</span>
               <span>{plannerLabel}</span>
+              <span>{subagentLabel}</span>
+              <span>{upgradeLabel}</span>
               <span>{keyStatusLabel}</span>
             </div>
           </div>
         </SettingsSection>
+
+        <SettingsSection title={t("settings.frontierRoute")} description={t("settings.frontierRouteHint")}>
+          <SettingsField label={t("settings.frontierEnabled")}>
+            <div className="set-seg">
+              {([true, false] as const).map((enabled) => (
+                <button
+                  key={String(enabled)}
+                  className={`set-seg__btn${s.upgradeEnabled === enabled ? " set-seg__btn--on" : ""}`}
+                  disabled={busy}
+                  onClick={() => void apply(() => setFrontierRoute({ upgradeEnabled: enabled }))}
+                >
+                  {enabled ? t("settings.frontierEnabled") : t("settings.frontierDisabled")}
+                </button>
+              ))}
+            </div>
+          </SettingsField>
+
+          <SettingsField label={t("settings.frontierModel")}>
+            <ModelPicker
+              s={s}
+              refs={refs}
+              value={frontierRef}
+              disabled={busy}
+              emptyOptionLabel={t("settings.frontierModelNone")}
+              emptyOptionHint={t("settings.frontierModelNoneHint")}
+              onPick={(ref) => void apply(() => setFrontierRoute({ frontierModel: ref }))}
+            />
+          </SettingsField>
+
+          <SettingsField label={t("settings.frontierThreshold")} hint={t("settings.frontierThresholdHint")}>
+            <input
+              key={`frontier-threshold-${s.upgradeThreshold ?? 0}`}
+              className="mem-input set-numeric"
+              type="number"
+              min={0}
+              step={1}
+              defaultValue={String(s.upgradeThreshold ?? 0)}
+              disabled={busy}
+              onBlur={(e) => {
+                const next = sanitizeInteger(Number(e.currentTarget.value), 0);
+                if (next !== sanitizeInteger(s.upgradeThreshold ?? 0, 0)) void apply(() => setFrontierRoute({ upgradeThreshold: next }));
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") e.currentTarget.blur();
+              }}
+            />
+          </SettingsField>
+
+          <SettingsField label={t("settings.frontierBudget")} hint={t("settings.frontierBudgetHint")}>
+            <input
+              key={`frontier-budget-${s.frontierBudget ?? 0}`}
+              className="mem-input set-numeric"
+              type="number"
+              min={0}
+              step={1000}
+              defaultValue={String(s.frontierBudget ?? 0)}
+              disabled={busy}
+              onBlur={(e) => {
+                const next = sanitizeInteger(Number(e.currentTarget.value), 0);
+                if (next !== sanitizeInteger(s.frontierBudget ?? 0, 0)) void apply(() => setFrontierRoute({ frontierBudget: next }));
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") e.currentTarget.blur();
+              }}
+            />
+          </SettingsField>
+
+          <div className="settings-model-current settings-model-current--route" aria-label={t("settings.frontierStatus")}>
+            <div>
+              <span>{t("settings.frontierStatus")}</span>
+              <strong>{frontierLabel}</strong>
+            </div>
+            <div className="settings-model-current__meta">
+              <span>{upgradeLabel}</span>
+              <span>{t("settings.frontierThresholdValue", { n: s.upgradeThreshold ?? 0 })}</span>
+              <span>{formatBudgetLabel(s.frontierBudget, t)}</span>
+            </div>
+          </div>
+        </SettingsSection>
+        </>
       ) : (
         <ProvidersSection s={s} busy={busy} apply={apply} />
       )}

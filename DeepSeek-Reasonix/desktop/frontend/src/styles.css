@@ -6513,6 +6513,10 @@ a[href] {
   margin-top: 14px;
 }
 
+.settings-page .settings-model-current--route {
+  margin-top: 8px;
+}
+
 .settings-page .prov-card,
 .settings-page .cap-server-entry,
 .settings-page .cap-source,
@@ -6998,6 +7002,10 @@ a[href] {
 }
 .set-narrow {
   width: 72px;
+}
+.set-numeric {
+  width: 160px;
+  max-width: 100%;
 }
 .set-hint {
   margin-left: 100px;
