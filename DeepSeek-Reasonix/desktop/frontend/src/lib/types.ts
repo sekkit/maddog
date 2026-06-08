@@ -18,6 +18,7 @@ export type EventKind =
   | "compaction_started"
   | "compaction_done"
   | "retrying"
+  | "mcp_surface_ready"
   | "upgrade"
   | "skill_generated"
   | "budget_exceeded"

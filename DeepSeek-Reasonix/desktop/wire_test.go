@@ -166,12 +166,35 @@ func TestToWireTurnDoneNoError(t *testing.T) {
 // --- kindNames completeness ---
 
 func TestKindNamesComplete(t *testing.T) {
-	// ToolProgress is the last Kind; every value through it must have a wire name,
+	// SkillPromoted is the last Kind; every value through it must have a wire name,
 	// or toWire emits kind:"" and the frontend reducer falls through to undefined.
-	for k := event.Kind(0); k <= event.ToolProgress; k++ {
+	for k := event.Kind(0); k <= event.SkillPromoted; k++ {
 		if kindNames[k] == "" {
 			t.Errorf("kind %d has no wire name — toWire would emit kind:\"\"", k)
 		}
+	}
+}
+
+func TestToWireRuntimeEvents(t *testing.T) {
+	tests := []struct {
+		name  string
+		event event.Event
+		kind  string
+		level string
+	}{
+		{name: "mcp surface ready", event: event.Event{Kind: event.MCPSurfaceReady, Text: "server: prompts ready (2 items)"}, kind: "mcp_surface_ready", level: "info"},
+		{name: "upgrade", event: event.Event{Kind: event.Upgrade, Level: event.LevelWarn, Text: "frontier route"}, kind: "upgrade", level: "warn"},
+		{name: "skill generated", event: event.Event{Kind: event.SkillGenerated, Level: event.LevelInfo, Text: "generated skill"}, kind: "skill_generated", level: "info"},
+		{name: "budget exceeded", event: event.Event{Kind: event.BudgetExceeded, Level: event.LevelWarn, Text: "budget hit"}, kind: "budget_exceeded", level: "warn"},
+		{name: "skill promoted", event: event.Event{Kind: event.SkillPromoted, Level: event.LevelInfo, Text: "promoted skill"}, kind: "skill_promoted", level: "info"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			w := toWire(tt.event)
+			if w.Kind != tt.kind || w.Level != tt.level || w.Text != tt.event.Text {
+				t.Fatalf("runtime wire = %+v, want kind=%q level=%q text=%q", w, tt.kind, tt.level, tt.event.Text)
+			}
+		})
 	}
 }
 

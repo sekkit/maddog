@@ -123,6 +123,7 @@ var kindNames = map[event.Kind]string{
 	event.CompactionStarted: "compaction_started",
 	event.CompactionDone:    "compaction_done",
 	event.ToolProgress:      "tool_progress",
+	event.MCPSurfaceReady:   "mcp_surface_ready",
 	event.Retrying:          "retrying",
 	event.Upgrade:           "upgrade",
 	event.SkillGenerated:    "skill_generated",
@@ -147,7 +148,7 @@ func toWireAsk(a event.Ask) *wireAsk {
 func toWire(e event.Event) wireEvent {
 	w := wireEvent{Kind: kindNames[e.Kind], Text: e.Text, Reasoning: e.Reasoning}
 	switch e.Kind {
-	case event.Notice, event.Upgrade, event.SkillGenerated, event.BudgetExceeded, event.SkillPromoted:
+	case event.Notice, event.MCPSurfaceReady, event.Upgrade, event.SkillGenerated, event.BudgetExceeded, event.SkillPromoted:
 		if e.Level == event.LevelWarn {
 			w.Level = "warn"
 		} else {

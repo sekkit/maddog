@@ -59,6 +59,31 @@ func TestToWire(t *testing.T) {
 		}
 	})
 
+	t.Run("mcp surface ready", func(t *testing.T) {
+		w := toWire(event.Event{Kind: event.MCPSurfaceReady, Text: "tools: prompts ready (2 items)"})
+		if w.Kind != "mcp_surface_ready" || w.Level != "info" || w.Text != "tools: prompts ready (2 items)" {
+			t.Errorf("mcp surface ready = %+v", w)
+		}
+	})
+
+	t.Run("runtime events", func(t *testing.T) {
+		for _, tc := range []struct {
+			ev    event.Event
+			kind  string
+			level string
+		}{
+			{event.Event{Kind: event.Upgrade, Level: event.LevelWarn, Text: "frontier"}, "upgrade", "warn"},
+			{event.Event{Kind: event.SkillGenerated, Text: "dynamic skill"}, "skill_generated", "info"},
+			{event.Event{Kind: event.BudgetExceeded, Level: event.LevelWarn, Text: "budget"}, "budget_exceeded", "warn"},
+			{event.Event{Kind: event.SkillPromoted, Text: "promoted"}, "skill_promoted", "info"},
+		} {
+			w := toWire(tc.ev)
+			if w.Kind != tc.kind || w.Level != tc.level || w.Text != tc.ev.Text {
+				t.Errorf("runtime event = %+v, want kind=%q level=%q text=%q", w, tc.kind, tc.level, tc.ev.Text)
+			}
+		}
+	})
+
 	t.Run("approval", func(t *testing.T) {
 		w := toWire(event.Event{Kind: event.ApprovalRequest, Approval: event.Approval{ID: "3", Tool: "bash", Subject: "rm"}})
 		if w.Approval == nil || w.Approval.ID != "3" || w.Approval.Tool != "bash" {

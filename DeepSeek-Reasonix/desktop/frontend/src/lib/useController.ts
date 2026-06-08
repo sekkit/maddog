@@ -334,6 +334,8 @@ function applyEvent(s: State, e: WireEvent): State {
     }
     case "notice":
       return { ...s, running: s.turnActive ? s.running : false, seq: s.seq + 1, items: [...s.items, { kind: "notice", id: `n${s.seq}`, level: e.level ?? "info", text: e.text ?? "" }] };
+    case "mcp_surface_ready":
+      return { ...s, running: s.turnActive ? s.running : false, seq: s.seq + 1, items: [...s.items, { kind: "notice", id: `mcp${s.seq}`, level: "info", text: e.text ?? "" }] };
     case "upgrade":
     case "skill_generated":
     case "budget_exceeded":
