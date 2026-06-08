@@ -12,6 +12,7 @@ import (
 	"reasonix/internal/command"
 	"reasonix/internal/event"
 	"reasonix/internal/memory"
+	"reasonix/internal/skill"
 )
 
 type fakeAutoPlanClassifier struct {
@@ -46,6 +47,40 @@ func TestCustomCommandLookup(t *testing.T) {
 	}
 	if _, ok := c.CustomCommand("/missing"); ok {
 		t.Error("missing should not be found")
+	}
+}
+
+func TestSkillsReflectStoreChangesAfterControllerBuild(t *testing.T) {
+	project := t.TempDir()
+	home := t.TempDir()
+	store := skill.New(skill.Options{HomeDir: home, ProjectRoot: project, DisableBuiltins: true})
+	c := New(Options{SkillStore: store, Skills: store.List()})
+
+	if _, ok := c.RunSkill("/hot now"); ok {
+		t.Fatal("skill should not exist before it is written")
+	}
+	writeControlSkill(t, project, ".reasonix/skills/hot/SKILL.md", "---\nname: hot\ndescription: Hot install\n---\nHot body")
+
+	if skills := c.Skills(); len(skills) != 1 || skills[0].Name != "hot" {
+		t.Fatalf("Skills() = %+v, want newly installed hot skill", skills)
+	}
+	sent, ok := c.RunSkill("/hot now")
+	if !ok {
+		t.Fatal("RunSkill should find newly installed skill")
+	}
+	if !strings.Contains(sent, "Hot body") || !strings.Contains(sent, "Arguments: now") {
+		t.Fatalf("rendered skill = %q", sent)
+	}
+}
+
+func writeControlSkill(t *testing.T, root, rel, body string) {
+	t.Helper()
+	path := filepath.Join(root, rel)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -334,5 +369,50 @@ func TestRunTurnAutoPlanScoresRawPromptNotResolvedRefs(t *testing.T) {
 	}
 	if c.PlanMode() {
 		t.Fatal("controller plan mode should remain off")
+	}
+}
+
+func TestRunTurnAppliesRuntimeSkillOrchestrationHint(t *testing.T) {
+	home := t.TempDir()
+	writeControlSkill(t, home, ".reasonix/skills/docs.md", "---\nname: docs\ndescription: documentation writing helper\n---\nbody")
+	store := skill.New(skill.Options{HomeDir: home, DisableBuiltins: true})
+	runner := &fakeTurnRunner{}
+	var generated []string
+	c := New(Options{
+		Runner: runner,
+		Sink: event.FuncSink(func(e event.Event) {
+			if e.Kind == event.Notice || e.Kind == event.SkillGenerated {
+				generated = append(generated, e.Text)
+			}
+		}),
+		SkillOrchestrator: skill.NewOrchestrator(store, skill.Generator{}),
+	})
+
+	if err := c.runTurn(context.Background(), "write documentation for setup"); err != nil {
+		t.Fatal(err)
+	}
+	if len(runner.inputs) != 1 || !strings.Contains(runner.inputs[0], "<runtime-skill>") || !strings.Contains(runner.inputs[0], `name="docs"`) {
+		t.Fatalf("runner input missing runtime skill hint: %q", runner.inputs)
+	}
+	if len(generated) == 0 || !strings.Contains(generated[0], "matched existing skill docs") {
+		t.Fatalf("expected orchestration notice, got %v", generated)
+	}
+}
+
+func TestRunAppliesRuntimeSkillOrchestrationHint(t *testing.T) {
+	home := t.TempDir()
+	writeControlSkill(t, home, ".reasonix/skills/docs.md", "---\nname: docs\ndescription: documentation writing helper\n---\nbody")
+	store := skill.New(skill.Options{HomeDir: home, DisableBuiltins: true})
+	runner := &fakeTurnRunner{}
+	c := New(Options{
+		Runner:            runner,
+		SkillOrchestrator: skill.NewOrchestrator(store, skill.Generator{}),
+	})
+
+	if err := c.Run(context.Background(), "write documentation for setup"); err != nil {
+		t.Fatal(err)
+	}
+	if len(runner.inputs) != 1 || !strings.Contains(runner.inputs[0], "<runtime-skill>") {
+		t.Fatalf("headless Run should include runtime skill hint: %q", runner.inputs)
 	}
 }

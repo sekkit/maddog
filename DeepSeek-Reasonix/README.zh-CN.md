@@ -112,9 +112,11 @@ api_key_env = "DEEPSEEK_API_KEY"
 
 [tools]
 enabled = []   # 省略/为空 = 全部内置工具
+bash_timeout_seconds = 120   # 前台安全上限；设为 0 表示不设工具层超时
 
 [skills]
 # paths = ["~/my-skills", "../shared/skills"]   # 额外的自定义技能目录
+# excluded_paths = ["~/.agents/skills"]         # 隐藏约定来源，不删除目录
 # disabled_skills = ["review"]                  # 隐藏技能，直到 /skill enable <name>
 
 [permissions]
@@ -223,6 +225,9 @@ session），向导后手动在 `reasonix.toml` 加一行即可：
 [agent]
 planner_model = "deepseek-pro"   # 作为低频规划器
 ```
+
+Planner 会看到已加载的 `REASONIX.md` / `AGENTS.md` 记忆，并拿到一小组只读研究工具，
+因此可以先检查相关文件再把计划交给执行器。写入类和流程类工具仍只给执行器使用。
 
 Subagent skills 默认继承执行器模型。设置 `subagent_model` 可让它们统一走另一个已配置
 模型；设置 `subagent_models` 则只覆盖 `review`、`security_review` 等指定 skill。

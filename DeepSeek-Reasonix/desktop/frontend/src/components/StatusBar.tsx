@@ -89,6 +89,8 @@ export function StatusBar({
   mode,
   cost,
   currency,
+  routeStatus,
+  skillStatus,
 }: {
   context: ContextInfo;
   usage?: WireUsage;
@@ -98,6 +100,8 @@ export function StatusBar({
   mode: Mode;
   cost?: number;
   currency?: string;
+  routeStatus?: string;
+  skillStatus?: string;
 }) {
   const { t } = useI18n();
   const pct = context.window ? Math.min(100, Math.round((context.used / context.window) * 100)) : null;
@@ -125,6 +129,14 @@ export function StatusBar({
       </Tooltip>
       <span className="statusbar__sep">·</span>
       <JobsChip jobs={jobsList} />
+      <span className="statusbar__sep">·</span>
+      <Tooltip label={routeStatus || t("status.routeIdleTitle")}>
+        <span className="statusbar__item statusbar__route">{routeStatus ? t("status.routeActive") : t("status.routeIdle")}</span>
+      </Tooltip>
+      <span className="statusbar__sep">·</span>
+      <Tooltip label={skillStatus || t("status.skillIdleTitle")}>
+        <span className="statusbar__item statusbar__skill">{skillStatus ? t("status.skillActive") : t("status.skillIdle")}</span>
+      </Tooltip>
       <span className="statusbar__sep">·</span>
       <Tooltip label={t("status.balanceTitle")}>
         <span className="statusbar__item statusbar__balance">

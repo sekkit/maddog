@@ -19,9 +19,14 @@ func TestRenderTOMLRoundTrips(t *testing.T) {
 	orig.Desktop.Theme = "dark"
 	orig.Desktop.ThemeStyle = "graphite"
 	orig.Desktop.CloseBehavior = "background"
+	orig.Notifications.Enabled = true
+	orig.Notifications.TurnDone = true
+	orig.Notifications.ApprovalRequest = true
+	orig.Notifications.AskRequest = true
 	orig.Agent.AutoPlanClassifier = "deepseek-flash"
 	orig.Agent.SubagentModel = "mimo-pro"
 	orig.Agent.SubagentModels = map[string]string{"review": "deepseek-pro"}
+	orig.Tools.BashTimeoutSeconds = intPtr(900)
 	orig.Permissions = PermissionsConfig{
 		Mode:  "deny",
 		Deny:  []string{"bash(rm -rf*)"},
@@ -39,7 +44,9 @@ func TestRenderTOMLRoundTrips(t *testing.T) {
 		},
 	}
 	orig.Skills.Paths = []string{"~/my-skills", "../shared/skills"}
+	orig.Skills.ExcludedPaths = []string{"~/.agents/skills"}
 	orig.Skills.DisabledSkills = []string{"review", "explore"}
+	orig.Skills.MaxDepth = 2
 	orig.Codegraph = CodegraphConfig{Enabled: true, AutoInstall: false, Path: "/opt/codegraph", Tier: "background"}
 	orig.Plugins = []PluginEntry{
 		{Name: "example", Command: "reasonix-plugin-example"},
@@ -47,6 +54,7 @@ func TestRenderTOMLRoundTrips(t *testing.T) {
 	}
 	mm, _ := orig.Provider("mimo-pro")
 	mm.BaseURL = "http://localhost:8000/v1"
+	mm.ReasoningProtocol = "openai"
 	ds, _ := orig.Provider("deepseek-flash")
 	ds.Effort = "max"
 
@@ -84,6 +92,9 @@ func TestRenderTOMLRoundTrips(t *testing.T) {
 	if got.Desktop.CloseBehavior != "background" {
 		t.Errorf("desktop.close_behavior = %q, want background", got.Desktop.CloseBehavior)
 	}
+	if !got.Notifications.Enabled || !got.Notifications.TurnDone || !got.Notifications.ApprovalRequest || !got.Notifications.AskRequest {
+		t.Errorf("notifications not preserved: %+v", got.Notifications)
+	}
 	if got.Agent.MaxSteps != orig.Agent.MaxSteps {
 		t.Errorf("max_steps = %d, want %d", got.Agent.MaxSteps, orig.Agent.MaxSteps)
 	}
@@ -117,8 +128,8 @@ func TestRenderTOMLRoundTrips(t *testing.T) {
 	if got.Codegraph.Path != "/opt/codegraph" {
 		t.Errorf("codegraph.path = %q, want /opt/codegraph", got.Codegraph.Path)
 	}
-	if got.Codegraph.Tier != "background" {
-		t.Errorf("codegraph.tier = %q, want background", got.Codegraph.Tier)
+	if got.Codegraph.Tier != "" {
+		t.Errorf("codegraph.tier = %q, want migrated empty", got.Codegraph.Tier)
 	}
 	if got.Agent.SubagentModel != "mimo-pro" {
 		t.Errorf("subagent_model = %q, want mimo-pro", got.Agent.SubagentModel)
@@ -126,7 +137,10 @@ func TestRenderTOMLRoundTrips(t *testing.T) {
 	if got.Agent.SubagentModels["review"] != "deepseek-pro" {
 		t.Errorf("subagent_models.review = %q, want deepseek-pro", got.Agent.SubagentModels["review"])
 	}
-	if g, _ := got.Provider("mimo-pro"); g == nil || g.BaseURL != "http://localhost:8000/v1" {
+	if got.Tools.BashTimeoutSeconds == nil || *got.Tools.BashTimeoutSeconds != 900 {
+		t.Errorf("tools.bash_timeout_seconds = %v, want 900", got.Tools.BashTimeoutSeconds)
+	}
+	if g, _ := got.Provider("mimo-pro"); g == nil || g.BaseURL != "http://localhost:8000/v1" || g.ReasoningProtocol != "openai" {
 		t.Errorf("mimo-pro base_url not preserved: %+v", g)
 	}
 	if g, _ := got.Provider("deepseek-flash"); g == nil || g.Effort != "max" {
@@ -150,8 +164,14 @@ func TestRenderTOMLRoundTrips(t *testing.T) {
 	if len(got.Skills.Paths) != 2 || got.Skills.Paths[0] != "~/my-skills" {
 		t.Errorf("skills.paths = %v", got.Skills.Paths)
 	}
+	if len(got.Skills.ExcludedPaths) != 1 || got.Skills.ExcludedPaths[0] != "~/.agents/skills" {
+		t.Errorf("skills.excluded_paths = %v", got.Skills.ExcludedPaths)
+	}
 	if len(got.Skills.DisabledSkills) != 2 || got.Skills.DisabledSkills[0] != "review" || got.Skills.DisabledSkills[1] != "explore" {
 		t.Errorf("skills.disabled_skills = %v", got.Skills.DisabledSkills)
+	}
+	if got.SkillMaxDepth() != 2 {
+		t.Errorf("skills.max_depth = %d, want 2", got.SkillMaxDepth())
 	}
 	if len(got.Plugins) != 2 {
 		t.Fatalf("plugins count = %d, want 2", len(got.Plugins))
@@ -166,8 +186,28 @@ func TestRenderTOMLRoundTrips(t *testing.T) {
 	if stripe.AutoStart == nil || *stripe.AutoStart {
 		t.Errorf("auto_start should render and parse as false, got %+v", stripe.AutoStart)
 	}
-	if stripe.Tier != "background" {
-		t.Errorf("plugin tier should render and parse as background, got %q", stripe.Tier)
+	if stripe.Tier != "" {
+		t.Errorf("plugin tier should be omitted from new config, got %q", stripe.Tier)
+	}
+	if strings.Contains(rendered, "\ntier") {
+		t.Errorf("rendered config should not contain MCP tier fields:\n%s", rendered)
+	}
+}
+
+func TestNotificationsDefaultsKeepEventSwitchesEnabled(t *testing.T) {
+	cfg := Default()
+	if cfg.Notifications.Enabled {
+		t.Fatal("notifications.enabled default = true, want false")
+	}
+	if !cfg.Notifications.TurnDone || !cfg.Notifications.ApprovalRequest || !cfg.Notifications.AskRequest {
+		t.Fatalf("notification event switches default off: %+v", cfg.Notifications)
+	}
+
+	if _, err := toml.Decode("[notifications]\nenabled = true\n", cfg); err != nil {
+		t.Fatalf("decode notifications: %v", err)
+	}
+	if !cfg.Notifications.Enabled || !cfg.Notifications.TurnDone || !cfg.Notifications.ApprovalRequest || !cfg.Notifications.AskRequest {
+		t.Fatalf("enabled-only config should keep event switches on: %+v", cfg.Notifications)
 	}
 }
 
@@ -180,14 +220,14 @@ func TestScopedRenderSeparatesUserAndProjectConfig(t *testing.T) {
 	c.Desktop.CloseBehavior = "background"
 
 	user := RenderTOMLForScope(c, RenderScopeUser)
-	for _, want := range []string{"config_version = 2", "[desktop]", `theme = "dark"`, `close_behavior = "background"`} {
+	for _, want := range []string{"config_version = 2", "[desktop]", `theme = "dark"`, `close_behavior = "background"`, "[notifications]"} {
 		if !strings.Contains(user, want) {
 			t.Fatalf("user render missing %q:\n%s", want, user)
 		}
 	}
 
 	project := RenderTOMLForScope(c, RenderScopeProject)
-	for _, forbidden := range []string{"[desktop]", "close_behavior ="} {
+	for _, forbidden := range []string{"[desktop]", "[notifications]", "close_behavior ="} {
 		if strings.Contains(project, forbidden) {
 			t.Fatalf("project render should not contain %q:\n%s", forbidden, project)
 		}
@@ -217,3 +257,5 @@ func TestProjectRenderPreservesNonDefaultLegacySections(t *testing.T) {
 }
 
 func boolPtr(v bool) *bool { return &v }
+
+func intPtr(v int) *int { return &v }

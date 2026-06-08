@@ -36,6 +36,7 @@ export type Item =
   | { kind: "assistant"; id: string; text: string; reasoning: string; streaming: boolean }
   | { kind: "phase"; id: string; text: string }
   | { kind: "notice"; id: string; level: "info" | "warn"; text: string }
+  | { kind: "runtime_event"; id: string; event: "upgrade" | "skill_generated" | "budget_exceeded" | "skill_promoted"; level: "info" | "warn"; text: string }
   | {
       kind: "compaction";
       id: string;
@@ -55,8 +56,10 @@ export type Item =
       output?: string;
       error?: string;
       truncated?: boolean;
+      durationMs?: number;
       isShell?: boolean; // true for !-prefix shell commands (controls default expand)
       parentId?: string; // a sub-agent call nests under the `task` call with this id
+      profile?: { model?: string; effort?: string }; // subagent model/effort from tool event
     };
 
 interface State {
@@ -82,6 +85,8 @@ interface State {
   sessionCost: number;
   sessionCurrency: string;
   retry?: { attempt: number; max: number };
+  routeStatus?: string;
+  skillStatus?: string;
   seq: number;
 }
 
@@ -101,8 +106,9 @@ const initialState: State = {
 
 type Action =
   | { type: "event"; e: WireEvent }
-  | { type: "user"; text: string }
+  | { type: "user"; text: string; seq: number }
   | { type: "unsend" }
+  | { type: "backend_status"; running: boolean }
   | { type: "meta"; meta: Meta }
   | { type: "context"; context: ContextInfo }
   | { type: "balance"; balance: BalanceInfo }
@@ -119,6 +125,100 @@ type Action =
 
 // ---- reducer helpers (unchanged logic) ----
 
+export function historyMessagesToItems(messages: HistoryMessage[], idPrefix: string, startSeq = 0): { items: Item[]; seq: number } {
+  const resultByID = new Map<string, HistoryMessage>();
+  for (const m of messages) {
+    if (m.role === "tool" && m.toolCallId && !resultByID.has(m.toolCallId)) {
+      resultByID.set(m.toolCallId, m);
+    }
+  }
+
+  const items: Item[] = [];
+  let seq = startSeq;
+  const consumedToolIDs = new Set<string>();
+  for (const m of messages) {
+    if (m.role === "system") continue;
+    if (m.role === "phase") {
+      if (m.content.trim() !== "") {
+        items.push({ kind: "phase", id: `${idPrefix}${seq}`, text: m.content });
+        seq++;
+      }
+      continue;
+    }
+    if (m.role === "notice") {
+      if (m.content.trim() !== "") {
+        items.push({ kind: "notice", id: `${idPrefix}${seq}`, level: m.level === "warn" ? "warn" : "info", text: m.content });
+        seq++;
+      }
+      continue;
+    }
+    if (m.role === "compaction") {
+      items.push({
+        kind: "compaction",
+        id: `${idPrefix}${seq}`,
+        pending: Boolean(m.pending),
+        trigger: m.trigger ?? "",
+        messages: m.messages ?? 0,
+        summary: m.summary ?? "",
+        archive: m.archive ?? "",
+      });
+      seq++;
+      continue;
+    }
+    if (m.role === "user") {
+      if (m.content.trim() === "") continue;
+      items.push({ kind: "user", id: `${idPrefix}${seq}`, text: m.content });
+      seq++;
+      continue;
+    }
+    if (m.role === "assistant") {
+      const hasText = m.content.trim() !== "" || (m.reasoning ?? "").trim() !== "";
+      if (hasText) {
+        items.push({ kind: "assistant", id: `${idPrefix}${seq}`, text: m.content, reasoning: m.reasoning ?? "", streaming: false });
+        seq++;
+      }
+      for (const tc of m.toolCalls ?? []) {
+        const result = resultByID.get(tc.id);
+        if (tc.id) consumedToolIDs.add(tc.id);
+        const output = result?.content ?? "";
+        const error = output.startsWith("[error") || output.startsWith("Error:") ? output : undefined;
+        items.push({
+          kind: "tool",
+          id: tc.id || `${idPrefix}tool${seq}`,
+          name: tc.name,
+          args: tc.arguments ?? "",
+          readOnly: false,
+          status: error ? "error" : "done",
+          output,
+          error,
+          isShell: (tc.id || "").startsWith("shell-"),
+        });
+        seq++;
+      }
+      continue;
+    }
+    if (m.role === "tool") {
+      if (m.toolCallId && consumedToolIDs.has(m.toolCallId)) continue;
+      const output = m.content;
+      const error = output.startsWith("[error") || output.startsWith("Error:") ? output : undefined;
+      items.push({
+        kind: "tool",
+        id: m.toolCallId || `${idPrefix}tool${seq}`,
+        name: m.toolName || "tool",
+        args: "",
+        readOnly: false,
+        status: error ? "error" : "done",
+        output,
+        error,
+        isShell: (m.toolCallId || "").startsWith("shell-"),
+      });
+      seq++;
+      continue;
+    }
+  }
+  return { items, seq };
+}
+
 function ensureAssistant(s: State): { items: Item[]; id: string; seq: number } {
   if (s.currentAssistant) {
     const exists = s.items.some((it) => it.id === s.currentAssistant && it.kind === "assistant");
@@ -131,6 +231,10 @@ function ensureAssistant(s: State): { items: Item[]; id: string; seq: number } {
 
 function flushPendingUser(s: State): State {
   if (s.pendingUser === undefined) return s;
+  const lastItem = s.items[s.items.length - 1];
+  if (lastItem?.kind === "user" && lastItem.text === s.pendingUser) {
+    return { ...s, pendingUser: undefined };
+  }
   return {
     ...s,
     seq: s.seq + 1,
@@ -144,7 +248,7 @@ function applyEvent(s: State, e: WireEvent): State {
     if (e.kind === "turn_done") return { ...s, discardTurn: false, running: false, turnActive: false, currentAssistant: undefined, live: undefined };
     return s;
   }
-  if (s.pendingUser !== undefined && e.kind !== "turn_started" && e.kind !== "turn_done") {
+  if (s.pendingUser !== undefined && e.kind !== "turn_done") {
     s = flushPendingUser(s);
   }
   if (e.kind === "retrying") {
@@ -152,8 +256,16 @@ function applyEvent(s: State, e: WireEvent): State {
   }
   if (s.retry) s = { ...s, retry: undefined };
   switch (e.kind) {
-    case "turn_started":
-      return { ...s, running: true, turnActive: true, currentAssistant: undefined, turnStartAt: Date.now(), turnTokens: 0 };
+    case "turn_started": {
+      // Flush the user message and pre-create an empty assistant bubble
+      // immediately so the user sees their message + a blinking cursor the
+      // instant the backend acknowledges the turn — no dead gap waiting for
+      // the first text/reasoning token.
+      let cur: State = s;
+      if (cur.pendingUser !== undefined) cur = flushPendingUser(cur);
+      const { items, id, seq } = ensureAssistant(cur);
+      return { ...cur, items, currentAssistant: id, seq, live: { id, text: "", reasoning: "" }, running: true, turnActive: true, turnStartAt: Date.now(), turnTokens: 0 };
+    }
     case "text":
     case "reasoning": {
       const { items, id, seq } = ensureAssistant(s);
@@ -179,10 +291,10 @@ function applyEvent(s: State, e: WireEvent): State {
       if (idx >= 0) {
         const next = [...s.items];
         const it = next[idx];
-        if (it.kind === "tool") next[idx] = { ...it, name: t.name, args: t.args ? t.args : it.args, readOnly: t.readOnly };
+        if (it.kind === "tool") next[idx] = { ...it, name: t.name, args: t.args ? t.args : it.args, readOnly: t.readOnly, profile: t.profile ?? it.profile };
         return { ...s, items: next };
       }
-      return { ...s, seq: s.seq + 1, items: [...s.items, { kind: "tool", id, name: t.name, args: t.args ?? "", readOnly: t.readOnly, status: "running", isShell: id.startsWith("shell-"), parentId: t.parentId }] };
+      return { ...s, seq: s.seq + 1, items: [...s.items, { kind: "tool", id, name: t.name, args: t.args ?? "", readOnly: t.readOnly, status: "running", isShell: id.startsWith("shell-"), parentId: t.parentId, profile: t.profile }] };
     }
     case "tool_result": {
       const t = e.tool;
@@ -197,7 +309,7 @@ function applyEvent(s: State, e: WireEvent): State {
       }
       if (idx >= 0) {
         const it = next[idx];
-        if (it.kind === "tool") next[idx] = { ...it, status: t.err ? "error" : "done", output: t.output, error: t.err, truncated: t.truncated };
+        if (it.kind === "tool") next[idx] = { ...it, status: t.err ? "error" : "done", output: t.output, error: t.err, truncated: t.truncated, durationMs: t.durationMs };
       }
       return { ...s, items: next };
     }
@@ -221,6 +333,22 @@ function applyEvent(s: State, e: WireEvent): State {
     }
     case "notice":
       return { ...s, running: s.turnActive ? s.running : false, seq: s.seq + 1, items: [...s.items, { kind: "notice", id: `n${s.seq}`, level: e.level ?? "info", text: e.text ?? "" }] };
+    case "upgrade":
+    case "skill_generated":
+    case "budget_exceeded":
+    case "skill_promoted": {
+      const text = e.text ?? "";
+      const routeStatus = e.kind === "upgrade" || e.kind === "budget_exceeded" ? text : s.routeStatus;
+      const skillStatus = e.kind === "skill_generated" || e.kind === "skill_promoted" ? text : s.skillStatus;
+      return {
+        ...s,
+        running: s.turnActive ? s.running : false,
+        routeStatus,
+        skillStatus,
+        seq: s.seq + 1,
+        items: [...s.items, { kind: "runtime_event", id: `rt${s.seq}`, event: e.kind, level: e.level ?? "info", text }],
+      };
+    }
     case "phase":
       return { ...s, seq: s.seq + 1, items: [...s.items, { kind: "phase", id: `p${s.seq}`, text: e.text ?? "" }] };
     case "compaction_started":
@@ -256,8 +384,31 @@ function applyEvent(s: State, e: WireEvent): State {
 
 function reducer(s: State, a: Action): State {
   switch (a.type) {
-    case "user": return { ...s, running: true, turnStartAt: Date.now(), turnTokens: 0, pendingUser: a.text, discardTurn: false };
+    case "user": {
+      const seq = a.seq !== undefined ? a.seq : s.seq;
+      return {
+        ...s,
+        seq: seq + 1,
+        items: [...s.items, { kind: "user", id: `u${seq}`, text: a.text }],
+        running: true,
+        turnStartAt: Date.now(),
+        turnTokens: 0,
+        pendingUser: a.text,
+        discardTurn: false,
+      };
+    }
     case "unsend": return { ...s, pendingUser: undefined, discardTurn: true, running: false, live: undefined };
+    case "backend_status": {
+      if (a.running === s.running) return s;
+      if (a.running) return { ...s, running: true, turnActive: true, turnStartAt: s.turnStartAt || Date.now() };
+      const finalized = s.items.map((it) => {
+        if (it.kind === "assistant" && s.live && it.id === s.live.id) return { ...it, text: s.live.text, reasoning: s.live.reasoning, streaming: false };
+        if (it.kind === "assistant" && it.streaming) return { ...it, streaming: false };
+        if (it.kind === "tool" && it.status === "running") return { ...it, status: "stopped" as const };
+        return it;
+      });
+      return { ...s, items: finalized, running: false, turnActive: false, live: undefined, currentAssistant: undefined, approval: undefined, ask: undefined };
+    }
     case "meta": return { ...s, meta: a.meta };
     case "context": return { ...s, context: a.context };
     case "balance": return { ...s, balance: a.balance };
@@ -267,16 +418,8 @@ function reducer(s: State, a: Action): State {
     case "message_action_start": return { ...s, messageAction: a.action };
     case "message_action_done": return { ...s, messageAction: undefined };
     case "history": {
-      const visible = a.messages.filter(
-        (m) => (m.role === "user" && m.content.trim() !== "") ||
-               (m.role === "assistant" && (m.content.trim() !== "" || (m.reasoning ?? "").trim() !== "")),
-      );
-      const items: Item[] = visible.map((m, i) =>
-        m.role === "user"
-          ? { kind: "user", id: `h${i}`, text: m.content }
-          : { kind: "assistant", id: `h${i}`, text: m.content, reasoning: m.reasoning ?? "", streaming: false },
-      );
-      return { ...s, items, seq: s.seq + visible.length };
+      const { items, seq } = historyMessagesToItems(a.messages, "h", s.seq);
+      return { ...s, items, seq };
     }
     case "local_notice": return { ...s, running: false, turnActive: false, seq: s.seq + 1, items: [...s.items, { kind: "notice", id: `n${s.seq}`, level: a.level, text: a.text }] };
     case "clearApproval": return { ...s, approval: undefined };
@@ -313,9 +456,16 @@ function messageActionBusyText(scope: MessageActionScope): string {
   }
 }
 
+function errorMessage(err: unknown): string {
+  if (err instanceof Error) return err.message;
+  if (typeof err === "string") return err;
+  return String(err || "");
+}
+
 export function useController() {
   const statesRef = useRef<TabStates>(new Map());
   const [activeTabId, setActiveTabId] = useState<string | undefined>();
+  const activeTabIdRef = useRef<string | undefined>(undefined);
   // A render-triggering counter so that mutations to a non-active tab's state still
   // cause a re-render when that tab becomes active.
   const [, setVersion] = useState(0);
@@ -324,6 +474,7 @@ export function useController() {
   // The active tab's current state, with a stable identity for cancel().
   const activeState = activeTabId ? getOrCreateState(statesRef.current, activeTabId) : initialState;
   const stateRef = useRef(activeState);
+  activeTabIdRef.current = activeTabId;
   stateRef.current = activeState;
 
   // Dispatch to a specific tab's state. If the tab doesn't have state yet, it's
@@ -338,19 +489,51 @@ export function useController() {
     }
   }, [bump]);
 
+  const checkpointRefreshSeq = useRef(new Map<string, number>());
+  const sessionLoadSeq = useRef(new Map<string, number>());
+  const bumpSessionLoadSeq = useCallback((tabId: string): number => {
+    const seq = (sessionLoadSeq.current.get(tabId) ?? 0) + 1;
+    sessionLoadSeq.current.set(tabId, seq);
+    return seq;
+  }, []);
+  const sessionLoadCurrent = useCallback((tabId: string, seq: number): boolean => {
+    return sessionLoadSeq.current.get(tabId) === seq;
+  }, []);
+  const bumpCheckpointRefreshSeq = useCallback((tabId: string): number => {
+    const seq = (checkpointRefreshSeq.current.get(tabId) ?? 0) + 1;
+    checkpointRefreshSeq.current.set(tabId, seq);
+    return seq;
+  }, []);
+  const refreshCheckpoints = useCallback(async (tabId: string) => {
+    const seq = bumpCheckpointRefreshSeq(tabId);
+    const checkpoints = await app.CheckpointsForTab(tabId).catch(() => undefined);
+    if (checkpointRefreshSeq.current.get(tabId) !== seq || checkpoints === undefined) return;
+    dispatchTo(tabId, { type: "checkpoints", checkpoints: asArray(checkpoints) });
+  }, [bumpCheckpointRefreshSeq, dispatchTo]);
+
   const loadSessionDataForTab = useCallback(async (tabId: string, reset = false) => {
-    try {
-      if (reset) dispatchTo(tabId, { type: "reset" });
-      dispatchTo(tabId, { type: "meta", meta: await app.MetaForTab(tabId) });
-      dispatchTo(tabId, { type: "context", context: await app.ContextUsageForTab(tabId) });
-      dispatchTo(tabId, { type: "effort", effort: await app.EffortForTab(tabId) });
-      dispatchTo(tabId, { type: "balance", balance: await app.BalanceForTab(tabId) });
-      dispatchTo(tabId, { type: "jobs", jobs: asArray(await app.JobsForTab(tabId)) });
-      dispatchTo(tabId, { type: "checkpoints", checkpoints: asArray(await app.CheckpointsForTab(tabId)) });
-      const history = asArray(await app.HistoryForTab(tabId));
-      if (history && history.length) dispatchTo(tabId, { type: "history", messages: history });
-    } catch { /* ignore */ }
-  }, [dispatchTo]);
+    const seq = bumpSessionLoadSeq(tabId);
+    const safe = <T,>(p: Promise<T>): Promise<T | undefined> => p.catch(() => undefined);
+    const [meta, context, effort, balance, jobs, checkpoints, history] = await Promise.all([
+      safe(app.MetaForTab(tabId)),
+      safe(app.ContextUsageForTab(tabId)),
+      safe(app.EffortForTab(tabId)),
+      safe(app.BalanceForTab(tabId)),
+      safe(app.JobsForTab(tabId)),
+      safe(app.CheckpointsForTab(tabId)),
+      safe(app.HistoryForTab(tabId)),
+    ]);
+    if (!sessionLoadCurrent(tabId, seq)) return;
+    if (reset) dispatchTo(tabId, { type: "reset" });
+    if (meta) dispatchTo(tabId, { type: "meta", meta });
+    if (context) dispatchTo(tabId, { type: "context", context });
+    if (effort) dispatchTo(tabId, { type: "effort", effort });
+    if (balance) dispatchTo(tabId, { type: "balance", balance });
+    if (jobs) dispatchTo(tabId, { type: "jobs", jobs: asArray(jobs) });
+    if (checkpoints) dispatchTo(tabId, { type: "checkpoints", checkpoints: asArray(checkpoints) });
+    const messages = asArray(history);
+    if (messages.length) dispatchTo(tabId, { type: "history", messages });
+  }, [bumpSessionLoadSeq, dispatchTo, sessionLoadCurrent]);
 
   const activeTabFromBackend = useCallback(async (): Promise<TabMeta | undefined> => {
     const tabs = asArray(await app.ListTabs().catch(() => [] as TabMeta[]));
@@ -374,17 +557,31 @@ export function useController() {
     return active.id;
   }, [activeTabFromBackend, loadSessionDataForTab]);
 
-  const loadSessionData = useCallback(async () => {
-    if (activeTabId) {
-      await loadSessionDataForTab(activeTabId);
+  const reconcileTabRuntime = useCallback(async (tabId: string) => {
+    const tabs = asArray(await app.ListTabs().catch(() => [] as TabMeta[]));
+    const tab = tabs.find((candidate) => candidate.id === tabId);
+    if (!tab) return;
+    const local = statesRef.current.get(tabId);
+    const needsInitialLoad = !local?.meta;
+    const missedTurnDone = Boolean(local?.running && !tab.running);
+    dispatchTo(tabId, { type: "backend_status", running: Boolean(tab.running) });
+    if (needsInitialLoad || missedTurnDone) {
+      await loadSessionDataForTab(tabId, missedTurnDone);
       return;
     }
-    await syncActiveTabFromBackend();
-  }, [activeTabId, loadSessionDataForTab, syncActiveTabFromBackend]);
+    const [jobs, effort, balance] = await Promise.all([
+      app.JobsForTab(tabId).catch(() => undefined),
+      app.EffortForTab(tabId).catch(() => undefined),
+      app.BalanceForTab(tabId).catch(() => undefined),
+    ]);
+    if (jobs) dispatchTo(tabId, { type: "jobs", jobs: asArray(jobs) });
+    if (effort) dispatchTo(tabId, { type: "effort", effort });
+    if (balance) dispatchTo(tabId, { type: "balance", balance });
+  }, [dispatchTo, loadSessionDataForTab]);
 
   useEffect(() => {
     const off = onEvent((e) => {
-      const targetTabId = e.tabId || activeTabId;
+      const targetTabId = e.tabId || activeTabIdRef.current;
       if (!targetTabId) return;
       dispatchTo(targetTabId, { type: "event", e });
       if (e.kind === "turn_done") {
@@ -394,6 +591,7 @@ export function useController() {
           .catch(() => {});
         app.BalanceForTab(targetTabId).then((balance) => dispatchTo(targetTabId, { type: "balance", balance })).catch(() => {});
         app.EffortForTab(targetTabId).then((effort) => dispatchTo(targetTabId, { type: "effort", effort })).catch(() => {});
+        void refreshCheckpoints(targetTabId);
       }
       if (e.kind === "turn_done" || e.kind === "notice") {
         app.JobsForTab(targetTabId).then((jobs) => dispatchTo(targetTabId, { type: "jobs", jobs: asArray(jobs) })).catch(() => {});
@@ -401,36 +599,31 @@ export function useController() {
     });
 
     const offReady = onReady(() => {
-      void loadSessionData();
-      const readyTabId = activeTabId;
+      const readyTabId = activeTabIdRef.current;
       if (readyTabId) {
-        app.BalanceForTab(readyTabId).then((balance) => dispatchTo(readyTabId, { type: "balance", balance })).catch(() => {});
-        app.JobsForTab(readyTabId).then((jobs) => dispatchTo(readyTabId, { type: "jobs", jobs: asArray(jobs) })).catch(() => {});
-        app.EffortForTab(readyTabId).then((effort) => dispatchTo(readyTabId, { type: "effort", effort })).catch(() => {});
+        void loadSessionDataForTab(readyTabId);
+        return;
       }
+      void syncActiveTabFromBackend();
     });
 
-    void loadSessionData();
-    if (activeTabId) {
-      app.BalanceForTab(activeTabId).then((balance) => dispatchTo(activeTabId, { type: "balance", balance })).catch(() => {});
-      app.EffortForTab(activeTabId).then((effort) => dispatchTo(activeTabId, { type: "effort", effort })).catch(() => {});
-      app.JobsForTab(activeTabId).then((jobs) => dispatchTo(activeTabId, { type: "jobs", jobs: asArray(jobs) })).catch(() => {});
-    }
+    void syncActiveTabFromBackend();
 
     return () => { off(); offReady(); };
-  }, [loadSessionData, activeTabId, dispatchTo]);
+  }, [dispatchTo, loadSessionDataForTab, refreshCheckpoints, syncActiveTabFromBackend]);
 
   const send = useCallback((displayText: string, submitText = displayText) => {
     if (!activeTabId) return;
-    dispatchTo(activeTabId, { type: "user", text: displayText });
+    const seq = getOrCreateState(statesRef.current, activeTabId).seq;
+    dispatchTo(activeTabId, { type: "user", text: displayText, seq });
     const display = displayText.trim(); const submit = submitText.trim();
     (display !== submit ? app.SubmitDisplayToTab(activeTabId, display, submit) : app.SubmitToTab(activeTabId, submit)).catch(() => {});
   }, [activeTabId, dispatchTo]);
 
   const runShell = useCallback((command: string) => {
     if (!activeTabId) return;
-    dispatchTo(activeTabId, { type: "user", text: `!${command}` });
-    app.RunShell(command).catch(() => {});
+    dispatchTo(activeTabId, { type: "user", text: `!${command}`, seq: getOrCreateState(statesRef.current, activeTabId).seq });
+    app.RunShellForTab(activeTabId, command).catch(() => {});
   }, [activeTabId, dispatchTo]);
 
   const notice = useCallback((text: string, level: "info" | "warn" = "info") => {
@@ -473,9 +666,11 @@ export function useController() {
   }, [activeTabId, dispatchTo]);
 
   const newSession = useCallback(async () => {
+    const tabId = activeTabId;
+    if (tabId) bumpCheckpointRefreshSeq(tabId);
     await app.NewSession().catch(() => {});
-    if (activeTabId) dispatchTo(activeTabId, { type: "reset" });
-  }, [activeTabId, dispatchTo]);
+    if (tabId) dispatchTo(tabId, { type: "reset" });
+  }, [activeTabId, bumpCheckpointRefreshSeq, dispatchTo]);
 
   const listSessions = useCallback(async (): Promise<SessionMeta[]> => asArray<SessionMeta>(await app.ListSessions().catch(() => [])), []);
   const listTrashedSessions = useCallback(async (): Promise<SessionMeta[]> => asArray<SessionMeta>(await app.ListTrashedSessions().catch(() => [])), []);
@@ -489,7 +684,8 @@ export function useController() {
     dispatchTo(targetTabId, { type: "reset" });
     if (messages.length) dispatchTo(targetTabId, { type: "history", messages });
     app.ContextUsageForTab(targetTabId).then((context) => dispatchTo(targetTabId, { type: "context", context })).catch(() => {});
-  }, [activeTabId, dispatchTo, waitForTabReady]);
+    void refreshCheckpoints(targetTabId);
+  }, [activeTabId, dispatchTo, refreshCheckpoints, waitForTabReady]);
 
   const previewSession = useCallback(async (path: string): Promise<HistoryMessage[]> => asArray<HistoryMessage>(await app.PreviewSession(path).catch(() => [])), []);
   const deleteSession = useCallback((path: string) => app.DeleteSession(path).catch(() => {}), []);
@@ -524,7 +720,12 @@ export function useController() {
 
   const setModel = useCallback(async (name: string) => {
     if (!activeTabId) return;
-    await app.SetModelForTab(activeTabId, name).catch(() => {});
+    try {
+      await app.SetModelForTab(activeTabId, name);
+    } catch (err) {
+      dispatchTo(activeTabId, { type: "local_notice", level: "warn", text: t("status.modelSwitchFailed", { err: errorMessage(err) }) });
+      return;
+    }
     try {
       dispatchTo(activeTabId, { type: "meta", meta: await app.MetaForTab(activeTabId) });
       dispatchTo(activeTabId, { type: "context", context: await app.ContextUsageForTab(activeTabId) });
@@ -584,16 +785,12 @@ export function useController() {
 
   // Tab management: switch preserves per-tab state; open creates it.
   const switchTab = useCallback(async (tabId: string) => {
+    setActiveTabId(tabId);
     try {
       await app.SetActiveTab(tabId);
-      setActiveTabId(tabId);
-      // Load session data into the tab's state if it hasn't been loaded yet.
-      const states = statesRef.current;
-      if (!states.has(tabId) || !states.get(tabId)?.meta) {
-        await loadSessionDataForTab(tabId);
-      }
+      await reconcileTabRuntime(tabId);
     } catch { /* ignore */ }
-  }, [loadSessionDataForTab]);
+  }, [reconcileTabRuntime]);
 
   const openProjectTab = useCallback(async (workspaceRoot: string, topicId: string): Promise<TabMeta | undefined> => {
     try {

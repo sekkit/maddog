@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { asArray } from "../lib/array";
 import { app, openExternal } from "../lib/bridge";
 import { useT } from "../lib/i18n";
@@ -15,8 +15,10 @@ type CapTab = "servers" | "skills";
 
 export function CapabilitiesPanel({
   onClose,
+  initialTab = "servers",
 }: {
   onClose: () => void;
+  initialTab?: CapTab;
 }) {
   const t = useT();
   const [view, setView] = useState<CapabilitiesView | null>(null);
@@ -24,7 +26,7 @@ export function CapabilitiesPanel({
   const [err, setErr] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
   const [editing, setEditing] = useState<string | null>(null);
-  const [tab, setTab] = useState<CapTab>("servers");
+  const [tab, setTab] = useState<CapTab>(initialTab);
   const [skillQuery, setSkillQuery] = useState("");
   const [expandedSkills, setExpandedSkills] = useState<Set<string>>(() => new Set());
   const [expandedErrors, setExpandedErrors] = useState<Set<string>>(() => new Set());
@@ -140,6 +142,11 @@ export function CapabilitiesPanel({
               ✕
             </button>
           </Tooltip>
+          <Tooltip label={t("caps.refresh")}>
+            <button className="chip" disabled={busy} onClick={() => void reload()}>
+              ↻
+            </button>
+          </Tooltip>
         </header>
 
         {!view ? (
@@ -181,9 +188,8 @@ export function CapabilitiesPanel({
                     servers={serverGroups.failed}
                     expanded={expandedErrors}
                     onToggle={toggleError}
-                    onRetry={(name) => void mutate(() => app.RetryMCPServer(name))}
+                    onRetry={(name) => void mutate(() => app.ReconnectMCPServer(name))}
                     onConfirmClearAuth={(name) => void mutate(() => app.ClearMCPServerAuthentication(name))}
-                    onSetTier={(name, tier) => void mutate(() => app.SetMCPServerTier(name, tier))}
                     onConfirm={(name) => void mutate(() => app.RemoveMCPServer(name))}
                     busy={busy}
                   />
@@ -202,10 +208,10 @@ export function CapabilitiesPanel({
                     setEditing(name);
                   }}
                   onCancelEdit={() => setEditing(null)}
-                  onRetry={(name) => void mutate(() => app.RetryMCPServer(name))}
+                  onRetry={(name) => void mutate(() => app.ReconnectMCPServer(name))}
+                  onReconnect={(name) => void mutate(() => app.ReconnectMCPServer(name))}
                   onConfirmClearAuth={(name) => void mutate(() => app.ClearMCPServerAuthentication(name))}
                   onToggle={(name, on) => void mutate(() => app.SetMCPServerEnabled(name, on))}
-                  onSetTier={(name, tier) => void mutate(() => app.SetMCPServerTier(name, tier))}
                   onUpdate={(name, input) =>
                     void mutate(() => app.UpdateMCPServer(name, input)).then((ok) => {
                       if (ok) setEditing(null);
@@ -284,6 +290,7 @@ function normalizeCapabilitiesView(view: CapabilitiesView | null | undefined): C
     skills: asArray(view?.skills),
     skillRoots: asArray(view?.skillRoots).map((root) => ({
       ...root,
+      removable: Boolean(root.removable),
       skillItems: asArray(root.skillItems),
     })),
   };
@@ -430,7 +437,7 @@ function SkillSources({
                 const rootSkillsExpanded = expandedRootSkills.has(key);
                 const rootSkillsFull = fullRootSkills.has(key);
                 const canShowRootSkills = rootSkills.length > 0;
-                const canRemoveRoot = root.scope === "custom" && root.configured;
+                const canRemoveRoot = root.removable;
                 return (
                   <div className={`cap-source cap-source--${skillRootTone(root)}`} key={key}>
                     <span className={`cap-dot cap-dot--${skillRootDot(root)}`} />
@@ -594,9 +601,9 @@ function ServerGroup({
   onEdit,
   onCancelEdit,
   onRetry,
+  onReconnect,
   onConfirmClearAuth,
   onToggle,
-  onSetTier,
   onUpdate,
   onToggleDetails,
   onToggleTools,
@@ -610,9 +617,9 @@ function ServerGroup({
   onEdit: (name: string) => void;
   onCancelEdit: () => void;
   onRetry: (name: string) => void;
+  onReconnect: (name: string) => void;
   onConfirmClearAuth: (name: string) => void;
   onToggle: (name: string, on: boolean) => void;
-  onSetTier: (name: string, tier: string) => void;
   onUpdate: (name: string, input: MCPServerInput) => void;
   onToggleDetails: (name: string) => void;
   onToggleTools: (name: string) => void;
@@ -632,9 +639,9 @@ function ServerGroup({
           onEdit={() => onEdit(s.name)}
           onCancelEdit={onCancelEdit}
           onRetry={() => onRetry(s.name)}
+          onReconnect={() => onReconnect(s.name)}
           onConfirmClearAuth={() => onConfirmClearAuth(s.name)}
           onToggle={(on) => onToggle(s.name, on)}
-          onSetTier={(tier) => onSetTier(s.name, tier)}
           onUpdate={(input) => onUpdate(s.name, input)}
           onToggleDetails={() => onToggleDetails(s.name)}
           onToggleTools={() => onToggleTools(s.name)}
@@ -651,7 +658,6 @@ function FailedServersNotice({
   onToggle,
   onRetry,
   onConfirmClearAuth,
-  onSetTier,
   onConfirm,
 }: {
   servers: ServerView[];
@@ -660,7 +666,6 @@ function FailedServersNotice({
   onToggle: (name: string) => void;
   onRetry: (name: string) => void;
   onConfirmClearAuth: (name: string) => void;
-  onSetTier: (name: string, tier: string) => void;
   onConfirm: (name: string) => void;
 }) {
   const t = useT();
@@ -677,7 +682,6 @@ function FailedServersNotice({
           const open = expanded.has(s.name);
           const error = s.error || t("caps.failed");
           const actionLabel = serverActionLabel(s, t);
-          const canConfigure = s.configured;
           const handlePrimaryAction = () => {
             if (shouldOpenAuth(s)) {
               openExternal((s.authUrl || "").trim());
@@ -721,11 +725,6 @@ function FailedServersNotice({
                   />
                 )}
               </div>
-              {canConfigure && (
-                <div className="cap-failure__mode">
-                  <AutoConnectControls tier={s.tier || "lazy"} busy={busy} onTierChange={(tier) => onSetTier(s.name, tier)} />
-                </div>
-              )}
               {open && (
                 <div className="cap-failure__logbox">
                   <div className="cap-failure__logbar">
@@ -755,9 +754,9 @@ function ServerRow({
   onEdit,
   onCancelEdit,
   onRetry,
+  onReconnect,
   onConfirmClearAuth,
   onToggle,
-  onSetTier,
   onUpdate,
   onToggleDetails,
   onToggleTools,
@@ -771,9 +770,9 @@ function ServerRow({
   onEdit: () => void;
   onCancelEdit: () => void;
   onRetry: () => void;
+  onReconnect: () => void;
   onConfirmClearAuth: () => void;
   onToggle: (on: boolean) => void;
-  onSetTier: (tier: string) => void;
   onUpdate: (input: MCPServerInput) => void;
   onToggleDetails: () => void;
   onToggleTools: () => void;
@@ -856,8 +855,8 @@ function ServerRow({
           busy={busy}
           onConfirm={onConfirm}
           onConnectNow={onRetry}
+          onReconnect={onReconnect}
           onConfirmClearAuth={onConfirmClearAuth}
-          onSetTier={onSetTier}
           toolsExpanded={toolsExpanded}
           editing={editing}
           onEdit={onEdit}
@@ -876,8 +875,8 @@ function ServerDetails({
   busy,
   onConfirm,
   onConnectNow,
+  onReconnect,
   onConfirmClearAuth,
-  onSetTier,
   toolsExpanded,
   editing,
   onEdit,
@@ -890,8 +889,8 @@ function ServerDetails({
   busy: boolean;
   onConfirm: () => void;
   onConnectNow: () => void;
+  onReconnect: () => void;
   onConfirmClearAuth: () => void;
-  onSetTier: (tier: string) => void;
   toolsExpanded: boolean;
   editing: boolean;
   onEdit: () => void;
@@ -901,9 +900,9 @@ function ServerDetails({
 }) {
   const t = useT();
   const command = serverCommand(s);
-  const canConfigure = s.configured;
   const canEditConfig = s.configured && !s.builtIn;
   const canConnectNow = s.status === "deferred" || s.status === "disabled";
+  const canReconnect = s.status === "connected";
   const canShowTools = (s.tools ?? 0) > 0 || (tools?.length ?? 0) > 0;
   const showClearAuth = canClearAuth(s);
   const authLabel = serverAuthLabel(s, t);
@@ -931,9 +930,6 @@ function ServerDetails({
             <span className="cap-detail__value">{authLabel}</span>
           </div>
         )}
-        {canConfigure && (
-          <AutoConnectControls tier={s.tier || "lazy"} busy={busy} onTierChange={onSetTier} />
-        )}
         {command && (
           <div className="cap-detail cap-detail--wide">
             <span className="cap-detail__label">{s.transport === "stdio" ? t("caps.command") : t("caps.url")}</span>
@@ -951,6 +947,11 @@ function ServerDetails({
         {canConnectNow && (
           <button className="btn btn--small" disabled={busy} onClick={onConnectNow}>
             {t("caps.connectNow")}
+          </button>
+        )}
+        {canReconnect && (
+          <button className="btn btn--small" disabled={busy} onClick={onReconnect}>
+            {t("caps.reconnect")}
           </button>
         )}
         {canShowTools && (
@@ -1019,7 +1020,6 @@ function EditServerForm({
   const [command, setCommand] = useState(initialTransport === "stdio" ? serverCommand(s) : "");
   const [url, setUrl] = useState(initialTransport === "stdio" ? "" : s.url || serverCommand(s));
   const [env, setEnv] = useState("");
-  const [tier, setTier] = useState(s.tier || "lazy");
   const isStdio = transport === "stdio";
   const ready = isStdio ? command.trim() !== "" : url.trim() !== "";
 
@@ -1033,7 +1033,6 @@ function EditServerForm({
       args: isStdio ? parts.slice(1) : [],
       url: isStdio ? "" : url.trim(),
       env: envText === "" ? null : parseEnvText(envText),
-      tier,
     });
   };
 
@@ -1063,7 +1062,6 @@ function EditServerForm({
             <input className="mem-input" value={url} disabled={busy} onChange={(e) => setUrl(e.target.value)} placeholder={t("caps.urlPlaceholder")} />
           </label>
         )}
-        <AutoConnectControls tier={tier} busy={busy} onTierChange={setTier} />
         <label className="cap-detail cap-detail--wide">
           <span className="cap-detail__label">{t("caps.envLabel")}</span>
           <textarea className="mem-textarea cap-config-edit__env" value={env} disabled={busy} onChange={(e) => setEnv(e.target.value)} placeholder={t("caps.envPlaceholder")} spellCheck={false} />
@@ -1088,58 +1086,9 @@ function EditServerForm({
   );
 }
 
-function AutoConnectControls({
-  tier,
-  busy,
-  onTierChange,
-}: {
-  tier: string;
-  busy: boolean;
-  onTierChange: (tier: string) => void;
-}) {
-  const t = useT();
-  const groupId = useId();
-  const normalized = normalizeTierValue(tier);
-  const options = [
-    { tier: "lazy", label: t("caps.launchLazy"), hint: t("caps.launchLazyHint") },
-    { tier: "background", label: t("caps.launchBackground"), hint: t("caps.launchBackgroundHint") },
-    { tier: "eager", label: t("caps.launchEager"), hint: t("caps.launchEagerHint") },
-  ];
-  return (
-    <fieldset className="cap-detail cap-detail--wide cap-connection-mode">
-      <legend className="cap-detail__label">{t("caps.launchMode")}</legend>
-      <div className="cap-connection-options">
-        {options.map((option) => (
-          <label
-            className={`cap-connection-option${normalized === option.tier ? " cap-connection-option--selected" : ""}${busy ? " cap-connection-option--disabled" : ""}`}
-            key={option.tier}
-          >
-            <input
-              type="radio"
-              name={`mcp-connection-tier-${groupId}`}
-              value={option.tier}
-              checked={normalized === option.tier}
-              disabled={busy}
-              onChange={() => onTierChange(option.tier)}
-            />
-            <span className="cap-connection-option__text">
-              <span className="cap-connection-option__label">{option.label}</span>
-              <span className="cap-connection-option__hint">{option.hint}</span>
-            </span>
-          </label>
-        ))}
-      </div>
-    </fieldset>
-  );
-}
-
 function serverCommand(s: ServerView): string {
   if (s.transport === "stdio") return [s.command, ...(s.args ?? [])].filter(Boolean).join(" ").trim();
   return (s.url || "").trim();
-}
-
-function normalizeTierValue(tier: string): string {
-  return tier === "background" || tier === "eager" ? tier : "lazy";
 }
 
 function normalizeTransportValue(transport: string): string {
@@ -1313,7 +1262,6 @@ function AddServerForm({
   const [command, setCommand] = useState("");
   const [url, setUrl] = useState("");
   const [env, setEnv] = useState("");
-  const [tier, setTier] = useState("lazy");
 
   const isStdio = transport === "stdio";
   const ready = name.trim() !== "" && (isStdio ? command.trim() !== "" : url.trim() !== "");
@@ -1332,7 +1280,6 @@ function AddServerForm({
       args: isStdio ? parts.slice(1) : [],
       url: isStdio ? "" : url.trim(),
       env: envMap,
-      tier,
     });
   };
 
@@ -1350,7 +1297,6 @@ function AddServerForm({
       ) : (
         <input className="mem-input" placeholder={t("caps.urlPlaceholder")} value={url} onChange={(e) => setUrl(e.target.value)} />
       )}
-      <AutoConnectControls tier={tier} busy={busy} onTierChange={setTier} />
       <label className="set-label">{t("caps.envLabel")}</label>
       <textarea className="mem-textarea" value={env} onChange={(e) => setEnv(e.target.value)} placeholder={t("caps.envPlaceholder")} spellCheck={false} />
       <div className="prov-card__actions">
@@ -1363,4 +1309,227 @@ function AddServerForm({
       </div>
     </div>
   );
+}
+
+// MCPServersSettingsPage is a self-contained MCP servers management page
+// embedded inside the settings centre.
+export function MCPServersSettingsPage() {
+	const t = useT();
+	const [view, setView] = useState<CapabilitiesView | null>(null);
+	const [busy, setBusy] = useState(false);
+	const [err, setErr] = useState<string | null>(null);
+	const [adding, setAdding] = useState(false);
+	const [editing, setEditing] = useState<string | null>(null);
+	const [expandedErrors, setExpandedErrors] = useState<Set<string>>(() => new Set());
+	const [expandedServers, setExpandedServers] = useState<Set<string>>(() => new Set());
+	const [expandedServerTools, setExpandedServerTools] = useState<Set<string>>(() => new Set());
+
+	const reload = useCallback(async () => {
+		setView(normalizeCapabilitiesView(await app.Capabilities().catch(() => ({ servers: [], skills: [], skillRoots: [] }))));
+	}, []);
+	useEffect(() => { void reload(); }, [reload]);
+	useEffect(() => {
+		if (!view || !view.servers.some((s) => s.status === "initializing" || s.status === "deferred")) return;
+		const id = window.setInterval(() => void reload(), 2500);
+		return () => window.clearInterval(id);
+	}, [reload, view]);
+
+	const mutate = async (fn: () => Promise<unknown>) => {
+		setBusy(true);
+		setErr(null);
+		try {
+			await fn();
+			await reload();
+			return true;
+		} catch (e) {
+			setErr(String((e as Error)?.message ?? e));
+			await reload();
+			return false;
+		} finally {
+			setBusy(false);
+		}
+	};
+
+	const serverGroups = useMemo(() => {
+		const servers = sortServersForDisplay(view?.servers ?? []);
+		return {
+			failed: servers.filter((s) => s.status === "failed"),
+			active: servers.filter((s) => s.status !== "failed"),
+		};
+	}, [view]);
+
+	const toggleError = useCallback((name: string) => {
+		setExpandedErrors((prev) => { const next = new Set(prev); if (next.has(name)) next.delete(name); else next.add(name); return next; });
+	}, []);
+	const toggleServer = useCallback((name: string) => {
+		setExpandedServers((prev) => { const next = new Set(prev); if (next.has(name)) next.delete(name); else next.add(name); return next; });
+	}, []);
+	const toggleServerTools = useCallback((name: string) => {
+		setExpandedServerTools((prev) => { const next = new Set(prev); if (next.has(name)) next.delete(name); else next.add(name); return next; });
+	}, []);
+
+	const summary = useMemo(() => {
+		if (!view) return "";
+		const connected = view.servers.filter((s) => s.status === "connected").length;
+		const failed = view.servers.filter((s) => s.status === "failed").length;
+		return t("caps.summary", { connected, failed, skills: 0 }).replace(/· \d+ skills/, "").trim();
+	}, [view, t]);
+
+	if (!view) return <div className="empty">{t("caps.loading")}</div>;
+
+	return (
+		<section className="mem-section">
+			{err && <div className="banner banner--error">{err}</div>}
+			{view.servers.length > 0 && (
+				<div className="drawer__summary" style={{ marginBottom: 12 }}>{summary}</div>
+			)}
+			<div className="mem-section__actions">
+				{!adding && (
+					<button className="btn btn--small" disabled={busy} onClick={() => setAdding(true)}>
+						{t("caps.addServer")}
+					</button>
+				)}
+			</div>
+			{serverGroups.failed.length > 0 && (
+				<FailedServersNotice
+					servers={serverGroups.failed}
+					expanded={expandedErrors}
+					busy={busy}
+					onToggle={toggleError}
+					onRetry={(name) => void mutate(() => app.ReconnectMCPServer(name))}
+					onConfirmClearAuth={(name) => void mutate(() => app.ClearMCPServerAuthentication(name))}
+					onConfirm={(name) => void mutate(() => app.RemoveMCPServer(name))}
+				/>
+			)}
+			{view.servers.length === 0 && !adding && (
+				<div className="mem-empty">{t("caps.noServers")}</div>
+			)}
+			<ServerGroup
+				busy={busy}
+				servers={serverGroups.active}
+				expanded={expandedServers}
+				expandedTools={expandedServerTools}
+				editing={editing}
+				onConfirm={(name) => void mutate(() => app.RemoveMCPServer(name))}
+				onEdit={(name) => { setEditing(name); }}
+				onCancelEdit={() => setEditing(null)}
+				onRetry={(name) => void mutate(() => app.ReconnectMCPServer(name))}
+				onReconnect={(name) => void mutate(() => app.ReconnectMCPServer(name))}
+				onConfirmClearAuth={(name) => void mutate(() => app.ClearMCPServerAuthentication(name))}
+				onToggle={(name, on) => void mutate(() => app.SetMCPServerEnabled(name, on))}
+				onUpdate={(name, input) =>
+					void mutate(() => app.UpdateMCPServer(name, input)).then((ok) => {
+						if (ok) setEditing(null);
+					})
+				}
+				onToggleDetails={toggleServer}
+				onToggleTools={toggleServerTools}
+			/>
+			{adding ? (
+				<AddServerForm busy={busy} onCancel={() => setAdding(false)} onAdd={async (input) => (await mutate(() => app.AddMCPServer(input))) && setAdding(false)} />
+			) : null}
+		</section>
+	);
+}
+
+// SkillsSettingsPage is a self-contained skills management page embedded inside
+// the settings centre.
+export function SkillsSettingsPage() {
+	const t = useT();
+	const [view, setView] = useState<CapabilitiesView | null>(null);
+	const [busy, setBusy] = useState(false);
+	const [err, setErr] = useState<string | null>(null);
+	const [skillQuery, setSkillQuery] = useState("");
+	const [expandedSkills, setExpandedSkills] = useState<Set<string>>(() => new Set());
+
+	const reload = useCallback(async () => {
+		setView(normalizeCapabilitiesView(await app.Capabilities().catch(() => ({ servers: [], skills: [], skillRoots: [] }))));
+	}, []);
+	useEffect(() => { void reload(); }, [reload]);
+
+	const mutate = async (fn: () => Promise<unknown>) => {
+		setBusy(true);
+		setErr(null);
+		try {
+			await fn();
+			await reload();
+			return true;
+		} catch (e) {
+			setErr(String((e as Error)?.message ?? e));
+			await reload();
+			return false;
+		} finally {
+			setBusy(false);
+		}
+	};
+
+	const filteredSkills = useMemo(() => {
+		if (!view) return [];
+		const q = skillQuery.trim().toLowerCase();
+		if (!q) return view.skills;
+		return view.skills.filter((sk) => {
+			const text = [sk.name, "/" + sk.name, sk.description, sk.scope, sk.runAs].join(" ").toLowerCase();
+			return text.includes(q);
+		});
+	}, [view, skillQuery]);
+
+	const skillSummary = useMemo(() => {
+		if (!view) return "";
+		return skillListSummary(view.skills, filteredSkills, skillQuery.trim().length > 0, t);
+	}, [filteredSkills, skillQuery, t, view]);
+
+	const toggleSkill = useCallback((name: string) => {
+		setExpandedSkills((prev) => { const next = new Set(prev); if (next.has(name)) next.delete(name); else next.add(name); return next; });
+	}, []);
+
+	if (!view) return <div className="empty">{t("caps.loading")}</div>;
+
+	return (
+		<section className="mem-section">
+			{err && <div className="banner banner--error">{err}</div>}
+			<div className="cap-search">
+				<input
+					className="mem-input"
+					type="search"
+					placeholder={t("caps.searchSkills")}
+					value={skillQuery}
+					onChange={(e) => setSkillQuery(e.target.value)}
+				/>
+			</div>
+			<SkillSources
+				roots={view.skillRoots ?? []}
+				busy={busy}
+				onAdd={() => mutate(async () => {
+					const path = await app.PickSkillFolder();
+					if (path) await app.AddSkillPath(path);
+				})}
+				onRefresh={() => mutate(() => app.RefreshSkills())}
+				onRemove={(path) => mutate(() => app.RemoveSkillPath(path))}
+			/>
+			<div className="cap-skills-head">
+				<div className="cap-skills-head__copy">
+					<div className="cap-skills-head__title">{t("caps.skills")}</div>
+					<div className="cap-skills-head__summary">{skillSummary}</div>
+				</div>
+			</div>
+			{view.skills.length === 0 ? (
+				<div className="mem-empty">{t("caps.noSkills")}</div>
+			) : filteredSkills.length === 0 ? (
+				<div className="mem-empty">{t("caps.noSkillMatches")}</div>
+			) : (
+				<div className="cap-skills">
+					{filteredSkills.map((sk) => (
+						<SkillRow
+							key={sk.name}
+							skill={sk}
+							busy={busy}
+							expanded={expandedSkills.has(sk.name)}
+							onToggle={() => toggleSkill(sk.name)}
+							onToggleEnabled={(enabled) => void mutate(() => app.SetSkillEnabled(sk.name, enabled))}
+						/>
+					))}
+				</div>
+			)}
+		</section>
+	);
 }

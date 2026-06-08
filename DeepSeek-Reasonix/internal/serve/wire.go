@@ -8,16 +8,18 @@ import "reasonix/internal/event"
 // error becomes a message — so a browser frontend renders the same typed stream
 // the TUI does.
 type wireEvent struct {
-	Kind       string          `json:"kind"`
-	Text       string          `json:"text,omitempty"`
-	Reasoning  string          `json:"reasoning,omitempty"`
-	Level      string          `json:"level,omitempty"`
-	Tool       *wireTool       `json:"tool,omitempty"`
-	Usage      *wireUsage      `json:"usage,omitempty"`
-	Approval   *wireApproval   `json:"approval,omitempty"`
-	Ask        *wireAsk        `json:"ask,omitempty"`
-	Compaction *wireCompaction `json:"compaction,omitempty"`
-	Err        string          `json:"err,omitempty"`
+	Kind         string          `json:"kind"`
+	Text         string          `json:"text,omitempty"`
+	Reasoning    string          `json:"reasoning,omitempty"`
+	Level        string          `json:"level,omitempty"`
+	Tool         *wireTool       `json:"tool,omitempty"`
+	Usage        *wireUsage      `json:"usage,omitempty"`
+	Approval     *wireApproval   `json:"approval,omitempty"`
+	Ask          *wireAsk        `json:"ask,omitempty"`
+	Compaction   *wireCompaction `json:"compaction,omitempty"`
+	Err          string          `json:"err,omitempty"`
+	RetryAttempt int             `json:"retryAttempt,omitempty"`
+	RetryMax     int             `json:"retryMax,omitempty"`
 }
 
 // wireCompaction is the JSON form of an event.Compaction. On a compaction_started
@@ -48,16 +50,23 @@ type wireAsk struct {
 	Questions []wireAskQuestion `json:"questions"`
 }
 
+type wireProfile struct {
+	Model  string `json:"model,omitempty"`
+	Effort string `json:"effort,omitempty"`
+}
+
 type wireTool struct {
-	ID        string `json:"id,omitempty"`
-	Name      string `json:"name"`
-	Args      string `json:"args,omitempty"`
-	Output    string `json:"output,omitempty"`
-	Err       string `json:"err,omitempty"`
-	ReadOnly  bool   `json:"readOnly"`
-	Truncated bool   `json:"truncated,omitempty"`
-	Partial   bool   `json:"partial,omitempty"`
-	ParentID  string `json:"parentId,omitempty"`
+	ID         string       `json:"id,omitempty"`
+	Name       string       `json:"name"`
+	Args       string       `json:"args,omitempty"`
+	Output     string       `json:"output,omitempty"`
+	Err        string       `json:"err,omitempty"`
+	ReadOnly   bool         `json:"readOnly"`
+	Truncated  bool         `json:"truncated,omitempty"`
+	DurationMs int64        `json:"durationMs,omitempty"`
+	Partial    bool         `json:"partial,omitempty"`
+	ParentID   string       `json:"parentId,omitempty"`
+	Profile    *wireProfile `json:"profile,omitempty"`
 }
 
 type wireUsage struct {
@@ -114,6 +123,11 @@ var kindNames = map[event.Kind]string{
 	event.CompactionStarted: "compaction_started",
 	event.CompactionDone:    "compaction_done",
 	event.ToolProgress:      "tool_progress",
+	event.Retrying:          "retrying",
+	event.Upgrade:           "upgrade",
+	event.SkillGenerated:    "skill_generated",
+	event.BudgetExceeded:    "budget_exceeded",
+	event.SkillPromoted:     "skill_promoted",
 }
 
 // toWireAsk converts an event.Ask into its JSON wire form.
@@ -133,19 +147,24 @@ func toWireAsk(a event.Ask) *wireAsk {
 func toWire(e event.Event) wireEvent {
 	w := wireEvent{Kind: kindNames[e.Kind], Text: e.Text, Reasoning: e.Reasoning}
 	switch e.Kind {
-	case event.Notice:
+	case event.Notice, event.Upgrade, event.SkillGenerated, event.BudgetExceeded, event.SkillPromoted:
 		if e.Level == event.LevelWarn {
 			w.Level = "warn"
 		} else {
 			w.Level = "info"
 		}
 	case event.ToolDispatch, event.ToolResult, event.ToolProgress:
-		w.Tool = &wireTool{
+		wt := &wireTool{
 			ID: e.Tool.ID, Name: e.Tool.Name, Args: e.Tool.Args,
 			Output: e.Tool.Output, Err: e.Tool.Err,
 			ReadOnly: e.Tool.ReadOnly, Truncated: e.Tool.Truncated,
-			Partial: e.Tool.Partial, ParentID: e.Tool.ParentID,
+			DurationMs: e.Tool.DurationMs, Partial: e.Tool.Partial,
+			ParentID: e.Tool.ParentID,
 		}
+		if e.Tool.Profile != nil {
+			wt.Profile = &wireProfile{Model: e.Tool.Profile.Model, Effort: e.Tool.Profile.Effort}
+		}
+		w.Tool = wt
 	case event.Usage:
 		if u := e.Usage; u != nil {
 			w.Usage = &wireUsage{
@@ -177,6 +196,9 @@ func toWire(e event.Event) wireEvent {
 		if e.Err != nil {
 			w.Err = e.Err.Error()
 		}
+	case event.Retrying:
+		w.RetryAttempt = e.RetryAttempt
+		w.RetryMax = e.RetryMax
 	}
 	return w
 }

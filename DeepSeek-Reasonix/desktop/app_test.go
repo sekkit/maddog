@@ -33,12 +33,13 @@ func (a *App) setTestCtrl(ctrl *control.Controller, model string) {
 	}
 	tab := a.tabs["test"]
 	tab.Ctrl = ctrl
+	a.bindControllerDisplayRecorder(ctrl)
 	tab.model = model
 }
 
 func isolateDesktopUserDirs(t *testing.T) string {
 	t.Helper()
-	home := t.TempDir()
+	home := robustTempDir(t)
 	xdg := filepath.Join(home, ".config")
 	appData := filepath.Join(home, "AppData")
 	for _, dir := range []string{xdg, appData} {
@@ -51,6 +52,22 @@ func isolateDesktopUserDirs(t *testing.T) string {
 	t.Setenv("XDG_CONFIG_HOME", xdg)
 	t.Setenv("AppData", appData)
 	return home
+}
+
+func providerNamesFromView(providers []ProviderView) []string {
+	out := make([]string, 0, len(providers))
+	for _, p := range providers {
+		out = append(out, p.Name)
+	}
+	return out
+}
+
+func modelRefsFromView(models []ModelInfo) map[string]bool {
+	out := map[string]bool{}
+	for _, m := range models {
+		out[m.Ref] = true
+	}
+	return out
 }
 
 func TestCommandsIncludesEffortNotThinking(t *testing.T) {
@@ -92,6 +109,23 @@ func TestBeforeCloseAllowsSystemQuitWhenBackgroundCloseEnabled(t *testing.T) {
 	}
 	if consumeSystemQuitRequested() {
 		t.Fatal("system quit marker should be consumed by beforeClose")
+	}
+}
+
+func TestBackgroundCloseHideStrategyByPlatform(t *testing.T) {
+	tests := []struct {
+		goos string
+		want bool
+	}{
+		{goos: "darwin", want: true},
+		{goos: "windows", want: false},
+		{goos: "linux", want: false},
+		{goos: "freebsd", want: false},
+	}
+	for _, tt := range tests {
+		if got := backgroundCloseUsesApplicationHide(tt.goos); got != tt.want {
+			t.Fatalf("backgroundCloseUsesApplicationHide(%q) = %v, want %v", tt.goos, got, tt.want)
+		}
 	}
 }
 
@@ -137,7 +171,7 @@ func TestSetEffortPersistsAndAutoClears(t *testing.T) {
 func TestSettingsUsesUserDesktopPreferencesNotProjectConfig(t *testing.T) {
 	isolateDesktopUserDirs(t)
 
-	project := t.TempDir()
+	project := robustTempDir(t)
 	if err := os.WriteFile(filepath.Join(project, "reasonix.toml"), []byte(`
 [desktop]
 language = "zh"
@@ -177,7 +211,7 @@ close_behavior = "quit"
 func TestSettingsSeedsMissingUserConfigFromLegacyProjectConfig(t *testing.T) {
 	isolateDesktopUserDirs(t)
 
-	project := t.TempDir()
+	project := robustTempDir(t)
 	if err := os.WriteFile(filepath.Join(project, "reasonix.toml"), []byte(`
 default_model = "legacy-provider/legacy-model"
 
@@ -214,6 +248,506 @@ close_behavior = "quit"
 	if userCfg.DesktopLanguage() != "en" || userCfg.DesktopTheme() != "light" || userCfg.DesktopThemeStyle() != "glacier" || userCfg.DesktopCloseBehavior() != "quit" {
 		t.Fatalf("saved user config did not preserve seeded desktop prefs: lang:%q theme:%q style:%q close:%q", userCfg.DesktopLanguage(), userCfg.DesktopTheme(), userCfg.DesktopThemeStyle(), userCfg.DesktopCloseBehavior())
 	}
+}
+
+func TestSettingsSubagentDefaultsRoundTrip(t *testing.T) {
+	isolateDesktopUserDirs(t)
+	t.Setenv("DEEPSEEK_API_KEY", "sk-test")
+	if err := os.MkdirAll(filepath.Dir(config.UserConfigPath()), 0o755); err != nil {
+		t.Fatalf("mkdir config dir: %v", err)
+	}
+	if err := os.WriteFile(config.UserConfigPath(), []byte(`
+default_model = "deepseek/deepseek-v4-flash"
+
+[[providers]]
+name = "deepseek"
+kind = "openai"
+base_url = "https://api.deepseek.com"
+models = ["deepseek-v4-flash", "deepseek-v4-pro"]
+default = "deepseek-v4-flash"
+api_key_env = "DEEPSEEK_API_KEY"
+`), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	app := NewApp()
+	if err := app.SetSubagentModel("deepseek/deepseek-v4-pro"); err != nil {
+		t.Fatalf("SetSubagentModel: %v", err)
+	}
+	if err := app.SetSubagentEffort("max"); err != nil {
+		t.Fatalf("SetSubagentEffort: %v", err)
+	}
+
+	got := app.Settings()
+	if got.SubagentModel != "deepseek/deepseek-v4-pro" || got.SubagentEffort != "max" {
+		t.Fatalf("subagent settings = model:%q effort:%q", got.SubagentModel, got.SubagentEffort)
+	}
+	cfg := config.LoadForEdit(config.UserConfigPath())
+	if cfg.Agent.SubagentModel != "deepseek/deepseek-v4-pro" || cfg.Agent.SubagentEffort != "max" {
+		t.Fatalf("saved config = model:%q effort:%q", cfg.Agent.SubagentModel, cfg.Agent.SubagentEffort)
+	}
+}
+
+func TestSettingsSurfacesOfficialProviderTemplatesSeparately(t *testing.T) {
+	isolateDesktopUserDirs(t)
+
+	got := NewApp().Settings()
+	providers := providerAccessSet(providerNamesFromView(got.Providers))
+	official := providerAccessSet(providerNamesFromView(got.OfficialProviders))
+	if providers["mimo-api"] {
+		t.Fatalf("mimo-api should not be mixed into configured providers: %+v", got.Providers)
+	}
+	if !official["deepseek"] || !official["mimo-api"] || !official["mimo-token-plan"] {
+		t.Fatalf("official providers = %+v, want deepseek, mimo-api, and mimo-token-plan", got.OfficialProviders)
+	}
+}
+
+func TestSettingsRepairsLegacyOfficialProviderWithoutModel(t *testing.T) {
+	isolateDesktopUserDirs(t)
+	t.Setenv("DEEPSEEK_API_KEY", "sk-test")
+	if err := os.MkdirAll(filepath.Dir(config.UserConfigPath()), 0o755); err != nil {
+		t.Fatalf("mkdir config dir: %v", err)
+	}
+	if err := os.WriteFile(config.UserConfigPath(), []byte(`
+default_model = "deepseek-flash"
+
+[[providers]]
+name = "deepseek-flash"
+kind = "openai"
+base_url = "https://api.deepseek.com"
+api_key_env = "DEEPSEEK_API_KEY"
+`), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	got := NewApp().Settings()
+	for _, p := range got.Providers {
+		if p.Name != "deepseek" {
+			continue
+		}
+		if !p.Added || !p.KeySet || len(p.Models) != 2 || p.Models[0] != "deepseek-v4-flash" || p.Models[1] != "deepseek-v4-pro" || p.Default != "deepseek-v4-flash" {
+			t.Fatalf("deepseek provider = %+v, want added repaired official model list", p)
+		}
+		if got.DefaultModel != "deepseek/deepseek-v4-flash" {
+			t.Fatalf("default_model = %q, want deepseek/deepseek-v4-flash", got.DefaultModel)
+		}
+		return
+	}
+	t.Fatalf("settings providers missing deepseek: %+v", got.Providers)
+}
+
+func TestSettingsInfersLegacyProviderAccessWhenMissing(t *testing.T) {
+	isolateDesktopUserDirs(t)
+	t.Setenv("DEEPSEEK_API_KEY", "sk-test")
+	t.Setenv("MIMO_API_KEY", "sk-test")
+	if err := os.MkdirAll(filepath.Dir(config.UserConfigPath()), 0o755); err != nil {
+		t.Fatalf("mkdir config dir: %v", err)
+	}
+	if err := os.WriteFile(config.UserConfigPath(), []byte(`
+default_model = "deepseek-flash/deepseek-v4-pro"
+
+[[providers]]
+name = "deepseek-flash"
+kind = "openai"
+base_url = "https://api.deepseek.com"
+models = ["deepseek-v4-flash", "deepseek-v4-pro"]
+default = "deepseek-v4-flash"
+api_key_env = "DEEPSEEK_API_KEY"
+
+[[providers]]
+name = "mimo-pro"
+kind = "openai"
+base_url = "https://token-plan-cn.xiaomimimo.com/v1"
+model = "mimo-v2.5-pro"
+api_key_env = "MIMO_API_KEY"
+`), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	got := NewApp().Settings()
+	providers := map[string]ProviderView{}
+	for _, p := range got.Providers {
+		providers[p.Name] = p
+	}
+	if !providers["deepseek"].Added || !providers["deepseek"].KeySet {
+		t.Fatalf("deepseek provider = %+v, want inferred added key-set provider", providers["deepseek"])
+	}
+	if !providers["mimo-token-plan"].Added || !providers["mimo-token-plan"].KeySet {
+		t.Fatalf("mimo-token-plan provider = %+v, want inferred added key-set provider", providers["mimo-token-plan"])
+	}
+	if got.DefaultModel != "deepseek/deepseek-v4-pro" {
+		t.Fatalf("default_model = %q, want deepseek/deepseek-v4-pro", got.DefaultModel)
+	}
+}
+
+func TestSettingsDoesNotInferProviderAccessWhenExplicitlyEmpty(t *testing.T) {
+	isolateDesktopUserDirs(t)
+	t.Setenv("DEEPSEEK_API_KEY", "sk-test")
+	if err := os.MkdirAll(filepath.Dir(config.UserConfigPath()), 0o755); err != nil {
+		t.Fatalf("mkdir config dir: %v", err)
+	}
+	if err := os.WriteFile(config.UserConfigPath(), []byte(`
+default_model = "deepseek-flash/deepseek-v4-flash"
+
+[desktop]
+provider_access = []
+
+[[providers]]
+name = "deepseek-flash"
+kind = "openai"
+base_url = "https://api.deepseek.com"
+models = ["deepseek-v4-flash"]
+default = "deepseek-v4-flash"
+api_key_env = "DEEPSEEK_API_KEY"
+`), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	got := NewApp().Settings()
+	for _, p := range got.Providers {
+		if p.Added {
+			t.Fatalf("provider %+v should not be inferred as added when provider_access is explicit empty", p)
+		}
+	}
+}
+
+func TestSettingsInfersConfiguredBuiltInsWithoutConfigFile(t *testing.T) {
+	isolateDesktopUserDirs(t)
+	t.Setenv("DEEPSEEK_API_KEY", "sk-test")
+	t.Setenv("MIMO_API_KEY", "sk-test")
+
+	got := NewApp().Settings()
+	providers := map[string]ProviderView{}
+	for _, p := range got.Providers {
+		providers[p.Name] = p
+	}
+	if !providers["deepseek"].Added || !providers["deepseek"].KeySet {
+		t.Fatalf("deepseek provider = %+v, want inferred added provider from configured key", providers["deepseek"])
+	}
+	if !providers["mimo-token-plan"].Added || !providers["mimo-token-plan"].KeySet {
+		t.Fatalf("mimo-token-plan provider = %+v, want inferred added provider from configured key", providers["mimo-token-plan"])
+	}
+}
+
+func TestSettingsDoesNotInferBuiltInsWithoutKeys(t *testing.T) {
+	isolateDesktopUserDirs(t)
+	t.Setenv("DEEPSEEK_API_KEY", "")
+	t.Setenv("MIMO_API_KEY", "")
+
+	got := NewApp().Settings()
+	for _, p := range got.Providers {
+		if p.Added {
+			t.Fatalf("provider %+v should not be inferred as added without a configured key", p)
+		}
+	}
+}
+
+func TestAddOfficialProviderAccessReplacesLegacyProviderWithoutModel(t *testing.T) {
+	isolateDesktopUserDirs(t)
+	if err := os.MkdirAll(filepath.Dir(config.UserConfigPath()), 0o755); err != nil {
+		t.Fatalf("mkdir config dir: %v", err)
+	}
+	if err := os.WriteFile(config.UserConfigPath(), []byte(`
+default_model = "deepseek-flash"
+
+[[providers]]
+name = "deepseek-flash"
+kind = "openai"
+base_url = "https://api.deepseek.com"
+api_key_env = "DEEPSEEK_API_KEY"
+`), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	if err := NewApp().AddOfficialProviderAccess("deepseek", "test-key"); err != nil {
+		t.Fatalf("AddOfficialProviderAccess: %v", err)
+	}
+	cfg := config.LoadForEdit(config.UserConfigPath())
+	p, ok := cfg.Provider("deepseek")
+	if !ok {
+		t.Fatal("deepseek provider not saved")
+	}
+	if len(p.Models) != 2 || p.Models[0] != "deepseek-v4-flash" || p.Models[1] != "deepseek-v4-pro" || p.Default != "deepseek-v4-flash" {
+		t.Fatalf("deepseek provider after add = %+v, want official model list", p)
+	}
+	if !providerAccessSet(cfg.Desktop.ProviderAccess)["deepseek"] {
+		t.Fatalf("provider_access missing deepseek: %+v", cfg.Desktop.ProviderAccess)
+	}
+	if cfg.DefaultModel != "deepseek/deepseek-v4-flash" {
+		t.Fatalf("default_model = %q, want deepseek/deepseek-v4-flash", cfg.DefaultModel)
+	}
+}
+
+func TestRemoveBuiltInProviderAccessRetargetsDefaultToRemainingAccess(t *testing.T) {
+	isolateDesktopUserDirs(t)
+	if err := os.MkdirAll(filepath.Dir(config.UserConfigPath()), 0o755); err != nil {
+		t.Fatalf("mkdir config dir: %v", err)
+	}
+	if err := os.WriteFile(config.UserConfigPath(), []byte(`
+default_model = "deepseek-flash/deepseek-v4-pro"
+
+[desktop]
+provider_access = ["deepseek-flash", "mimo-pro"]
+
+[[providers]]
+name = "deepseek-flash"
+kind = "openai"
+base_url = "https://api.deepseek.com"
+models = ["deepseek-v4-flash", "deepseek-v4-pro"]
+default = "deepseek-v4-flash"
+api_key_env = "DEEPSEEK_API_KEY"
+
+[[providers]]
+name = "mimo-pro"
+kind = "openai"
+base_url = "https://token-plan-cn.xiaomimimo.com/v1"
+model = "mimo-v2.5-pro"
+api_key_env = "MIMO_API_KEY"
+`), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	if err := NewApp().RemoveProviderAccess("deepseek"); err != nil {
+		t.Fatalf("RemoveProviderAccess: %v", err)
+	}
+	cfg := config.LoadForEdit(config.UserConfigPath())
+	access := providerAccessSet(cfg.Desktop.ProviderAccess)
+	if access["deepseek"] || !access["mimo-token-plan"] {
+		t.Fatalf("provider_access = %+v, want only mimo-token-plan", cfg.Desktop.ProviderAccess)
+	}
+	if cfg.DefaultModel != "mimo-token-plan/mimo-v2.5-pro" {
+		t.Fatalf("default_model = %q, want mimo-token-plan/mimo-v2.5-pro", cfg.DefaultModel)
+	}
+}
+
+func TestModelsForTabOnlyListsProviderAccessWhenConfigured(t *testing.T) {
+	isolateDesktopUserDirs(t)
+	t.Setenv("DEEPSEEK_API_KEY", "sk-test")
+	t.Setenv("MIMO_API_KEY", "sk-test")
+
+	cfg := config.Default()
+	cfg.DefaultModel = "deepseek-flash/deepseek-v4-flash"
+	cfg.Desktop.ProviderAccess = []string{"deepseek-flash", "mimo-pro"}
+	deepseek, _ := cfg.Provider("deepseek-flash")
+	deepseek.Model = ""
+	deepseek.Models = []string{"deepseek-v4-flash", "deepseek-v4-pro"}
+	deepseek.Default = "deepseek-v4-flash"
+	if err := cfg.SaveTo(config.UserConfigPath()); err != nil {
+		t.Fatalf("save config: %v", err)
+	}
+
+	models := NewApp().Models()
+	refs := modelRefsFromView(models)
+	for _, want := range []string{
+		"deepseek/deepseek-v4-flash",
+		"deepseek/deepseek-v4-pro",
+		"mimo-token-plan/mimo-v2.5-pro",
+	} {
+		if !refs[want] {
+			t.Fatalf("Models() refs = %+v, missing %s", models, want)
+		}
+	}
+	for _, hidden := range []string{
+		"deepseek-pro/deepseek-v4-pro",
+		"mimo-flash/mimo-v2.5",
+	} {
+		if refs[hidden] {
+			t.Fatalf("Models() refs = %+v, should not include hidden provider %s", models, hidden)
+		}
+	}
+	if len(models) != 3 {
+		t.Fatalf("Models() len = %d, want 3: %+v", len(models), models)
+	}
+}
+
+func TestModelsForTabListsMimoAPIPaidAccess(t *testing.T) {
+	isolateDesktopUserDirs(t)
+	t.Setenv("MIMO_API_KEY", "sk-test")
+
+	cfg := config.Default()
+	cfg.DefaultModel = "mimo-api/mimo-v2.5-pro"
+	cfg.Desktop.ProviderAccess = []string{"mimo-api"}
+	if err := cfg.SaveTo(config.UserConfigPath()); err != nil {
+		t.Fatalf("save config: %v", err)
+	}
+
+	models := NewApp().Models()
+	refs := modelRefsFromView(models)
+	if !refs["mimo-api/mimo-v2.5-pro"] {
+		t.Fatalf("Models() refs = %+v, missing mimo-api/mimo-v2.5-pro", models)
+	}
+	if len(models) != 1 {
+		t.Fatalf("Models() len = %d, want 1: %+v", len(models), models)
+	}
+}
+
+func TestSetModelForTabRejectsProviderOutsideAccess(t *testing.T) {
+	isolateDesktopUserDirs(t)
+	t.Setenv("DEEPSEEK_API_KEY", "sk-test")
+	t.Setenv("MIMO_API_KEY", "sk-test")
+
+	cfg := config.Default()
+	cfg.DefaultModel = "deepseek-flash/deepseek-v4-flash"
+	cfg.Desktop.ProviderAccess = []string{"deepseek-flash"}
+	if err := cfg.SaveTo(config.UserConfigPath()); err != nil {
+		t.Fatalf("save config: %v", err)
+	}
+
+	app := NewApp()
+	app.ctx = context.Background()
+	tab := &WorkspaceTab{ID: "tab_a", Scope: "global", Ready: true, model: "deepseek-flash/deepseek-v4-flash"}
+	app.tabs = map[string]*WorkspaceTab{tab.ID: tab}
+	app.tabOrder = []string{tab.ID}
+	app.activeTabID = tab.ID
+
+	err := app.SetModelForTab(tab.ID, "mimo-flash/mimo-v2.5")
+	if err == nil || !strings.Contains(err.Error(), "not available") {
+		t.Fatalf("SetModelForTab hidden provider error = %v, want not available", err)
+	}
+}
+
+func TestSetDefaultModelRejectsProviderWithoutKey(t *testing.T) {
+	isolateDesktopUserDirs(t)
+	t.Setenv("MIMO_API_KEY", "")
+
+	cfg := config.Default()
+	cfg.Desktop.ProviderAccess = []string{"mimo-api"}
+	if err := cfg.SaveTo(config.UserConfigPath()); err != nil {
+		t.Fatalf("save config: %v", err)
+	}
+
+	app := NewApp()
+	tab := &WorkspaceTab{ID: "tab_a", Scope: "global", Ready: true, model: "deepseek-flash/deepseek-v4-flash"}
+	app.tabs = map[string]*WorkspaceTab{tab.ID: tab}
+	app.tabOrder = []string{tab.ID}
+	app.activeTabID = tab.ID
+
+	err := app.SetDefaultModel("mimo-api/mimo-v2.5-pro")
+	if err == nil || !strings.Contains(err.Error(), "has no key") {
+		t.Fatalf("SetDefaultModel no-key error = %v, want has no key", err)
+	}
+	if tab.model != "deepseek-flash/deepseek-v4-flash" {
+		t.Fatalf("tab model after failed default change = %q, want previous", tab.model)
+	}
+}
+
+func TestSaveProviderPersistsReasoningProtocol(t *testing.T) {
+	isolateDesktopUserDirs(t)
+
+	app := NewApp()
+	if err := app.SaveProvider(ProviderView{
+		Name:              "deepseek-proxy",
+		Kind:              "openai",
+		BaseURL:           "https://proxy.example.com/v1",
+		Models:            []string{"deepseek-v4-flash"},
+		Default:           "deepseek-v4-flash",
+		APIKeyEnv:         "DEEPSEEK_PROXY_KEY",
+		ReasoningProtocol: "none",
+		SupportedEfforts:  []string{"high", "max"},
+		DefaultEffort:     "max",
+	}); err != nil {
+		t.Fatalf("SaveProvider: %v", err)
+	}
+
+	cfg := config.LoadForEdit(config.UserConfigPath())
+	got, ok := cfg.Provider("deepseek-proxy")
+	if !ok {
+		t.Fatal("saved provider not found")
+	}
+	if got.ReasoningProtocol != "none" || got.DefaultEffort != "max" {
+		t.Fatalf("saved provider = %+v, want reasoning_protocol none and default_effort max", got)
+	}
+
+	view := app.Settings()
+	for _, p := range view.Providers {
+		if p.Name == "deepseek-proxy" {
+			if p.ReasoningProtocol != "none" {
+				t.Fatalf("settings reasoningProtocol = %q, want none", p.ReasoningProtocol)
+			}
+			return
+		}
+	}
+	t.Fatalf("Settings() missing saved provider: %+v", view.Providers)
+}
+
+func TestDeleteProviderMigratesConfigAndOpenTabs(t *testing.T) {
+	isolateDesktopUserDirs(t)
+	t.Setenv("REASONIX_TEST_KEY", "sk-test")
+
+	cfg := config.Default()
+	cfg.DefaultModel = "prov-a/model-a2"
+	cfg.Providers = []config.ProviderEntry{
+		{Name: "prov-a", Kind: "openai", BaseURL: "https://a.example.com", Model: "model-a1", Models: []string{"model-a1", "model-a2"}, APIKeyEnv: "REASONIX_TEST_KEY"},
+		{Name: "prov-b", Kind: "openai", BaseURL: "https://b.example.com", Model: "model-b1", APIKeyEnv: "REASONIX_TEST_KEY"},
+	}
+	cfg.Agent.PlannerModel = "prov-a"
+	cfg.Desktop.ProviderAccess = []string{"prov-a", "prov-b"}
+	if err := cfg.SaveTo(config.UserConfigPath()); err != nil {
+		t.Fatalf("save config: %v", err)
+	}
+
+	ctrl := control.New(control.Options{Label: "old"})
+	defer ctrl.Close()
+	app := NewApp()
+	tab := &WorkspaceTab{ID: "tab_a", Scope: "global", Ctrl: ctrl, Label: "prov-a/model-a1", Ready: true, model: "prov-a/model-a1"}
+	app.tabs = map[string]*WorkspaceTab{tab.ID: tab}
+	app.tabOrder = []string{tab.ID}
+	app.activeTabID = tab.ID
+
+	if err := app.DeleteProvider("prov-a"); err != nil {
+		t.Fatalf("DeleteProvider: %v", err)
+	}
+
+	got := config.LoadForEdit(config.UserConfigPath())
+	if _, ok := got.Provider("prov-a"); ok {
+		t.Fatal("prov-a should be removed")
+	}
+	if got.DefaultModel != "prov-b" || got.Agent.PlannerModel != "prov-b" {
+		t.Fatalf("model refs after delete = default:%q planner:%q, want prov-b", got.DefaultModel, got.Agent.PlannerModel)
+	}
+	if providerAccessSet(got.Desktop.ProviderAccess)["prov-a"] {
+		t.Fatalf("provider access still contains prov-a: %+v", got.Desktop.ProviderAccess)
+	}
+	if tab.model != "prov-b/model-b1" || tab.Label != "prov-b/model-b1" {
+		t.Fatalf("tab model after delete = model:%q label:%q, want prov-b/model-b1", tab.model, tab.Label)
+	}
+	if tab.Ctrl != nil {
+		t.Fatal("tab controller should be closed and cleared when retargeted without a running app context")
+	}
+}
+
+func TestDeleteProviderRejectsRunningAffectedTab(t *testing.T) {
+	isolateDesktopUserDirs(t)
+	t.Setenv("REASONIX_TEST_KEY", "sk-test")
+
+	cfg := config.Default()
+	cfg.DefaultModel = "prov-a/model-a1"
+	cfg.Providers = []config.ProviderEntry{
+		{Name: "prov-a", Kind: "openai", BaseURL: "https://a.example.com", Model: "model-a1", APIKeyEnv: "REASONIX_TEST_KEY"},
+		{Name: "prov-b", Kind: "openai", BaseURL: "https://b.example.com", Model: "model-b1", APIKeyEnv: "REASONIX_TEST_KEY"},
+	}
+	if err := cfg.SaveTo(config.UserConfigPath()); err != nil {
+		t.Fatalf("save config: %v", err)
+	}
+
+	runner := &blockingRunner{started: make(chan struct{}), release: make(chan struct{})}
+	app := NewApp()
+	app.setTestCtrl(control.New(control.Options{Runner: runner}), "prov-a/model-a1")
+	ctrl := app.activeCtrl()
+	ctrl.Submit("work")
+	<-runner.started
+
+	err := app.DeleteProvider("prov-a")
+	if err == nil || !strings.Contains(err.Error(), "finish or cancel") {
+		t.Fatalf("DeleteProvider while running error = %v, want finish/cancel guard", err)
+	}
+	if _, ok := config.LoadForEdit(config.UserConfigPath()).Provider("prov-a"); !ok {
+		t.Fatal("provider should remain after rejected deletion")
+	}
+
+	close(runner.release)
+	waitNotRunning(t, ctrl)
+	ctrl.Close()
 }
 
 func TestMigrateDesktopPreferencesDoesNotOverwriteExistingConfig(t *testing.T) {
@@ -290,11 +824,17 @@ func TestSearchFileRefsFindsNestedBasename(t *testing.T) {
 	orig, _ := os.Getwd()
 	defer os.Chdir(orig)
 
-	dir := t.TempDir()
+	dir := robustTempDir(t)
 	if err := os.MkdirAll(filepath.Join(dir, "frontend", "wailsjs", "runtime"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(dir, "frontend", "wailsjs", "runtime", "runtime.js"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "frontend", "Thumbs.db"), []byte("noise"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "frontend", ".DS_Store"), []byte("noise"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.MkdirAll(filepath.Join(dir, "node_modules", "pkg"), 0o755); err != nil {
@@ -303,16 +843,84 @@ func TestSearchFileRefsFindsNestedBasename(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "node_modules", "pkg", "runtime.js"), []byte("noise"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.MkdirAll(filepath.Join(dir, ".codegraph", "cache"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".codegraph", "cache", "runtime.js"), []byte("index"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, noise := range []string{".codex", ".npm", ".pnpm-store", "bin", "dist", "stage", "tmp"} {
+		if err := os.MkdirAll(filepath.Join(dir, noise), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, noise, "runtime.js"), []byte("noise"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "desktop", "frontend", "wailsjs"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "desktop", "frontend", "wailsjs", "runtime.js"), []byte("generated"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "product", "bin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "product", "bin", "runtime.js"), []byte("real"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.Chdir(dir); err != nil {
 		t.Fatal(err)
 	}
 
-	got := (&App{}).SearchFileRefs("runtime.js")
+	app := &App{}
+	listed := app.ListDir("")
+	for _, hidden := range []string{".codex", ".codegraph", ".npm", ".pnpm-store", "bin", "dist", "stage", "tmp"} {
+		if hasDirEntry(listed, hidden) {
+			t.Fatalf("ListDir should hide local noise %q, got %+v", hidden, listed)
+		}
+	}
+	desktopFrontend := app.ListDir("desktop/frontend")
+	if hasDirEntry(desktopFrontend, "wailsjs") {
+		t.Fatalf("ListDir should hide generated Wails bindings, got %+v", desktopFrontend)
+	}
+	frontendEntries := app.ListDir("frontend")
+	for _, hidden := range []string{".DS_Store", "Thumbs.db"} {
+		if hasDirEntry(frontendEntries, hidden) {
+			t.Fatalf("ListDir should hide local noise file %q, got %+v", hidden, frontendEntries)
+		}
+	}
+
+	got := app.SearchFileRefs("runtime.js")
 	if !hasDirEntry(got, "frontend/wailsjs/runtime/runtime.js") {
 		t.Fatalf("SearchFileRefs(runtime.js) should find nested workspace file, got %+v", got)
 	}
+	if !hasDirEntry(got, "product/bin/runtime.js") {
+		t.Fatalf("SearchFileRefs should keep non-root bin directories searchable, got %+v", got)
+	}
 	if hasDirEntry(got, "node_modules/pkg/runtime.js") {
 		t.Fatalf("SearchFileRefs should skip node_modules noise, got %+v", got)
+	}
+	for _, hidden := range []string{
+		".codex/runtime.js",
+		".codegraph/cache/runtime.js",
+		".npm/runtime.js",
+		".pnpm-store/runtime.js",
+		"bin/runtime.js",
+		"desktop/frontend/wailsjs/runtime.js",
+		"dist/runtime.js",
+		"stage/runtime.js",
+		"tmp/runtime.js",
+	} {
+		if hasDirEntry(got, hidden) {
+			t.Fatalf("SearchFileRefs should skip local noise %q, got %+v", hidden, got)
+		}
+	}
+	if noise := app.SearchFileRefs("Thumbs"); hasDirEntry(noise, "frontend/Thumbs.db") {
+		t.Fatalf("SearchFileRefs should skip Thumbs.db noise, got %+v", noise)
+	}
+	if noise := app.SearchFileRefs(".DS"); hasDirEntry(noise, "frontend/.DS_Store") {
+		t.Fatalf("SearchFileRefs should skip .DS_Store noise even for dot-prefixed search, got %+v", noise)
 	}
 }
 
@@ -320,8 +928,8 @@ func TestFileRefsUseActiveTabWorkspaceRoot(t *testing.T) {
 	orig, _ := os.Getwd()
 	defer os.Chdir(orig)
 
-	launchRoot := t.TempDir()
-	projectRoot := t.TempDir()
+	launchRoot := robustTempDir(t)
+	projectRoot := robustTempDir(t)
 	if err := os.WriteFile(filepath.Join(launchRoot, "launch-only.txt"), []byte("wrong"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -460,10 +1068,58 @@ func (r *appendingDesktopRunner) Run(_ context.Context, input string) error {
 	return nil
 }
 
+func TestSubmitToTabHistoryDisplaysRawInputAfterMemoryCompose(t *testing.T) {
+	isolateDesktopUserDirs(t)
+	dir := config.SessionDir()
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	path := filepath.Join(dir, "memory-display.jsonl")
+	sess := agent.NewSession("sys")
+	exec := agent.New(nil, nil, sess, agent.Options{}, event.Discard)
+	runner := &appendingDesktopRunner{session: sess, started: make(chan string, 1)}
+	ctrl := control.New(control.Options{
+		Runner:      runner,
+		Executor:    exec,
+		Sink:        event.Discard,
+		SessionDir:  dir,
+		SessionPath: path,
+		Label:       "test",
+	})
+	defer ctrl.Close()
+
+	app := NewApp()
+	app.setTestCtrl(ctrl, "deepseek/test")
+	ctrl.QueueMemory(`Saved memory "reasonix-contributions": contribution count updated`)
+
+	const prompt = "不要，删了"
+	app.SubmitToTab("test", prompt)
+	composed := <-runner.started
+	waitNotRunning(t, ctrl)
+
+	if !strings.Contains(composed, "<memory-update>") || !strings.HasSuffix(composed, prompt) {
+		t.Fatalf("model input should include memory update followed by prompt, got %q", composed)
+	}
+	got := app.HistoryForTab("test")
+	if len(got) < 2 {
+		t.Fatalf("history length = %d, want user + assistant", len(got))
+	}
+	if got[0].Role != "system" || got[1].Role != "user" {
+		t.Fatalf("history roles = %+v, want system then user", got[:min(len(got), 2)])
+	}
+	if got[1].Content != prompt {
+		t.Fatalf("displayed user content = %q, want %q", got[1].Content, prompt)
+	}
+	if strings.Contains(got[1].Content, "<memory-update>") {
+		t.Fatalf("displayed user content leaked memory update: %q", got[1].Content)
+	}
+}
+
 func TestForkCreatesActiveTabWithoutSwitchingSourceController(t *testing.T) {
 	isolateDesktopUserDirs(t)
 
-	workspace := t.TempDir()
+	workspace := robustTempDir(t)
 	if err := os.WriteFile(filepath.Join(workspace, "reasonix.toml"), []byte("[codegraph]\nenabled = false\n"), 0o644); err != nil {
 		t.Fatalf("write workspace config: %v", err)
 	}
@@ -554,9 +1210,9 @@ func TestForkCreatesActiveTabWithoutSwitchingSourceController(t *testing.T) {
 	}
 }
 
-func TestCapabilitiesShowsLazyMCPAsDeferredNotDisabled(t *testing.T) {
+func TestCapabilitiesShowsDefaultMCPAsInitializingNotDisabled(t *testing.T) {
 	isolateDesktopUserDirs(t)
-	dir := t.TempDir()
+	dir := robustTempDir(t)
 	t.Chdir(dir)
 	if err := os.WriteFile(filepath.Join(dir, "reasonix.toml"), []byte(`
 [codegraph]
@@ -581,8 +1237,8 @@ args = ["-y", "@playwright/mcp"]
 	view := app.Capabilities()
 	for _, s := range view.Servers {
 		if s.Name == "playwright" {
-			if s.Status != "deferred" {
-				t.Fatalf("lazy MCP status = %q, want deferred; server = %+v", s.Status, s)
+			if s.Status != "initializing" {
+				t.Fatalf("default MCP status = %q, want initializing; server = %+v", s.Status, s)
 			}
 			return
 		}
@@ -592,7 +1248,7 @@ args = ["-y", "@playwright/mcp"]
 
 func TestCapabilitiesShowsDefaultCodegraphDisabled(t *testing.T) {
 	isolateDesktopUserDirs(t)
-	dir := t.TempDir()
+	dir := robustTempDir(t)
 	t.Chdir(dir)
 
 	app := NewApp()
@@ -611,8 +1267,8 @@ func TestCapabilitiesShowsDefaultCodegraphDisabled(t *testing.T) {
 			if s.AutoStart {
 				t.Fatalf("codegraph autoStart = true, want false; server = %+v", s)
 			}
-			if s.Tier != "lazy" {
-				t.Fatalf("codegraph tier = %q, want lazy; server = %+v", s.Tier, s)
+			if s.Tier != "background" {
+				t.Fatalf("codegraph tier = %q, want background; server = %+v", s.Tier, s)
 			}
 			return
 		}
@@ -620,9 +1276,9 @@ func TestCapabilitiesShowsDefaultCodegraphDisabled(t *testing.T) {
 	t.Fatalf("codegraph missing from Capabilities: %+v", view.Servers)
 }
 
-func TestCapabilitiesMarksDeferredRemoteMCPAuthPossible(t *testing.T) {
+func TestCapabilitiesMarksBackgroundRemoteMCPAuthPossible(t *testing.T) {
 	isolateDesktopUserDirs(t)
-	dir := t.TempDir()
+	dir := robustTempDir(t)
 	t.Chdir(dir)
 	if err := os.WriteFile(filepath.Join(dir, "reasonix.toml"), []byte(`
 [codegraph]
@@ -644,7 +1300,7 @@ tier = "lazy"
 	view := app.Capabilities()
 	for _, s := range view.Servers {
 		if s.Name == "dida" {
-			if s.Status != "deferred" || s.AuthStatus != "possible" || s.AuthURL != "https://mcp.dida365.com" {
+			if s.Status != "initializing" || s.AuthStatus != "possible" || s.AuthURL != "https://mcp.dida365.com" {
 				t.Fatalf("dida auth diagnosis = %+v", s)
 			}
 			return
@@ -655,7 +1311,7 @@ tier = "lazy"
 
 func TestCapabilitiesDoesNotMarkRemoteMCPWithAuthHeaderPossible(t *testing.T) {
 	isolateDesktopUserDirs(t)
-	dir := t.TempDir()
+	dir := robustTempDir(t)
 	t.Chdir(dir)
 	if err := os.WriteFile(filepath.Join(dir, "reasonix.toml"), []byte(`
 [codegraph]
@@ -689,7 +1345,7 @@ tier = "lazy"
 
 func TestCapabilitiesMarksAuthFailureRequired(t *testing.T) {
 	isolateDesktopUserDirs(t)
-	dir := t.TempDir()
+	dir := robustTempDir(t)
 	t.Chdir(dir)
 	if err := os.WriteFile(filepath.Join(dir, "reasonix.toml"), []byte(`
 [codegraph]
@@ -724,7 +1380,7 @@ tier = "lazy"
 
 func TestClearMCPServerAuthenticationClearsConfigAndFailure(t *testing.T) {
 	isolateDesktopUserDirs(t)
-	dir := t.TempDir()
+	dir := robustTempDir(t)
 	t.Chdir(dir)
 	if err := os.WriteFile(filepath.Join(dir, "reasonix.toml"), []byte(`
 [codegraph]
@@ -776,8 +1432,8 @@ tier = "lazy"
 	view := app.Capabilities()
 	for _, s := range view.Servers {
 		if s.Name == "figma" {
-			if s.Status != "deferred" || s.AuthStatus != "possible" {
-				t.Fatalf("figma should return to deferred possible auth: %+v", s)
+			if s.Status != "initializing" || s.AuthStatus != "possible" {
+				t.Fatalf("figma should return to background possible auth: %+v", s)
 			}
 			return
 		}
@@ -785,9 +1441,9 @@ tier = "lazy"
 	t.Fatalf("figma MCP missing from Capabilities: %+v", view.Servers)
 }
 
-func TestUpdateMCPServerKeepsLazyMCPDeferred(t *testing.T) {
+func TestUpdateMCPServerMigratesLegacyTierToBackground(t *testing.T) {
 	isolateDesktopUserDirs(t)
-	dir := t.TempDir()
+	dir := robustTempDir(t)
 	t.Chdir(dir)
 	if err := os.WriteFile(filepath.Join(dir, "reasonix.toml"), []byte(`
 [codegraph]
@@ -798,6 +1454,7 @@ name = "playwright"
 command = "npx"
 args = ["-y", "@playwright/mcp"]
 env = { TOKEN = "${PLAYWRIGHT_TOKEN}" }
+tier = "lazy"
 `), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -815,7 +1472,6 @@ env = { TOKEN = "${PLAYWRIGHT_TOKEN}" }
 		Transport: "stdio",
 		Command:   "node",
 		Args:      []string{"server.js"},
-		Tier:      "lazy",
 	}); err != nil {
 		t.Fatalf("UpdateMCPServer: %v", err)
 	}
@@ -837,6 +1493,9 @@ env = { TOKEN = "${PLAYWRIGHT_TOKEN}" }
 	if userPlugin.Command != "node" || userPlugin.Env["TOKEN"] != "${PLAYWRIGHT_TOKEN}" {
 		t.Fatalf("user plugin after migration = %+v", userPlugin)
 	}
+	if userPlugin.Tier != "" {
+		t.Fatalf("user plugin tier = %q, want migrated empty", userPlugin.Tier)
+	}
 	projectCfg := config.LoadForEdit(filepath.Join(dir, "reasonix.toml"))
 	if _, ok := findPluginEntry(projectCfg.Plugins, "playwright"); ok {
 		t.Fatalf("project plugin should be removed after desktop migration: %+v", projectCfg.Plugins)
@@ -844,8 +1503,8 @@ env = { TOKEN = "${PLAYWRIGHT_TOKEN}" }
 	view := app.Capabilities()
 	for _, s := range view.Servers {
 		if s.Name == "playwright" {
-			if s.Status != "deferred" {
-				t.Fatalf("updated lazy MCP status = %q, want deferred; server = %+v", s.Status, s)
+			if s.Status != "failed" {
+				t.Fatalf("updated MCP status = %q, want failed after immediate reconnect attempt; server = %+v", s.Status, s)
 			}
 			if s.Command != "node" || len(s.Args) != 1 || s.Args[0] != "server.js" {
 				t.Fatalf("server command not refreshed: %+v", s)
@@ -856,7 +1515,7 @@ env = { TOKEN = "${PLAYWRIGHT_TOKEN}" }
 	t.Fatalf("playwright MCP missing from Capabilities: %+v", view.Servers)
 }
 
-func TestUpdateMCPServerRecordsReconnectFailure(t *testing.T) {
+func TestUpdateMCPServerSplitsPastedCommandLine(t *testing.T) {
 	isolateDesktopUserDirs(t)
 	dir := t.TempDir()
 	t.Chdir(dir)
@@ -865,9 +1524,49 @@ func TestUpdateMCPServerRecordsReconnectFailure(t *testing.T) {
 enabled = false
 
 [[plugins]]
+name = "playwright"
+command = "npx"
+args = ["-y", "@playwright/mcp"]
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	app := NewApp()
+	app.setTestCtrl(control.New(control.Options{Host: plugin.NewHost()}), "")
+	defer app.activeCtrl().Close()
+
+	if err := app.UpdateMCPServer("playwright", MCPServerInput{
+		Name:      "playwright",
+		Transport: "stdio",
+		Command:   "npx -y @modelcontextprotocol/server-filesystem .",
+	}); err != nil {
+		t.Fatalf("UpdateMCPServer: %v", err)
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := cfg.Plugins[0]
+	if p.Command != "npx" {
+		t.Fatalf("command = %q, want npx", p.Command)
+	}
+	if got := strings.Join(p.Args, "\x00"); got != strings.Join([]string{"-y", "@modelcontextprotocol/server-filesystem", "."}, "\x00") {
+		t.Fatalf("args = %v", p.Args)
+	}
+}
+
+func TestUpdateMCPServerRecordsReconnectFailure(t *testing.T) {
+	isolateDesktopUserDirs(t)
+	dir := robustTempDir(t)
+	t.Chdir(dir)
+	if err := os.WriteFile(filepath.Join(dir, "reasonix.toml"), []byte(`
+[codegraph]
+enabled = false
+
+[[plugins]]
 name = "broken"
 command = "npx"
-tier = "lazy"
+tier = "background"
 `), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -880,7 +1579,6 @@ tier = "lazy"
 		Name:      "broken",
 		Transport: "stdio",
 		Command:   "reasonix-missing-mcp-binary",
-		Tier:      "background",
 	}); err != nil {
 		t.Fatalf("UpdateMCPServer should persist config even when reconnect fails: %v", err)
 	}
@@ -891,8 +1589,8 @@ tier = "lazy"
 	if got := cfg.Plugins[0].Command; got != "reasonix-missing-mcp-binary" {
 		t.Fatalf("updated command = %q, want missing binary", got)
 	}
-	if got := cfg.Plugins[0].Tier; got != "background" {
-		t.Fatalf("updated tier = %q, want background", got)
+	if got := cfg.Plugins[0].Tier; got != "" {
+		t.Fatalf("updated tier = %q, want migrated empty", got)
 	}
 	if !mcpFailed(app.activeCtrl(), "broken") {
 		t.Fatalf("Host.Failures() = %+v, want broken failure recorded", app.activeCtrl().Host().Failures())
@@ -914,7 +1612,7 @@ tier = "lazy"
 
 func TestSetMCPServerTierRecordsConnectFailure(t *testing.T) {
 	isolateDesktopUserDirs(t)
-	dir := t.TempDir()
+	dir := robustTempDir(t)
 	t.Chdir(dir)
 	if err := os.WriteFile(filepath.Join(dir, "reasonix.toml"), []byte(`
 [codegraph]
@@ -937,22 +1635,22 @@ tier = "lazy"
 	}()
 
 	if err := app.SetMCPServerTier("broken", "background"); err != nil {
-		t.Fatalf("SetMCPServerTier should persist tier even when immediate connect fails: %v", err)
+		t.Fatalf("SetMCPServerTier legacy binding: %v", err)
 	}
 	cfg, err := config.Load()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := cfg.Plugins[0].Tier; got != "background" {
-		t.Fatalf("saved tier = %q, want background", got)
+	if got := cfg.Plugins[0].Tier; got != "" {
+		t.Fatalf("saved tier = %q, want migrated empty", got)
 	}
 	userCfg := config.LoadForEdit(config.UserConfigPath())
 	userPlugin, ok := findPluginEntry(userCfg.Plugins, "broken")
 	if !ok {
 		t.Fatalf("broken should be migrated to user config: %+v", userCfg.Plugins)
 	}
-	if userPlugin.Tier != "background" {
-		t.Fatalf("user plugin tier = %q, want background", userPlugin.Tier)
+	if userPlugin.Tier != "" {
+		t.Fatalf("user plugin tier = %q, want migrated empty", userPlugin.Tier)
 	}
 	projectCfg := config.LoadForEdit(filepath.Join(dir, "reasonix.toml"))
 	if _, ok := findPluginEntry(projectCfg.Plugins, "broken"); ok {
@@ -977,13 +1675,13 @@ tier = "lazy"
 }
 
 func TestSetMCPServerTierPersistsCodegraphConfig(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	t.Setenv("USERPROFILE", t.TempDir())
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
-	t.Setenv("AppData", t.TempDir())
-	t.Setenv("PATH", t.TempDir())
-	t.Setenv("REASONIX_CACHE_DIR", t.TempDir()) // isolate the codegraph bundle cache so Resolve fails deterministically
-	dir := t.TempDir()
+	t.Setenv("HOME", robustTempDir(t))
+	t.Setenv("USERPROFILE", robustTempDir(t))
+	t.Setenv("XDG_CONFIG_HOME", robustTempDir(t))
+	t.Setenv("AppData", robustTempDir(t))
+	t.Setenv("PATH", robustTempDir(t))
+	t.Setenv("REASONIX_CACHE_DIR", robustTempDir(t)) // isolate the codegraph bundle cache so Resolve fails deterministically
+	dir := robustTempDir(t)
 	t.Chdir(dir)
 	if err := os.WriteFile(filepath.Join(dir, "reasonix.toml"), []byte(`
 [codegraph]
@@ -1007,15 +1705,15 @@ auto_install = true
 	if !cfg.Codegraph.Enabled {
 		t.Fatal("codegraph enabled = false, want true after selecting a startup tier")
 	}
-	if got := cfg.Codegraph.Tier; got != "background" {
-		t.Fatalf("codegraph tier = %q, want background", got)
+	if got := cfg.Codegraph.Tier; got != "" {
+		t.Fatalf("codegraph tier = %q, want migrated empty", got)
 	}
 	userCfg := config.LoadForEdit(config.UserConfigPath())
 	if !userCfg.Codegraph.Enabled {
 		t.Fatal("user codegraph enabled = false, want true after selecting a startup tier")
 	}
-	if got := userCfg.Codegraph.Tier; got != "background" {
-		t.Fatalf("user codegraph tier = %q, want background", got)
+	if got := userCfg.Codegraph.Tier; got != "" {
+		t.Fatalf("user codegraph tier = %q, want migrated empty", got)
 	}
 	if !mcpFailed(app.activeCtrl(), "codegraph") {
 		t.Fatalf("Host.Failures() = %+v, want codegraph failure recorded for missing runtime", app.activeCtrl().Host().Failures())
@@ -1037,7 +1735,7 @@ auto_install = true
 
 func TestSetMCPServerEnabledPersistsCodegraphOff(t *testing.T) {
 	isolateDesktopUserDirs(t)
-	dir := t.TempDir()
+	dir := robustTempDir(t)
 	t.Chdir(dir)
 	if err := os.WriteFile(filepath.Join(dir, "reasonix.toml"), []byte(`
 [codegraph]
@@ -1077,9 +1775,9 @@ tier = "lazy"
 	t.Fatalf("codegraph missing from Capabilities: %+v", view.Servers)
 }
 
-func TestCapabilitiesKeepsFailedMCPConfiguredTierAfterRestart(t *testing.T) {
+func TestCapabilitiesMigratesFailedMCPConfiguredTierAfterRestart(t *testing.T) {
 	isolateDesktopUserDirs(t)
-	dir := t.TempDir()
+	dir := robustTempDir(t)
 	t.Chdir(dir)
 	if err := os.WriteFile(filepath.Join(dir, "reasonix.toml"), []byte(`
 [codegraph]
@@ -1108,8 +1806,8 @@ tier = "eager"
 			if s.Status != "failed" {
 				t.Fatalf("server status = %q, want failed; server = %+v", s.Status, s)
 			}
-			if s.Tier != "eager" {
-				t.Fatalf("server tier = %q, want eager so failed UI preserves the configured selection", s.Tier)
+			if s.Tier != "background" {
+				t.Fatalf("server tier = %q, want migrated background default", s.Tier)
 			}
 			if !s.Configured {
 				t.Fatalf("server configured = false, want true; server = %+v", s)
@@ -1118,6 +1816,52 @@ tier = "eager"
 		}
 	}
 	t.Fatalf("broken MCP missing from Capabilities: %+v", view.Servers)
+}
+
+func TestRunShellForTabRoutesToRequestedTab(t *testing.T) {
+	isolateDesktopUserDirs(t)
+
+	activeEvents := make(chan event.Event, 16)
+	inactiveEvents := make(chan event.Event, 16)
+	activeCtrl := control.New(control.Options{Sink: event.FuncSink(func(e event.Event) { activeEvents <- e })})
+	inactiveCtrl := control.New(control.Options{Sink: event.FuncSink(func(e event.Event) { inactiveEvents <- e })})
+	defer activeCtrl.Close()
+	defer inactiveCtrl.Close()
+
+	app := &App{
+		tabs: map[string]*WorkspaceTab{
+			"active":   {ID: "active", Scope: "global", Ctrl: activeCtrl, Ready: true},
+			"inactive": {ID: "inactive", Scope: "global", Ctrl: inactiveCtrl, Ready: true},
+		},
+		tabOrder:    []string{"active", "inactive"},
+		activeTabID: "active",
+	}
+
+	app.RunShellForTab("inactive", "echo route-test")
+
+	sawDispatch := false
+	deadline := time.After(3 * time.Second)
+	for {
+		select {
+		case e := <-inactiveEvents:
+			if e.Kind == event.ToolDispatch && strings.Contains(e.Tool.Args, "route-test") {
+				sawDispatch = true
+			}
+			if e.Kind == event.TurnDone {
+				if !sawDispatch {
+					t.Fatal("inactive tab finished without receiving shell dispatch")
+				}
+				select {
+				case active := <-activeEvents:
+					t.Fatalf("active tab received event for inactive shell: %+v", active)
+				default:
+				}
+				return
+			}
+		case <-deadline:
+			t.Fatal("timed out waiting for inactive shell turn")
+		}
+	}
 }
 
 type blockingRunner struct {

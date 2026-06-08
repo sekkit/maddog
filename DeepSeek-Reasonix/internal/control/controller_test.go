@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -26,6 +27,15 @@ type appendingRunner struct {
 
 func (r appendingRunner) Run(_ context.Context, input string) error {
 	r.session.Add(provider.Message{Role: provider.RoleUser, Content: input})
+	return nil
+}
+
+type handoffRunner struct {
+	session *agent.Session
+}
+
+func (r handoffRunner) Run(_ context.Context, input string) error {
+	r.session.Add(provider.Message{Role: provider.RoleUser, Content: "handoff: " + input})
 	return nil
 }
 
@@ -74,6 +84,55 @@ func TestRunTurnSnapshotsActivityWhenTranscriptChanges(t *testing.T) {
 	}
 	if meta.UpdatedAt.IsZero() {
 		t.Fatal("activity meta should be marked")
+	}
+}
+
+func TestRunTurnCapturesReplayBundle(t *testing.T) {
+	dir := t.TempDir()
+	sess := agent.NewSession("sys")
+	exec := agent.New(nil, nil, sess, agent.Options{}, event.Discard)
+	path := filepath.Join(dir, "session.jsonl")
+	c := New(Options{Runner: appendingRunner{session: sess}, Executor: exec, SessionDir: dir, SessionPath: path, Label: "test"})
+
+	if err := c.runTurn(context.Background(), "hello"); err != nil {
+		t.Fatal(err)
+	}
+
+	replayDir := strings.TrimSuffix(path, filepath.Ext(path)) + ".replay"
+	deadline := time.After(2 * time.Second)
+	for {
+		entries, err := os.ReadDir(replayDir)
+		if err == nil && len(entries) > 0 {
+			return
+		}
+		select {
+		case <-deadline:
+			t.Fatalf("timed out waiting for replay bundle in %s", replayDir)
+		default:
+			time.Sleep(20 * time.Millisecond)
+		}
+	}
+}
+
+func TestRunTurnRecordsDisplayForPersistedUserMessage(t *testing.T) {
+	sess := agent.NewSession("sys")
+	exec := agent.New(nil, nil, sess, agent.Options{}, event.Discard)
+	c := New(Options{Runner: handoffRunner{session: sess}, Executor: exec})
+	var gotContent, gotDisplay string
+	c.SetDisplayRecorder(func(content, display string) {
+		gotContent = content
+		gotDisplay = display
+	})
+
+	if err := c.runTurnWithRawDisplay(context.Background(), "expanded prompt", "raw prompt", "visible prompt"); err != nil {
+		t.Fatal(err)
+	}
+
+	if gotContent != "handoff: expanded prompt" {
+		t.Fatalf("display recorded against %q, want persisted user message", gotContent)
+	}
+	if gotDisplay != "visible prompt" {
+		t.Fatalf("display = %q, want visible prompt", gotDisplay)
 	}
 }
 

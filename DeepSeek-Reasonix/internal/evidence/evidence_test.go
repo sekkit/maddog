@@ -91,6 +91,43 @@ func TestLedgerResetClearsTurnReceipts(t *testing.T) {
 	}
 }
 
+func TestLedgerFailureSignalSummarizesRecentFailures(t *testing.T) {
+	ledger := NewLedger()
+	ledger.Record(Receipt{ToolName: "bash", Success: true})
+	ledger.Record(Receipt{ToolName: "grep", Success: false})
+	ledger.Record(Receipt{ToolName: "read_file", Success: false})
+	ledger.Record(Receipt{ToolName: "write_file", Success: true})
+	ledger.Record(Receipt{ToolName: "bash", Success: false})
+	ledger.Record(Receipt{ToolName: "bash", Success: false})
+
+	sig := ledger.FailureSignal()
+	if sig.ConsecutiveErrors != 2 {
+		t.Fatalf("ConsecutiveErrors = %d, want 2", sig.ConsecutiveErrors)
+	}
+	if sig.ErrorStreak != 4 {
+		t.Fatalf("ErrorStreak = %d, want 4", sig.ErrorStreak)
+	}
+	if sig.LastErrorTool != "bash" {
+		t.Fatalf("LastErrorTool = %q, want bash", sig.LastErrorTool)
+	}
+	if sig.HealthScore <= 0 || sig.HealthScore >= 1 {
+		t.Fatalf("HealthScore = %f, want a partial health score", sig.HealthScore)
+	}
+}
+
+func TestLedgerFailureSignalSinceIgnoresEarlierReceipts(t *testing.T) {
+	ledger := NewLedger()
+	ledger.Record(Receipt{ToolName: "grep", Success: false})
+	ledger.Record(Receipt{ToolName: "read_file", Success: false})
+	start := ledger.Count()
+	ledger.Record(Receipt{ToolName: "bash", Success: false})
+
+	sig := ledger.FailureSignalSince(start)
+	if sig.ConsecutiveErrors != 1 || sig.ErrorStreak != 1 || sig.LastErrorTool != "bash" {
+		t.Fatalf("FailureSignalSince(%d) = %+v, want only bash failure", start, sig)
+	}
+}
+
 func TestContextCarriesLedger(t *testing.T) {
 	ledger := NewLedger()
 	ctx := WithLedger(context.Background(), ledger)

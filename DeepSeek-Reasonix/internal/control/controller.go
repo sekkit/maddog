@@ -14,12 +14,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -32,6 +34,7 @@ import (
 	"reasonix/internal/command"
 	"reasonix/internal/config"
 	"reasonix/internal/diff"
+	replayeval "reasonix/internal/eval"
 	"reasonix/internal/event"
 	"reasonix/internal/hook"
 	"reasonix/internal/i18n"
@@ -46,6 +49,10 @@ import (
 	"reasonix/internal/tool"
 )
 
+// ErrTurnRunning reports that a caller tried to start a second foreground turn
+// while one is already active in the same Controller.
+var ErrTurnRunning = errors.New("turn already running")
+
 // Controller drives one chat session. Construct with New; drive with the command
 // methods; observe through the Sink passed in Options.
 type Controller struct {
@@ -54,20 +61,23 @@ type Controller struct {
 	sink     event.Sink
 	policy   permission.Policy
 
-	label        string
-	systemPrompt string
-	sessionDir   string
-	host         *plugin.Host
-	commands     []command.Command
-	skills       []skill.Skill
-	allSkills    []skill.Skill
-	hooks        *hook.Runner // session hook runner; nil-safe (no hooks configured)
-	mem          *memory.Set
-	cleanup      func()
-	autoPlan     string
-	classifier   autoPlanClassifier
-	startedOnce  bool              // guards the one-shot SessionStart hook on first turn
-	onRemember   func(rule string) // set via Options; invoked when user picks "always allow"
+	label         string
+	systemPrompt  string
+	sessionDir    string
+	host          *plugin.Host
+	commands      []command.Command
+	skills        []skill.Skill
+	allSkills     []skill.Skill
+	skillStore    *skill.Store
+	allSkillStore *skill.Store
+	skillOrch     *skill.Orchestrator
+	hooks         *hook.Runner // session hook runner; nil-safe (no hooks configured)
+	mem           *memory.Set
+	cleanup       func()
+	autoPlan      string
+	classifier    autoPlanClassifier
+	startedOnce   bool              // guards the one-shot SessionStart hook on first turn
+	onRemember    func(rule string) // set via Options; invoked when user picks "always allow"
 
 	// balanceURL/balanceKey target the active provider's optional wallet-balance
 	// endpoint (empty when the provider declares none). Captured at build so a
@@ -141,6 +151,9 @@ type Controller struct {
 	// a fresh memory takes effect this session without busting the prompt cache;
 	// it joins the prefix naturally on the next session.
 	pendingMemory []string
+
+	displayRecorder func(content, display string)
+	replayWG        sync.WaitGroup
 }
 
 type approvalReply struct {
@@ -153,21 +166,24 @@ type approvalReply struct {
 // lets the controller mint and rotate session files; Host/Commands are surfaced
 // to frontends that resolve MCP prompts and slash commands.
 type Options struct {
-	Runner       agent.Runner
-	Executor     *agent.Agent
-	Sink         event.Sink
-	Policy       permission.Policy
-	Label        string
-	SystemPrompt string
-	SessionDir   string
-	SessionPath  string
-	Host         *plugin.Host
-	Commands     []command.Command
-	Skills       []skill.Skill
-	AllSkills    []skill.Skill
-	Hooks        *hook.Runner
-	Memory       *memory.Set
-	Cleanup      func()
+	Runner            agent.Runner
+	Executor          *agent.Agent
+	Sink              event.Sink
+	Policy            permission.Policy
+	Label             string
+	SystemPrompt      string
+	SessionDir        string
+	SessionPath       string
+	Host              *plugin.Host
+	Commands          []command.Command
+	Skills            []skill.Skill
+	AllSkills         []skill.Skill
+	SkillStore        *skill.Store
+	AllSkillStore     *skill.Store
+	SkillOrchestrator *skill.Orchestrator
+	Hooks             *hook.Runner
+	Memory            *memory.Set
+	Cleanup           func()
 	// BalanceURL/BalanceKey wire the active provider's optional wallet-balance
 	// endpoint and bearer key; empty when the provider declares no balance_url.
 	BalanceURL    string
@@ -217,6 +233,9 @@ func New(opts Options) *Controller {
 		commands:      opts.Commands,
 		skills:        opts.Skills,
 		allSkills:     opts.AllSkills,
+		skillStore:    opts.SkillStore,
+		allSkillStore: opts.AllSkillStore,
+		skillOrch:     opts.SkillOrchestrator,
 		hooks:         opts.Hooks,
 		mem:           opts.Memory,
 		cleanup:       opts.Cleanup,
@@ -245,6 +264,42 @@ func New(opts Options) *Controller {
 		c.executor.SetMemoryQueue(c)
 	}
 	return c
+}
+
+// SetDisplayRecorder installs an optional hook used by frontends that persist a
+// shorter user-facing transcript than the fully composed model prompt.
+func (c *Controller) SetDisplayRecorder(fn func(content, display string)) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.displayRecorder = fn
+}
+
+func (c *Controller) recordDisplay(content, display string) {
+	if strings.TrimSpace(display) == "" || content == display {
+		return
+	}
+	c.mu.Lock()
+	record := c.displayRecorder
+	c.mu.Unlock()
+	if record != nil {
+		record(content, display)
+	}
+}
+
+func (c *Controller) recordDisplayForNewUser(startMessages int, display string) {
+	if strings.TrimSpace(display) == "" {
+		return
+	}
+	msgs := c.History()
+	if startMessages > len(msgs) {
+		startMessages = len(msgs)
+	}
+	for _, m := range msgs[startMessages:] {
+		if m.Role == provider.RoleUser {
+			c.recordDisplay(m.Content, display)
+			return
+		}
+	}
 }
 
 // ckptDir derives a session's checkpoint directory from its file path
@@ -351,12 +406,44 @@ func (c *Controller) runTurn(ctx context.Context, input string) error {
 	return c.runTurnWithRaw(ctx, input, input)
 }
 
+// RunTurn executes one foreground turn synchronously through the same lifecycle
+// used by interactive frontends: auto-plan, transient memory/background-job
+// composition, checkpoints, hooks, and plan approval. It is for transports that
+// need a blocking request/response boundary, such as ACP session/prompt.
+func (c *Controller) RunTurn(ctx context.Context, input string) error {
+	ctx, cancel := context.WithCancel(ctx)
+	c.mu.Lock()
+	if c.running {
+		c.mu.Unlock()
+		cancel()
+		return ErrTurnRunning
+	}
+	c.cancel = cancel
+	c.running = true
+	c.mu.Unlock()
+
+	defer func() {
+		c.mu.Lock()
+		c.running = false
+		c.cancel = nil
+		c.mu.Unlock()
+		cancel()
+	}()
+	return c.runTurn(ctx, input)
+}
+
 func (c *Controller) runTurnWithRaw(ctx context.Context, input, raw string) error {
+	return c.runTurnWithRawDisplay(ctx, input, raw, "")
+}
+
+func (c *Controller) runTurnWithRawDisplay(ctx context.Context, input, raw, display string) error {
 	c.maybeSessionStart(ctx)
 	c.maybeAutoPlan(ctx, raw)
 	input = c.Compose(input)
+	input = c.orchestrateSkills(ctx, input)
 	startMessages := c.messageCount()
 	defer c.snapshotActivityIfChanged(startMessages)
+	defer c.recordDisplayForNewUser(startMessages, display)
 	// Open a checkpoint for this turn before the user message is appended, so the
 	// recorded message boundary precedes it and pre-edit snapshots land here.
 	c.beginCheckpoint(input)
@@ -374,8 +461,10 @@ func (c *Controller) runTurnWithRaw(ctx context.Context, input, raw string) erro
 		defer func() { c.hooks.Stop(ctx, lastAssistantText(c.History()), turn) }()
 	}
 	if err := c.runner.Run(ctx, input); err != nil {
+		c.captureReplay(false, err)
 		return err
 	}
+	c.captureReplay(true, nil)
 	c.mu.Lock()
 	plan := c.planMode
 	c.mu.Unlock()
@@ -408,8 +497,10 @@ func (c *Controller) runTurnWithRaw(ctx context.Context, input, raw string) erro
 		c.mu.Unlock()
 	}()
 	if err := c.runner.Run(ctx, planApprovedMessage); err != nil {
+		c.captureReplay(false, err)
 		return err
 	}
+	c.captureReplay(true, nil)
 	c.completePlanTodos(seededTodos)
 	return nil
 }
@@ -435,6 +526,16 @@ func lastAssistantText(msgs []provider.Message) string {
 // resolve to a turn; an unknown slash emits a Notice. Anything else is a normal
 // turn with its @-references resolved first.
 func (c *Controller) Submit(input string) {
+	c.submit(input, "")
+}
+
+// SubmitDisplay runs input as a turn while remembering the user-facing display
+// text for transcript replay when controller-side composition expands input.
+func (c *Controller) SubmitDisplay(display, input string) {
+	c.submit(input, display)
+}
+
+func (c *Controller) submit(input, display string) {
 	trimmed := strings.TrimSpace(input)
 	if note, ok := MemoryQuickAddNote(trimmed); ok {
 		c.rememberProjectNote(note)
@@ -479,11 +580,15 @@ func (c *Controller) Submit(input string) {
 				c.notice("unknown command: " + trimmed)
 				return nil
 			}
-			return c.runTurnWithRaw(ctx, sent, sent)
+			return c.runTurnWithRawDisplay(ctx, sent, sent, display)
 		})
+	case strings.HasPrefix(trimmed, "//"):
+		// Double-slash — not a command. Common in code snippets (JS
+		// comments, file:// URLs). Run as a normal turn.
+		c.runRefTurn(input, display)
 	case strings.HasPrefix(trimmed, "/"):
 		if ref, ok := FileRefLine(trimmed); ok {
-			c.runRefTurn(ref)
+			c.runRefTurn(ref, display)
 			return
 		}
 		// Read-only management verbs (/model /memory /skills /hooks /mcp) emit a
@@ -533,19 +638,19 @@ func (c *Controller) Submit(input string) {
 		// turn. (Built-in slash verbs like /compact are handled above.)
 		if sent, ok := c.CustomCommand(trimmed); ok {
 			c.runGuarded(func(ctx context.Context) error {
-				return c.runTurnWithRaw(ctx, sent, sent)
+				return c.runTurnWithRawDisplay(ctx, sent, sent, display)
 			})
 			return
 		}
 		if sent, ok := c.RunSkill(trimmed); ok {
 			c.runGuarded(func(ctx context.Context) error {
-				return c.runTurnWithRaw(ctx, sent, sent)
+				return c.runTurnWithRawDisplay(ctx, sent, sent, display)
 			})
 			return
 		}
 		c.notice("unknown command: " + trimmed)
 	default:
-		c.runRefTurn(input)
+		c.runRefTurn(input, display)
 	}
 }
 
@@ -624,26 +729,28 @@ func (c *Controller) RunShell(command string) {
 		}})
 		cmd.Stdout = w
 		cmd.Stderr = w
+		start := time.Now()
 		err := cmd.Run()
+		durationMs := time.Since(start).Milliseconds()
 		out := buf.String()
 
 		if ctx.Err() == context.DeadlineExceeded {
 			c.sink.Emit(event.Event{
 				Kind: event.ToolResult,
-				Tool: event.Tool{ID: id, Name: "bash", Output: out, Err: fmt.Sprintf(i18n.M.ShellExecTimeoutFmt, shellTimeout)},
+				Tool: event.Tool{ID: id, Name: "bash", Output: out, Err: fmt.Sprintf(i18n.M.ShellExecTimeoutFmt, shellTimeout), DurationMs: durationMs},
 			})
 			return nil
 		}
 		if err != nil {
 			c.sink.Emit(event.Event{
 				Kind: event.ToolResult,
-				Tool: event.Tool{ID: id, Name: "bash", Output: out, Err: fmt.Sprintf(i18n.M.ShellExecFailedFmt, err)},
+				Tool: event.Tool{ID: id, Name: "bash", Output: out, Err: fmt.Sprintf(i18n.M.ShellExecFailedFmt, err), DurationMs: durationMs},
 			})
 			return nil
 		}
 		c.sink.Emit(event.Event{
 			Kind: event.ToolResult,
-			Tool: event.Tool{ID: id, Name: "bash", Output: out},
+			Tool: event.Tool{ID: id, Name: "bash", Output: out, DurationMs: durationMs},
 		})
 		return nil
 	})
@@ -651,7 +758,7 @@ func (c *Controller) RunShell(command string) {
 
 // runRefTurn resolves a line's @references into a context block and starts a
 // turn with it prepended (or the raw line when nothing resolved).
-func (c *Controller) runRefTurn(input string) {
+func (c *Controller) runRefTurn(input, display string) {
 	c.runGuarded(func(ctx context.Context) error {
 		block, errs := c.ResolveRefs(ctx, input)
 		for _, e := range errs {
@@ -661,7 +768,7 @@ func (c *Controller) runRefTurn(input string) {
 		if block != "" {
 			sent = "Referenced context:\n\n" + block + "\n\n" + input
 		}
-		return c.runTurnWithRaw(ctx, sent, input)
+		return c.runTurnWithRawDisplay(ctx, sent, input, display)
 	})
 }
 
@@ -670,11 +777,31 @@ func (c *Controller) notice(text string) {
 	c.sink.Emit(event.Event{Kind: event.Notice, Level: event.LevelInfo, Text: text})
 }
 
+func (c *Controller) orchestrateSkills(ctx context.Context, input string) string {
+	if c == nil || c.skillOrch == nil {
+		return input
+	}
+	res, err := c.skillOrch.Orchestrate(ctx, input)
+	if err != nil {
+		c.sink.Emit(event.Event{Kind: event.Notice, Level: event.LevelWarn, Text: "runtime skill orchestration skipped: " + err.Error()})
+		return input
+	}
+	if strings.TrimSpace(res.Prompt) == "" {
+		if strings.TrimSpace(res.Reason) != "" && !res.Matched && !res.Generated {
+			c.sink.Emit(event.Event{Kind: event.Notice, Level: event.LevelInfo, Text: res.Reason})
+		}
+		return input
+	}
+	c.sink.Emit(res.Event())
+	return input + "\n\n" + res.Prompt
+}
+
 // Run executes a turn synchronously, returning the agent's error. Used by the
 // headless `reasonix run` path, where the Sink renders to stdout and the caller
 // just needs the exit status — no TurnDone event, no cancel bookkeeping.
 func (c *Controller) Run(ctx context.Context, input string) error {
 	c.maybeSessionStart(ctx)
+	input = c.orchestrateSkills(ctx, input)
 	startMessages := c.messageCount()
 	defer c.snapshotActivityIfChanged(startMessages)
 	if c.hooks.Enabled() {
@@ -684,7 +811,50 @@ func (c *Controller) Run(ctx context.Context, input string) error {
 		}
 		defer func() { c.hooks.Stop(ctx, lastAssistantText(c.History()), c.turn) }()
 	}
-	return c.runner.Run(ctx, input)
+	if err := c.runner.Run(ctx, input); err != nil {
+		c.captureReplay(false, err)
+		return err
+	}
+	c.captureReplay(true, nil)
+	return nil
+}
+
+func (c *Controller) captureReplay(success bool, runErr error) {
+	if c == nil || c.executor == nil {
+		return
+	}
+	path := c.SessionPath()
+	if strings.TrimSpace(path) == "" {
+		return
+	}
+	msgs := c.executor.Session().Snapshot()
+	if len(msgs) == 0 {
+		return
+	}
+	outcome := replayeval.OutcomeInfo{
+		Success:     success,
+		GoalMet:     success,
+		FinalAnswer: lastAssistantText(msgs),
+	}
+	if runErr != nil {
+		outcome.FinalAnswer = runErr.Error()
+	}
+	receipts := c.executor.EvidenceSnapshot()
+	sessionID := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
+	dir := strings.TrimSuffix(path, filepath.Ext(path)) + ".replay"
+	c.replayWG.Add(1)
+	go func() {
+		defer c.replayWG.Done()
+		if _, _, err := replayeval.Capture(replayeval.CaptureOptions{
+			SessionID: sessionID,
+			Messages:  msgs,
+			Evidence:  receipts,
+			Outcome:   outcome,
+			Dir:       dir,
+		}); err != nil {
+			c.sink.Emit(event.Event{Kind: event.Notice, Level: event.LevelWarn, Text: "replay capture failed: " + err.Error()})
+		}
+	}()
 }
 
 // Cancel aborts the in-flight turn. A goroutine blocked awaiting approval
@@ -1377,11 +1547,21 @@ func (c *Controller) Host() *plugin.Host { return c.host }
 func (c *Controller) Commands() []command.Command { return c.commands }
 
 // Skills returns the discoverable skills (for the slash menu and `/skills`).
-func (c *Controller) Skills() []skill.Skill { return c.skills }
+// When a live Store is available, scan it on demand so skills installed during
+// this session appear without rewriting the cache-stable system prompt.
+func (c *Controller) Skills() []skill.Skill {
+	if c.skillStore != nil {
+		return c.skillStore.List()
+	}
+	return c.skills
+}
 
 // AllSkills returns every discoverable skill, including disabled ones, for
 // management surfaces that need to re-enable a hidden skill.
 func (c *Controller) AllSkills() []skill.Skill {
+	if c.allSkillStore != nil {
+		return c.allSkillStore.List()
+	}
 	if len(c.allSkills) > 0 {
 		return c.allSkills
 	}
@@ -1496,6 +1676,55 @@ func (c *Controller) connectMCPSpec(s plugin.Spec) (int, error) {
 		}
 	}
 	return len(tools), nil
+}
+
+// ImportMCPEntries persists selected MCP entries and attempts to connect them
+// live. A connection failure does not roll back the config import: the user can
+// fix local dependencies and reconnect in a later session.
+func (c *Controller) ImportMCPEntries(entries []config.PluginEntry) (total, added, updated, connected, failed, skipped int, err error) {
+	cfg, lerr := config.Load()
+	if lerr != nil {
+		return 0, 0, 0, 0, 0, 0, lerr
+	}
+	existing := make(map[string]bool, len(cfg.Plugins))
+	for _, p := range cfg.Plugins {
+		existing[p.Name] = true
+	}
+	for _, e := range entries {
+		if existing[e.Name] {
+			updated++
+		} else {
+			added++
+		}
+		if err := cfg.UpsertPlugin(e); err != nil {
+			return 0, 0, 0, 0, 0, 0, err
+		}
+		existing[e.Name] = true
+	}
+	if err := cfg.Save(); err != nil {
+		return 0, 0, 0, 0, 0, 0, err
+	}
+	for _, e := range entries {
+		if c.host != nil && containsString(c.host.ServerNames(), e.Name) {
+			skipped++
+			continue
+		}
+		if _, err := c.AddMCPServer(e); err != nil {
+			failed++
+			continue
+		}
+		connected++
+	}
+	return len(entries), added, updated, connected, failed, skipped, nil
+}
+
+func containsString(ss []string, want string) bool {
+	for _, s := range ss {
+		if s == want {
+			return true
+		}
+	}
+	return false
 }
 
 func (c *Controller) ConfiguredMCPNames() []string {
@@ -1646,6 +1875,7 @@ func (c *Controller) Close() {
 	if c.jobs != nil {
 		c.jobs.Close() // cancel any still-running background jobs
 	}
+	c.replayWG.Wait()
 	if c.cleanup != nil {
 		c.cleanup()
 	}

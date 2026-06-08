@@ -17,13 +17,22 @@ export type EventKind =
   | "turn_done"
   | "compaction_started"
   | "compaction_done"
-  | "retrying";
+  | "retrying"
+  | "upgrade"
+  | "skill_generated"
+  | "budget_exceeded"
+  | "skill_promoted";
 
 export interface WireCompaction {
   trigger?: string; // "auto" | "manual"
   messages?: number; // done: how many messages were folded into the summary
   summary?: string; // done: the briefing (empty on an aborted pass)
   archive?: string; // done: archive path, if any
+}
+
+export interface WireProfile {
+  model?: string;
+  effort?: string;
 }
 
 export interface WireTool {
@@ -34,8 +43,10 @@ export interface WireTool {
   err?: string;
   readOnly: boolean;
   truncated?: boolean;
+  durationMs?: number;
   partial?: boolean; // an early dispatch (name only) — a full one with args follows
   parentId?: string; // set on a sub-agent's calls — the parent `task` call's id
+  profile?: WireProfile; // subagent model/effort resolved for this call
 }
 
 export interface WireUsage {
@@ -189,6 +200,21 @@ export interface HistoryMessage {
   role: string;
   content: string;
   reasoning?: string;
+  level?: "info" | "warn";
+  toolCalls?: HistoryToolCall[];
+  toolCallId?: string;
+  toolName?: string;
+  pending?: boolean;
+  trigger?: string;
+  messages?: number;
+  summary?: string;
+  archive?: string;
+}
+
+export interface HistoryToolCall {
+  id: string;
+  name: string;
+  arguments: string;
 }
 
 // CheckpointMeta is one rewind point (a user turn) for the rewind UI.
@@ -217,6 +243,16 @@ export interface SessionMeta {
   workspaceRoot?: string;
   topicId?: string;
   topicTitle?: string;
+}
+
+// SessionReference is a session selected via @ past:chats for context injection.
+export interface SessionReference {
+  path: string;
+  title: string;
+  preview?: string;
+  turns?: number;
+  createdAt?: number;
+  lastActivityAt?: number;
 }
 
 export interface WorkspaceView {
@@ -269,6 +305,9 @@ export interface FilePreview {
   size: number;
   truncated: boolean;
   binary: boolean;
+  kind?: "image" | "pdf";
+  mime?: string;
+  url?: string;
   err?: string;
 }
 
@@ -339,6 +378,7 @@ export interface SkillRootView {
   priority: number;
   status: string;
   configured: boolean;
+  removable: boolean;
   skills: number;
   skillItems?: SkillRootSkillView[];
   warning?: string;
@@ -355,7 +395,6 @@ export interface MCPServerInput {
   args: string[];
   url: string;
   env?: Record<string, string> | null;
-  tier: string;
 }
 
 export interface ModelInfo {
@@ -413,17 +452,24 @@ export interface MemoryView {
   available: boolean;
 }
 
+// SettingsTab is the top-level navigation item in the Settings Centre modal.
+export type SettingsTab = "general" | "models" | "providers" | "mcp" | "skills" | "memory" | "permissions" | "sandbox" | "network" | "appearance" | "updates";
+
 // Settings panel payloads (desktop/settings_app.go).
 export interface ProviderView {
   name: string;
+  builtIn: boolean;
+  added: boolean;
   kind: string;
   baseUrl: string;
   models: string[];
+  modelsUrl: string; // optional override for model discovery; empty derives from baseUrl
   default: string;
   apiKeyEnv: string;
   keySet: boolean; // the env var currently resolves to a value
   balanceUrl: string; // optional wallet-balance endpoint; "" disables the readout
   contextWindow: number;
+  reasoningProtocol: string; // auto|deepseek|openai|none; empty = auto/model registry
   supportedEfforts: string[]; // custom /effort levels; empty = use built-in Kind/BaseURL default
   defaultEffort: string; // /effort level when user picks "auto" or unset; "" = supportedEfforts[0]
 }
@@ -484,8 +530,11 @@ export interface AgentView {
 export interface SettingsView {
   defaultModel: string;
   plannerModel: string;
+  subagentModel: string;
+  subagentEffort: string;
   autoPlan: string;
   providers: ProviderView[];
+  officialProviders: ProviderView[];
   permissions: PermissionsView;
   sandbox: SandboxView;
   network: NetworkView;

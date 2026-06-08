@@ -55,15 +55,22 @@ type wireAsk struct {
 }
 
 type wireTool struct {
-	ID        string `json:"id,omitempty"`
-	Name      string `json:"name"`
-	Args      string `json:"args,omitempty"`
-	Output    string `json:"output,omitempty"`
-	Err       string `json:"err,omitempty"`
-	ReadOnly  bool   `json:"readOnly"`
-	Truncated bool   `json:"truncated,omitempty"`
-	Partial   bool   `json:"partial,omitempty"`
-	ParentID  string `json:"parentId,omitempty"`
+	ID         string       `json:"id,omitempty"`
+	Name       string       `json:"name"`
+	Args       string       `json:"args,omitempty"`
+	Output     string       `json:"output,omitempty"`
+	Err        string       `json:"err,omitempty"`
+	ReadOnly   bool         `json:"readOnly"`
+	Truncated  bool         `json:"truncated,omitempty"`
+	DurationMs int64        `json:"durationMs,omitempty"`
+	Partial    bool         `json:"partial,omitempty"`
+	ParentID   string       `json:"parentId,omitempty"`
+	Profile    *wireProfile `json:"profile,omitempty"`
+}
+
+type wireProfile struct {
+	Model  string `json:"model,omitempty"`
+	Effort string `json:"effort,omitempty"`
 }
 
 type wireUsage struct {
@@ -121,6 +128,10 @@ var kindNames = map[event.Kind]string{
 	event.CompactionDone:    "compaction_done",
 	event.ToolProgress:      "tool_progress",
 	event.Retrying:          "retrying",
+	event.Upgrade:           "upgrade",
+	event.SkillGenerated:    "skill_generated",
+	event.BudgetExceeded:    "budget_exceeded",
+	event.SkillPromoted:     "skill_promoted",
 }
 
 // toWireAsk converts an event.Ask into its JSON wire form.
@@ -140,19 +151,24 @@ func toWireAsk(a event.Ask) *wireAsk {
 func toWire(e event.Event) wireEvent {
 	w := wireEvent{Kind: kindNames[e.Kind], Text: e.Text, Reasoning: e.Reasoning}
 	switch e.Kind {
-	case event.Notice:
+	case event.Notice, event.Upgrade, event.SkillGenerated, event.BudgetExceeded, event.SkillPromoted:
 		if e.Level == event.LevelWarn {
 			w.Level = "warn"
 		} else {
 			w.Level = "info"
 		}
 	case event.ToolDispatch, event.ToolResult, event.ToolProgress:
-		w.Tool = &wireTool{
+		wt := &wireTool{
 			ID: e.Tool.ID, Name: e.Tool.Name, Args: e.Tool.Args,
 			Output: e.Tool.Output, Err: e.Tool.Err,
 			ReadOnly: e.Tool.ReadOnly, Truncated: e.Tool.Truncated,
-			Partial: e.Tool.Partial, ParentID: e.Tool.ParentID,
+			DurationMs: e.Tool.DurationMs, Partial: e.Tool.Partial,
+			ParentID: e.Tool.ParentID,
 		}
+		if e.Tool.Profile != nil {
+			wt.Profile = &wireProfile{Model: e.Tool.Profile.Model, Effort: e.Tool.Profile.Effort}
+		}
+		w.Tool = wt
 	case event.Usage:
 		if u := e.Usage; u != nil {
 			w.Usage = &wireUsage{

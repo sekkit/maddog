@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 	"unicode/utf8"
 
 	"reasonix/internal/diff"
@@ -28,6 +29,8 @@ import (
 const maxToolOutputBytes = 32 * 1024
 
 const maxFinalReadinessBlocks = 3
+const maxEmptyFinalBlocks = 3
+const maxStreamRecoveries = 1
 
 // Renderer redraws the assistant's final-answer text as styled output. It is
 // applied only after a turn's text stream completes, so the user sees raw
@@ -120,6 +123,19 @@ type Agent struct {
 	maxSteps    int
 	temperature float64
 	pricing     *provider.Pricing
+
+	upgradePolicy         UpgradePolicy
+	frontierProv          provider.Provider
+	frontierPricing       *provider.Pricing
+	frontierContextWindow int
+	frontierTarget        string
+	defaultProv           provider.Provider
+	defaultPricing        *provider.Pricing
+	defaultContextWindow  int
+	upgraded              bool
+	onFrontier            bool
+	frontierReceiptStart  int
+	frontierTokens        atomic.Int64
 
 	// sink receives the turn's typed event stream (reasoning/text deltas, tool
 	// dispatch/results, usage, notices). The agent no longer formats output
@@ -266,6 +282,15 @@ func (a *Agent) Session() *Session {
 	return a.session
 }
 
+// EvidenceSnapshot returns a copy of the current turn's host-observed receipts.
+// It is used by replay/eval capture after a turn completes.
+func (a *Agent) EvidenceSnapshot() []evidence.Receipt {
+	if a == nil || a.evidence == nil {
+		return nil
+	}
+	return a.evidence.Snapshot()
+}
+
 // SetSession replaces the agent's conversation wholesale. Used by
 // `reasonix chat --resume` to load a saved JSONL transcript before the first turn,
 // so the model picks up exactly where it left off. Callers serialise it against a
@@ -331,6 +356,14 @@ type Options struct {
 
 	// ProjectChecks are host-observable structured checks extracted during boot.
 	ProjectChecks []instruction.VerifyCheck
+
+	// Frontier upgrade routing. When UpgradePolicy selects an upgrade, the
+	// current turn continues on FrontierProvider while preserving session state.
+	UpgradePolicy         UpgradePolicy
+	FrontierProvider      provider.Provider
+	FrontierPricing       *provider.Pricing
+	FrontierContextWindow int
+	FrontierTarget        string
 }
 
 // New constructs an Agent. MaxSteps <= 0 means no cap — the run loop continues
@@ -362,24 +395,29 @@ func New(prov provider.Provider, tools *tool.Registry, session *Session, opts Op
 		hooks = nil
 	}
 	return &Agent{
-		prov:              prov,
-		tools:             tools,
-		session:           session,
-		maxSteps:          opts.MaxSteps,
-		temperature:       opts.Temperature,
-		pricing:           opts.Pricing,
-		sink:              sink,
-		gate:              gate,
-		hooks:             hooks,
-		jobs:              opts.Jobs,
-		evidence:          evidence.NewLedger(),
-		projectChecks:     append([]instruction.VerifyCheck(nil), opts.ProjectChecks...),
-		contextWindow:     opts.ContextWindow,
-		softCompactRatio:  opts.SoftCompactRatio,
-		compactRatio:      opts.CompactRatio,
-		compactForceRatio: opts.CompactForceRatio,
-		recentKeep:        opts.RecentKeep,
-		archiveDir:        opts.ArchiveDir,
+		prov:                  prov,
+		tools:                 tools,
+		session:               session,
+		maxSteps:              opts.MaxSteps,
+		temperature:           opts.Temperature,
+		pricing:               opts.Pricing,
+		upgradePolicy:         opts.UpgradePolicy,
+		frontierProv:          opts.FrontierProvider,
+		frontierPricing:       opts.FrontierPricing,
+		frontierContextWindow: opts.FrontierContextWindow,
+		frontierTarget:        opts.FrontierTarget,
+		sink:                  sink,
+		gate:                  gate,
+		hooks:                 hooks,
+		jobs:                  opts.Jobs,
+		evidence:              evidence.NewLedger(),
+		projectChecks:         append([]instruction.VerifyCheck(nil), opts.ProjectChecks...),
+		contextWindow:         opts.ContextWindow,
+		softCompactRatio:      opts.SoftCompactRatio,
+		compactRatio:          opts.CompactRatio,
+		compactForceRatio:     opts.CompactForceRatio,
+		recentKeep:            opts.RecentKeep,
+		archiveDir:            opts.ArchiveDir,
 	}
 }
 
@@ -393,11 +431,14 @@ func (a *Agent) Run(ctx context.Context, input string) error {
 	if a.evidence != nil {
 		a.evidence.Reset()
 	}
+	a.resetRoutingForTurn()
 	a.repeatSuccessCounts = nil
 	a.sink.Emit(event.Event{Kind: event.TurnStarted})
 	a.session.Add(provider.Message{Role: provider.RoleUser, Content: input})
 
 	finalReadinessBlocks := 0
+	emptyFinalBlocks := 0
+	streamRecoveries := 0
 	for step := 0; a.maxSteps <= 0 || step < a.maxSteps; step++ {
 		schemas := a.tools.Schemas()
 		prefixShape := a.capturePrefixShape(schemas)
@@ -406,15 +447,52 @@ func (a *Agent) Run(ctx context.Context, input string) error {
 			prevPrefixShape = prefixShape
 		}
 
-		text, reasoning, signature, calls, usage, err := a.stream(ctx, step+1)
+		text, reasoning, signature, calls, usage, interrupted, partialToolStarted, err := a.stream(ctx, step+1)
 		if err != nil {
+			if a.onFrontier {
+				a.downgradeFromFrontier()
+				a.sink.Emit(event.Event{Kind: event.Upgrade, Level: event.LevelWarn, Text: "frontier request failed, switched back to default: " + err.Error()})
+				if !interrupted {
+					step-- // retry the same round on the default provider
+					continue
+				}
+			}
+			if interrupted && streamRecoveries < maxStreamRecoveries {
+				streamRecoveries++
+				if hasVisibleFinalAnswer(text) {
+					a.session.Add(provider.Message{
+						Role:               provider.RoleAssistant,
+						Content:            text,
+						ReasoningContent:   reasoning,
+						ReasoningSignature: signature,
+					})
+				}
+				a.session.Add(provider.Message{
+					Role:    provider.RoleUser,
+					Content: streamRecoveryMessage(hasVisibleFinalAnswer(text), partialToolStarted),
+				})
+				a.sink.Emit(event.Event{Kind: event.Retrying, RetryAttempt: streamRecoveries, RetryMax: maxStreamRecoveries})
+				step-- // recovery retries do not consume the tool-round maxSteps budget
+				continue
+			}
 			return err
 		}
+		streamRecoveries = 0
 		cacheDiagnostics := CompareShape(prevPrefixShape, prefixShape, usage)
 		a.lastPrefixShape = prefixShape
 		a.haveLastPrefixShape = true
 		if usage != nil && usage.TotalTokens > 0 {
-			a.sink.Emit(event.Event{Kind: event.Usage, Usage: usage, Pricing: a.pricing,
+			pricing := a.pricing
+			if a.onFrontier {
+				pricing = a.frontierPricing
+				if _, ok := a.frontierProv.(frontierBudgetTracker); !ok {
+					a.frontierTokens.Add(int64(usage.CompletionTokens))
+				}
+				if a.emitFrontierBudgetIfExceeded() {
+					a.downgradeFromFrontier()
+				}
+			}
+			a.sink.Emit(event.Event{Kind: event.Usage, Usage: usage, Pricing: pricing,
 				CacheDiagnostics: &cacheDiagnostics,
 				SessionHit:       int(a.sessCacheHit.Load()), SessionMiss: int(a.sessCacheMiss.Load())})
 		}
@@ -435,18 +513,37 @@ func (a *Agent) Run(ctx context.Context, input string) error {
 		})
 
 		if len(calls) == 0 {
-			if reason := a.finalReadinessFailure(); reason != "" {
+			readiness := a.finalReadinessCheck()
+			if readiness.reason != "" {
 				finalReadinessBlocks++
+				result := evidence.ReadinessBlocked
 				if finalReadinessBlocks >= maxFinalReadinessBlocks {
-					return fmt.Errorf("final-answer readiness failed %d times: %s", finalReadinessBlocks, reason)
+					result = evidence.ReadinessErrored
+					event.RecordReadinessAudit(a.sink, readiness.audit(result, false))
+					return fmt.Errorf("final-answer readiness failed %d times: %s", finalReadinessBlocks, readiness.reason)
 				}
-				a.sink.Emit(event.Event{Kind: event.Notice, Level: event.LevelWarn, Text: "final-answer readiness blocked: " + reason})
-				a.session.Add(provider.Message{Role: provider.RoleUser, Content: finalReadinessRetryMessage(reason)})
+				event.RecordReadinessAudit(a.sink, readiness.audit(result, false))
+				a.sink.Emit(event.Event{Kind: event.Notice, Level: event.LevelWarn, Text: "final-answer readiness blocked: " + readiness.reason})
+				a.session.Add(provider.Message{Role: provider.RoleUser, Content: finalReadinessRetryMessage(readiness.reason)})
 				a.maybeCompact(ctx, usage)
 				continue
 			}
+			if !hasVisibleFinalAnswer(text) {
+				emptyFinalBlocks++
+				if emptyFinalBlocks >= maxEmptyFinalBlocks {
+					return fmt.Errorf("model finished without a visible final answer %d times", emptyFinalBlocks)
+				}
+				a.sink.Emit(event.Event{Kind: event.Notice, Level: event.LevelWarn, Text: "empty final answer blocked: model returned no visible answer text; retrying"})
+				a.session.Add(provider.Message{Role: provider.RoleUser, Content: emptyFinalRetryMessage()})
+				a.maybeCompact(ctx, usage)
+				continue
+			}
+			if readiness.applies {
+				event.RecordReadinessAudit(a.sink, readiness.audit(evidence.ReadinessAllowed, finalReadinessBlocks > 0))
+			}
 			return nil // model gave a final answer
 		}
+		emptyFinalBlocks = 0
 
 		results := a.executeBatch(ctx, calls)
 		for i, call := range calls {
@@ -457,6 +554,7 @@ func (a *Agent) Run(ctx context.Context, input string) error {
 				Name:       call.Name,
 			})
 		}
+		a.evaluateRoutingAfterTools(step + 1)
 
 		// The prompt only grows from here; compact before the next turn so it
 		// stays within the model's window.
@@ -468,42 +566,194 @@ func (a *Agent) Run(ctx context.Context, input string) error {
 	return fmt.Errorf("paused after %d tool-call rounds (agent.max_steps) — the work so far is saved; send another message to continue, or set max_steps higher or to 0 for no limit", a.maxSteps)
 }
 
+func (a *Agent) resetRoutingForTurn() {
+	a.upgraded = false
+	a.onFrontier = false
+	a.frontierReceiptStart = 0
+	if a.defaultProv != nil {
+		a.prov = a.defaultProv
+		a.pricing = a.defaultPricing
+		a.contextWindow = a.defaultContextWindow
+	}
+}
+
+func (a *Agent) evaluateRoutingAfterTools(turn int) {
+	if a.upgradePolicy == nil || a.evidence == nil {
+		return
+	}
+	if a.onFrontier {
+		if a.frontierFailed() {
+			a.downgradeFromFrontier()
+			a.sink.Emit(event.Event{Kind: event.Upgrade, Level: event.LevelWarn, Text: "frontier also failing, switched back to default"})
+		}
+		return
+	}
+	if a.upgraded || a.frontierProv == nil {
+		return
+	}
+	decision := a.upgradePolicy.Evaluate(a.evidence.FailureSignal(), turn, a.frontierTokens.Load())
+	if !decision.ShouldUpgrade {
+		return
+	}
+	a.switchToFrontier(decision)
+	target := strings.TrimSpace(decision.TargetModel)
+	if target == "" {
+		target = strings.TrimSpace(a.frontierTarget)
+	}
+	if target == "" && a.frontierProv != nil {
+		target = a.frontierProv.Name()
+	}
+	text := "upgraded to " + target
+	if strings.TrimSpace(decision.Reason) != "" {
+		text += ": " + strings.TrimSpace(decision.Reason)
+	}
+	a.sink.Emit(event.Event{Kind: event.Upgrade, Level: event.LevelInfo, Text: text})
+}
+
+func (a *Agent) switchToFrontier(d UpgradeDecision) {
+	if a.frontierProv == nil {
+		return
+	}
+	if a.defaultProv == nil {
+		a.defaultProv = a.prov
+		a.defaultPricing = a.pricing
+		a.defaultContextWindow = a.contextWindow
+	}
+	a.prov = a.frontierProv
+	a.pricing = a.frontierPricing
+	if a.frontierContextWindow > 0 {
+		a.contextWindow = a.frontierContextWindow
+	}
+	if strings.TrimSpace(d.TargetModel) != "" {
+		a.frontierTarget = strings.TrimSpace(d.TargetModel)
+	}
+	a.upgraded = true
+	a.onFrontier = true
+	a.frontierReceiptStart = a.evidence.Count()
+	a.stormSig = ""
+	a.stormCount = 0
+}
+
+func (a *Agent) downgradeFromFrontier() {
+	if a.defaultProv == nil {
+		return
+	}
+	a.prov = a.defaultProv
+	a.pricing = a.defaultPricing
+	a.contextWindow = a.defaultContextWindow
+	a.onFrontier = false
+	a.stormSig = ""
+	a.stormCount = 0
+}
+
+func (a *Agent) frontierFailed() bool {
+	if !a.onFrontier || a.evidence == nil {
+		return false
+	}
+	sig := a.evidence.FailureSignalSince(a.frontierReceiptStart)
+	if sig.ConsecutiveErrors == 0 {
+		return false
+	}
+	decision := a.upgradePolicy.Evaluate(sig, 0, 0)
+	return decision.ShouldUpgrade
+}
+
+func (a *Agent) emitFrontierBudgetIfExceeded() bool {
+	if tracked, ok := a.frontierProv.(frontierBudgetTracker); ok {
+		a.frontierTokens.Store(tracked.OutputTokens())
+		if tracked.Exceeded() {
+			a.sink.Emit(event.Event{Kind: event.BudgetExceeded, Level: event.LevelWarn,
+				Text: fmt.Sprintf("frontier budget exceeded: %d/%d output tokens used", tracked.OutputTokens(), tracked.BudgetLimit())})
+			return true
+		}
+	}
+	if limited, ok := a.upgradePolicy.(interface {
+		FrontierBudgetLimit() int64
+	}); ok {
+		limit := limited.FrontierBudgetLimit()
+		if limit > 0 && a.frontierTokens.Load() >= limit {
+			a.sink.Emit(event.Event{Kind: event.BudgetExceeded, Level: event.LevelWarn,
+				Text: fmt.Sprintf("frontier budget exceeded: %d/%d output tokens used", a.frontierTokens.Load(), limit)})
+			return true
+		}
+	}
+	return false
+}
+
+type frontierBudgetTracker interface {
+	OutputTokens() int64
+	BudgetLimit() int64
+	Exceeded() bool
+}
+
 func (a *Agent) finalReadinessFailure() string {
+	return a.finalReadinessCheck().reason
+}
+
+type finalReadinessCheck struct {
+	applies              bool
+	reason               string
+	missingProjectChecks int
+	missingCompleteStep  bool
+	incompleteTodos      int
+}
+
+func (c finalReadinessCheck) audit(result evidence.ReadinessAuditResult, recovered bool) evidence.ReadinessAudit {
+	return evidence.ReadinessAudit{
+		Result:                 result,
+		Recovered:              recovered,
+		MissingProjectChecks:   c.missingProjectChecks,
+		MissingCompleteStep:    c.missingCompleteStep,
+		IncompleteTodos:        c.incompleteTodos,
+		CommandMismatchMissing: c.missingProjectChecks,
+	}
+}
+
+func (a *Agent) finalReadinessCheck() finalReadinessCheck {
 	if a.evidence == nil {
-		return ""
+		return finalReadinessCheck{}
 	}
 	var missing []string
+	out := finalReadinessCheck{}
 	if !a.planMode.Load() {
 		if incomplete, hasTodos := a.evidence.IncompleteLatestTodos(); hasTodos && len(incomplete) > 0 {
+			out.applies = true
+			out.incompleteTodos = len(incomplete)
 			missing = append(missing, finalReadinessIncompleteTodos(incomplete))
 		}
 	}
 	writer, hasWriter := a.evidence.LatestSuccessfulWriterIndex()
 	if !hasWriter {
-		return strings.Join(missing, "; ")
+		if len(missing) > 0 {
+			out.reason = strings.Join(missing, "; ")
+		}
+		return out
 	}
 	hasProjectChecks := len(a.projectChecks) > 0
 	hasTodoReceipt := a.evidence.HasSuccessfulTodoWrite()
 	if !hasProjectChecks && !hasTodoReceipt && len(missing) == 0 {
-		return ""
+		return finalReadinessCheck{}
 	}
-
+	out.applies = true
 	for _, check := range a.projectChecks {
 		command := strings.TrimSpace(check.Command)
 		if command == "" {
 			continue
 		}
 		if !a.evidence.HasSuccessfulCommandAfter(command, writer) {
+			out.missingProjectChecks++
 			missing = append(missing, fmt.Sprintf("run %q from %s after the latest write", command, finalReadinessCheckSource(check)))
 		}
 	}
 	if hasTodoReceipt && !a.evidence.HasSuccessfulCompleteStepAfter(writer) {
+		out.missingCompleteStep = true
 		missing = append(missing, "call complete_step after the latest write")
 	}
 	if len(missing) == 0 {
-		return ""
+		return out
 	}
-	return strings.Join(missing, "; ")
+	out.reason = strings.Join(missing, "; ")
+	return out
 }
 
 func finalReadinessIncompleteTodos(items []evidence.TodoStepMatch) string {
@@ -533,12 +783,31 @@ func finalReadinessRetryMessage(reason string) string {
 	return "Host final-answer readiness check failed. Before giving a final answer, address the missing host-observable receipts: " + reason + ". Run the required tool calls, then answer when readiness is satisfied."
 }
 
+func hasVisibleFinalAnswer(text string) bool {
+	return strings.TrimSpace(text) != ""
+}
+
+func emptyFinalRetryMessage() string {
+	return "The previous assistant response finished without any visible answer text. Continue the same task now and provide a concise visible answer to the user. Do not send reasoning only."
+}
+
+func streamRecoveryMessage(hasPartialText, hadPartialTool bool) string {
+	switch {
+	case hadPartialTool:
+		return "The previous assistant response was interrupted while a tool call was streaming. Continue the same task now. If a tool is still needed, issue a fresh complete tool call from scratch; do not rely on any partial tool-call arguments from the interrupted stream."
+	case hasPartialText:
+		return "The previous assistant response was interrupted during streaming. Continue the same task from immediately after the partial assistant message above. Do not repeat text that is already visible."
+	default:
+		return "The previous assistant response was interrupted during streaming before visible answer text was completed. Continue the same task now and provide the next useful response."
+	}
+}
+
 // stream runs one completion, emitting reasoning and text deltas as typed
 // events and collecting complete tool calls. A Message event closes the text
 // stream so a sink can re-render the streamed raw text as styled markdown. The
 // accumulated text and reasoning are also returned so the caller can round-trip
 // reasoning on the next turn.
-func (a *Agent) stream(ctx context.Context, turn int) (string, string, string, []provider.ToolCall, *provider.Usage, error) {
+func (a *Agent) stream(ctx context.Context, turn int) (string, string, string, []provider.ToolCall, *provider.Usage, bool, bool, error) {
 	ctx = provider.WithRetryNotify(ctx, func(info provider.RetryInfo) {
 		a.sink.Emit(event.Event{Kind: event.Retrying, RetryAttempt: info.Attempt, RetryMax: info.Max})
 	})
@@ -548,7 +817,7 @@ func (a *Agent) stream(ctx context.Context, turn int) (string, string, string, [
 		Temperature: a.temperature,
 	})
 	if err != nil {
-		return "", "", "", nil, nil, err
+		return "", "", "", nil, nil, false, false, err
 	}
 
 	// A PostLLMCall hook rewrites the whole reasoning block, so when one is wired
@@ -561,6 +830,22 @@ func (a *Agent) stream(ctx context.Context, turn int) (string, string, string, [
 	var signature string // provider-issued proof for the reasoning (Anthropic thinking)
 	var calls []provider.ToolCall
 	var usage *provider.Usage
+	var partialToolStarted bool
+	finishReasoning := func() (stored, display string) {
+		original := reasoning.String()
+		display = original
+		if transformReasoning && original != "" {
+			display = a.hooks.PostLLMCall(ctx, original, turn)
+			if display != "" {
+				a.sink.Emit(event.Event{Kind: event.Reasoning, Text: display})
+			}
+		}
+		stored = display
+		if signature != "" {
+			stored = original
+		}
+		return stored, display
+	}
 	for chunk := range ch {
 		switch chunk.Type {
 		case provider.ChunkReasoning:
@@ -575,6 +860,7 @@ func (a *Agent) stream(ctx context.Context, turn int) (string, string, string, [
 			text.WriteString(chunk.Text)
 			a.sink.Emit(event.Event{Kind: event.Text, Text: chunk.Text})
 		case provider.ChunkToolCallStart:
+			partialToolStarted = true
 			// Surface the tool card as soon as the call begins — before its
 			// (possibly large) arguments finish streaming — so the user sees it
 			// working instead of a stall. executeBatch emits the full dispatch
@@ -585,6 +871,7 @@ func (a *Agent) stream(ctx context.Context, turn int) (string, string, string, [
 				}})
 			}
 		case provider.ChunkToolCall:
+			partialToolStarted = true
 			calls = append(calls, *chunk.ToolCall)
 		case provider.ChunkUsage:
 			usage = chunk.Usage
@@ -592,36 +879,30 @@ func (a *Agent) stream(ctx context.Context, turn int) (string, string, string, [
 			a.sessCacheHit.Add(int64(chunk.Usage.CacheHitTokens))
 			a.sessCacheMiss.Add(int64(chunk.Usage.CacheMissTokens))
 		case provider.ChunkError:
-			return "", "", "", nil, nil, chunk.Err
+			if provider.IsStreamInterrupted(chunk.Err) {
+				stored, _ := finishReasoning()
+				return text.String(), stored, signature, calls, usage, true, partialToolStarted, chunk.Err
+			}
+			return "", "", "", nil, nil, false, false, chunk.Err
 		}
 	}
 	// With a PostLLMCall hook, the live stream was suppressed above; transform the
 	// full reasoning now and emit it once so the sink never sees the untranslated
 	// text. Without a hook this is skipped — the chunk-by-chunk events already fired.
-	original := reasoning.String()
-	display := original
-	if transformReasoning && original != "" {
-		display = a.hooks.PostLLMCall(ctx, original, turn)
-		if display != "" {
-			a.sink.Emit(event.Event{Kind: event.Reasoning, Text: display})
-		}
-	}
+	stored, display := finishReasoning()
 	// Store the transformed reasoning — except when a provider signature pins it to
 	// the original text (Anthropic extended thinking). That signed thinking block is
 	// replayed verbatim on the next tool-call turn; re-uploading transformed text
 	// under the original signature is rejected, so keep the original for storage
-	// while the user still sees the transformed version live.
-	stored := display
-	if signature != "" {
-		stored = original
-	}
+	// while the user still sees the transformed version live. finishReasoning did
+	// that choice above.
 	// Close the text stream: a sink may re-render the streamed raw text as
 	// styled markdown now that it is complete. Reasoning rides along so the sink
 	// has the full chain if it wants it.
 	if text.Len() > 0 || display != "" {
 		a.sink.Emit(event.Event{Kind: event.Message, Text: text.String(), Reasoning: display})
 	}
-	return text.String(), stored, signature, calls, usage, nil
+	return text.String(), stored, signature, calls, usage, false, false, nil
 }
 
 func (a *Agent) capturePrefixShape(schemas []provider.ToolSchema) PrefixShape {
@@ -657,14 +938,22 @@ func (a *Agent) executeBatch(ctx context.Context, calls []provider.ToolCall) []s
 			if ch, ok := tool.PreviewChange(t, json.RawMessage(c.Arguments)); ok {
 				ev.FileDiff = event.FileDiff{Diff: ch.Diff, Added: ch.Added, Removed: ch.Removed}
 			}
+			if pr, ok := t.(interface {
+				ResolveProfile(json.RawMessage) *event.Profile
+			}); ok {
+				ev.Profile = pr.ResolveProfile(json.RawMessage(c.Arguments))
+			}
 		}
 		a.sink.Emit(event.Event{Kind: event.ToolDispatch, Tool: ev})
 	}
 
 	results := make([]string, len(calls))
 	outcomes := make([]toolOutcome, len(calls))
+	durations := make([]int64, len(calls))
 	run := func(i int) {
+		start := time.Now()
 		outcomes[i] = a.executeOne(ctx, calls[i])
+		durations[i] = time.Since(start).Milliseconds()
 		results[i] = outcomes[i].output
 	}
 
@@ -682,13 +971,14 @@ func (a *Agent) executeBatch(ctx context.Context, calls []provider.ToolCall) []s
 		o := outcomes[i]
 		t, ok := a.tools.Get(c.Name)
 		a.sink.Emit(event.Event{Kind: event.ToolResult, Tool: event.Tool{
-			ID:        c.ID,
-			Name:      c.Name,
-			Args:      c.Arguments,
-			Output:    o.output,
-			Err:       o.errMsg,
-			ReadOnly:  ok && t.ReadOnly(),
-			Truncated: o.truncated,
+			ID:         c.ID,
+			Name:       c.Name,
+			Args:       c.Arguments,
+			Output:     o.output,
+			Err:        o.errMsg,
+			ReadOnly:   ok && t.ReadOnly(),
+			Truncated:  o.truncated,
+			DurationMs: durations[i],
 		}})
 		if o.truncated && o.truncMsg != "" {
 			a.sink.Emit(event.Event{Kind: event.Notice, Level: event.LevelInfo, Text: o.truncMsg})

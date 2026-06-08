@@ -3,8 +3,15 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"mime"
+	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -65,12 +72,177 @@ type App struct {
 	forceQuit atomic.Bool
 	trayReady bool
 	tray      *desktopTray
+
+	mediaTokens *mediaTokenStore
+}
+
+// mediaTokenEntry holds metadata for a workspace media file served via temporary URL.
+type mediaTokenEntry struct {
+	absPath   string
+	filename  string
+	mime      string
+	kind      string
+	size      int64
+	modTime   time.Time
+	createdAt time.Time
+	expiresAt time.Time
+}
+
+// mediaTokenStore manages temporary tokens that grant access to workspace files
+// through the AssetServer middleware. Tokens expire after a fixed TTL and are
+// capped at a maximum count; creating a new token evicts the oldest entry when
+// the store is full.
+type mediaTokenStore struct {
+	mu    sync.Mutex
+	byTok map[string]*mediaTokenEntry
+	order []string // oldest first
+	maxN  int
+	ttl   time.Duration
+}
+
+const mediaTokenMax = 256
+
+func newMediaTokenStore() *mediaTokenStore {
+	return &mediaTokenStore{
+		byTok: map[string]*mediaTokenEntry{},
+		maxN:  mediaTokenMax,
+		ttl:   10 * time.Minute,
+	}
+}
+
+func (s *mediaTokenStore) cleanupLocked() {
+	now := time.Now()
+	for len(s.order) > 0 {
+		tok := s.order[0]
+		e := s.byTok[tok]
+		if e == nil {
+			s.order = s.order[1:]
+			continue
+		}
+		if !now.Before(e.expiresAt) {
+			delete(s.byTok, tok)
+			s.order = s.order[1:]
+			continue
+		}
+		break
+	}
+	for len(s.order) > s.maxN {
+		oldest := s.order[0]
+		delete(s.byTok, oldest)
+		s.order = s.order[1:]
+	}
+}
+
+func (s *mediaTokenStore) create(absPath, filename, mime, kind string, size int64, modTime time.Time) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.cleanupLocked()
+
+	tok := make([]byte, 16)
+	if _, err := rand.Read(tok); err != nil {
+		panic("crypto/rand.Read failed: " + err.Error())
+	}
+	token := hex.EncodeToString(tok)
+
+	now := time.Now()
+	s.byTok[token] = &mediaTokenEntry{
+		absPath:   absPath,
+		filename:  filename,
+		mime:      mime,
+		kind:      kind,
+		size:      size,
+		modTime:   modTime,
+		createdAt: now,
+		expiresAt: now.Add(s.ttl),
+	}
+	s.order = append(s.order, token)
+
+	// Trim oldest if the new token pushed us over the limit.
+	for len(s.order) > s.maxN {
+		oldest := s.order[0]
+		delete(s.byTok, oldest)
+		s.order = s.order[1:]
+	}
+
+	return token
+}
+
+func (s *mediaTokenStore) get(token string) *mediaTokenEntry {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	e := s.byTok[token]
+	if e == nil {
+		return nil
+	}
+	if time.Now().After(e.expiresAt) {
+		delete(s.byTok, token)
+		return nil
+	}
+	return e
+}
+
+func (a *App) ensureMediaTokenStore() *mediaTokenStore {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.mediaTokens == nil {
+		a.mediaTokens = newMediaTokenStore()
+	}
+	return a.mediaTokens
+}
+
+// workspaceMediaMiddleware returns an HTTP middleware that intercepts
+// /__reasonix_workspace_media/{token}/{filename} requests and serves the
+// corresponding workspace file. All other paths pass through to the Wails
+// default asset handler unchanged.
+func (a *App) workspaceMediaMiddleware() func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			prefix := "/__reasonix_workspace_media/"
+			if !strings.HasPrefix(r.URL.Path, prefix) {
+				next.ServeHTTP(w, r)
+				return
+			}
+
+			if r.Method != http.MethodGet && r.Method != http.MethodHead {
+				w.WriteHeader(http.StatusMethodNotAllowed)
+				return
+			}
+
+			rest := strings.TrimPrefix(r.URL.Path, prefix)
+			parts := strings.SplitN(rest, "/", 2)
+			if len(parts) == 0 || parts[0] == "" {
+				http.NotFound(w, r)
+				return
+			}
+			token := parts[0]
+
+			entry := a.ensureMediaTokenStore().get(token)
+			if entry == nil {
+				http.NotFound(w, r)
+				return
+			}
+
+			f, err := os.Open(entry.absPath)
+			if err != nil {
+				http.NotFound(w, r)
+				return
+			}
+			defer f.Close()
+
+			w.Header().Set("Content-Type", entry.mime)
+			w.Header().Set("Content-Disposition", mime.FormatMediaType("inline", map[string]string{"filename": entry.filename}))
+			w.Header().Set("X-Content-Type-Options", "nosniff")
+			w.Header().Set("Cache-Control", "private, max-age=600")
+			http.ServeContent(w, r, entry.filename, entry.modTime, f)
+		})
+	}
 }
 
 // NewApp constructs the bound object. Tabs are restored in startup from the
 // last session's desktop-tabs.json.
 func NewApp() *App {
-	return &App{tabs: map[string]*WorkspaceTab{}}
+	return &App{tabs: map[string]*WorkspaceTab{}, mediaTokens: newMediaTokenStore()}
 }
 
 func (a *App) bootContext() context.Context {
@@ -108,10 +280,7 @@ func (a *App) beforeClose(ctx context.Context) bool {
 	if cfg.DesktopCloseBehavior() == "background" {
 		a.saveWindowStateSync()
 		a.snapshotAllTabs()
-		// Hide the application, not just the window, so macOS can restore it
-		// from the Dock/menu using the normal app activation path. On tray-capable
-		// platforms, the tray menu provides an additional Open/Quit entry point.
-		runtime.Hide(ctx)
+		hideForBackground(ctx)
 		return true
 	}
 	return false
@@ -119,8 +288,7 @@ func (a *App) beforeClose(ctx context.Context) bool {
 
 func (a *App) showMainWindow() {
 	if a.ctx != nil {
-		runtime.Show(a.ctx)
-		runtime.WindowShow(a.ctx)
+		showFromBackground(a.ctx)
 	}
 }
 
@@ -136,6 +304,26 @@ func (a *App) quitApp() {
 	runtime.Quit(a.ctx)
 }
 
+func hideForBackground(ctx context.Context) {
+	if backgroundCloseUsesApplicationHide(goruntime.GOOS) {
+		runtime.Hide(ctx)
+		return
+	}
+	runtime.WindowHide(ctx)
+}
+
+func showFromBackground(ctx context.Context) {
+	if backgroundCloseUsesApplicationHide(goruntime.GOOS) {
+		runtime.Show(ctx)
+	}
+	runtime.WindowShow(ctx)
+	runtime.WindowUnminimise(ctx)
+}
+
+func backgroundCloseUsesApplicationHide(goos string) bool {
+	return goos == "darwin"
+}
+
 // restoreOrBuildTabs restores the tabs from the last session, or creates a
 // default Global tab on first launch.
 func (a *App) restoreOrBuildTabs() {
@@ -149,6 +337,7 @@ func (a *App) restoreOrBuildTabs() {
 
 	f := loadTabsFile()
 	if len(f.Tabs) > 0 {
+		toBuild := make([]*WorkspaceTab, 0, len(f.Tabs))
 		for _, entry := range f.Tabs {
 			a.mu.Lock()
 			id := a.restoredTabIDLocked(entry.ID)
@@ -163,12 +352,13 @@ func (a *App) restoreOrBuildTabs() {
 			tab.model = entry.Model
 			tab.effort = cloneStringPtr(entry.Effort)
 			tab.mode = persistedTabMode(entry.Mode)
+			tab.SessionPath = strings.TrimSpace(entry.SessionPath)
 			tab.sink = &tabEventSink{tabID: tab.ID, app: a, ctx: ctx}
 			a.mu.Lock()
 			a.tabs[tab.ID] = tab
 			a.tabOrder = append(a.tabOrder, tab.ID)
 			a.mu.Unlock()
-			go a.buildTabController(tab)
+			toBuild = append(toBuild, tab)
 		}
 		a.mu.Lock()
 		if _, ok := a.tabs[f.ActiveTab]; ok {
@@ -180,6 +370,9 @@ func (a *App) restoreOrBuildTabs() {
 			}
 		}
 		a.mu.Unlock()
+		for _, tab := range toBuild {
+			a.startTabControllerBuild(tab)
+		}
 		return
 	}
 
@@ -192,7 +385,7 @@ func (a *App) restoreOrBuildTabs() {
 	a.tabOrder = append(a.tabOrder, tab.ID)
 	a.activeTabID = tab.ID
 	a.mu.Unlock()
-	go a.buildTabController(tab)
+	a.startTabControllerBuild(tab)
 }
 
 func (a *App) createTabEntry(scope, workspaceRoot, topicID string) *WorkspaceTab {
@@ -309,14 +502,18 @@ func (a *App) SubmitToTab(tabID, input string) {
 		return
 	}
 	if ctrl := a.ctrlByTabID(tabID); ctrl != nil {
-		ctrl.Submit(input)
+		ctrl.SubmitDisplay(input, input)
 	}
 }
 
 // RunShell executes a shell command directly (bypassing the model) and streams
 // output as events on eventChannel.
 func (a *App) RunShell(command string) {
-	if ctrl := a.activeCtrl(); ctrl != nil {
+	a.RunShellForTab("", command)
+}
+
+func (a *App) RunShellForTab(tabID, command string) {
+	if ctrl := a.ctrlByTabID(tabID); ctrl != nil {
 		ctrl.RunShell(command)
 	}
 }
@@ -332,8 +529,20 @@ func (a *App) SubmitDisplayToTab(tabID, display, input string) {
 	if ctrl == nil {
 		return
 	}
-	_ = recordSessionDisplay(config.SessionDir(), ctrl.SessionPath(), input, display)
-	ctrl.Submit(input)
+	ctrl.SubmitDisplay(display, input)
+}
+
+func (a *App) bindControllerDisplayRecorder(ctrl *control.Controller) {
+	if ctrl == nil {
+		return
+	}
+	ctrl.SetDisplayRecorder(func(content, display string) {
+		dir := ctrl.SessionDir()
+		if dir == "" {
+			dir = config.SessionDir()
+		}
+		_ = recordSessionDisplay(dir, ctrl.SessionPath(), content, display)
+	})
 }
 
 // Cancel aborts the in-flight turn.
@@ -450,12 +659,17 @@ func (a *App) Compact() error {
 // NewSession snapshots the current conversation and rotates to a fresh one.
 func (a *App) NewSession() error {
 	a.mu.RLock()
+	tab := a.activeTabLocked()
 	ctrl := a.activeCtrlLocked()
 	a.mu.RUnlock()
 	if ctrl == nil {
 		return nil
 	}
-	return ctrl.NewSession()
+	if err := ctrl.NewSession(); err != nil {
+		return err
+	}
+	a.persistTabSessionPath(tab, ctrl.SessionPath())
+	return nil
 }
 
 // CheckpointMeta summarises one rewind point (a user turn) for the desktop.
@@ -568,6 +782,7 @@ func (a *App) Fork(turn int) (TabMeta, error) {
 		WorkspaceRoot: workspaceRoot,
 		TopicID:       topicID,
 		TopicTitle:    topicTitle,
+		SessionPath:   newPath,
 		model:         model,
 		effort:        effort,
 		mode:          mode,
@@ -583,7 +798,7 @@ func (a *App) Fork(turn int) (TabMeta, error) {
 	a.mu.Unlock()
 
 	a.emitProjectTreeChanged()
-	go a.buildTabController(tab)
+	a.startTabControllerBuild(tab)
 	return meta, nil
 }
 
@@ -722,8 +937,8 @@ func (a *App) openSessionPaths(dir string) map[string]struct{} {
 	a.mu.RLock()
 	paths := make([]string, 0, len(a.tabs))
 	for _, tab := range a.tabs {
-		if tab != nil && tab.Ctrl != nil {
-			paths = append(paths, tab.Ctrl.SessionPath())
+		if tab != nil {
+			paths = append(paths, tab.currentSessionPath())
 		}
 	}
 	a.mu.RUnlock()
@@ -741,8 +956,8 @@ func (a *App) openSessionPaths(dir string) map[string]struct{} {
 func (a *App) activeSessionPath(dir string) string {
 	a.mu.RLock()
 	var path string
-	if tab := a.tabs[a.activeTabID]; tab != nil && tab.Ctrl != nil {
-		path = tab.Ctrl.SessionPath()
+	if tab := a.tabs[a.activeTabID]; tab != nil {
+		path = tab.currentSessionPath()
 	}
 	a.mu.RUnlock()
 	currentPath, _, err := validateSessionPath(dir, path)
@@ -794,16 +1009,18 @@ func (a *App) ResumeSession(path string) ([]HistoryMessage, error) {
 // matching tab should resume on that exact controller instead of whichever tab is
 // active by the time the async call reaches the backend.
 func (a *App) ResumeSessionForTab(tabID, path string) ([]HistoryMessage, error) {
-	ctrl := a.ctrlByTabID(tabID)
-	if ctrl == nil {
+	tab := a.tabByID(tabID)
+	if tab == nil || tab.Ctrl == nil {
 		return []HistoryMessage{}, fmt.Errorf("tab is not ready")
 	}
+	ctrl := tab.Ctrl
 	loaded, err := agent.LoadSession(path)
 	if err != nil {
 		return nil, err
 	}
 	_ = ctrl.Snapshot() // persist the current session before switching away
 	ctrl.Resume(loaded, path)
+	a.rememberTabSessionPath(tab, path)
 	return a.HistoryForTab(tabID), nil
 }
 
@@ -827,12 +1044,54 @@ func (a *App) PickWorkspace() (string, error) {
 	a.mu.RUnlock()
 	dir, err := runtime.OpenDirectoryDialog(a.ctx, runtime.OpenDialogOptions{
 		Title:            "Choose working folder",
-		DefaultDirectory: cur,
+		DefaultDirectory: dialogDefaultDirectory(cur),
 	})
 	if err != nil || dir == "" {
 		return "", err
 	}
 	return a.SwitchWorkspace(dir)
+}
+
+func dialogDefaultDirectory(preferred string) string {
+	if dir := nearestExistingDirectory(preferred); dir != "" {
+		return dir
+	}
+	if cwd, err := os.Getwd(); err == nil {
+		if dir := nearestExistingDirectory(cwd); dir != "" {
+			return dir
+		}
+	}
+	if home, err := os.UserHomeDir(); err == nil {
+		if dir := nearestExistingDirectory(home); dir != "" {
+			return dir
+		}
+	}
+	return ""
+}
+
+func nearestExistingDirectory(path string) string {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return ""
+	}
+	if abs, err := filepath.Abs(path); err == nil {
+		path = abs
+	}
+	for {
+		info, err := os.Stat(path)
+		if err == nil {
+			if info.IsDir() {
+				return path
+			}
+			path = filepath.Dir(path)
+			continue
+		}
+		parent := filepath.Dir(path)
+		if parent == path {
+			return ""
+		}
+		path = parent
+	}
 }
 
 func (a *App) ListWorkspaces() []WorkspaceMeta {
@@ -941,9 +1200,24 @@ func (a *App) SwitchWorkspace(dir string) (string, error) {
 // HistoryMessage is one prior turn, for the frontend to repopulate its transcript
 // after a reload.
 type HistoryMessage struct {
-	Role      string `json:"role"`
-	Content   string `json:"content"`
-	Reasoning string `json:"reasoning,omitempty"`
+	Role       string            `json:"role"`
+	Content    string            `json:"content"`
+	Reasoning  string            `json:"reasoning,omitempty"`
+	Level      string            `json:"level,omitempty"`
+	ToolCalls  []HistoryToolCall `json:"toolCalls,omitempty"`
+	ToolCallID string            `json:"toolCallId,omitempty"`
+	ToolName   string            `json:"toolName,omitempty"`
+	Pending    bool              `json:"pending,omitempty"`
+	Trigger    string            `json:"trigger,omitempty"`
+	Messages   int               `json:"messages,omitempty"`
+	Summary    string            `json:"summary,omitempty"`
+	Archive    string            `json:"archive,omitempty"`
+}
+
+type HistoryToolCall struct {
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	Arguments string `json:"arguments"`
 }
 
 // History returns the session's message log.
@@ -971,17 +1245,166 @@ func historyMessages(msgs []provider.Message, resolveUserContent func(string) st
 		if m.Role == provider.RoleAssistant {
 			reasoning = m.ReasoningContent
 		}
-		out = append(out, HistoryMessage{Role: string(m.Role), Content: content, Reasoning: reasoning})
+		hm := HistoryMessage{Role: string(m.Role), Content: content, Reasoning: reasoning}
+		if m.Role == provider.RoleAssistant && len(m.ToolCalls) > 0 {
+			hm.ToolCalls = make([]HistoryToolCall, len(m.ToolCalls))
+			for i, tc := range m.ToolCalls {
+				hm.ToolCalls[i] = HistoryToolCall{ID: tc.ID, Name: tc.Name, Arguments: tc.Arguments}
+			}
+		}
+		if m.Role == provider.RoleTool {
+			hm.ToolCallID = m.ToolCallID
+			hm.ToolName = m.Name
+		}
+		out = append(out, hm)
 	}
 	return out
 }
 
 func previewSessionMessages(sessionDir, path string) ([]HistoryMessage, error) {
+	if out, ok, err := previewEventSessionMessages(path); ok || err != nil {
+		return out, err
+	}
 	loaded, err := agent.LoadSession(path)
 	if err != nil {
 		return nil, err
 	}
 	return historyMessages(loaded.Snapshot(), sessionDisplayResolver(sessionDir, path)), nil
+}
+
+type previewEventRecord struct {
+	Kind             string             `json:"kind"`
+	Type             string             `json:"type"`
+	Role             string             `json:"role"`
+	Text             string             `json:"text"`
+	Content          string             `json:"content"`
+	Reasoning        string             `json:"reasoning"`
+	ReasoningContent string             `json:"reasoningContent"`
+	Level            string             `json:"level"`
+	ToolCalls        []previewToolCall  `json:"toolCalls"`
+	CallID           string             `json:"callId"`
+	ToolCallID       string             `json:"toolCallId"`
+	ToolName         string             `json:"toolName"`
+	Name             string             `json:"name"`
+	Output           string             `json:"output"`
+	Compaction       *previewCompaction `json:"compaction"`
+	Trigger          string             `json:"trigger"`
+	Messages         int                `json:"messages"`
+	Summary          string             `json:"summary"`
+	Archive          string             `json:"archive"`
+}
+
+type previewToolCall struct {
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	Arguments string `json:"arguments"`
+	Function  struct {
+		Name      string `json:"name"`
+		Arguments string `json:"arguments"`
+	} `json:"function"`
+}
+
+type previewCompaction struct {
+	Trigger  string `json:"trigger"`
+	Messages int    `json:"messages"`
+	Summary  string `json:"summary"`
+	Archive  string `json:"archive"`
+}
+
+func previewEventSessionMessages(path string) ([]HistoryMessage, bool, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, false, err
+	}
+	defer f.Close()
+
+	dec := json.NewDecoder(f)
+	out := []HistoryMessage{}
+	toolName := map[string]string{}
+	sawEvent := false
+	for {
+		var rec previewEventRecord
+		if err := dec.Decode(&rec); err != nil {
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			if sawEvent {
+				return out, true, nil
+			}
+			return nil, false, nil
+		}
+		eventName := strings.TrimSpace(rec.Kind)
+		if eventName == "" {
+			eventName = strings.TrimSpace(rec.Type)
+		}
+		if eventName == "" {
+			continue
+		}
+		sawEvent = true
+		switch eventName {
+		case "user.message":
+			if rec.Text != "" {
+				out = append(out, HistoryMessage{Role: "user", Content: rec.Text})
+			}
+		case "model.final":
+			hm := HistoryMessage{Role: "assistant", Content: rec.Content, Reasoning: firstNonEmpty(rec.Reasoning, rec.ReasoningContent)}
+			for _, tc := range rec.ToolCalls {
+				id := tc.ID
+				name := firstNonEmpty(tc.Name, tc.Function.Name)
+				args := firstNonEmpty(tc.Arguments, tc.Function.Arguments)
+				hm.ToolCalls = append(hm.ToolCalls, HistoryToolCall{ID: id, Name: name, Arguments: args})
+				if id != "" {
+					toolName[id] = name
+				}
+			}
+			out = append(out, hm)
+		case "tool.result":
+			callID := firstNonEmpty(rec.CallID, rec.ToolCallID)
+			out = append(out, HistoryMessage{
+				Role:       "tool",
+				ToolCallID: callID,
+				ToolName:   firstNonEmpty(rec.ToolName, rec.Name, toolName[callID]),
+				Content:    firstNonEmpty(rec.Output, rec.Content),
+			})
+		case "phase":
+			out = append(out, HistoryMessage{Role: "phase", Content: firstNonEmpty(rec.Text, rec.Content)})
+		case "notice":
+			level := rec.Level
+			if level != "warn" {
+				level = "info"
+			}
+			out = append(out, HistoryMessage{Role: "notice", Level: level, Content: firstNonEmpty(rec.Text, rec.Content)})
+		case "compaction_started":
+			c := rec.compactionPayload()
+			out = append(out, HistoryMessage{Role: "compaction", Pending: true, Trigger: c.Trigger})
+		case "compaction_done":
+			c := rec.compactionPayload()
+			out = append(out, HistoryMessage{
+				Role:     "compaction",
+				Trigger:  c.Trigger,
+				Messages: c.Messages,
+				Summary:  c.Summary,
+				Archive:  c.Archive,
+			})
+		}
+	}
+	return out, sawEvent, nil
+}
+
+func (r previewEventRecord) compactionPayload() previewCompaction {
+	if r.Compaction != nil {
+		return *r.Compaction
+	}
+	return previewCompaction{Trigger: r.Trigger, Messages: r.Messages, Summary: r.Summary, Archive: r.Archive}
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 // ContextInfo is the prompt-vs-window gauge payload. Both zero means no data yet.
@@ -1283,6 +1706,7 @@ type SkillRootView struct {
 	Priority   int                  `json:"priority"`
 	Status     string               `json:"status"`
 	Configured bool                 `json:"configured"`
+	Removable  bool                 `json:"removable"`
 	Skills     int                  `json:"skills"`
 	SkillItems []SkillRootSkillView `json:"skillItems,omitempty"`
 	Warning    string               `json:"warning,omitempty"`
@@ -1467,14 +1891,19 @@ func skillRootsView() []SkillRootView {
 	cfg, _ := config.Load()
 	userCfg := config.LoadForEdit(config.UserConfigPath())
 	var custom []string
+	var excluded []string
+	maxDepth := 3
 	if cfg != nil {
 		custom = cfg.SkillCustomPaths()
+		excluded = cfg.SkillExcludedPaths()
+		maxDepth = cfg.SkillMaxDepth()
 	}
-	st := skill.New(skill.Options{ProjectRoot: cwd, CustomPaths: custom, DisableBuiltins: true, Stderr: io.Discard})
+	st := skill.New(skill.Options{ProjectRoot: cwd, CustomPaths: custom, ExcludedPaths: excluded, MaxDepth: maxDepth, DisableBuiltins: true, Stderr: io.Discard})
 	counts := map[string]int{}
 	skillItems := map[string][]SkillRootSkillView{}
+	roots := st.Roots()
 	for _, sk := range st.List() {
-		root := config.CanonicalSkillPath(filepath.Dir(skillRootPath(sk.Path)))
+		root := skillDisplayRoot(sk, roots)
 		counts[root]++
 		skillItems[root] = append(skillItems[root], SkillRootSkillView{
 			Name:        sk.Name,
@@ -1495,7 +1924,7 @@ func skillRootsView() []SkillRootView {
 		}
 	}
 	out := []SkillRootView{}
-	for _, r := range st.Roots() {
+	for _, r := range roots {
 		dir := config.CanonicalSkillPath(r.Dir)
 		view := SkillRootView{
 			Dir:        r.Dir,
@@ -1503,6 +1932,7 @@ func skillRootsView() []SkillRootView {
 			Priority:   r.Priority + 1,
 			Status:     string(r.Status),
 			Configured: r.Scope == skill.ScopeCustom && userConfigured[dir],
+			Removable:  true,
 			Skills:     counts[dir],
 			SkillItems: skillItems[dir],
 		}
@@ -1518,6 +1948,7 @@ func skillRootsView() []SkillRootView {
 				Scope:      string(skill.ScopeCustom),
 				Status:     "inactive",
 				Configured: true,
+				Removable:  true,
 				Warning:    "configured in user config but not active in this workspace; project [skills].paths may override it",
 			})
 		}
@@ -1544,7 +1975,7 @@ func (a *App) PickSkillFolder() (string, error) {
 	cur, _ := os.Getwd()
 	dir, err := runtime.OpenDirectoryDialog(a.ctx, runtime.OpenDialogOptions{
 		Title:            "Choose skills folder",
-		DefaultDirectory: cur,
+		DefaultDirectory: dialogDefaultDirectory(cur),
 	})
 	if err != nil || dir == "" {
 		return "", err
@@ -1556,17 +1987,25 @@ func (a *App) PickSkillFolder() (string, error) {
 // controller so the skills index and slash menu reflect it immediately.
 func (a *App) AddSkillPath(path string) error {
 	path = normalizeSkillPath(path)
+	workspaceRoot := a.activeWorkspaceRoot()
 	return a.applyConfigChange(func(c *config.Config) error {
+		if isConventionSkillRoot(path, workspaceRoot) {
+			return c.RestoreSkillPath(path)
+		}
 		return c.AddSkillPath(path)
 	})
 }
 
-// RemoveSkillPath removes a custom skill root from the user config and rebuilds.
+// RemoveSkillPath removes a skill source from the user config and rebuilds. For
+// convention roots, it records a pseudo-delete in excluded_paths.
 func (a *App) RemoveSkillPath(path string) error {
 	path = normalizeSkillPath(path)
 	return a.applyConfigChange(func(c *config.Config) error {
-		_, err := c.RemoveSkillPath(path)
-		return err
+		removed, err := c.RemoveSkillPath(path)
+		if err != nil || removed {
+			return err
+		}
+		return c.ExcludeSkillPath(path)
 	})
 }
 
@@ -1619,11 +2058,49 @@ func normalizeSkillPath(path string) string {
 	return filepath.Clean(path)
 }
 
+func isConventionSkillRoot(path, workspaceRoot string) bool {
+	want := config.CanonicalSkillPath(path)
+	if want == "" {
+		return false
+	}
+	bases := []string{workspaceRoot}
+	if home, err := os.UserHomeDir(); err == nil {
+		bases = append(bases, home)
+	}
+	for _, base := range bases {
+		base = strings.TrimSpace(base)
+		if base == "" {
+			continue
+		}
+		for _, dir := range config.ConventionDirs {
+			if want == config.CanonicalSkillPath(filepath.Join(base, dir, skill.SkillsDirname)) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func skillRootPath(path string) string {
 	if filepath.Base(path) == skill.SkillFile {
 		return filepath.Dir(path)
 	}
 	return path
+}
+
+func skillDisplayRoot(sk skill.Skill, roots []skill.Root) string {
+	cleanPath := filepath.Clean(sk.Path)
+	for _, r := range roots {
+		if r.Scope != sk.Scope {
+			continue
+		}
+		cleanRoot := filepath.Clean(r.Dir)
+		prefix := cleanRoot + string(filepath.Separator)
+		if cleanPath == cleanRoot || strings.HasPrefix(cleanPath, prefix) {
+			return config.CanonicalSkillPath(r.Dir)
+		}
+	}
+	return config.CanonicalSkillPath(filepath.Dir(skillRootPath(sk.Path)))
 }
 
 // MCPServerInput is the drawer's "add server" form. Transport is "stdio" (Command
@@ -1635,7 +2112,6 @@ type MCPServerInput struct {
 	Args      []string          `json:"args"`
 	URL       string            `json:"url"`
 	Env       map[string]string `json:"env"`
-	Tier      string            `json:"tier"`
 }
 
 // AddMCPServer connects a server live and persists it to config (Customize → MCP →
@@ -1652,8 +2128,8 @@ func (a *App) AddMCPServer(in MCPServerInput) (int, error) {
 		Args:    in.Args,
 		URL:     in.URL,
 		Env:     in.Env,
-		Tier:    normalizeMCPTier(in.Tier),
 	}
+	entry, _ = config.NormalizePluginCommandLine(entry)
 	if err := a.saveDesktopMCPServer(entry); err != nil {
 		return 0, err
 	}
@@ -1684,10 +2160,11 @@ func (a *App) UpdateMCPServer(name string, in MCPServerInput) error {
 	updated.Command = strings.TrimSpace(in.Command)
 	updated.Args = append([]string(nil), in.Args...)
 	updated.URL = strings.TrimSpace(in.URL)
-	updated.Tier = normalizeMCPTier(in.Tier)
+	updated.Tier = ""
 	if in.Env != nil {
 		updated.Env = in.Env
 	}
+	updated, _ = config.NormalizePluginCommandLine(updated)
 	if updated.Type == "stdio" {
 		updated.URL = ""
 	} else {
@@ -1743,15 +2220,26 @@ func (a *App) RemoveMCPServer(name string) error {
 	return fmt.Errorf("no MCP server named %q", name)
 }
 
-// RetryMCPServer reconnects a configured server that failed or was disconnected,
-// without touching config (the failed row's retry button).
-func (a *App) RetryMCPServer(name string) error {
+// ReconnectMCPServer disconnects the server if it is already connected (to force
+// a fresh handshake and tool re-registration), then reconnects.  Failures are
+// recorded on the Host so the UI can render them.
+func (a *App) ReconnectMCPServer(name string) error {
 	tab := a.activeTab()
 	if tab == nil || tab.Ctrl == nil {
 		return fmt.Errorf("no active session")
 	}
+	if mcpConnected(tab.Ctrl, name) {
+		tab.Ctrl.DisconnectMCPServer(name)
+	}
 	_, err := a.connectConfiguredMCPServerForTab(tab, name)
-	return err
+	if err != nil {
+		recordMCPFailure(tab.Ctrl, config.PluginEntry{Name: name}, err)
+		return err
+	}
+	a.mu.Lock()
+	delete(tab.disabledMCP, name)
+	a.mu.Unlock()
+	return nil
 }
 
 // ClearMCPServerAuthentication removes local auth-like config for one MCP and
@@ -1829,9 +2317,9 @@ func (a *App) connectConfiguredMCPServerForTab(tab *WorkspaceTab, name string) (
 	return 0, fmt.Errorf("no configured MCP server named %q", name)
 }
 
-// SetMCPServerTier persists how a configured MCP server should start on future
-// sessions. It does not tear down a connected server; the per-session toggle and
-// "connect now" remain separate controls.
+// SetMCPServerTier is kept for old desktop bindings. New config writes drop the
+// retired tier field, so this only affects the active session before the next
+// config reload.
 func (a *App) SetMCPServerTier(name, tier string) error {
 	if name == "codegraph" {
 		return a.setCodegraphTier(tier)
@@ -2040,6 +2528,8 @@ func normalizeMCPTier(tier string) string {
 		return "eager"
 	case "background":
 		return "background"
+	case "":
+		return "background"
 	default:
 		return "lazy"
 	}
@@ -2237,10 +2727,14 @@ func (a *App) ModelsForTab(tabID string) []ModelInfo {
 	if err != nil {
 		return []ModelInfo{}
 	}
+	if entry, ok := cfg.ResolveModel(curModel); ok {
+		curModel = entry.Name + "/" + entry.Model
+	}
+	access := providerAccessSet(cfg.Desktop.ProviderAccess)
 	out := []ModelInfo{}
 	for i := range cfg.Providers {
 		p := &cfg.Providers[i]
-		if !p.Configured() {
+		if !modelProviderAccessAllowed(access, p.Name) || !p.Configured() {
 			continue
 		}
 		for _, m := range p.ModelList() {
@@ -2249,6 +2743,13 @@ func (a *App) ModelsForTab(tabID string) []ModelInfo {
 		}
 	}
 	return out
+}
+
+func modelProviderAccessAllowed(access map[string]bool, name string) bool {
+	if len(access) == 0 {
+		return true
+	}
+	return access[strings.TrimSpace(name)]
 }
 
 // SetModel switches the active model and carries the current conversation into the
@@ -2280,10 +2781,13 @@ func (a *App) SetModelForTab(tabID, name string) error {
 	if !ok {
 		return fmt.Errorf("unknown model %q", name)
 	}
+	if !modelProviderAccessAllowed(providerAccessSet(cfg.Desktop.ProviderAccess), entry.Name) {
+		return fmt.Errorf("model %q is not available because provider %q is not added", name, entry.Name)
+	}
 	name = entry.Name + "/" + entry.Model
 	effortOverride := cloneStringPtr(tab.effort)
 	if effortOverride != nil {
-		normalized, err := config.NormalizeEffort(entry, config.EffortDisplay(&config.ProviderEntry{Effort: *effortOverride, Name: entry.Name, Kind: entry.Kind, BaseURL: entry.BaseURL}))
+		normalized, err := config.NormalizeEffort(entry, config.EffortDisplay(&config.ProviderEntry{Effort: *effortOverride}))
 		if err != nil {
 			effortOverride = nil
 		} else {
@@ -2310,6 +2814,7 @@ func (a *App) SetModelForTab(tabID, name string) error {
 	if err != nil {
 		return err
 	}
+	a.bindControllerDisplayRecorder(newCtrl)
 	a.mu.Lock()
 	tab.Ctrl = newCtrl
 	tab.model = name
@@ -2326,6 +2831,7 @@ func (a *App) SetModelForTab(tabID, name string) error {
 	} else if path != "" {
 		newCtrl.SetSessionPath(path)
 	}
+	a.persistTabSessionPath(tab, path)
 	return nil
 }
 
@@ -2399,6 +2905,7 @@ func (a *App) SetEffortForTab(tabID, level string) error {
 	if err != nil {
 		return err
 	}
+	a.bindControllerDisplayRecorder(newCtrl)
 	a.mu.Lock()
 	tab.Ctrl = newCtrl
 	tab.effort = &effort
@@ -2415,6 +2922,7 @@ func (a *App) SetEffortForTab(tabID, level string) error {
 	} else if path != "" {
 		newCtrl.SetSessionPath(path)
 	}
+	a.persistTabSessionPath(tab, path)
 	return nil
 }
 
@@ -2428,6 +2936,14 @@ func (a *App) applyProviderEffortConfig(entry *config.ProviderEntry, effort stri
 		if entry.Kind == "anthropic" && effort != "" && entry.Thinking == "" {
 			if err := cfg.SetProviderThinking(entry.Name, "adaptive"); err != nil {
 				return err
+			}
+		}
+		canonicalName := config.CanonicalDesktopOfficialProviderName(entry.Name)
+		if canonicalName != entry.Name {
+			if _, ok := cfg.Provider(canonicalName); ok {
+				if err := cfg.SetProviderEffort(canonicalName, effort); err != nil {
+					return err
+				}
 			}
 		}
 		return cfg.SetProviderEffort(entry.Name, effort)
@@ -2447,6 +2963,9 @@ type FilePreview struct {
 	Size      int64  `json:"size"`
 	Truncated bool   `json:"truncated"`
 	Binary    bool   `json:"binary"`
+	Kind      string `json:"kind,omitempty"`
+	Mime      string `json:"mime,omitempty"`
+	URL       string `json:"url,omitempty"`
 	Err       string `json:"err,omitempty"`
 }
 
@@ -2466,11 +2985,45 @@ type WorkspaceChangesView struct {
 	GitErr       string                `json:"gitErr,omitempty"`
 }
 
-// atSkip are entries the "@" menu hides as noise.
-var atSkip = map[string]bool{".git": true, "node_modules": true, ".DS_Store": true}
+// workspaceNoiseNames are local cache/vendor entries hidden from the file tree
+// and "@" menu regardless of where they appear.
+var workspaceNoiseNames = map[string]bool{
+	".codex":       true,
+	".codegraph":   true,
+	".DS_Store":    true,
+	".git":         true,
+	".npm":         true,
+	".pnpm-store":  true,
+	"node_modules": true,
+	"Thumbs.db":    true,
+}
+
+var workspaceNoiseDirs = map[string]bool{
+	"bin":                      true,
+	"desktop/build":            true,
+	"desktop/frontend/dist":    true,
+	"desktop/frontend/wailsjs": true,
+	"dist":                     true,
+	"npm/.stage":               true,
+	"site/.astro":              true,
+	"site/dist":                true,
+	"stage":                    true,
+	"tmp":                      true,
+}
 
 const filePreviewLimit = 256 * 1024
 const fileRefSearchLimit = 20
+
+var previewMediaMIMEs = map[string]string{
+	".bmp":  "image/bmp",
+	".gif":  "image/gif",
+	".jpeg": "image/jpeg",
+	".jpg":  "image/jpeg",
+	".pdf":  "application/pdf",
+	".png":  "image/png",
+	".svg":  "image/svg+xml",
+	".webp": "image/webp",
+}
 
 func trimUTF8PartialSuffix(data []byte) []byte {
 	if utf8.Valid(data) {
@@ -2486,6 +3039,35 @@ func trimUTF8PartialSuffix(data []byte) []byte {
 		return data[:i]
 	}
 	return data
+}
+
+func previewMediaKind(path string) (kind string, mime string) {
+	mime = previewMediaMIMEs[strings.ToLower(filepath.Ext(path))]
+	if mime == "" {
+		return "", ""
+	}
+	if strings.HasPrefix(mime, "image/") {
+		return "image", mime
+	}
+	if mime == "application/pdf" {
+		return "pdf", mime
+	}
+	return "", ""
+}
+
+func workspaceEntryRel(rel, name string) string {
+	rel = strings.Trim(filepath.ToSlash(rel), "/")
+	if rel == "" || rel == "." {
+		return name
+	}
+	return rel + "/" + name
+}
+
+func skipWorkspaceEntry(rel, name string, isDir bool) bool {
+	if workspaceNoiseNames[name] {
+		return true
+	}
+	return isDir && workspaceNoiseDirs[workspaceEntryRel(rel, name)]
 }
 
 func (a *App) activeWorkspaceBase() (string, error) {
@@ -2559,7 +3141,7 @@ func (a *App) ListDir(rel string) []DirEntry {
 	dirs, files := []DirEntry{}, []DirEntry{}
 	for _, e := range es {
 		name := e.Name()
-		if atSkip[name] {
+		if skipWorkspaceEntry(rel, name, e.IsDir()) {
 			continue
 		}
 		if e.IsDir() {
@@ -2613,6 +3195,13 @@ func (a *App) ReadFile(rel string) FilePreview {
 		return out
 	}
 	out.Size = info.Size()
+	if kind, mime := previewMediaKind(path); kind != "" {
+		token := a.ensureMediaTokenStore().create(path, info.Name(), mime, kind, info.Size(), info.ModTime())
+		out.Kind = kind
+		out.Mime = mime
+		out.URL = "/__reasonix_workspace_media/" + token + "/" + url.PathEscape(info.Name())
+		return out
+	}
 	f, err := os.Open(path)
 	if err != nil {
 		out.Err = err.Error()
@@ -2787,9 +3376,13 @@ func (a *App) currentProviderEntryForTab(tabID string) (*config.ProviderEntry, e
 	if strings.TrimSpace(ref) == "" {
 		ref = cfg.DefaultModel
 	}
-	entry, ok := cfg.ResolveModel(ref)
+	resolved, _, ok := cfg.ResolveModelWithFallback(ref)
 	if !ok {
 		return nil, fmt.Errorf("unknown model %q", ref)
+	}
+	entry, ok := cfg.ResolveModel(resolved)
+	if !ok {
+		return nil, fmt.Errorf("unknown model %q", resolved)
 	}
 	if effortOverride != nil {
 		entry.Effort = *effortOverride

@@ -82,6 +82,7 @@ export interface AppBindings {
   SubmitDisplay(display: string, input: string): Promise<void>;
   SubmitDisplayToTab(tabID: string, display: string, input: string): Promise<void>;
   RunShell(command: string): Promise<void>;
+  RunShellForTab(tabID: string, command: string): Promise<void>;
   Cancel(): Promise<void>;
   CancelTab(tabID: string): Promise<void>;
   Approve(id: string, allow: boolean, session: boolean, persist: boolean): Promise<void>;
@@ -127,7 +128,7 @@ export interface AppBindings {
   AddMCPServer(input: MCPServerInput): Promise<number>;
   UpdateMCPServer(name: string, input: MCPServerInput): Promise<void>;
   RemoveMCPServer(name: string): Promise<void>;
-  RetryMCPServer(name: string): Promise<void>;
+  ReconnectMCPServer(name: string): Promise<void>;
   ClearMCPServerAuthentication(name: string): Promise<void>;
   PickSkillFolder(): Promise<string>;
   AddSkillPath(path: string): Promise<void>;
@@ -163,10 +164,16 @@ export interface AppBindings {
   Settings(): Promise<SettingsView>;
   SetDefaultModel(ref: string): Promise<void>;
   SetPlannerModel(ref: string): Promise<void>;
+  SetSubagentModel(ref: string): Promise<void>;
+  SetSubagentEffort(level: string): Promise<void>;
   SetAutoPlan(mode: string): Promise<void>;
   SaveProvider(p: ProviderView): Promise<void>;
+  AddOfficialProviderAccess(kind: string, key: string): Promise<void>;
+  FetchProviderModels(p: ProviderView): Promise<string[]>;
   DeleteProvider(name: string): Promise<void>;
+  RemoveProviderAccess(name: string): Promise<void>;
   SetProviderKey(apiKeyEnv: string, value: string): Promise<void>;
+  ClearProviderKey(apiKeyEnv: string): Promise<void>;
   SetPermissionMode(mode: string): Promise<void>;
   AddPermissionRule(list: string, rule: string): Promise<void>;
   RemovePermissionRule(list: string, rule: string): Promise<void>;
@@ -357,13 +364,26 @@ function baseName(path: string): string {
   return path.replace(/[/\\]+$/, "").split(/[/\\]/).filter(Boolean).pop() ?? path;
 }
 
+function browserPlatformOverride(): "darwin" | "windows" | "linux" | "" {
+  if (typeof window === "undefined" || window.runtime) return "";
+  const value = new URLSearchParams(window.location.search).get("platform");
+  return value === "darwin" || value === "windows" || value === "linux" ? value : "";
+}
+
+function mockScenario(): "demo" | "fresh" {
+  if (typeof window === "undefined") return "demo";
+  const value = new URLSearchParams(window.location.search).get("mock")?.trim().toLowerCase();
+  return value === "fresh" || value === "empty" || value === "first-run" ? "fresh" : "demo";
+}
+
 function makeMockApp(): AppBindings {
+  const freshMock = mockScenario() === "fresh";
   let cancelled = false;
   let pendingAskPreview = false;
   let pendingApprovalPreview = false;
-  let cwd = "~/projects/joyquant-db"; // mutable so PickWorkspace is visible in dev
   const globalWorkspaceRoot = "~/Library/Application Support/reasonix/global-workspace";
-  let workspaces = ["~/projects/joyquant-db", "~/projects/joyquant-sys", "~/projects/reasonix", "~/projects/blade"];
+  let cwd = freshMock ? globalWorkspaceRoot : "~/projects/joyquant-db"; // mutable so PickWorkspace is visible in dev
+  let workspaces = freshMock ? [] : ["~/projects/joyquant-db", "~/projects/joyquant-sys", "~/projects/reasonix", "~/projects/blade"];
   let mockEffort = "auto";
   const day = 86_400_000;
   const t0 = Date.now();
@@ -376,7 +396,7 @@ function makeMockApp(): AppBindings {
       builtIn: true,
       configured: true,
       autoStart: false,
-      tier: "lazy",
+      tier: "background",
       tools: 0,
       prompts: 0,
       resources: 0,
@@ -387,14 +407,14 @@ function makeMockApp(): AppBindings {
         { name: "node", description: "Inspect a specific graph node." },
       ],
     },
-    { name: "github", transport: "stdio", status: "connected", configured: true, autoStart: true, tier: "lazy", command: "npx", args: ["-y", "@modelcontextprotocol/server-github"], tools: 12, prompts: 2, resources: 0 },
+    { name: "github", transport: "stdio", status: "connected", configured: true, autoStart: true, tier: "background", command: "npx", args: ["-y", "@modelcontextprotocol/server-github"], tools: 12, prompts: 2, resources: 0 },
     {
       name: "linear",
       transport: "http",
-      status: "deferred",
+      status: "initializing",
       configured: true,
       autoStart: true,
-      tier: "lazy",
+      tier: "background",
       url: "https://mcp.linear.app/mcp",
       authStatus: "possible",
       authUrl: "https://mcp.linear.app/mcp",
@@ -412,7 +432,7 @@ function makeMockApp(): AppBindings {
         { name: "search", description: "Search Linear workspace objects." },
       ],
     },
-    { name: "figma", transport: "http", status: "failed", configured: true, autoStart: true, tier: "lazy", url: "https://mcp.figma.com/mcp", authStatus: "required", authUrl: "https://mcp.figma.com/mcp", tools: 0, prompts: 0, resources: 0, error: "connect: 401 unauthorized" },
+    { name: "figma", transport: "http", status: "failed", configured: true, autoStart: true, tier: "background", url: "https://mcp.figma.com/mcp", authStatus: "required", authUrl: "https://mcp.figma.com/mcp", tools: 0, prompts: 0, resources: 0, error: "connect: 401 unauthorized" },
   ];
   const capSkills: SkillView[] = [
     { name: "explore", description: "Investigate the codebase in an isolated subagent", scope: "builtin", runAs: "subagent", enabled: true },
@@ -420,13 +440,14 @@ function makeMockApp(): AppBindings {
     { name: "init", description: "Scaffold a REASONIX.md for this repo", scope: "builtin", runAs: "inline", enabled: true },
   ];
   let capSkillRoots: SkillRootView[] = [
-    { dir: "~/projects/reasonix/.reasonix/skills", scope: "project", priority: 1, status: "missing", configured: false, skills: 0 },
+    { dir: "~/projects/reasonix/.reasonix/skills", scope: "project", priority: 1, status: "missing", configured: false, removable: true, skills: 0 },
     {
       dir: "~/my-skills",
       scope: "custom",
       priority: 5,
       status: "ok",
       configured: true,
+      removable: true,
       skills: 1,
       skillItems: [{ name: "review", description: "Review the staged diff", scope: "custom", runAs: "inline" }],
     },
@@ -436,6 +457,7 @@ function makeMockApp(): AppBindings {
       priority: 6,
       status: "ok",
       configured: false,
+      removable: true,
       skills: 2,
       skillItems: [
         { name: "explore", description: "Investigate the codebase in an isolated subagent", scope: "global", runAs: "subagent" },
@@ -513,14 +535,25 @@ function makeMockApp(): AppBindings {
       topicTitle: t("mock.trashGlobalProductTitle"),
     },
   ];
+  if (freshMock) {
+    sessions.splice(0);
+    trashedSessions.splice(0);
+  }
   // Mutable settings so the Settings panel's edits are observable in browser dev.
   const settings: SettingsView = {
-    defaultModel: "deepseek-flash",
+    defaultModel: "deepseek",
     plannerModel: "",
+    subagentModel: "",
+    subagentEffort: "",
     autoPlan: "off",
     providers: [
-      { name: "deepseek-flash", kind: "openai", baseUrl: "https://api.deepseek.com", models: ["deepseek-v4-flash"], default: "deepseek-v4-flash", apiKeyEnv: "DEEPSEEK_API_KEY", keySet: true, balanceUrl: "https://api.deepseek.com/user/balance", contextWindow: 1_000_000, supportedEfforts: [], defaultEffort: "" },
-      { name: "mimo-pro", kind: "openai", baseUrl: "https://api.xiaomimimo.com/v1", models: ["mimo-v2.5-pro"], default: "mimo-v2.5-pro", apiKeyEnv: "MIMO_API_KEY", keySet: false, balanceUrl: "", contextWindow: 1_000_000, supportedEfforts: [], defaultEffort: "" },
+      { name: "deepseek", builtIn: true, added: false, kind: "openai", baseUrl: "https://api.deepseek.com", modelsUrl: "", models: ["deepseek-v4-flash"], default: "deepseek-v4-flash", apiKeyEnv: "DEEPSEEK_API_KEY", keySet: true, balanceUrl: "https://api.deepseek.com/user/balance", contextWindow: 1_000_000, reasoningProtocol: "", supportedEfforts: [], defaultEffort: "" },
+      { name: "mimo-token-plan", builtIn: true, added: false, kind: "openai", baseUrl: "https://token-plan-cn.xiaomimimo.com/v1", modelsUrl: "", models: ["mimo-v2.5-pro"], default: "mimo-v2.5-pro", apiKeyEnv: "MIMO_API_KEY", keySet: false, balanceUrl: "", contextWindow: 1_048_576, reasoningProtocol: "", supportedEfforts: [], defaultEffort: "" },
+    ],
+    officialProviders: [
+      { name: "deepseek", builtIn: true, added: false, kind: "openai", baseUrl: "https://api.deepseek.com", modelsUrl: "", models: ["deepseek-v4-flash", "deepseek-v4-pro"], default: "deepseek-v4-flash", apiKeyEnv: "DEEPSEEK_API_KEY", keySet: true, balanceUrl: "https://api.deepseek.com/user/balance", contextWindow: 1_000_000, reasoningProtocol: "", supportedEfforts: [], defaultEffort: "" },
+      { name: "mimo-api", builtIn: true, added: false, kind: "openai", baseUrl: "https://api.xiaomimimo.com/v1", modelsUrl: "", models: ["mimo-v2.5-pro"], default: "mimo-v2.5-pro", apiKeyEnv: "MIMO_API_KEY", keySet: false, balanceUrl: "", contextWindow: 1_048_576, reasoningProtocol: "", supportedEfforts: [], defaultEffort: "" },
+      { name: "mimo-token-plan", builtIn: true, added: false, kind: "openai", baseUrl: "https://token-plan-cn.xiaomimimo.com/v1", modelsUrl: "", models: ["mimo-v2.5-pro"], default: "mimo-v2.5-pro", apiKeyEnv: "MIMO_API_KEY", keySet: false, balanceUrl: "", contextWindow: 1_048_576, reasoningProtocol: "", supportedEfforts: [], defaultEffort: "" },
     ],
     permissions: { mode: "ask", allow: ["ls", "read_file"], ask: [], deny: ["bash(rm *)"] },
     sandbox: { bash: "enforce", network: true, workspaceRoot: "", allowWrite: [] },
@@ -539,7 +572,13 @@ function makeMockApp(): AppBindings {
     providerKinds: ["openai"],
     bypass: false,
   };
-  const mockProjectTree: ProjectNode[] = [
+  settings.providers = settings.providers.map((provider) =>
+    provider.apiKeyEnv === "DEEPSEEK_API_KEY" ? { ...provider, keySet: !freshMock } : provider,
+  );
+  if (freshMock) {
+    settings.configPath = "~/.config/reasonix/config.toml";
+  }
+  const mockProjectTree: ProjectNode[] = freshMock ? [] : [
     {
       key: "project_~/projects/joyquant-db",
       kind: "project",
@@ -596,7 +635,22 @@ function makeMockApp(): AppBindings {
   const setMockActiveTab = (tabId: string) => {
     mockTabs = mockTabs.map((tab) => ({ ...tab, active: tab.id === tabId }));
   };
-  let mockTabs: TabMeta[] = [
+  let mockTabs: TabMeta[] = freshMock ? [
+    {
+      id: "tab_global",
+      scope: "global",
+      workspaceRoot: globalWorkspaceRoot,
+      workspaceName: "Global",
+      topicId: "",
+      topicTitle: "Global",
+      label: "DeepSeek-R1",
+      ready: true,
+      running: false,
+      mode: "normal",
+      active: true,
+      cwd: globalWorkspaceRoot,
+    },
+  ] : [
     {
       id: "tab_joyquant_db",
       scope: "project",
@@ -644,6 +698,8 @@ function makeMockApp(): AppBindings {
   ];
   return {
     async Platform() {
+      const override = browserPlatformOverride();
+      if (override) return override;
       // Mirror the OS the browser dev mock runs on.
       const ua = typeof navigator !== "undefined" ? navigator.userAgent : "";
       if (/Win/i.test(ua)) return "windows";
@@ -753,8 +809,47 @@ function makeMockApp(): AppBindings {
             }),
             output: "todo list updated",
             readOnly: false,
+            durationMs: 150,
           },
         });
+        emit({ kind: "turn_done" });
+        return;
+      }
+      if (trimmedInput === "/process-preview" || trimmedInput === "process preview" || trimmedInput === "过程预览") {
+        await delay(200);
+        if (cancelled) return;
+        emit({ kind: "phase", text: "Preparing context" });
+        await delay(120);
+        emit({ kind: "notice", level: "info", text: "Loaded project instructions from AGENTS.md." });
+        await delay(120);
+        emit({ kind: "notice", level: "warn", text: "Network access is enabled; external results may change over time." });
+        await delay(120);
+        emit({ kind: "compaction_started", compaction: { trigger: "manual" } });
+        await delay(320);
+        emit({
+          kind: "compaction_done",
+          compaction: {
+            trigger: "manual",
+            messages: 6,
+            summary: "Preserved the active task, relevant files, and UI decisions while trimming earlier exploratory context.",
+          },
+        });
+        emit({ kind: "message", text: "Process card preview complete." });
+        emit({ kind: "turn_done" });
+        return;
+      }
+      if (trimmedInput === "/runtime-preview" || trimmedInput === "runtime preview" || trimmedInput === "运行时预览") {
+        await delay(200);
+        if (cancelled) return;
+        emit({ kind: "upgrade", level: "info", text: "Upgraded route to frontier model after repeated tool failures." });
+        await delay(120);
+        emit({ kind: "skill_generated", level: "info", text: "Generated runtime skill: inspect-failing-build." });
+        await delay(120);
+        emit({ kind: "budget_exceeded", level: "warn", text: "Frontier budget reached; falling back to default model." });
+        await delay(120);
+        emit({ kind: "skill_promoted", level: "info", text: "Promoted skill inspect-failing-build to project scope after replay guard passed." });
+        await delay(120);
+        emit({ kind: "message", text: "Runtime route and skill preview complete." });
         emit({ kind: "turn_done" });
         return;
       }
@@ -786,7 +881,7 @@ function makeMockApp(): AppBindings {
       await delay(350);
       emit({
         kind: "tool_result",
-        tool: { id: "t1", name: "edit_file", output: "edited main.go", readOnly: false },
+        tool: { id: "t1", name: "edit_file", output: "edited main.go", readOnly: false, durationMs: 350 },
       });
       emit({
         kind: "usage",
@@ -823,8 +918,11 @@ function makeMockApp(): AppBindings {
           emit({ kind: "tool_progress", tool: { id, name: "bash", output: `$ ${command}\n(mock output)\n`, readOnly: false } });
           await delay(100);
           if (cancelled) return;
-          emit({ kind: "tool_result", tool: { id, name: "bash", output: `$ ${command}\n(mock output)\n`, readOnly: false } });
+          emit({ kind: "tool_result", tool: { id, name: "bash", output: `$ ${command}\n(mock output)\n`, readOnly: false, durationMs: 300 } });
           emit({ kind: "turn_done" });
+        },
+        async RunShellForTab(_tabID, command) {
+          await this.RunShell(command);
         },
         async Cancel() {
           cancelled = true;
@@ -926,11 +1024,14 @@ function makeMockApp(): AppBindings {
       const s = sessions.find((x) => x.path === path) ?? trashedSessions.find((x) => x.path === path);
       return [
         { role: "user", content: s?.preview || `(mock) preview ${path}` },
+        { role: "phase", content: "Preparing read-only preview" },
         {
           role: "assistant",
           content: "This is a read-only mock preview. The active conversation is unchanged.",
           reasoning: "Preview reads the saved session without resuming it.",
         },
+        { role: "notice", level: "info", content: "Preview mode keeps the active conversation untouched." },
+        { role: "compaction", content: "", trigger: "manual", messages: 3, summary: "Mock preview preserved the latest task, tool result, and answer summary." },
       ];
     },
     async DeleteSession(path: string) {
@@ -1046,7 +1147,7 @@ function makeMockApp(): AppBindings {
         status: "connected",
         configured: true,
         autoStart: true,
-        tier: input.tier || "lazy",
+        tier: "background",
         command: input.command,
         args: input.args,
         url: input.url,
@@ -1063,14 +1164,13 @@ function makeMockApp(): AppBindings {
     async UpdateMCPServer(name: string, input: MCPServerInput) {
       capServers = capServers.map((s) => {
         if (s.name !== name) return s;
-        const connected = s.status === "connected" || s.status === "failed" || input.tier !== "lazy";
+        const connected = s.status === "connected" || s.status === "failed" || s.tier !== "lazy";
         const nextStatus = s.status === "disabled" ? "disabled" : connected ? "connected" : "deferred";
         const nextTools = nextStatus === "connected" ? s.tools || (input.transport === "stdio" ? 3 : 5) : 0;
         return {
           ...s,
           transport: input.transport,
           status: nextStatus,
-          tier: input.tier || "lazy",
           command: input.transport === "stdio" ? input.command : "",
           args: input.transport === "stdio" ? input.args : [],
           url: input.transport === "stdio" ? "" : input.url,
@@ -1085,9 +1185,15 @@ function makeMockApp(): AppBindings {
     async RemoveMCPServer(name: string) {
       capServers = capServers.filter((s) => s.name !== name);
     },
-    async RetryMCPServer(name: string) {
+    async ReconnectMCPServer(name: string) {
       capServers = capServers.map((s) =>
-        s.name === name ? { ...s, status: "connected", tools: s.tools || 4, error: undefined, authStatus: undefined, authUrl: undefined } : s,
+        s.name === name
+          ? { ...s, status: "initializing", error: undefined, authStatus: undefined, authUrl: undefined }
+          : s,
+      );
+      await new Promise((r) => setTimeout(r, 400));
+      capServers = capServers.map((s) =>
+        s.name === name ? { ...s, status: "connected", tools: s.tools || 4 } : s,
       );
     },
     async ClearMCPServerAuthentication(name: string) {
@@ -1117,6 +1223,7 @@ function makeMockApp(): AppBindings {
           priority: capSkillRoots.length + 1,
           status: "ok",
           configured: true,
+          removable: true,
           skills: 1,
           skillItems: [{ name: "local-dev", description: "Local custom development workflow", scope: "custom", runAs: "inline" }],
         });
@@ -1126,7 +1233,7 @@ function makeMockApp(): AppBindings {
       }
     },
     async RemoveSkillPath(path: string) {
-      capSkillRoots = capSkillRoots.filter((r) => !(r.scope === "custom" && r.dir === path));
+      capSkillRoots = capSkillRoots.filter((r) => r.dir !== path);
       if (!capSkillRoots.some((r) => r.scope === "custom")) {
         const idx = capSkills.findIndex((s) => s.name === "local-dev");
         if (idx >= 0) capSkills.splice(idx, 1);
@@ -1348,20 +1455,56 @@ function makeMockApp(): AppBindings {
     async SetPlannerModel(ref: string) {
       settings.plannerModel = ref;
     },
+    async SetSubagentModel(ref: string) {
+      settings.subagentModel = ref;
+    },
+    async SetSubagentEffort(level: string) {
+      settings.subagentEffort = level;
+    },
     async SetAutoPlan(mode: string) {
       settings.autoPlan = mode;
     },
     async SaveProvider(p: ProviderView) {
+      p.added = true;
       const i = settings.providers.findIndex((x) => x.name === p.name);
       if (i >= 0) settings.providers[i] = p;
       else settings.providers.push(p);
     },
+    async AddOfficialProviderAccess(kind: string, key: string) {
+      const templates: Record<string, ProviderView> = {
+        deepseek: { name: "deepseek", builtIn: true, added: true, kind: "openai", baseUrl: "https://api.deepseek.com", modelsUrl: "", models: ["deepseek-v4-flash", "deepseek-v4-pro"], default: "deepseek-v4-flash", apiKeyEnv: "DEEPSEEK_API_KEY", keySet: !!key.trim(), balanceUrl: "https://api.deepseek.com/user/balance", contextWindow: 1_000_000, reasoningProtocol: "", supportedEfforts: [], defaultEffort: "" },
+        "mimo-api": { name: "mimo-api", builtIn: true, added: true, kind: "openai", baseUrl: "https://api.xiaomimimo.com/v1", modelsUrl: "", models: ["mimo-v2.5-pro"], default: "mimo-v2.5-pro", apiKeyEnv: "MIMO_API_KEY", keySet: !!key.trim(), balanceUrl: "", contextWindow: 1_048_576, reasoningProtocol: "", supportedEfforts: [], defaultEffort: "" },
+        "mimo-token-plan": { name: "mimo-token-plan", builtIn: true, added: true, kind: "openai", baseUrl: "https://token-plan-cn.xiaomimimo.com/v1", modelsUrl: "", models: ["mimo-v2.5-pro"], default: "mimo-v2.5-pro", apiKeyEnv: "MIMO_API_KEY", keySet: !!key.trim(), balanceUrl: "", contextWindow: 1_048_576, reasoningProtocol: "", supportedEfforts: [], defaultEffort: "" },
+      };
+      const next = templates[kind] ?? templates.deepseek;
+      const i = settings.providers.findIndex((x) => x.name === next.name);
+      if (i >= 0) settings.providers[i] = { ...settings.providers[i], ...next, keySet: next.keySet || settings.providers[i].keySet };
+      else settings.providers.push(next);
+    },
+    async FetchProviderModels(p: ProviderView) {
+      if (!p.baseUrl.trim()) throw new Error(t("settings.fetchModelsMissingBaseUrl"));
+      if (!p.apiKeyEnv.trim()) throw new Error(t("settings.fetchModelsMissingKeyEnv"));
+      await delay(350);
+      if (p.baseUrl.includes("deepseek")) return ["deepseek-v4-flash", "deepseek-v4-pro"];
+      if (p.baseUrl.includes("mimo") || p.baseUrl.includes("xiaomimimo")) return ["mimo-v2.5", "mimo-v2.5-pro"];
+      return ["gpt-5", "gpt-5-mini", "qwen3-coder"];
+    },
     async DeleteProvider(name: string) {
       settings.providers = settings.providers.filter((p) => p.name !== name);
     },
-    async SetProviderKey(apiKeyEnv: string) {
+    async RemoveProviderAccess(name: string) {
+      const p = settings.providers.find((x) => x.name === name);
+      if (p?.builtIn) p.added = false;
+      else settings.providers = settings.providers.filter((x) => x.name !== name);
+    },
+    async SetProviderKey(apiKeyEnv: string, _value: string) {
       settings.providers.forEach((p) => {
         if (p.apiKeyEnv === apiKeyEnv) p.keySet = true;
+      });
+    },
+    async ClearProviderKey(apiKeyEnv: string) {
+      settings.providers.forEach((p) => {
+        if (p.apiKeyEnv === apiKeyEnv) p.keySet = false;
       });
     },
     async SetPermissionMode(mode: string) {

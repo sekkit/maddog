@@ -218,6 +218,11 @@ type chatTUI struct {
 	// window). Reset when Ctrl+C clears non-empty input instead.
 	lastCtrlCAt time.Time
 
+	// mcpImport holds the interactive cc-switch MCP import picker (nil when
+	// closed). It writes selected servers to config and hot-connects the ones that
+	// can start successfully.
+	mcpImport *mcpImportPicker
+
 	// host is the running MCP servers (nil when no plugins). The TUI reads
 	// prompts (slash commands), resources (@-references), and server status
 	// (/mcp) from it.
@@ -419,18 +424,7 @@ type clipboardPasteMsg struct {
 // the controller, so a resumed session pre-populates scrollback.
 func newChatTUI(ctrl *control.Controller, missing string, eventCh chan event.Event, termW int) chatTUI {
 	ti := textarea.New()
-	ti.Prompt = ""
-	ti.CharLimit = 16384
-	ti.SetHeight(1)
-	ti.ShowLineNumbers = false
-	applyTextareaTheme(&ti)
-	// Use the real terminal cursor (not a styled virtual one) so View can place
-	// it at the insertion point and IME candidate windows anchor to the input.
-	ti.SetVirtualCursor(false)
-	// Plain Enter submits (the chatTUI handler intercepts it), so the textarea's
-	// own InsertNewline binding moves to Alt+Enter / Ctrl+J / Shift+Enter.
-	ti.KeyMap.InsertNewline = key.NewBinding(key.WithKeys("alt+enter", "ctrl+j", "shift+enter"))
-	ti.Focus()
+	configureChatTextarea(&ti)
 
 	sp := spinner.New()
 	sp.Spinner = spinner.Dot
@@ -464,6 +458,25 @@ func newChatTUI(ctrl *control.Controller, missing string, eventCh chan event.Eve
 		skills:               ctrl.Skills(),
 		viewport:             viewport.New(viewport.WithWidth(termW)),
 	}
+}
+
+func configureChatTextarea(ti *textarea.Model) {
+	ti.Prompt = ""
+	ti.CharLimit = 16384
+	ti.DynamicHeight = true
+	ti.MinHeight = 1
+	ti.MaxHeight = maxInputRows
+	ti.MaxContentHeight = ti.CharLimit
+	ti.SetHeight(1)
+	ti.ShowLineNumbers = false
+	applyTextareaTheme(ti)
+	// Use the real terminal cursor (not a styled virtual one) so View can place
+	// it at the insertion point and IME candidate windows anchor to the input.
+	ti.SetVirtualCursor(false)
+	// Plain Enter submits (the chatTUI handler intercepts it), so the textarea's
+	// own InsertNewline binding moves to Alt+Enter / Ctrl+J / Shift+Enter.
+	ti.KeyMap.InsertNewline = key.NewBinding(key.WithKeys("alt+enter", "ctrl+j", "shift+enter"))
+	ti.Focus()
 }
 
 func (m *chatTUI) rememberSubmittedInput(input string) {
@@ -758,7 +771,7 @@ func (m chatTUI) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.updateCompletion()
 			return m, finalize(m, cmds)
 		}
-		if !m.chooserTyping() && m.pendingApproval == nil && m.rewind == nil && m.resumePick == nil && m.mcp == nil && m.skillPick == nil && m.shouldFoldPaste(msg.Content) {
+		if !m.chooserTyping() && m.pendingApproval == nil && m.rewind == nil && m.resumePick == nil && m.mcp == nil && m.mcpImport == nil && m.skillPick == nil && m.shouldFoldPaste(msg.Content) {
 			m.insertFoldedPaste(msg.Content)
 			m.growInputToFit()
 			m.updateCompletion()
@@ -788,7 +801,6 @@ func (m chatTUI) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				case "enter":
 					val := strings.TrimSpace(m.input.Value())
 					m.input.Reset()
-					m.input.SetHeight(1)
 					m.chooser.typing = false
 					if val == "" {
 						return m, finalize(m, cmds)
@@ -799,7 +811,6 @@ func (m chatTUI) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				case "esc":
 					m.chooser.typing = false
 					m.input.Reset()
-					m.input.SetHeight(1)
 					return m, finalize(m, cmds)
 				}
 				var ic tea.Cmd
@@ -813,6 +824,10 @@ func (m chatTUI) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// The rewind picker is modal while open: keys navigate it.
 		if m.rewind != nil {
 			return m.handleRewindKey(msg)
+		}
+		// The MCP import picker is modal while open: keys select candidates.
+		if m.mcpImport != nil {
+			return m.handleMCPImportKey(msg)
 		}
 		// The resume picker is modal while open: keys navigate it.
 		if m.resumePick != nil {
@@ -1005,7 +1020,6 @@ func (m chatTUI) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.queueEditDraft = ""
 				}
 				m.input.Reset()
-				m.input.SetHeight(1)
 				m.pastedBlocks = nil
 				return m, finalize(m, cmds)
 			}
@@ -1026,7 +1040,6 @@ func (m chatTUI) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// space keeps "#7" / "#issue" prompts from being swallowed.
 			if note, ok := control.MemoryQuickAddNote(line); ok {
 				m.input.Reset()
-				m.input.SetHeight(1)
 				m.pastedBlocks = nil
 				if note == "" {
 					m.notice(i18n.M.QuickRememberEmpty)
@@ -1043,13 +1056,11 @@ func (m chatTUI) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				cmd := strings.TrimPrefix(line, "!")
 				if strings.TrimSpace(cmd) == "" {
 					m.input.Reset()
-					m.input.SetHeight(1)
 					m.pastedBlocks = nil
 					m.notice(i18n.M.ShellExecEmpty)
 					return m, finalize(m, cmds)
 				}
 				m.input.Reset()
-				m.input.SetHeight(1)
 				m.pastedBlocks = nil
 				m.state = tuiRunning
 				m.runStart = time.Now()
@@ -1069,12 +1080,14 @@ func (m chatTUI) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Slash commands run locally without going through the model. A
 			// '/'-leading line that's actually a dragged file path is an attachment,
 			// not a command, so it's rewritten to an @reference instead.
-			if strings.HasPrefix(line, "/") {
+			if strings.HasPrefix(line, "//") {
+				// Double-slash — common in JS comments, file:// URLs, etc.
+				// Not a command. Fall through to normal message path.
+			} else if strings.HasPrefix(line, "/") {
 				if ref, ok := control.FileRefLine(line); ok {
 					line = ref
 				} else {
 					m.input.Reset()
-					m.input.SetHeight(1)
 					m.pastedBlocks = nil
 					cmds = append(cmds, m.runSlashCommand(line))
 					return m, finalize(m, cmds)
@@ -1083,7 +1096,6 @@ func (m chatTUI) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 			sentLine := m.expandPastedBlocks(line)
 			m.input.Reset()
-			m.input.SetHeight(1)
 
 			// @references (local files / MCP resources, including inline image
 			// attachments) are resolved off the event loop by the controller; the turn
@@ -1329,6 +1341,7 @@ func (m chatTUI) bottomRows() int {
 		m.renderApprovalBanner(),
 		m.renderChooser(),
 		m.renderRewind(),
+		m.renderMCPImport(),
 		m.renderResumePicker(),
 		m.renderCompletion(),
 	} {
@@ -1361,7 +1374,7 @@ func (m chatTUI) bottomRows() int {
 // reserve rows for a composer that cannot receive input, leaving a confusing
 // blank/bordered area at the bottom of the TUI.
 func (m chatTUI) hideComposer() bool {
-	if m.mcp != nil || m.skillPick != nil || m.resumePick != nil || m.rewind != nil || m.pendingApproval != nil {
+	if m.mcp != nil || m.mcpImport != nil || m.skillPick != nil || m.resumePick != nil || m.rewind != nil || m.pendingApproval != nil {
 		return true
 	}
 	return m.chooser != nil && !m.chooser.typing
@@ -1914,6 +1927,8 @@ func (m chatTUI) View() tea.View {
 	switch {
 	case m.rewind != nil:
 		status = "  " + modeTag + " · ⟲ rewind"
+	case m.mcpImport != nil:
+		status = "  " + modeTag + " · MCP import"
 	case m.resumePick != nil:
 		status = "  " + modeTag + " · " + i18n.M.StatusResumePicker
 	case m.mcp != nil:
@@ -2002,6 +2017,10 @@ func (m chatTUI) View() tea.View {
 		rowsAboveBox += strings.Count(card, "\n") + 1
 	}
 	if card := m.renderRewind(); card != "" {
+		parts = append(parts, card)
+		rowsAboveBox += strings.Count(card, "\n") + 1
+	}
+	if card := m.renderMCPImport(); card != "" {
 		parts = append(parts, card)
 		rowsAboveBox += strings.Count(card, "\n") + 1
 	}
@@ -2448,6 +2467,9 @@ func (m *chatTUI) clearSubmittedPastes() {
 }
 
 func (m *chatTUI) growInputToFit() {
+	if m.input.DynamicHeight {
+		return
+	}
 	lines := strings.Count(m.input.Value(), "\n") + 1
 	if lines < 1 {
 		lines = 1
@@ -2835,7 +2857,7 @@ func (m *chatTUI) ingestEvent(e event.Event) {
 			m.commitLine(line)
 		}
 
-	case event.Notice:
+	case event.Notice, event.Upgrade, event.SkillGenerated, event.BudgetExceeded, event.SkillPromoted:
 		glyph := "·"
 		if e.Level == event.LevelWarn {
 			glyph = "!"
@@ -3138,8 +3160,10 @@ func (m *chatTUI) runMCPSubcommand(input string) {
 		} else {
 			m.notice("removed " + name + " from config")
 		}
+	case "import":
+		m.openMCPImportPicker()
 	default:
-		m.notice("unknown /mcp subcommand " + args[1] + " — try: /mcp, /mcp list, /mcp show, /mcp add, /mcp connect, /mcp remove")
+		m.notice("unknown /mcp subcommand " + args[1] + " — try: /mcp, /mcp list, /mcp show, /mcp add, /mcp connect, /mcp import, /mcp remove")
 	}
 }
 
