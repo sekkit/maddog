@@ -10,8 +10,17 @@ import (
 	"strings"
 	"testing"
 
+	"reasonix/internal/netclient"
 	"reasonix/internal/provider"
 )
+
+func testProviderConfig(name, baseURL, model, apiKey string, extra map[string]any) provider.Config {
+	merged := map[string]any{"proxy_spec": netclient.ProxySpec{Mode: netclient.ModeOff}}
+	for k, v := range extra {
+		merged[k] = v
+	}
+	return provider.Config{Name: name, BaseURL: baseURL, Model: model, APIKey: apiKey, Extra: merged}
+}
 
 // TestStreamRetriesThenSucceeds drives the real retry path end-to-end: the
 // server returns 503 twice, then a valid SSE stream. The provider must back off,
@@ -31,7 +40,7 @@ func TestStreamRetriesThenSucceeds(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	p, err := New(provider.Config{Name: "deepseek", BaseURL: srv.URL, Model: "deepseek-v4", APIKey: "k"})
+	p, err := New(testProviderConfig("deepseek", srv.URL, "deepseek-v4", "k", nil))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -79,7 +88,7 @@ func TestStreamInsufficientBalance(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	p, _ := New(provider.Config{Name: "deepseek", BaseURL: srv.URL, Model: "deepseek-v4", APIKey: "k"})
+	p, _ := New(testProviderConfig("deepseek", srv.URL, "deepseek-v4", "k", nil))
 	_, err := p.Stream(context.Background(), provider.Request{Messages: []provider.Message{{Role: provider.RoleUser, Content: "hi"}}})
 	var apiErr *provider.APIError
 	if !errors.As(err, &apiErr) || apiErr.Status != 402 {
@@ -99,13 +108,7 @@ func TestStreamAuthError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	p, err := New(provider.Config{
-		Name:    "deepseek",
-		BaseURL: srv.URL,
-		Model:   "deepseek-v4",
-		APIKey:  "bad",
-		Extra:   map[string]any{"api_key_env": "DEEPSEEK_API_KEY"},
-	})
+	p, err := New(testProviderConfig("deepseek", srv.URL, "deepseek-v4", "bad", map[string]any{"api_key_env": "DEEPSEEK_API_KEY"}))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -209,7 +212,7 @@ func TestStreamRepairsDanglingToolCalls(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	p, err := New(provider.Config{Name: "deepseek-flash", BaseURL: srv.URL, Model: "deepseek-v4", APIKey: "k"})
+	p, err := New(testProviderConfig("deepseek-flash", srv.URL, "deepseek-v4", "k", nil))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -449,7 +452,7 @@ func TestStreamSynthesizesMissingToolCallIDs(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	p, err := New(provider.Config{Name: "local", BaseURL: srv.URL, Model: "qwen", APIKey: "k"})
+	p, err := New(testProviderConfig("local", srv.URL, "qwen", "k", nil))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}

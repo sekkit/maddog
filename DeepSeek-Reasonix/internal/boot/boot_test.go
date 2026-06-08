@@ -18,6 +18,7 @@ import (
 
 	"reasonix/internal/config"
 	"reasonix/internal/event"
+	"reasonix/internal/netclient"
 	"reasonix/internal/plugin"
 	"reasonix/internal/provider"
 	"reasonix/internal/sandbox"
@@ -91,14 +92,14 @@ func TestNewProviderAppliesConfiguredDefaultEffort(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	p, err := NewProvider(&config.ProviderEntry{
+	p, err := NewProviderWithProxy(&config.ProviderEntry{
 		Name:             "custom",
 		Kind:             "openai",
 		BaseURL:          srv.URL,
 		Model:            "m",
 		SupportedEfforts: []string{"low", "medium", "high"},
 		DefaultEffort:    "MEDIUM",
-	})
+	}, netclient.ProxySpec{Mode: netclient.ModeOff})
 	if err != nil {
 		t.Fatalf("NewProvider: %v", err)
 	}
@@ -129,12 +130,12 @@ func TestNewProviderAppliesModelReasoningProtocol(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	p, err := NewProvider(&config.ProviderEntry{
+	p, err := NewProviderWithProxy(&config.ProviderEntry{
 		Name:    "deepseek-proxy",
 		Kind:    "openai",
 		BaseURL: srv.URL,
 		Model:   "deepseek-v4-flash",
-	})
+	}, netclient.ProxySpec{Mode: netclient.ModeOff})
 	if err != nil {
 		t.Fatalf("NewProvider: %v", err)
 	}

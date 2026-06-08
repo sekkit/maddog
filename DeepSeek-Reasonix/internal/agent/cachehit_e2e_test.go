@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"reasonix/internal/event"
+	"reasonix/internal/netclient"
 	"reasonix/internal/provider"
 	"reasonix/internal/provider/openai"
 	"reasonix/internal/tool"
@@ -536,7 +537,10 @@ func newAgent(t *testing.T, url string, reg *tool.Registry, contextWindow, recen
 		BaseURL: url,
 		Model:   "deepseek-reasoner",
 		APIKey:  "test",
-		Extra:   map[string]any{"api_key_env": "DEEPSEEK_API_KEY"},
+		Extra: map[string]any{
+			"api_key_env": "DEEPSEEK_API_KEY",
+			"proxy_spec":  netclient.ProxySpec{Mode: netclient.ModeOff},
+		},
 	})
 	if err != nil {
 		t.Fatalf("provider New: %v", err)
