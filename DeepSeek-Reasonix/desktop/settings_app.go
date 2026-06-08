@@ -429,12 +429,12 @@ func (a *App) rebuild() error {
 			model = resolved
 		}
 	}
-	ctrl, err := boot.Build(a.bootContext(), boot.Options{
+	ctrl, err := boot.Build(a.bootContext(), desktopBootOptions(boot.Options{
 		Model: model, RequireKey: false,
 		Sink:           tab.sink,
 		WorkspaceRoot:  tab.WorkspaceRoot,
 		EffortOverride: cloneStringPtr(tab.effort),
-	})
+	}))
 	if err != nil {
 		a.mu.Lock()
 		tab.StartupErr = err.Error()

@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"reasonix/internal/agent"
-	"reasonix/internal/config"
 )
 
 func waitForTabReady(t *testing.T, app *App, tabID string) *WorkspaceTab {
@@ -126,7 +125,7 @@ func TestDeleteTopicKeepsSessionHistory(t *testing.T) {
 	if err := setTopicTitle(projectRoot, topicID, "Keep history"); err != nil {
 		t.Fatalf("set topic title: %v", err)
 	}
-	dir := config.SessionDir()
+	dir := desktopSessionDir()
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatalf("mkdir sessions: %v", err)
 	}
@@ -213,7 +212,7 @@ func TestListWorkspacesMigratesLegacyWorkspaceList(t *testing.T) {
 func TestLegacySessionsMigrateIntoGlobalTopics(t *testing.T) {
 	isolateDesktopUserDirs(t)
 
-	dir := config.SessionDir()
+	dir := desktopSessionDir()
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatalf("mkdir sessions: %v", err)
 	}
@@ -252,7 +251,7 @@ func TestV05LegacyEventSessionsImportIntoGlobalTopic(t *testing.T) {
 	home := isolateDesktopUserDirs(t)
 
 	legacyDir := filepath.Join(home, ".reasonix", "sessions")
-	destDir := config.SessionDir()
+	destDir := desktopSessionDir()
 	writeLegacyEventSession(t, legacyDir, "v053-chat.events.jsonl", "hello from v0.53", "hi from v0.53", time.Now().Add(-time.Hour))
 
 	imported, err := agent.MigrateLegacySessions(legacyDir, destDir)
@@ -292,7 +291,7 @@ func TestV05LegacyEventSessionsImportIntoGlobalTopic(t *testing.T) {
 func TestLegacySessionTopicIDsKeepNormalizedNameCollisionsDistinct(t *testing.T) {
 	isolateDesktopUserDirs(t)
 
-	dir := config.SessionDir()
+	dir := desktopSessionDir()
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatalf("mkdir sessions: %v", err)
 	}
@@ -324,7 +323,7 @@ func TestLegacySessionTopicIDsKeepNormalizedNameCollisionsDistinct(t *testing.T)
 func TestDefaultGlobalTabGetsMigratedTopicID(t *testing.T) {
 	isolateDesktopUserDirs(t)
 
-	dir := config.SessionDir()
+	dir := desktopSessionDir()
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatalf("mkdir sessions: %v", err)
 	}
@@ -366,7 +365,7 @@ func TestDefaultGlobalTabGetsMigratedTopicID(t *testing.T) {
 func TestBuildTabControllerRestoresPinnedSessionBeforeTopicFallback(t *testing.T) {
 	isolateDesktopUserDirs(t)
 
-	dir := config.SessionDir()
+	dir := desktopSessionDir()
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatalf("mkdir sessions: %v", err)
 	}
@@ -406,7 +405,7 @@ func TestBuildTabControllerRestoresPinnedSessionBeforeTopicFallback(t *testing.T
 func TestBuildTabControllerKeepsMissingPinnedSessionPath(t *testing.T) {
 	isolateDesktopUserDirs(t)
 
-	dir := config.SessionDir()
+	dir := desktopSessionDir()
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatalf("mkdir sessions: %v", err)
 	}
@@ -797,7 +796,7 @@ func TestRenameTopicRecreatesDeletedProjectTitleIndexFromSessionMeta(t *testing.
 	if err := setTopicTitle(projectRoot, topicID, "旧标题"); err != nil {
 		t.Fatalf("set topic title: %v", err)
 	}
-	dir := config.SessionDir()
+	dir := desktopSessionDir()
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatalf("mkdir sessions: %v", err)
 	}
@@ -902,7 +901,7 @@ func TestTrashTopicMovesRelatedSessionsToTrash(t *testing.T) {
 	if err := setTopicTitle(projectRoot, topicID, "Trash history"); err != nil {
 		t.Fatalf("set topic title: %v", err)
 	}
-	dir := config.SessionDir()
+	dir := desktopSessionDir()
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatalf("mkdir sessions: %v", err)
 	}
@@ -926,7 +925,7 @@ func TestTrashTopicMovesRelatedSessionsToTrash(t *testing.T) {
 func TestRestoreGlobalTopicSessionReindexesProjectTree(t *testing.T) {
 	isolateDesktopUserDirs(t)
 
-	dir := config.SessionDir()
+	dir := desktopSessionDir()
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatalf("mkdir sessions: %v", err)
 	}
@@ -972,7 +971,7 @@ func TestRestoreProjectTopicSessionReindexesProjectTree(t *testing.T) {
 	if err := setTopicTitle(projectRoot, topicID, "Project restore"); err != nil {
 		t.Fatalf("set topic title: %v", err)
 	}
-	dir := config.SessionDir()
+	dir := desktopSessionDir()
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatalf("mkdir sessions: %v", err)
 	}
@@ -1005,7 +1004,7 @@ func TestRestoreProjectTopicSessionReindexesProjectTree(t *testing.T) {
 func TestRestoreSessionWithoutTopicMetadataFallsBackToGlobal(t *testing.T) {
 	isolateDesktopUserDirs(t)
 
-	dir := config.SessionDir()
+	dir := desktopSessionDir()
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatalf("mkdir sessions: %v", err)
 	}
@@ -1037,7 +1036,7 @@ func TestTrashTopicMovesOpenSessionToTrash(t *testing.T) {
 	if err := setTopicTitle(projectRoot, topicID, "Open trash"); err != nil {
 		t.Fatalf("set topic title: %v", err)
 	}
-	dir := config.SessionDir()
+	dir := desktopSessionDir()
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatalf("mkdir sessions: %v", err)
 	}
@@ -1104,7 +1103,7 @@ func TestTrashTopicMovesOpenSessionToTrash(t *testing.T) {
 
 func TestLegacyMigrationSkipsProjectScopedSessions(t *testing.T) {
 	isolateDesktopUserDirs(t)
-	dir := config.SessionDir()
+	dir := desktopSessionDir()
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -1133,7 +1132,7 @@ func TestLegacyMigrationSkipsProjectScopedSessions(t *testing.T) {
 
 func TestLegacyMigrationConcurrentRunsHaveNoLostUpdates(t *testing.T) {
 	isolateDesktopUserDirs(t)
-	dir := config.SessionDir()
+	dir := desktopSessionDir()
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}

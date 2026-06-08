@@ -264,14 +264,14 @@ func TestMediaTokenHandlerEscapedFilename(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	name := `weird "file" name.png`
+	name := "weird file #1.png"
 	if err := os.WriteFile(name, []byte("png"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
 	app := NewApp()
 	preview := app.ReadFile(name)
-	if strings.Contains(preview.URL, " ") || strings.Contains(preview.URL, `"`) {
+	if strings.Contains(preview.URL, " ") || strings.Contains(preview.URL, "#") {
 		t.Fatalf("media URL should path-escape filename, got %q", preview.URL)
 	}
 

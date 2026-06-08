@@ -970,7 +970,7 @@ func TestFileRefsUseActiveTabWorkspaceRoot(t *testing.T) {
 func TestDeleteSessionRejectsActiveRelativePath(t *testing.T) {
 	isolateDesktopUserDirs(t)
 
-	dir := config.SessionDir()
+	dir := desktopSessionDir()
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatalf("mkdir session dir: %v", err)
 	}
@@ -998,7 +998,7 @@ func TestDeleteSessionRejectsActiveRelativePath(t *testing.T) {
 func TestDeleteSessionRejectsInactiveOpenTab(t *testing.T) {
 	isolateDesktopUserDirs(t)
 
-	dir := config.SessionDir()
+	dir := desktopSessionDir()
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatalf("mkdir session dir: %v", err)
 	}
@@ -1070,7 +1070,7 @@ func (r *appendingDesktopRunner) Run(_ context.Context, input string) error {
 
 func TestSubmitToTabHistoryDisplaysRawInputAfterMemoryCompose(t *testing.T) {
 	isolateDesktopUserDirs(t)
-	dir := config.SessionDir()
+	dir := desktopSessionDir()
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -1123,7 +1123,7 @@ func TestForkCreatesActiveTabWithoutSwitchingSourceController(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(workspace, "reasonix.toml"), []byte("[codegraph]\nenabled = false\n"), 0o644); err != nil {
 		t.Fatalf("write workspace config: %v", err)
 	}
-	dir := config.SessionDir()
+	dir := desktopSessionDir()
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatalf("mkdir session dir: %v", err)
 	}
@@ -1517,7 +1517,7 @@ tier = "lazy"
 
 func TestUpdateMCPServerSplitsPastedCommandLine(t *testing.T) {
 	isolateDesktopUserDirs(t)
-	dir := t.TempDir()
+	dir := robustTempDir(t)
 	t.Chdir(dir)
 	if err := os.WriteFile(filepath.Join(dir, "reasonix.toml"), []byte(`
 [codegraph]
@@ -1538,7 +1538,7 @@ args = ["-y", "@playwright/mcp"]
 	if err := app.UpdateMCPServer("playwright", MCPServerInput{
 		Name:      "playwright",
 		Transport: "stdio",
-		Command:   "npx -y @modelcontextprotocol/server-filesystem .",
+		Command:   "node missing-server.js --root .",
 	}); err != nil {
 		t.Fatalf("UpdateMCPServer: %v", err)
 	}
@@ -1547,10 +1547,10 @@ args = ["-y", "@playwright/mcp"]
 		t.Fatal(err)
 	}
 	p := cfg.Plugins[0]
-	if p.Command != "npx" {
-		t.Fatalf("command = %q, want npx", p.Command)
+	if p.Command != "node" {
+		t.Fatalf("command = %q, want node", p.Command)
 	}
-	if got := strings.Join(p.Args, "\x00"); got != strings.Join([]string{"-y", "@modelcontextprotocol/server-filesystem", "."}, "\x00") {
+	if got := strings.Join(p.Args, "\x00"); got != strings.Join([]string{"missing-server.js", "--root", "."}, "\x00") {
 		t.Fatalf("args = %v", p.Args)
 	}
 }

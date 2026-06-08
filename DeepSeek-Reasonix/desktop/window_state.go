@@ -6,8 +6,6 @@ import (
 	"path/filepath"
 
 	"github.com/wailsapp/wails/v2/pkg/runtime"
-
-	"reasonix/internal/config"
 )
 
 // DesktopWindowState captures the window geometry to restore across launches.
@@ -20,7 +18,11 @@ type DesktopWindowState struct {
 }
 
 func windowStatePath() string {
-	return filepath.Join(config.MemoryUserDir(), "desktop-window.json")
+	dir := desktopConfigDir()
+	if dir == "" {
+		return ""
+	}
+	return filepath.Join(dir, "desktop-window.json")
 }
 
 // loadWindowState reads the saved window geometry. The second return value is
@@ -56,6 +58,9 @@ func loadWindowState() (DesktopWindowState, bool) {
 // window geometry before quit and periodically during use.
 func (a *App) SaveWindowState(state DesktopWindowState) error {
 	path := windowStatePath()
+	if path == "" {
+		return nil
+	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
