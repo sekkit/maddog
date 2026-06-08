@@ -162,6 +162,122 @@ func TestStreamUsesBearerTokenAuthEnv(t *testing.T) {
 	}
 }
 
+func TestResponsesWireStreamsTextAndUsage(t *testing.T) {
+	var gotPath, gotAuth string
+	var gotBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotAuth = r.Header.Get("Authorization")
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, `data: {"type":"response.output_text.delta","delta":"OK"}`+"\n\n")
+		_, _ = io.WriteString(w, `data: {"type":"response.output_text.delta","delta":"-RESPONSES"}`+"\n\n")
+		_, _ = io.WriteString(w, `data: {"type":"response.completed","response":{"status":"completed","usage":{"input_tokens":11,"output_tokens":7,"total_tokens":18,"input_tokens_details":{"cached_tokens":3},"output_tokens_details":{"reasoning_tokens":2}}}}`+"\n\n")
+	}))
+	defer srv.Close()
+
+	p, err := New(testProviderConfig("icodeeasy-frontier", srv.URL, "gpt-5.5", "sk-test", map[string]any{
+		"wire_api":    "responses",
+		"api_key_env": "ICODEEASY_API_KEY",
+		"effort":      "high",
+	}))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	ch, err := p.Stream(context.Background(), provider.Request{
+		Messages:  []provider.Message{{Role: provider.RoleSystem, Content: "be terse"}, {Role: provider.RoleUser, Content: "ping"}},
+		MaxTokens: 64,
+	})
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	var text strings.Builder
+	var usage *provider.Usage
+	for ck := range ch {
+		switch ck.Type {
+		case provider.ChunkText:
+			text.WriteString(ck.Text)
+		case provider.ChunkUsage:
+			usage = ck.Usage
+		case provider.ChunkError:
+			t.Fatalf("stream error: %v", ck.Err)
+		}
+	}
+	if gotPath != "/responses" {
+		t.Fatalf("request path = %q, want /responses", gotPath)
+	}
+	if gotAuth != "Bearer sk-test" {
+		t.Fatalf("Authorization = %q, want bearer key", gotAuth)
+	}
+	if gotBody["model"] != "gpt-5.5" || gotBody["stream"] != true || gotBody["max_output_tokens"] != float64(64) {
+		t.Fatalf("request body = %+v", gotBody)
+	}
+	reasoning, _ := gotBody["reasoning"].(map[string]any)
+	if reasoning["effort"] != "high" {
+		t.Fatalf("reasoning = %+v, want effort high", reasoning)
+	}
+	if gotBody["instructions"] != "be terse" {
+		t.Fatalf("instructions = %v, want system prompt", gotBody["instructions"])
+	}
+	if text.String() != "OK-RESPONSES" {
+		t.Fatalf("streamed text = %q, want OK-RESPONSES", text.String())
+	}
+	if usage == nil {
+		t.Fatal("missing usage chunk")
+	}
+	if usage.PromptTokens != 11 || usage.CompletionTokens != 7 || usage.TotalTokens != 18 || usage.CacheHitTokens != 3 || usage.CacheMissTokens != 8 || usage.ReasoningTokens != 2 {
+		t.Fatalf("usage = %+v", usage)
+	}
+}
+
+func TestResponsesWireStreamsFunctionCall(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, `data: {"type":"response.output_item.added","output_index":0,"item":{"id":"fc_1","type":"function_call","call_id":"call_1","name":"read_file","arguments":""}}`+"\n\n")
+		_, _ = io.WriteString(w, `data: {"type":"response.function_call_arguments.delta","output_index":0,"item_id":"fc_1","delta":"{\"path\""}`+"\n\n")
+		_, _ = io.WriteString(w, `data: {"type":"response.function_call_arguments.delta","output_index":0,"item_id":"fc_1","delta":":\"README.md\"}"}`+"\n\n")
+		_, _ = io.WriteString(w, `data: {"type":"response.function_call_arguments.done","output_index":0,"item_id":"fc_1","arguments":"{\"path\":\"README.md\"}"}`+"\n\n")
+		_, _ = io.WriteString(w, `data: {"type":"response.completed","response":{"status":"completed"}}`+"\n\n")
+	}))
+	defer srv.Close()
+
+	p, err := New(testProviderConfig("icodeeasy-frontier", srv.URL, "gpt-5.5", "sk-test", map[string]any{"wire_api": "responses"}))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	ch, err := p.Stream(context.Background(), provider.Request{
+		Messages: []provider.Message{{Role: provider.RoleUser, Content: "read"}},
+		Tools: []provider.ToolSchema{{
+			Name:        "read_file",
+			Description: "Read a file",
+			Parameters:  json.RawMessage(`{"type":"object"}`),
+		}},
+	})
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	var started, done *provider.ToolCall
+	for ck := range ch {
+		switch ck.Type {
+		case provider.ChunkToolCallStart:
+			started = ck.ToolCall
+		case provider.ChunkToolCall:
+			done = ck.ToolCall
+		case provider.ChunkError:
+			t.Fatalf("stream error: %v", ck.Err)
+		}
+	}
+	if started == nil || started.ID != "call_1" || started.Name != "read_file" {
+		t.Fatalf("start tool call = %+v", started)
+	}
+	if done == nil || done.ID != "call_1" || done.Name != "read_file" || done.Arguments != `{"path":"README.md"}` {
+		t.Fatalf("done tool call = %+v", done)
+	}
+}
+
 // TestBuildRequestAlwaysSerializesContent guards the DeepSeek 400 regression:
 // an assistant turn that is pure tool_calls (no preamble text) has empty
 // content, and DeepSeek rejects a message missing the `content` field. Every

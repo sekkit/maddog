@@ -531,6 +531,10 @@ type ProviderEntry struct {
 	// models. Empty/auto uses the model capability registry plus endpoint
 	// heuristics; none disables automatic reasoning controls for this provider.
 	ReasoningProtocol string `toml:"reasoning_protocol"`
+	// WireAPI selects the OpenAI transport wire. Empty/chat uses
+	// /chat/completions; responses uses /responses for GPT-5 Codex/frontier
+	// models that no longer support the chat endpoint.
+	WireAPI string `toml:"wire_api"`
 	// SupportedEfforts lists the /effort levels this provider/model exposes.
 	// When non-empty, it overrides the built-in defaults derived from
 	// Kind/BaseURL and makes /effort configurable. "auto" is the implicit

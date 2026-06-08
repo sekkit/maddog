@@ -960,6 +960,7 @@ func TestUpsertProviderNormalizesCustomEffortFields(t *testing.T) {
 		Model:             "m",
 		Effort:            " HIGH ",
 		ReasoningProtocol: " OPENAI ",
+		WireAPI:           " RESPONSES ",
 		SupportedEfforts:  []string{"Low", "MEDIUM", "medium", "auto"},
 		DefaultEffort:     " LOW ",
 	}); err != nil {
@@ -972,6 +973,9 @@ func TestUpsertProviderNormalizesCustomEffortFields(t *testing.T) {
 	if got.ReasoningProtocol != "openai" {
 		t.Fatalf("reasoning_protocol = %q, want openai", got.ReasoningProtocol)
 	}
+	if got.WireAPI != "responses" {
+		t.Fatalf("wire_api = %q, want responses", got.WireAPI)
+	}
 	wantSupported := []string{"low", "medium"}
 	if len(got.SupportedEfforts) != len(wantSupported) {
 		t.Fatalf("supported_efforts = %v, want %v", got.SupportedEfforts, wantSupported)
@@ -980,6 +984,20 @@ func TestUpsertProviderNormalizesCustomEffortFields(t *testing.T) {
 		if got.SupportedEfforts[i] != want {
 			t.Fatalf("supported_efforts[%d] = %q, want %q", i, got.SupportedEfforts[i], want)
 		}
+	}
+}
+
+func TestUpsertProviderRejectsInvalidWireAPI(t *testing.T) {
+	c := &Config{}
+	err := c.UpsertProvider(ProviderEntry{
+		Name:    "custom",
+		Kind:    "openai",
+		BaseURL: "https://example.com",
+		Model:   "m",
+		WireAPI: "realtime",
+	})
+	if err == nil || !strings.Contains(err.Error(), "wire_api") {
+		t.Fatalf("UpsertProvider error = %v, want wire_api validation", err)
 	}
 }
 

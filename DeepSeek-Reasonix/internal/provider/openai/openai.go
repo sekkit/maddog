@@ -36,6 +36,9 @@ func New(cfg provider.Config) (provider.Provider, error) {
 	if name == "" {
 		name = "openai"
 	}
+	if wire, _ := cfg.Extra["wire_api"].(string); normalizeWireAPI(wire) == "responses" {
+		return newResponsesClient(cfg, name)
+	}
 	keyEnv, _ := cfg.Extra["api_key_env"].(string) // for actionable auth errors
 	auth := provider.AuthConfigFromExtra(cfg.Extra, cfg.APIKey, keyEnv)
 	effort, _ := cfg.Extra["effort"].(string)
@@ -123,6 +126,15 @@ func normalizeReasoningProtocol(raw string) string {
 		return strings.ToLower(strings.TrimSpace(raw))
 	default:
 		return ""
+	}
+}
+
+func normalizeWireAPI(raw string) string {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "responses", "response":
+		return "responses"
+	default:
+		return "chat"
 	}
 }
 
