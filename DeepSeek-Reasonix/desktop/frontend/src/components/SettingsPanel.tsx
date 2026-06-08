@@ -340,6 +340,11 @@ function allRefs(s: SettingsView): string[] {
   return out;
 }
 
+function providerCredentialEnv(p: ProviderView | undefined): string {
+  if (!p) return "";
+  return normalizeAuthType(p.authType) === "api_key" ? p.apiKeyEnv : p.authTokenEnv || p.identityEnv;
+}
+
 // toRef normalises a stored model id (a provider name, a bare model, or a ref) to
 // a "provider/model" ref so a <select> of refs can show it selected.
 function toRef(model: string, s: SettingsView): string {
@@ -360,6 +365,7 @@ const PROXY_MODES = ["auto", "custom", "off"] as const;
 // here is what the user sees in the dropdown.
 const EFFORT_PRESETS: readonly string[] = ["low", "medium", "high", "xhigh", "max"];
 const REASONING_PROTOCOLS: readonly string[] = ["", "deepseek", "openai", "none"];
+const AUTH_TYPES: readonly string[] = ["api_key", "bearer", "workload_identity"];
 const PROXY_TYPES = ["http", "https", "socks5", "socks5h"] as const;
 const LANGUAGE_PREFS: LangPref[] = ["", "zh", "en"];
 const AUTO_PLAN_MODES = ["off", "on"] as const;
@@ -400,6 +406,34 @@ function normalizeReasoningProtocol(protocol: string | undefined): string {
   return REASONING_PROTOCOLS.includes(protocol ?? "") ? protocol ?? "" : "";
 }
 
+function normalizeAuthType(authType: string | undefined): string {
+  return AUTH_TYPES.includes(authType ?? "") ? authType ?? "api_key" : "api_key";
+}
+
+function normalizeProviderView(p: ProviderView): ProviderView {
+  return {
+    ...p,
+    builtIn: Boolean(p.builtIn),
+    added: Boolean(p.added),
+    models: asArray(p.models),
+    modelsUrl: p.modelsUrl ?? "",
+    apiKeyEnv: p.apiKeyEnv ?? "",
+    authType: normalizeAuthType(p.authType),
+    authTokenEnv: p.authTokenEnv ?? "",
+    authHeader: p.authHeader ?? "",
+    authScheme: p.authScheme ?? "",
+    identityEnv: p.identityEnv ?? "",
+    identityFile: p.identityFile ?? "",
+    federationRuleId: p.federationRuleId ?? "",
+    organizationId: p.organizationId ?? "",
+    serviceAccountId: p.serviceAccountId ?? "",
+    workspaceId: p.workspaceId ?? "",
+    keySet: Boolean(p.keySet),
+    reasoningProtocol: normalizeReasoningProtocol(p.reasoningProtocol),
+    supportedEfforts: asArray(p.supportedEfforts),
+  };
+}
+
 function normalizeSettingsView(view: SettingsView | null | undefined): SettingsView | null {
   if (!view) return null;
   const permissions = view.permissions ?? { mode: "ask", allow: [], ask: [], deny: [] };
@@ -413,15 +447,8 @@ function normalizeSettingsView(view: SettingsView | null | undefined): SettingsV
   const agent = view.agent ?? { temperature: 0, maxSteps: 0, systemPrompt: "" };
   return {
     ...view,
-    providers: asArray(view.providers).map((p) => ({
-      ...p,
-      builtIn: Boolean(p.builtIn),
-      added: Boolean(p.added),
-      models: asArray(p.models),
-      modelsUrl: p.modelsUrl ?? "",
-      reasoningProtocol: normalizeReasoningProtocol(p.reasoningProtocol),
-      supportedEfforts: asArray(p.supportedEfforts),
-    })),
+    providers: asArray(view.providers).map(normalizeProviderView),
+    officialProviders: asArray(view.officialProviders).map(normalizeProviderView),
     providerKinds: asArray(view.providerKinds),
     permissions: {
       ...permissions,
@@ -485,6 +512,17 @@ function reasoningProtocolLabel(protocol: string, t: ReturnType<typeof useT>): s
       return t("settings.reasoningProtocol.none");
     default:
       return t("settings.reasoningProtocol.auto");
+  }
+}
+
+function authTypeLabel(authType: string, t: ReturnType<typeof useT>): string {
+  switch (normalizeAuthType(authType)) {
+    case "bearer":
+      return t("settings.authType.bearer");
+    case "workload_identity":
+      return t("settings.authType.workloadIdentity");
+    default:
+      return t("settings.authType.apiKey");
   }
 }
 
@@ -693,11 +731,11 @@ function ModelsSection({ s, busy, apply, backgroundApply }: ModelsSectionProps) 
     const groups = providerAccessGroups(s.providers.filter((p) => p.added), t);
     const candidates = groups
       .map((group) => {
-        const provider = group.providers.find((p) => p.keySet && p.apiKeyEnv && p.baseUrl);
+        const provider = group.providers.find((p) => p.keySet && providerCredentialEnv(p) && p.baseUrl);
         return provider ? { group, provider } : null;
       })
       .filter((item): item is { group: ProviderAccessGroup; provider: ProviderView } => Boolean(item));
-    const refreshKey = candidates.map(({ group, provider }) => `${group.id}:${provider.apiKeyEnv}`).join("|");
+    const refreshKey = candidates.map(({ group, provider }) => `${group.id}:${providerCredentialEnv(provider)}`).join("|");
     if (!refreshKey || autoRefreshKeyRef.current === refreshKey) return;
     autoRefreshKeyRef.current = refreshKey;
 
@@ -1178,10 +1216,12 @@ function ProvidersSection({ s, busy, apply }: SectionProps) {
       await apply(async () => {
         await app.SetProviderKey(apiKeyEnv, value);
         try {
-          const fetched = await app.FetchProviderModels({ ...probe, apiKeyEnv });
+          const authPatch = normalizeAuthType(probe.authType) === "api_key" ? { apiKeyEnv } : { authTokenEnv: apiKeyEnv };
+          const probeWithAuth = { ...probe, ...authPatch };
+          const fetched = await app.FetchProviderModels(probeWithAuth);
           if (fetched.length > 0) {
             const currentDefault = probe.default && fetched.includes(probe.default) ? probe.default : fetched[0];
-            await app.SaveProvider({ ...probe, apiKeyEnv, models: fetched, default: currentDefault });
+            await app.SaveProvider({ ...probeWithAuth, models: fetched, default: currentDefault });
             setGroupFetchResult(group.id, {
               kind: "ok",
               text: t("settings.fetchModelsUpdatedForProvider", { provider: group.label, n: fetched.length }),
@@ -1282,6 +1322,7 @@ type ProviderAccessGroup = {
   builtIn: boolean;
   providers: ProviderView[];
   apiKeyEnv: string;
+  authType: string;
   keySet: boolean;
   baseUrl: string;
   kind: string;
@@ -1490,7 +1531,7 @@ function ProviderAccessCard({
           )}
           <button
             className="btn btn--small"
-            disabled={busy || fetching || !group.baseUrl || !group.apiKeyEnv || !group.keySet}
+            disabled={busy || fetching || !group.baseUrl || !providerCredentialEnv(editableProvider ?? group.providers[0]) || !group.keySet}
             onClick={onRefresh}
           >
             {fetching ? t("settings.fetchingModels") : t("settings.fetchModels")}
@@ -1517,6 +1558,7 @@ function ProviderAccessCard({
       <div className="provider-access-meta">
         <span>{group.kind}</span>
         <span>{group.baseUrl}</span>
+        <span>{authTypeLabel(group.authType, t)}</span>
         <span>{group.apiKeyEnv || t("common.none")}</span>
       </div>
 
@@ -1601,6 +1643,7 @@ function providerAccessGroups(providers: ProviderView[], t: ReturnType<typeof us
       builtIn: p.builtIn,
       providers: [p],
       apiKeyEnv: p.apiKeyEnv,
+      authType: p.authType,
       keySet: p.keySet,
       baseUrl: p.baseUrl,
       kind: p.kind,
@@ -1676,6 +1719,16 @@ function ProviderEditor({
   const [models, setModels] = useState((initial?.models ?? []).join(", "));
   const [modelsUrl] = useState(initial?.modelsUrl ?? "");
   const [apiKeyEnv, setApiKeyEnv] = useState(initial?.apiKeyEnv ?? "");
+  const [authType, setAuthType] = useState(normalizeAuthType(initial?.authType));
+  const [authTokenEnv, setAuthTokenEnv] = useState(initial?.authTokenEnv ?? "");
+  const [authHeader, setAuthHeader] = useState(initial?.authHeader ?? "");
+  const [authScheme, setAuthScheme] = useState(initial?.authScheme ?? "");
+  const [identityEnv, setIdentityEnv] = useState(initial?.identityEnv ?? "");
+  const [identityFile, setIdentityFile] = useState(initial?.identityFile ?? "");
+  const [federationRuleId, setFederationRuleId] = useState(initial?.federationRuleId ?? "");
+  const [organizationId, setOrganizationId] = useState(initial?.organizationId ?? "");
+  const [serviceAccountId, setServiceAccountId] = useState(initial?.serviceAccountId ?? "");
+  const [workspaceId, setWorkspaceId] = useState(initial?.workspaceId ?? "");
   const [keyDraft, setKeyDraft] = useState("");
   const [balanceUrl, setBalanceUrl] = useState(initial?.balanceUrl ?? "");
   // Empty when unset so the placeholder (and its "0 = default" hint) reads instead
@@ -1731,8 +1784,11 @@ function ProviderEditor({
     setFetchErr(null);
     try {
       const effectiveApiKeyEnv = apiKeyEnv.trim() || apiKeyEnvFromProviderName(name);
+      const effectiveAuthTokenEnv = authTokenEnv.trim() || `${apiKeyEnvFromProviderName(name).replace(/_API_KEY$/, "")}_AUTH_TOKEN`;
+      const credentialEnv = authType === "api_key" ? effectiveApiKeyEnv : effectiveAuthTokenEnv;
       if (!apiKeyEnv.trim()) setApiKeyEnv(effectiveApiKeyEnv);
-      if (keyDraft.trim()) await app.SetProviderKey(effectiveApiKeyEnv, keyDraft.trim());
+      if (authType !== "api_key" && !authTokenEnv.trim()) setAuthTokenEnv(effectiveAuthTokenEnv);
+      if (keyDraft.trim()) await app.SetProviderKey(credentialEnv, keyDraft.trim());
       const fetched = await app.FetchProviderModels({
         name: name.trim() || t("settings.newProviderDraftName"),
         builtIn: initial?.builtIn ?? false,
@@ -1743,6 +1799,16 @@ function ProviderEditor({
         models: [],
         default: "",
         apiKeyEnv: effectiveApiKeyEnv,
+        authType,
+        authTokenEnv: authType === "api_key" ? "" : effectiveAuthTokenEnv,
+        authHeader: authHeader.trim(),
+        authScheme: authScheme.trim(),
+        identityEnv: identityEnv.trim(),
+        identityFile: identityFile.trim(),
+        federationRuleId: federationRuleId.trim(),
+        organizationId: organizationId.trim(),
+        serviceAccountId: serviceAccountId.trim(),
+        workspaceId: workspaceId.trim(),
         keySet: Boolean(keyDraft.trim()) || (initial?.keySet ?? false),
         balanceUrl: balanceUrl.trim(),
         contextWindow: Number(ctx) || 0,
@@ -1768,7 +1834,9 @@ function ProviderEditor({
       .map((m) => m.trim())
       .filter(Boolean);
     const effectiveApiKeyEnv = apiKeyEnv.trim() || apiKeyEnvFromProviderName(name);
-    if (keyDraft.trim()) await app.SetProviderKey(effectiveApiKeyEnv, keyDraft.trim());
+    const effectiveAuthTokenEnv = authTokenEnv.trim() || `${apiKeyEnvFromProviderName(name).replace(/_API_KEY$/, "")}_AUTH_TOKEN`;
+    const credentialEnv = authType === "api_key" ? effectiveApiKeyEnv : effectiveAuthTokenEnv;
+    if (keyDraft.trim()) await app.SetProviderKey(credentialEnv, keyDraft.trim());
     onSave({
       name: name.trim(),
       builtIn: initial?.builtIn ?? false,
@@ -1778,6 +1846,16 @@ function ProviderEditor({
       models: ms,
       default: ms[0] ?? "",
       apiKeyEnv: effectiveApiKeyEnv,
+      authType,
+      authTokenEnv: authType === "api_key" ? "" : effectiveAuthTokenEnv,
+      authHeader: authHeader.trim(),
+      authScheme: authScheme.trim(),
+      identityEnv: identityEnv.trim(),
+      identityFile: identityFile.trim(),
+      federationRuleId: federationRuleId.trim(),
+      organizationId: organizationId.trim(),
+      serviceAccountId: serviceAccountId.trim(),
+      workspaceId: workspaceId.trim(),
       modelsUrl,
       keySet: Boolean(keyDraft.trim()) || (initial?.keySet ?? false),
       balanceUrl: balanceUrl.trim(),
@@ -1791,7 +1869,7 @@ function ProviderEditor({
   };
 
   if (builtIn) {
-    const keyEnv = initial?.apiKeyEnv.trim() ?? "";
+    const keyEnv = (initial?.authType === "api_key" ? initial?.apiKeyEnv : initial?.authTokenEnv || initial?.identityEnv || initial?.apiKeyEnv)?.trim() ?? "";
     return (
       <div className="provider-editor provider-editor--builtin provider-editor--key-only">
         {initial && onSaveKey && keyEnv && (
@@ -1825,9 +1903,10 @@ function ProviderEditor({
     .split(",")
     .map((m) => m.trim())
     .filter(Boolean);
-  const canFetch = Boolean(name.trim() && baseUrl.trim() && (keyDraft.trim() || apiKeyEnv.trim()));
+  const credentialEnv = authType === "api_key" ? apiKeyEnv : authTokenEnv;
+  const canFetch = Boolean(name.trim() && baseUrl.trim() && (keyDraft.trim() || credentialEnv.trim()));
 
-  const protocolField = initial ? (
+  const protocolField = (
     <select className="mem-select" value={kind} onChange={(e) => setKind(e.target.value)}>
       {kindOptions.map((k) => (
         <option key={k} value={k}>
@@ -1835,11 +1914,6 @@ function ProviderEditor({
         </option>
       ))}
     </select>
-  ) : (
-    <div className="provider-readonly-field provider-readonly-field--stacked" aria-readonly="true">
-      <strong>{t("settings.providerProtocolOpenAI")}</strong>
-      <span>{t("settings.providerProtocolOpenAIHint")}</span>
-    </div>
   );
 
   const advancedFields = (
@@ -1854,6 +1928,52 @@ function ProviderEditor({
           onChange={(e) => setApiKeyEnv(e.target.value)}
         />
         <div className="mem-hint">{t("settings.providerApiKeyEnvHint")}</div>
+        <label className="set-label">{t("settings.authType")}</label>
+        <select className="mem-select" value={authType} onChange={(e) => setAuthType(normalizeAuthType(e.target.value))}>
+          {AUTH_TYPES.map((typ) => (
+            <option key={typ} value={typ}>
+              {authTypeLabel(typ, t)}
+            </option>
+          ))}
+        </select>
+        <div className="mem-hint">{t("settings.authTypeHint")}</div>
+        {authType !== "api_key" && (
+          <>
+            <label className="set-label">{t("settings.authTokenEnv")}</label>
+            <input
+              className="mem-input"
+              placeholder={`${apiKeyEnvFromProviderName(name).replace(/_API_KEY$/, "")}_AUTH_TOKEN`}
+              value={authTokenEnv}
+              onChange={(e) => setAuthTokenEnv(e.target.value)}
+            />
+            <div className="mem-hint">{t("settings.authTokenEnvHint")}</div>
+          </>
+        )}
+        {authType === "workload_identity" && (
+          <>
+            <label className="set-label">{t("settings.identityEnv")}</label>
+            <input className="mem-input" placeholder="ANTHROPIC_IDENTITY_TOKEN" value={identityEnv} onChange={(e) => setIdentityEnv(e.target.value)} />
+            <div className="mem-hint">{t("settings.identityEnvHint")}</div>
+            <label className="set-label">{t("settings.identityFile")}</label>
+            <input className="mem-input" placeholder="/var/run/secrets/anthropic.com/token" value={identityFile} onChange={(e) => setIdentityFile(e.target.value)} />
+            <label className="set-label">{t("settings.federationRuleId")}</label>
+            <input className="mem-input" placeholder="fdrl_..." value={federationRuleId} onChange={(e) => setFederationRuleId(e.target.value)} />
+            <label className="set-label">{t("settings.organizationId")}</label>
+            <input className="mem-input" placeholder="00000000-0000-0000-0000-000000000000" value={organizationId} onChange={(e) => setOrganizationId(e.target.value)} />
+            <label className="set-label">{t("settings.serviceAccountId")}</label>
+            <input className="mem-input" placeholder="svac_..." value={serviceAccountId} onChange={(e) => setServiceAccountId(e.target.value)} />
+            <label className="set-label">{t("settings.workspaceId")}</label>
+            <input className="mem-input" placeholder="wrkspc_..." value={workspaceId} onChange={(e) => setWorkspaceId(e.target.value)} />
+          </>
+        )}
+        {(authType === "bearer" || authType === "workload_identity") && (
+          <>
+            <label className="set-label">{t("settings.authHeader")}</label>
+            <input className="mem-input" placeholder="Authorization" value={authHeader} onChange={(e) => setAuthHeader(e.target.value)} />
+            <label className="set-label">{t("settings.authScheme")}</label>
+            <input className="mem-input" placeholder="Bearer" value={authScheme} onChange={(e) => setAuthScheme(e.target.value)} />
+          </>
+        )}
         <label className="set-label">{t("settings.providerBalanceUrl")}</label>
         <input className="mem-input" placeholder={t("settings.balanceUrlPlaceholder")} value={balanceUrl} onChange={(e) => setBalanceUrl(e.target.value)} />
         <div className="mem-hint">{t("settings.balanceUrlHint")}</div>
@@ -1968,11 +2088,11 @@ function ProviderEditor({
           />
         </>
       )}
-      {initial && onSaveKey && apiKeyEnv.trim() && (
+      {initial && onSaveKey && credentialEnv.trim() && (
         <>
           <label className="set-label">{t("settings.providerKey")}</label>
           <KeyField
-            apiKeyEnv={apiKeyEnv.trim()}
+            apiKeyEnv={credentialEnv.trim()}
             busy={busy || fetchingModels}
             keySet={initial.keySet}
             onSet={(env, value) => onSaveKey(env, value)}

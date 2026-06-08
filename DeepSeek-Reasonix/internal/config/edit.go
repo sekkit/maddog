@@ -11,6 +11,7 @@ import (
 	"reasonix/internal/mcpdiag"
 	"reasonix/internal/netclient"
 	"reasonix/internal/permission"
+	"reasonix/internal/provider"
 )
 
 // edit.go is the programmatic mutation surface a settings UI drives: change the
@@ -325,6 +326,7 @@ func (c *Config) providerRemovalFallback(name string) string {
 
 // validateProvider checks the fields a provider can't function without.
 func validateProvider(e ProviderEntry) error {
+	authType := e.NormalizedAuthType()
 	switch {
 	case strings.TrimSpace(e.Name) == "":
 		return fmt.Errorf("provider: name is required")
@@ -334,6 +336,12 @@ func validateProvider(e ProviderEntry) error {
 		return fmt.Errorf("provider %q: base_url is required", e.Name)
 	case !providerHasAnyModel(e):
 		return fmt.Errorf("provider %q: model is required", e.Name)
+	case authType != provider.AuthTypeAPIKey && authType != provider.AuthTypeBearer && authType != provider.AuthTypeWorkloadIdentity:
+		return fmt.Errorf("provider %q: auth_type must be api_key|bearer|workload_identity", e.Name)
+	case authType == provider.AuthTypeBearer && strings.TrimSpace(e.AuthTokenEnv) == "" && strings.TrimSpace(e.APIKeyEnv) == "":
+		return fmt.Errorf("provider %q: auth_token_env is required for bearer auth", e.Name)
+	case authType == provider.AuthTypeWorkloadIdentity && strings.TrimSpace(e.AuthTokenEnv) == "" && strings.TrimSpace(e.IdentityEnv) == "" && strings.TrimSpace(e.IdentityFile) == "":
+		return fmt.Errorf("provider %q: auth_token_env or identity_env is required for workload identity auth", e.Name)
 	}
 	return nil
 }

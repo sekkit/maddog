@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"reasonix/internal/netclient"
 	"reasonix/internal/provider"
 )
 
@@ -148,6 +149,129 @@ func TestStreamSetsAdvisorBetaHeader(t *testing.T) {
 	}
 	if !sawBeta {
 		t.Fatal("anthropic-beta header should enable advisor tool beta")
+	}
+}
+
+func TestStreamUsesAPIKeyAuthByDefault(t *testing.T) {
+	var gotAPIKey, gotBearer string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAPIKey = r.Header.Get("x-api-key")
+		gotBearer = r.Header.Get("Authorization")
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n")
+	}))
+	defer srv.Close()
+
+	c := &client{name: "anthropic", model: "claude-sonnet-4-6", baseURL: srv.URL, apiKey: "api-key", http: srv.Client()}
+	ch, err := c.Stream(context.Background(), provider.Request{Messages: []provider.Message{{Role: provider.RoleUser, Content: "hi"}}})
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	for range ch {
+	}
+	if gotAPIKey != "api-key" {
+		t.Fatalf("x-api-key = %q, want api-key", gotAPIKey)
+	}
+	if gotBearer != "" {
+		t.Fatalf("Authorization = %q, want empty for API key auth", gotBearer)
+	}
+}
+
+func TestStreamUsesBearerTokenAuth(t *testing.T) {
+	var gotAPIKey, gotBearer string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAPIKey = r.Header.Get("x-api-key")
+		gotBearer = r.Header.Get("Authorization")
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n")
+	}))
+	defer srv.Close()
+
+	p, err := New(provider.Config{
+		Name:    "anthropic-wif",
+		BaseURL: srv.URL,
+		Model:   "claude-opus-4-8",
+		Extra: map[string]any{
+			"proxy_spec":     netclient.ProxySpec{Mode: netclient.ModeOff},
+			"auth_type":      "workload_identity",
+			"auth_token":     "short-lived-token",
+			"auth_token_env": "ANTHROPIC_AUTH_TOKEN",
+		},
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	ch, err := p.Stream(context.Background(), provider.Request{Messages: []provider.Message{{Role: provider.RoleUser, Content: "hi"}}})
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	for range ch {
+	}
+	if gotBearer != "Bearer short-lived-token" {
+		t.Fatalf("Authorization = %q, want bearer token", gotBearer)
+	}
+	if gotAPIKey != "" {
+		t.Fatalf("x-api-key = %q, want empty for bearer auth", gotAPIKey)
+	}
+}
+
+func TestStreamExchangesWorkloadIdentityToken(t *testing.T) {
+	var sawExchange bool
+	var gotBearer string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/oauth/token":
+			sawExchange = true
+			var body map[string]string
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Fatalf("decode token exchange: %v", err)
+			}
+			if body["grant_type"] != "urn:ietf:params:oauth:grant-type:jwt-bearer" ||
+				body["assertion"] != "oidc-jwt" ||
+				body["federation_rule_id"] != "fdrl_test" ||
+				body["organization_id"] != "org-test" ||
+				body["service_account_id"] != "svac_test" {
+				t.Fatalf("exchange body = %+v", body)
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, `{"access_token":"minted-token","token_type":"bearer","expires_in":3600}`)
+		case "/v1/messages":
+			gotBearer = r.Header.Get("Authorization")
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = io.WriteString(w, "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n")
+		default:
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	p, err := New(provider.Config{
+		Name:    "anthropic-wif",
+		BaseURL: srv.URL,
+		Model:   "claude-opus-4-8",
+		Extra: map[string]any{
+			"proxy_spec":         netclient.ProxySpec{Mode: netclient.ModeOff},
+			"auth_type":          "workload_identity",
+			"identity_token":     "oidc-jwt",
+			"federation_rule_id": "fdrl_test",
+			"organization_id":    "org-test",
+			"service_account_id": "svac_test",
+		},
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	ch, err := p.Stream(context.Background(), provider.Request{Messages: []provider.Message{{Role: provider.RoleUser, Content: "hi"}}})
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	for range ch {
+	}
+	if !sawExchange {
+		t.Fatal("expected WIF token exchange")
+	}
+	if gotBearer != "Bearer minted-token" {
+		t.Fatalf("Authorization = %q, want minted token", gotBearer)
 	}
 }
 

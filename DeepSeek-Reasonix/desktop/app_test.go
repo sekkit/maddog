@@ -708,6 +708,47 @@ func TestSaveProviderPersistsReasoningProtocol(t *testing.T) {
 	t.Fatalf("Settings() missing saved provider: %+v", view.Providers)
 }
 
+func TestSaveProviderPersistsAuthMode(t *testing.T) {
+	isolateDesktopUserDirs(t)
+	t.Setenv("ANTHROPIC_AUTH_TOKEN", "token")
+
+	app := NewApp()
+	if err := app.SaveProvider(ProviderView{
+		Name:         "claude-wif",
+		Kind:         "anthropic",
+		BaseURL:      "https://api.anthropic.com",
+		Models:       []string{"claude-opus-4-8"},
+		Default:      "claude-opus-4-8",
+		AuthType:     "workload_identity",
+		AuthTokenEnv: "ANTHROPIC_AUTH_TOKEN",
+	}); err != nil {
+		t.Fatalf("SaveProvider: %v", err)
+	}
+
+	cfg := config.LoadForEdit(config.UserConfigPath())
+	got, ok := cfg.Provider("claude-wif")
+	if !ok {
+		t.Fatal("saved provider not found")
+	}
+	if got.AuthType != "workload_identity" || got.AuthTokenEnv != "ANTHROPIC_AUTH_TOKEN" {
+		t.Fatalf("saved provider auth = type %q token env %q", got.AuthType, got.AuthTokenEnv)
+	}
+	if !got.Configured() {
+		t.Fatal("saved provider should be configured from auth_token_env")
+	}
+
+	view := app.Settings()
+	for _, p := range view.Providers {
+		if p.Name == "claude-wif" {
+			if p.AuthType != "workload_identity" || p.AuthTokenEnv != "ANTHROPIC_AUTH_TOKEN" || !p.KeySet {
+				t.Fatalf("settings provider auth = %+v", p)
+			}
+			return
+		}
+	}
+	t.Fatalf("Settings() missing saved provider: %+v", view.Providers)
+}
+
 func TestDeleteProviderMigratesConfigAndOpenTabs(t *testing.T) {
 	isolateDesktopUserDirs(t)
 	t.Setenv("REASONIX_TEST_KEY", "sk-test")

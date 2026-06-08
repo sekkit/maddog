@@ -128,6 +128,40 @@ func TestStreamAuthError(t *testing.T) {
 	}
 }
 
+func TestStreamUsesBearerTokenAuthEnv(t *testing.T) {
+	var gotAuth string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\n")
+		_, _ = io.WriteString(w, "data: [DONE]\n\n")
+	}))
+	defer srv.Close()
+
+	p, err := New(testProviderConfig("openai", srv.URL, "gpt-5", "", map[string]any{
+		"auth_type":      "bearer",
+		"auth_token":     "oauth-access-token",
+		"auth_token_env": "OPENAI_ACCESS_TOKEN",
+		"auth_header":    "Authorization",
+	}))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	ch, err := p.Stream(context.Background(), provider.Request{Messages: []provider.Message{{Role: provider.RoleUser, Content: "hi"}}})
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	for ck := range ch {
+		if ck.Type == provider.ChunkError {
+			t.Fatalf("stream error: %v", ck.Err)
+		}
+	}
+	if gotAuth != "Bearer oauth-access-token" {
+		t.Fatalf("Authorization = %q, want bearer token", gotAuth)
+	}
+}
+
 // TestBuildRequestAlwaysSerializesContent guards the DeepSeek 400 regression:
 // an assistant turn that is pure tool_calls (no preamble text) has empty
 // content, and DeepSeek rejects a message missing the `content` field. Every

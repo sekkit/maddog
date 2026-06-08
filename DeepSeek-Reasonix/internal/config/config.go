@@ -506,6 +506,16 @@ type ProviderEntry struct {
 	ModelsURL     string            `toml:"models_url"` // auto-fetch models from this URL on startup
 	Default       string            `toml:"default"`    // default model when Models is set (else Models[0])
 	APIKeyEnv     string            `toml:"api_key_env"`
+	AuthType      string            `toml:"auth_type"`      // api_key (default), bearer, or workload_identity
+	AuthTokenEnv  string            `toml:"auth_token_env"` // bearer/access-token env var; API key auth falls back to api_key_env
+	AuthHeader    string            `toml:"auth_header"`    // optional override; defaults to provider-specific header
+	AuthScheme    string            `toml:"auth_scheme"`    // optional override; bearer modes default to Bearer
+	IdentityEnv   string            `toml:"identity_env"`   // WIF OIDC/JWT assertion env var
+	IdentityFile  string            `toml:"identity_file"`  // WIF OIDC/JWT assertion file
+	FederationID  string            `toml:"federation_rule_id"`
+	Organization  string            `toml:"organization_id"`
+	ServiceAcctID string            `toml:"service_account_id"`
+	WorkspaceID   string            `toml:"workspace_id"`
 	BalanceURL    string            `toml:"balance_url"` // optional; a provider-specific wallet-balance endpoint (DeepSeek: https://api.deepseek.com/user/balance). Empty = no balance readout.
 	ContextWindow int               `toml:"context_window"`
 	Price         *provider.Pricing `toml:"price"`
@@ -1317,6 +1327,16 @@ func officialProviderFromLegacy(entry ProviderEntry, old *ProviderEntry) Provide
 	entry.BaseURL = old.BaseURL
 	entry.ModelsURL = old.ModelsURL
 	entry.APIKeyEnv = old.APIKeyEnv
+	entry.AuthType = old.AuthType
+	entry.AuthTokenEnv = old.AuthTokenEnv
+	entry.AuthHeader = old.AuthHeader
+	entry.AuthScheme = old.AuthScheme
+	entry.IdentityEnv = old.IdentityEnv
+	entry.IdentityFile = old.IdentityFile
+	entry.FederationID = old.FederationID
+	entry.Organization = old.Organization
+	entry.ServiceAcctID = old.ServiceAcctID
+	entry.WorkspaceID = old.WorkspaceID
 	entry.BalanceURL = old.BalanceURL
 	entry.ContextWindow = old.ContextWindow
 	entry.Price = old.Price
@@ -1648,6 +1668,78 @@ func (c *Config) ResolveModelWithFallback(ref string) (resolvedRef string, fallb
 	return "", false, false
 }
 
+// NormalizedAuthType reports the configured auth mode. Empty preserves the
+// historical API-key behavior.
+func (e *ProviderEntry) NormalizedAuthType() string {
+	return provider.AuthConfig{Type: e.AuthType}.NormalizedType()
+}
+
+// AuthEnvName returns the credential env var used by the current auth mode.
+func (e *ProviderEntry) AuthEnvName() string {
+	switch e.NormalizedAuthType() {
+	case provider.AuthTypeBearer:
+		if strings.TrimSpace(e.AuthTokenEnv) != "" {
+			return strings.TrimSpace(e.AuthTokenEnv)
+		}
+		return strings.TrimSpace(e.APIKeyEnv)
+	case provider.AuthTypeWorkloadIdentity:
+		if strings.TrimSpace(e.AuthTokenEnv) != "" {
+			return strings.TrimSpace(e.AuthTokenEnv)
+		}
+		if strings.TrimSpace(e.IdentityEnv) != "" {
+			return strings.TrimSpace(e.IdentityEnv)
+		}
+		return strings.TrimSpace(e.APIKeyEnv)
+	default:
+		return strings.TrimSpace(e.APIKeyEnv)
+	}
+}
+
+// AuthToken resolves the entry's request token from env. API key auth reads
+// api_key_env; bearer auth reads auth_token_env with api_key_env as a legacy
+// fallback; workload identity reads a pre-minted access token when present.
+func (e *ProviderEntry) AuthToken() string {
+	env := e.AuthEnvName()
+	if env == "" {
+		return ""
+	}
+	return os.Getenv(env)
+}
+
+// IdentityToken resolves an OIDC/JWT assertion for Anthropic workload identity.
+func (e *ProviderEntry) IdentityToken() string {
+	if env := strings.TrimSpace(e.IdentityEnv); env != "" {
+		if v := strings.TrimSpace(os.Getenv(env)); v != "" {
+			return v
+		}
+	}
+	if path := strings.TrimSpace(e.IdentityFile); path != "" {
+		if b, err := os.ReadFile(path); err == nil {
+			return strings.TrimSpace(string(b))
+		}
+	}
+	return ""
+}
+
+// AuthConfig returns the provider-layer authentication contract for this entry.
+func (e *ProviderEntry) AuthConfig() provider.AuthConfig {
+	return provider.AuthConfig{
+		Type:          e.AuthType,
+		Token:         e.AuthToken(),
+		TokenEnv:      e.AuthEnvName(),
+		HeaderName:    e.AuthHeader,
+		HeaderScheme:  e.AuthScheme,
+		IdentityToken: e.IdentityToken(),
+		IdentityEnv:   strings.TrimSpace(e.IdentityEnv),
+		Extra: map[string]string{
+			"federation_rule_id": strings.TrimSpace(e.FederationID),
+			"organization_id":    strings.TrimSpace(e.Organization),
+			"service_account_id": strings.TrimSpace(e.ServiceAcctID),
+			"workspace_id":       strings.TrimSpace(e.WorkspaceID),
+		},
+	}
+}
+
 // APIKey resolves the entry's API key from its api_key_env.
 func (e *ProviderEntry) APIKey() string {
 	if e.APIKeyEnv == "" {
@@ -1656,10 +1748,13 @@ func (e *ProviderEntry) APIKey() string {
 	return os.Getenv(e.APIKeyEnv)
 }
 
-// Configured reports whether the provider's api_key_env is set — the same check
-// Validate enforces, so pickers can filter on it.
+// Configured reports whether the provider's configured auth material is
+// present — the same check Validate enforces, so pickers can filter on it.
 func (e *ProviderEntry) Configured() bool {
-	return e.APIKey() != ""
+	if e.AuthToken() != "" {
+		return true
+	}
+	return e.NormalizedAuthType() == provider.AuthTypeWorkloadIdentity && e.IdentityToken() != ""
 }
 
 // ResolveSystemPrompt returns the system prompt, reading system_prompt_file if set.
@@ -1689,8 +1784,11 @@ func (c *Config) Validate(model string) error {
 	if e.BaseURL == "" {
 		return fmt.Errorf("provider %q: base_url is required", model)
 	}
-	if e.APIKey() == "" {
-		return fmt.Errorf("provider %q: missing env %s", model, e.APIKeyEnv)
+	if !e.Configured() {
+		if env := e.AuthEnvName(); env != "" {
+			return fmt.Errorf("provider %q: missing env %s", model, env)
+		}
+		return fmt.Errorf("provider %q: missing auth material", model)
 	}
 	return nil
 }

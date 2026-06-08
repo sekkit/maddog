@@ -22,9 +22,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"sync"
+	"time"
 
 	"reasonix/internal/netclient"
 	"reasonix/internal/provider"
@@ -63,6 +65,7 @@ func New(cfg provider.Config) (provider.Provider, error) {
 		baseURL = defaultBaseURL
 	}
 	keyEnv, _ := cfg.Extra["api_key_env"].(string) // for actionable auth errors
+	auth := provider.AuthConfigFromExtra(cfg.Extra, cfg.APIKey, keyEnv)
 	thinking, _ := cfg.Extra["thinking"].(string)
 	effort, _ := cfg.Extra["effort"].(string)
 	httpClient, err := newHTTPClient(cfg)
@@ -73,6 +76,7 @@ func New(cfg provider.Config) (provider.Provider, error) {
 		name:     name,
 		apiKey:   cfg.APIKey,
 		keyEnv:   keyEnv,
+		auth:     auth,
 		baseURL:  strings.TrimRight(baseURL, "/"),
 		model:    cfg.Model,
 		thinking: thinking,
@@ -90,11 +94,14 @@ type client struct {
 	name     string
 	apiKey   string
 	keyEnv   string // api_key_env name, surfaced in auth errors
+	auth     provider.AuthConfig
 	baseURL  string
 	model    string
 	thinking string // "adaptive" enables extended thinking; "" = off (config-driven)
 	effort   string // output_config.effort: low|medium|high|xhigh|max; "" = provider default
 	http     *http.Client
+	authMu   sync.Mutex
+	authExp  time.Time
 }
 
 func (c *client) Name() string { return c.name }
@@ -117,13 +124,17 @@ func (c *client) Stream(ctx context.Context, req provider.Request) (<-chan provi
 	bufPool.Put(buf)
 
 	newReq := func(ctx context.Context) (*http.Request, error) {
+		auth, err := c.requestAuth(ctx)
+		if err != nil {
+			return nil, err
+		}
 		httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/v1/messages", bytes.NewReader(body))
 		if err != nil {
 			return nil, err
 		}
 		httpReq.Header.Set("Content-Type", "application/json")
 		httpReq.Header.Set("Accept", "text/event-stream")
-		httpReq.Header.Set("x-api-key", c.apiKey)
+		auth.Header(httpReq, "x-api-key")
 		httpReq.Header.Set("anthropic-version", anthropicVersion)
 		if req.NativeAdvisor != nil {
 			httpReq.Header.Set("anthropic-beta", advisorBetaHeader)
@@ -138,6 +149,92 @@ func (c *client) Stream(ctx context.Context, req provider.Request) (<-chan provi
 	out := make(chan provider.Chunk)
 	go c.readStream(resp, out)
 	return out, nil
+}
+
+func (c *client) requestAuth(ctx context.Context) (provider.AuthConfig, error) {
+	auth := c.auth
+	if auth.Token == "" {
+		auth.Token = c.apiKey
+	}
+	if auth.TokenEnv == "" {
+		auth.TokenEnv = c.keyEnv
+	}
+	if auth.NormalizedType() != provider.AuthTypeWorkloadIdentity || auth.Token != "" {
+		return auth, nil
+	}
+	token, exp, err := c.exchangeWorkloadIdentity(ctx, auth)
+	if err != nil {
+		return auth, err
+	}
+	auth.Token = token
+	c.authMu.Lock()
+	c.auth.Token = token
+	c.authExp = exp
+	c.authMu.Unlock()
+	return auth, nil
+}
+
+func (c *client) exchangeWorkloadIdentity(ctx context.Context, auth provider.AuthConfig) (string, time.Time, error) {
+	c.authMu.Lock()
+	if c.auth.Token != "" && (c.authExp.IsZero() || time.Until(c.authExp) > time.Minute) {
+		token, exp := c.auth.Token, c.authExp
+		c.authMu.Unlock()
+		return token, exp, nil
+	}
+	c.authMu.Unlock()
+
+	assertion := strings.TrimSpace(auth.IdentityToken)
+	if assertion == "" {
+		return "", time.Time{}, fmt.Errorf("%s: workload identity auth requires identity token", c.name)
+	}
+	body := map[string]string{
+		"grant_type": "urn:ietf:params:oauth:grant-type:jwt-bearer",
+		"assertion":  assertion,
+	}
+	for _, key := range []string{"federation_rule_id", "organization_id", "service_account_id", "workspace_id"} {
+		if v := strings.TrimSpace(auth.Extra[key]); v != "" {
+			body[key] = v
+		}
+	}
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(body); err != nil {
+		return "", time.Time{}, fmt.Errorf("%s: workload identity auth: marshal token request: %w", c.name, err)
+	}
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/v1/oauth/token", &buf)
+	if err != nil {
+		return "", time.Time{}, err
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Accept", "application/json")
+	resp, err := c.http.Do(httpReq)
+	if err != nil {
+		return "", time.Time{}, fmt.Errorf("%s: workload identity auth: token exchange failed: %w", c.name, err)
+	}
+	defer resp.Body.Close()
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, 256*1024))
+	if err != nil {
+		return "", time.Time{}, fmt.Errorf("%s: workload identity auth: read token response: %w", c.name, err)
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "", time.Time{}, fmt.Errorf("%s: workload identity auth: token exchange status %d: %s", c.name, resp.StatusCode, strings.TrimSpace(string(respBody)))
+	}
+	var decoded struct {
+		AccessToken string `json:"access_token"`
+		ExpiresIn   int64  `json:"expires_in"`
+		TokenType   string `json:"token_type"`
+	}
+	if err := json.Unmarshal(respBody, &decoded); err != nil {
+		return "", time.Time{}, fmt.Errorf("%s: workload identity auth: decode token response: %w", c.name, err)
+	}
+	token := strings.TrimSpace(decoded.AccessToken)
+	if token == "" {
+		return "", time.Time{}, fmt.Errorf("%s: workload identity auth: token response missing access_token", c.name)
+	}
+	var exp time.Time
+	if decoded.ExpiresIn > 0 {
+		exp = time.Now().Add(time.Duration(decoded.ExpiresIn) * time.Second)
+	}
+	return token, exp, nil
 }
 
 // buildRequest converts the transport-agnostic Request into the Messages API shape:

@@ -223,7 +223,39 @@ func RenderTOMLForScope(c *Config, scope RenderScope) string {
 			if p.ModelsURL != "" {
 				fmt.Fprintf(&b, "models_url  = %q   # auto-fetch models from this URL on startup\n", p.ModelsURL)
 			}
-			fmt.Fprintf(&b, "api_key_env = %q\n", p.APIKeyEnv)
+			if p.APIKeyEnv != "" {
+				fmt.Fprintf(&b, "api_key_env = %q\n", p.APIKeyEnv)
+			}
+			if p.AuthType != "" {
+				fmt.Fprintf(&b, "auth_type   = %q   # api_key|bearer|workload_identity\n", p.AuthType)
+			}
+			if p.AuthTokenEnv != "" {
+				fmt.Fprintf(&b, "auth_token_env = %q\n", p.AuthTokenEnv)
+			}
+			if p.AuthHeader != "" {
+				fmt.Fprintf(&b, "auth_header = %q\n", p.AuthHeader)
+			}
+			if p.AuthScheme != "" {
+				fmt.Fprintf(&b, "auth_scheme = %q\n", p.AuthScheme)
+			}
+			if p.IdentityEnv != "" {
+				fmt.Fprintf(&b, "identity_env = %q   # workload identity JWT/OIDC assertion env var\n", p.IdentityEnv)
+			}
+			if p.IdentityFile != "" {
+				fmt.Fprintf(&b, "identity_file = %q   # workload identity JWT/OIDC assertion file\n", p.IdentityFile)
+			}
+			if p.FederationID != "" {
+				fmt.Fprintf(&b, "federation_rule_id = %q\n", p.FederationID)
+			}
+			if p.Organization != "" {
+				fmt.Fprintf(&b, "organization_id = %q\n", p.Organization)
+			}
+			if p.ServiceAcctID != "" {
+				fmt.Fprintf(&b, "service_account_id = %q\n", p.ServiceAcctID)
+			}
+			if p.WorkspaceID != "" {
+				fmt.Fprintf(&b, "workspace_id = %q\n", p.WorkspaceID)
+			}
 			if p.BalanceURL != "" {
 				fmt.Fprintf(&b, "balance_url = %q   # optional; wallet-balance endpoint shown in the status bar\n", p.BalanceURL)
 			}

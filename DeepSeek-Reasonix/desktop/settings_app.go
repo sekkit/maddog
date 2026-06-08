@@ -34,6 +34,16 @@ type ProviderView struct {
 	ModelsURL         string   `json:"modelsUrl"`
 	Default           string   `json:"default"`
 	APIKeyEnv         string   `json:"apiKeyEnv"`
+	AuthType          string   `json:"authType"`
+	AuthTokenEnv      string   `json:"authTokenEnv"`
+	AuthHeader        string   `json:"authHeader"`
+	AuthScheme        string   `json:"authScheme"`
+	IdentityEnv       string   `json:"identityEnv"`
+	IdentityFile      string   `json:"identityFile"`
+	FederationID      string   `json:"federationRuleId"`
+	Organization      string   `json:"organizationId"`
+	ServiceAcctID     string   `json:"serviceAccountId"`
+	WorkspaceID       string   `json:"workspaceId"`
 	KeySet            bool     `json:"keySet"` // the env var currently resolves to a non-empty value
 	BalanceURL        string   `json:"balanceUrl"`
 	ContextWindow     int      `json:"contextWindow"`
@@ -189,7 +199,17 @@ func providerViewFromEntry(p config.ProviderEntry, builtIn, added bool) Provider
 		Name: p.Name, BuiltIn: builtIn, Added: added, Kind: p.Kind, BaseURL: p.BaseURL,
 		Models: nonNil(p.ChatModelList()), ModelsURL: p.ModelsURL, Default: p.DefaultModel(),
 		APIKeyEnv:         p.APIKeyEnv,
-		KeySet:            p.APIKeyEnv != "" && os.Getenv(p.APIKeyEnv) != "",
+		AuthType:          p.AuthType,
+		AuthTokenEnv:      p.AuthTokenEnv,
+		AuthHeader:        p.AuthHeader,
+		AuthScheme:        p.AuthScheme,
+		IdentityEnv:       p.IdentityEnv,
+		IdentityFile:      p.IdentityFile,
+		FederationID:      p.FederationID,
+		Organization:      p.Organization,
+		ServiceAcctID:     p.ServiceAcctID,
+		WorkspaceID:       p.WorkspaceID,
+		KeySet:            p.Configured(),
 		BalanceURL:        p.BalanceURL,
 		ContextWindow:     p.ContextWindow,
 		ReasoningProtocol: p.ReasoningProtocol,
@@ -680,6 +700,16 @@ func (a *App) SaveProvider(p ProviderView) error {
 		e.BaseURL = p.BaseURL
 		e.ModelsURL = p.ModelsURL
 		e.APIKeyEnv = p.APIKeyEnv
+		e.AuthType = p.AuthType
+		e.AuthTokenEnv = p.AuthTokenEnv
+		e.AuthHeader = p.AuthHeader
+		e.AuthScheme = p.AuthScheme
+		e.IdentityEnv = p.IdentityEnv
+		e.IdentityFile = p.IdentityFile
+		e.FederationID = p.FederationID
+		e.Organization = p.Organization
+		e.ServiceAcctID = p.ServiceAcctID
+		e.WorkspaceID = p.WorkspaceID
 		e.BalanceURL = strings.TrimSpace(p.BalanceURL)
 		e.ContextWindow = p.ContextWindow
 		e.ReasoningProtocol = p.ReasoningProtocol
@@ -734,10 +764,16 @@ func (a *App) AddOfficialProviderAccess(kind, key string) error {
 // it never touches chat request serialization or provider-visible prompt data.
 func (a *App) FetchProviderModels(p ProviderView) ([]string, error) {
 	e := config.ProviderEntry{
-		Name:      p.Name,
-		BaseURL:   p.BaseURL,
-		ModelsURL: p.ModelsURL,
-		APIKeyEnv: p.APIKeyEnv,
+		Name:         p.Name,
+		BaseURL:      p.BaseURL,
+		ModelsURL:    p.ModelsURL,
+		APIKeyEnv:    p.APIKeyEnv,
+		AuthType:     p.AuthType,
+		AuthTokenEnv: p.AuthTokenEnv,
+		AuthHeader:   p.AuthHeader,
+		AuthScheme:   p.AuthScheme,
+		IdentityEnv:  p.IdentityEnv,
+		IdentityFile: p.IdentityFile,
 	}
 	ctx, cancel := context.WithTimeout(a.reqCtx(), 15*time.Second)
 	defer cancel()

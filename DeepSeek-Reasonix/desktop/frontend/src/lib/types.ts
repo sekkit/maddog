@@ -482,6 +482,16 @@ export interface ProviderView {
   modelsUrl: string; // optional override for model discovery; empty derives from baseUrl
   default: string;
   apiKeyEnv: string;
+  authType: string; // api_key|bearer|workload_identity; empty = api_key
+  authTokenEnv: string;
+  authHeader: string;
+  authScheme: string;
+  identityEnv: string;
+  identityFile: string;
+  federationRuleId: string;
+  organizationId: string;
+  serviceAccountId: string;
+  workspaceId: string;
   keySet: boolean; // the env var currently resolves to a value
   balanceUrl: string; // optional wallet-balance endpoint; "" disables the readout
   contextWindow: number;

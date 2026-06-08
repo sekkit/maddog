@@ -148,8 +148,8 @@ func Build(ctx context.Context, opts Options) (*control.Controller, error) {
 	// A resolvable model whose API key env is unset would otherwise build fine
 	// (RequireKey is false so the UI stays reachable) and then fail silently on the
 	// first request, showing as an empty/dead model. Surface the cause up front.
-	if !opts.RequireKey && entry.APIKeyEnv != "" && entry.APIKey() == "" {
-		sink.Emit(event.Event{Kind: event.Notice, Text: fmt.Sprintf("model %q is selected but its API key %s is not set — requests will fail until you set it", modelName, entry.APIKeyEnv)})
+	if !opts.RequireKey && entry.AuthEnvName() != "" && !entry.Configured() {
+		sink.Emit(event.Event{Kind: event.Notice, Text: fmt.Sprintf("model %q is selected but its auth env %s is not set — requests will fail until you set it", modelName, entry.AuthEnvName())})
 	}
 	jm := jobs.NewManager(sink)
 
@@ -178,9 +178,9 @@ func Build(ctx context.Context, opts Options) (*control.Controller, error) {
 		if !ok {
 			sink.Emit(event.Event{Kind: event.Notice, Level: event.LevelWarn,
 				Text: fmt.Sprintf("frontier_model %q is not configured — automatic upgrade disabled", cfg.Agent.FrontierModel)})
-		} else if frontierEntry.APIKeyEnv != "" && frontierEntry.APIKey() == "" {
+		} else if frontierEntry.AuthEnvName() != "" && !frontierEntry.Configured() {
 			sink.Emit(event.Event{Kind: event.Notice, Level: event.LevelWarn,
-				Text: fmt.Sprintf("frontier_model %q selected but %s is not set — automatic upgrade disabled", cfg.Agent.FrontierModel, frontierEntry.APIKeyEnv)})
+				Text: fmt.Sprintf("frontier_model %q selected but %s is not set — automatic upgrade disabled", cfg.Agent.FrontierModel, frontierEntry.AuthEnvName())})
 		} else {
 			fp, ferr := NewProviderWithProxy(frontierEntry, proxySpec)
 			if ferr != nil {
@@ -926,12 +926,13 @@ func NewProviderWithProxy(e *config.ProviderEntry, proxy netclient.ProxySpec) (p
 		Name:    e.Name,
 		BaseURL: e.BaseURL,
 		Model:   e.Model,
-		APIKey:  e.APIKey(),
+		APIKey:  e.AuthToken(),
 		// Pass the key's env var so auth failures can name where to fix it, plus
 		// provider-kind-specific knobs. EffectiveEffort applies a configured
 		// default_effort when the user has not explicitly selected /effort.
 		Extra: map[string]any{
-			"api_key_env":        e.APIKeyEnv,
+			"api_key_env":        e.AuthEnvName(),
+			"auth":               e.AuthConfig(),
 			"thinking":           e.Thinking,
 			"effort":             config.EffectiveEffort(e),
 			"reasoning_protocol": config.ReasoningProtocolForEntry(e),

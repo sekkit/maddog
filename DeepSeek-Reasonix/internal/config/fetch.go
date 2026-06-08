@@ -27,9 +27,9 @@ func (e *ProviderEntry) FetchModels(ctx context.Context) ([]string, error) {
 	if e.BaseURL == "" {
 		return nil, fmt.Errorf("fetch models: provider %q has no base_url", e.Name)
 	}
-	key := e.APIKey()
+	key := e.AuthToken()
 	if key == "" {
-		return nil, fmt.Errorf("fetch models: provider %q has no API key (set %s in .env)", e.Name, e.APIKeyEnv)
+		return nil, fmt.Errorf("fetch models: provider %q has no auth token (set %s in .env)", e.Name, e.AuthEnvName())
 	}
 	candidates, err := BuildModelFetchURLs(e.BaseURL, e.ModelsURL)
 	if err != nil {
