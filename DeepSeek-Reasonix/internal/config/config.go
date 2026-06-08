@@ -458,19 +458,25 @@ func (c *Config) BashMode() string {
 // each model's prompt prefix stays cache-stable). SubagentModel is the optional
 // default for runAs=subagent skills; SubagentModels overrides it per skill name.
 type AgentConfig struct {
-	SystemPrompt     string            `toml:"system_prompt"`
-	SystemPromptFile string            `toml:"system_prompt_file"`
-	MaxSteps         int               `toml:"max_steps"` // tool-call rounds per turn; 0 = unlimited
-	Temperature      float64           `toml:"temperature"`
-	PlannerModel     string            `toml:"planner_model"`
-	SubagentModel    string            `toml:"subagent_model"`
-	SubagentModels   map[string]string `toml:"subagent_models"`
-	SubagentEffort   string            `toml:"subagent_effort"`
-	SubagentEfforts  map[string]string `toml:"subagent_efforts"`
-	FrontierModel    string            `toml:"frontier_model"`
-	UpgradeThreshold int               `toml:"upgrade_threshold"`
-	FrontierBudget   int64             `toml:"frontier_budget"`
-	UpgradeEnabled   bool              `toml:"upgrade_enabled"`
+	SystemPrompt              string            `toml:"system_prompt"`
+	SystemPromptFile          string            `toml:"system_prompt_file"`
+	MaxSteps                  int               `toml:"max_steps"` // tool-call rounds per turn; 0 = unlimited
+	Temperature               float64           `toml:"temperature"`
+	PlannerModel              string            `toml:"planner_model"`
+	SubagentModel             string            `toml:"subagent_model"`
+	SubagentModels            map[string]string `toml:"subagent_models"`
+	SubagentEffort            string            `toml:"subagent_effort"`
+	SubagentEfforts           map[string]string `toml:"subagent_efforts"`
+	FrontierModel             string            `toml:"frontier_model"`
+	UpgradeThreshold          int               `toml:"upgrade_threshold"`
+	FrontierBudget            int64             `toml:"frontier_budget"`
+	UpgradeEnabled            bool              `toml:"upgrade_enabled"`
+	AdvisorMaxUsesPerTurn     int               `toml:"advisor_max_uses_per_turn"`
+	AdvisorMaxUsesPerSession  int               `toml:"advisor_max_uses_per_session"`
+	AdvisorMaxContextMessages int               `toml:"advisor_max_context_messages"`
+	AdvisorMaxContextChars    int               `toml:"advisor_max_context_chars"`
+	AdvisorNativeEnabled      bool              `toml:"advisor_native_enabled"`
+	AdvisorNativeMaxTokens    int               `toml:"advisor_native_max_tokens"`
 	// OutputStyle selects a persona/tone block folded into the system prompt at
 	// startup (a built-in like "explanatory"/"learning"/"concise", or a custom
 	// .reasonix/output-styles/<name>.md). Empty = the unmodified prompt.
@@ -779,14 +785,20 @@ func Default() *Config {
 			// the user cancels, or the provider errors. Context stays bounded by
 			// compaction, not by a round count. Set a positive agent.max_steps only
 			// if you want a hard guard against runaway.
-			MaxSteps:          0,
-			AutoPlan:          "off",
-			UpgradeEnabled:    true,
-			UpgradeThreshold:  3,
-			FrontierBudget:    500000,
-			SoftCompactRatio:  0.5,
-			CompactRatio:      0.8,
-			CompactForceRatio: 0.9,
+			MaxSteps:                  0,
+			AutoPlan:                  "off",
+			UpgradeEnabled:            true,
+			UpgradeThreshold:          3,
+			FrontierBudget:            500000,
+			AdvisorMaxUsesPerTurn:     1,
+			AdvisorMaxUsesPerSession:  10,
+			AdvisorMaxContextMessages: 12,
+			AdvisorMaxContextChars:    12000,
+			AdvisorNativeEnabled:      false,
+			AdvisorNativeMaxTokens:    1024,
+			SoftCompactRatio:          0.5,
+			CompactRatio:              0.8,
+			CompactForceRatio:         0.9,
 		},
 		Skills: SkillsConfig{
 			RuntimeOrchestration: true,

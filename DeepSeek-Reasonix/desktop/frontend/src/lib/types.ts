@@ -22,7 +22,8 @@ export type EventKind =
   | "upgrade"
   | "skill_generated"
   | "budget_exceeded"
-  | "skill_promoted";
+  | "skill_promoted"
+  | "advisor";
 
 export interface WireCompaction {
   trigger?: string; // "auto" | "manual"
@@ -67,6 +68,18 @@ export interface WireUsage {
   costUsd?: number;
 }
 
+export interface WireAdvisor {
+  reason?: string;
+  question?: string;
+  advice?: string;
+  usesThisTurn?: number;
+  usesThisSession?: number;
+  remainingThisTurn?: number;
+  remainingThisSession?: number;
+  maxUsesPerTurn?: number;
+  maxUsesPerSession?: number;
+}
+
 export interface WireApproval {
   id: string;
   tool: string;
@@ -104,6 +117,7 @@ export interface WireEvent {
   level?: "info" | "warn";
   tool?: WireTool;
   usage?: WireUsage;
+  advisor?: WireAdvisor;
   approval?: WireApproval;
   ask?: WireAsk;
   compaction?: WireCompaction;

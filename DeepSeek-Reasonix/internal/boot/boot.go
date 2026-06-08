@@ -170,6 +170,7 @@ func Build(ctx context.Context, opts Options) (*control.Controller, error) {
 	var frontierPricing *provider.Pricing
 	var frontierContextWindow int
 	var frontierTarget string
+	var frontierEntryForAdvisor *config.ProviderEntry
 	var upgradePolicy agent.UpgradePolicy
 	var frontierTokens atomic.Int64
 	if cfg.Agent.UpgradeEnabled && strings.TrimSpace(cfg.Agent.FrontierModel) != "" && cfg.Agent.UpgradeThreshold > 0 {
@@ -190,6 +191,7 @@ func Build(ctx context.Context, opts Options) (*control.Controller, error) {
 				frontierPricing = frontierEntry.Price
 				frontierContextWindow = frontierEntry.ContextWindow
 				frontierTarget = cfg.Agent.FrontierModel
+				frontierEntryForAdvisor = frontierEntry
 				upgradePolicy = agent.ThresholdUpgradePolicy{
 					Threshold:   cfg.Agent.UpgradeThreshold,
 					BudgetLimit: cfg.Agent.FrontierBudget,
@@ -562,6 +564,24 @@ func Build(ctx context.Context, opts Options) (*control.Controller, error) {
 		}
 		return &event.Profile{Model: model, Effort: effort}
 	}
+	var advisorRunner agent.AdvisorRunner
+	if cfg.Agent.AdvisorMaxUsesPerTurn > 0 && frontierProv != nil {
+		advisorRunner = func(sctx context.Context, req agent.AdvisorRequest) (string, error) {
+			sk, ok := skillStore.Read("advisor")
+			if !ok {
+				return "", fmt.Errorf("advisor skill is not available")
+			}
+			return skillRunner(sctx, sk, agent.FormatAdvisorTask(req))
+		}
+	}
+	var nativeAdvisor *provider.NativeAdvisorConfig
+	if cfg.Agent.AdvisorNativeEnabled && entry.Kind == "anthropic" && frontierEntryForAdvisor != nil && frontierEntryForAdvisor.Kind == "anthropic" {
+		nativeAdvisor = &provider.NativeAdvisorConfig{
+			Model:     frontierEntryForAdvisor.Model,
+			MaxUses:   cfg.Agent.AdvisorMaxUsesPerTurn,
+			MaxTokens: cfg.Agent.AdvisorNativeMaxTokens,
+		}
+	}
 	reg.Add(skill.NewRunSkillTool(skillStore, skillRunner, skillProfile))
 	reg.Add(skill.NewInstallSkillTool(skillStore, nil))
 	reg.Add(installsource.NewTool(installsource.Options{
@@ -623,15 +643,23 @@ func Build(ctx context.Context, opts Options) (*control.Controller, error) {
 		FrontierPricing:       frontierPricing,
 		FrontierContextWindow: frontierContextWindow,
 		FrontierTarget:        frontierTarget,
-		Gate:                  headlessGate,
-		Hooks:                 hookRunner,
-		Jobs:                  jm,
-		ProjectChecks:         projectChecks,
-		ContextWindow:         entry.ContextWindow,
-		SoftCompactRatio:      cfg.Agent.SoftCompactRatio,
-		CompactRatio:          cfg.Agent.CompactRatio,
-		CompactForceRatio:     cfg.Agent.CompactForceRatio,
-		ArchiveDir:            archiveDir,
+		Advisor: agent.AdvisorConfig{
+			MaxUsesPerTurn:     cfg.Agent.AdvisorMaxUsesPerTurn,
+			MaxUsesPerSession:  cfg.Agent.AdvisorMaxUsesPerSession,
+			MaxContextMessages: cfg.Agent.AdvisorMaxContextMessages,
+			MaxContextChars:    cfg.Agent.AdvisorMaxContextChars,
+		},
+		AdvisorRunner:     advisorRunner,
+		NativeAdvisor:     nativeAdvisor,
+		Gate:              headlessGate,
+		Hooks:             hookRunner,
+		Jobs:              jm,
+		ProjectChecks:     projectChecks,
+		ContextWindow:     entry.ContextWindow,
+		SoftCompactRatio:  cfg.Agent.SoftCompactRatio,
+		CompactRatio:      cfg.Agent.CompactRatio,
+		CompactForceRatio: cfg.Agent.CompactForceRatio,
+		ArchiveDir:        archiveDir,
 	}, sink)
 
 	// Custom slash commands (.reasonix/commands + user dir). Best-effort: a malformed

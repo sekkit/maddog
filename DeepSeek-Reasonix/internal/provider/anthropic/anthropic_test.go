@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -94,6 +95,59 @@ func TestBuildRequestNoSystem(t *testing.T) {
 	// A tool with no schema gets a minimal valid object schema.
 	if string(r.Tools[0].InputSchema) != `{"type":"object","properties":{}}` {
 		t.Fatalf("empty schema not defaulted: %s", r.Tools[0].InputSchema)
+	}
+}
+
+func TestBuildRequestNativeAdvisorTool(t *testing.T) {
+	c := &client{name: "anthropic", model: "claude-sonnet-4-6"}
+	r := c.buildRequest(provider.Request{
+		Messages: []provider.Message{{Role: provider.RoleUser, Content: "fix this"}},
+		Tools:    []provider.ToolSchema{{Name: "read_file", Description: "read", Parameters: json.RawMessage(`{"type":"object"}`)}},
+		NativeAdvisor: &provider.NativeAdvisorConfig{
+			Model:     "claude-opus-4-6",
+			MaxUses:   1,
+			MaxTokens: 1024,
+		},
+	})
+	if len(r.Tools) != 2 {
+		t.Fatalf("tools = %+v, want read_file + native advisor", r.Tools)
+	}
+	advisor := r.Tools[1]
+	if advisor.Type != "advisor_20260301" || advisor.Name != "advisor" || advisor.Model != "claude-opus-4-6" {
+		t.Fatalf("advisor tool spec = %+v", advisor)
+	}
+	if advisor.MaxUses != 1 || advisor.MaxTokens != 1024 {
+		t.Fatalf("advisor caps = uses %d tokens %d", advisor.MaxUses, advisor.MaxTokens)
+	}
+	if len(advisor.InputSchema) != 0 {
+		t.Fatalf("native advisor should not carry input_schema: %s", advisor.InputSchema)
+	}
+}
+
+func TestStreamSetsAdvisorBetaHeader(t *testing.T) {
+	var sawBeta bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		sawBeta = strings.Contains(r.Header.Get("anthropic-beta"), "advisor-tool-2026-03-01")
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n")
+	}))
+	defer srv.Close()
+
+	c := &client{name: "anthropic", model: "claude-sonnet-4-6", baseURL: srv.URL, apiKey: "key", http: srv.Client()}
+	ch, err := c.Stream(context.Background(), provider.Request{
+		Messages: []provider.Message{{Role: provider.RoleUser, Content: "fix"}},
+		NativeAdvisor: &provider.NativeAdvisorConfig{
+			Model:   "claude-opus-4-6",
+			MaxUses: 1,
+		},
+	})
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	for range ch {
+	}
+	if !sawBeta {
+		t.Fatal("anthropic-beta header should enable advisor tool beta")
 	}
 }
 

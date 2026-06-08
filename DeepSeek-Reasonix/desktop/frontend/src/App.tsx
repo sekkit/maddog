@@ -275,6 +275,16 @@ function sessionItemsToMarkdown(title: string, items: Item[], live?: LiveStream)
       case "notice":
         lines.push(`### ${item.level === "warn" ? "Warning" : "Notice"}`, "", item.text.trim(), "");
         break;
+      case "runtime_event":
+        lines.push(`### Runtime Event: ${item.event}`, "", item.text.trim(), "");
+        break;
+      case "advisor":
+        lines.push("### Advisor", "");
+        if (item.advisor.reason?.trim()) lines.push(`Reason: ${item.advisor.reason.trim()}`, "");
+        if (item.advisor.question?.trim()) lines.push(fence("Question", item.advisor.question));
+        if (item.advisor.advice?.trim()) lines.push(fence("Advice", item.advisor.advice));
+        lines.push("");
+        break;
       case "compaction":
         lines.push("### Context Compaction", "");
         if (item.pending) {

@@ -62,6 +62,16 @@ func TestTextSinkCanShowReasoningInVerboseMode(t *testing.T) {
 	}
 }
 
+func TestTextSinkRendersAdvisorEvent(t *testing.T) {
+	var b strings.Builder
+	s := NewTextSink(&b, nil, 80)
+	s.Emit(event.Event{Kind: event.TurnStarted})
+	s.Emit(event.Event{Kind: event.Advisor, Level: event.LevelInfo, Text: "advisor consulted: 3 consecutive tool failures"})
+	if got, want := b.String(), "  · advisor consulted: 3 consecutive tool failures\n"; got != want {
+		t.Fatalf("advisor render = %q, want %q", got, want)
+	}
+}
+
 // fakeRenderer returns a fixed string so the redraw escape sequence is testable
 // without a real markdown library.
 type fakeRenderer struct{}

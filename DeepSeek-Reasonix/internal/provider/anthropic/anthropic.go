@@ -33,6 +33,8 @@ import (
 const (
 	// anthropicVersion is the required API version header value.
 	anthropicVersion = "2023-06-01"
+	// advisorBetaHeader enables Anthropic's advisor server-side tool beta.
+	advisorBetaHeader = "advisor-tool-2026-03-01"
 	// defaultBaseURL is the first-party endpoint; config may override it (e.g. a
 	// gateway). Bedrock/Vertex use a different request shape and are out of scope.
 	defaultBaseURL = "https://api.anthropic.com"
@@ -123,6 +125,9 @@ func (c *client) Stream(ctx context.Context, req provider.Request) (<-chan provi
 		httpReq.Header.Set("Accept", "text/event-stream")
 		httpReq.Header.Set("x-api-key", c.apiKey)
 		httpReq.Header.Set("anthropic-version", anthropicVersion)
+		if req.NativeAdvisor != nil {
+			httpReq.Header.Set("anthropic-beta", advisorBetaHeader)
+		}
 		return httpReq, nil
 	}
 	resp, err := provider.SendWithRetry(ctx, c.http, c.name, c.keyEnv, newReq)
@@ -174,6 +179,10 @@ func (c *client) buildRequest(req provider.Request) anthRequest {
 			}
 			appendBlocks("user", contentBlock{Type: "tool_result", ToolUseID: m.ToolCallID, Content: content})
 		case provider.RoleAssistant:
+			if len(m.NativeBlocks) > 0 && req.NativeAdvisor != nil {
+				appendBlocks("assistant", nativeContentBlocks(m.NativeBlocks)...)
+				continue
+			}
 			var blocks []contentBlock
 			// Replay the signed thinking block first (Anthropic requires it precede
 			// the tool_use it led to). Only when thinking is on and we have both the
@@ -204,6 +213,19 @@ func (c *client) buildRequest(req provider.Request) anthRequest {
 		}
 		tools = append(tools, anthTool{Name: t.Name, Description: t.Description, InputSchema: schema})
 	}
+	if na := req.NativeAdvisor; na != nil {
+		maxTokens := na.MaxTokens
+		if maxTokens > 0 && maxTokens < 1024 {
+			maxTokens = 1024
+		}
+		tools = append(tools, anthTool{
+			Type:      "advisor_20260301",
+			Name:      "advisor",
+			Model:     na.Model,
+			MaxUses:   na.MaxUses,
+			MaxTokens: maxTokens,
+		})
+	}
 
 	// Prompt-cache breakpoints (ephemeral, prefix-match). Render order is
 	// tools → system → messages, so a marker on the last system block caches
@@ -212,8 +234,8 @@ func (c *client) buildRequest(req provider.Request) anthRequest {
 	// incrementally as turns are appended. Max 4 breakpoints; we use ≤2.
 	if n := len(system); n > 0 {
 		system[n-1].CacheControl = ephemeral()
-	} else if n := len(tools); n > 0 {
-		tools[n-1].CacheControl = ephemeral()
+	} else if i := lastCacheableToolIndex(tools); i >= 0 {
+		tools[i].CacheControl = ephemeral()
 	}
 	if n := len(msgs); n > 0 {
 		if k := len(msgs[n-1].Content); k > 0 {
@@ -245,6 +267,21 @@ func (c *client) buildRequest(req provider.Request) anthRequest {
 	return r
 }
 
+func nativeContentBlocks(raw []json.RawMessage) []contentBlock {
+	blocks := make([]contentBlock, 0, len(raw))
+	for _, rb := range raw {
+		if len(rb) == 0 {
+			continue
+		}
+		var block contentBlock
+		if err := json.Unmarshal(rb, &block); err != nil {
+			continue
+		}
+		blocks = append(blocks, block)
+	}
+	return blocks
+}
+
 // readStream parses the Messages API SSE stream into Chunks. Text deltas emit live;
 // each tool_use content block emits a ChunkToolCallStart when its id+name are known
 // and a complete ChunkToolCall when the block closes; usage is assembled from
@@ -255,6 +292,10 @@ func (c *client) readStream(resp *http.Response, out chan<- provider.Chunk) {
 	defer close(out)
 
 	tools := map[int]*provider.ToolCall{} // tool_use blocks, keyed by content index
+	textBlocks := map[int]*strings.Builder{}
+	serverBlocks := map[int]*wireContentBlock{}
+	var nativeBlocks []json.RawMessage
+	preserveNative := false
 	var inTok, outTok, cacheCreate, cacheRead int
 	var stopReason string
 	haveUsage := false
@@ -289,10 +330,24 @@ func (c *client) readStream(resp *http.Response, out chan<- provider.Chunk) {
 				haveUsage = true
 			}
 		case "content_block_start":
-			if ev.ContentBlock != nil && ev.ContentBlock.Type == "tool_use" {
+			if ev.ContentBlock == nil {
+				continue
+			}
+			switch ev.ContentBlock.Type {
+			case "text":
+				textBlocks[ev.Index] = &strings.Builder{}
+			case "tool_use":
 				tc := &provider.ToolCall{ID: ev.ContentBlock.ID, Name: ev.ContentBlock.Name}
 				tools[ev.Index] = tc
 				out <- provider.Chunk{Type: provider.ChunkToolCallStart, ToolCall: &provider.ToolCall{ID: tc.ID, Name: tc.Name}}
+			case "server_tool_use":
+				preserveNative = true
+				serverBlocks[ev.Index] = ev.ContentBlock
+			case "advisor_tool_result":
+				preserveNative = true
+				if block := marshalNativeBlock(ev.ContentBlock); len(block) > 0 {
+					nativeBlocks = append(nativeBlocks, block)
+				}
 			}
 		case "content_block_delta":
 			if ev.Delta == nil {
@@ -301,6 +356,9 @@ func (c *client) readStream(resp *http.Response, out chan<- provider.Chunk) {
 			switch ev.Delta.Type {
 			case "text_delta":
 				if ev.Delta.Text != "" {
+					if b := textBlocks[ev.Index]; b != nil {
+						b.WriteString(ev.Delta.Text)
+					}
 					out <- provider.Chunk{Type: provider.ChunkText, Text: ev.Delta.Text}
 				}
 			case "thinking_delta":
@@ -317,9 +375,24 @@ func (c *client) readStream(resp *http.Response, out chan<- provider.Chunk) {
 				}
 			}
 		case "content_block_stop":
+			if b := textBlocks[ev.Index]; b != nil {
+				if block := marshalTextNativeBlock(b.String()); len(block) > 0 {
+					nativeBlocks = append(nativeBlocks, block)
+				}
+				delete(textBlocks, ev.Index)
+			}
 			if tc := tools[ev.Index]; tc != nil {
+				if block := marshalToolUseNativeBlock(tc); len(block) > 0 {
+					nativeBlocks = append(nativeBlocks, block)
+				}
 				out <- provider.Chunk{Type: provider.ChunkToolCall, ToolCall: tc}
 				delete(tools, ev.Index)
+			}
+			if block := serverBlocks[ev.Index]; block != nil {
+				if raw := marshalNativeBlock(block); len(raw) > 0 {
+					nativeBlocks = append(nativeBlocks, raw)
+				}
+				delete(serverBlocks, ev.Index)
 			}
 		case "message_delta":
 			if ev.Delta != nil && ev.Delta.StopReason != "" {
@@ -346,6 +419,11 @@ func (c *client) readStream(resp *http.Response, out chan<- provider.Chunk) {
 		return
 	}
 
+	if preserveNative {
+		for _, block := range nativeBlocks {
+			out <- provider.Chunk{Type: provider.ChunkNativeBlock, NativeBlock: block}
+		}
+	}
 	if haveUsage {
 		out <- provider.Chunk{Type: provider.ChunkUsage, Usage: &provider.Usage{
 			PromptTokens:     inTok + cacheCreate + cacheRead,
@@ -422,18 +500,31 @@ type contentBlock struct {
 	Thinking     string          `json:"thinking,omitempty"`    // thinking
 	Signature    string          `json:"signature,omitempty"`   // thinking
 	ID           string          `json:"id,omitempty"`          // tool_use
-	Name         string          `json:"name,omitempty"`        // tool_use
+	Name         string          `json:"name,omitempty"`        // tool_use / server_tool_use
 	Input        json.RawMessage `json:"input,omitempty"`       // tool_use
 	ToolUseID    string          `json:"tool_use_id,omitempty"` // tool_result
-	Content      string          `json:"content,omitempty"`     // tool_result
+	Content      any             `json:"content,omitempty"`     // tool_result / server tool result
 	CacheControl *cacheControl   `json:"cache_control,omitempty"`
 }
 
 type anthTool struct {
 	Name         string          `json:"name"`
+	Type         string          `json:"type,omitempty"`
 	Description  string          `json:"description,omitempty"`
-	InputSchema  json.RawMessage `json:"input_schema"`
+	InputSchema  json.RawMessage `json:"input_schema,omitempty"`
+	Model        string          `json:"model,omitempty"`
+	MaxUses      int             `json:"max_uses,omitempty"`
+	MaxTokens    int             `json:"max_tokens,omitempty"`
 	CacheControl *cacheControl   `json:"cache_control,omitempty"`
+}
+
+func lastCacheableToolIndex(tools []anthTool) int {
+	for i := len(tools) - 1; i >= 0; i-- {
+		if tools[i].Type == "" {
+			return i
+		}
+	}
+	return -1
 }
 
 // streamEvent is the discriminated SSE event; read the fields matching Type.
@@ -443,12 +534,8 @@ type streamEvent struct {
 	Message *struct {
 		Usage *wireUsage `json:"usage"`
 	} `json:"message"`
-	ContentBlock *struct {
-		Type string `json:"type"`
-		ID   string `json:"id"`
-		Name string `json:"name"`
-	} `json:"content_block"`
-	Delta *struct {
+	ContentBlock *wireContentBlock `json:"content_block"`
+	Delta        *struct {
 		Type        string `json:"type"`         // text_delta | thinking_delta | signature_delta | input_json_delta
 		Text        string `json:"text"`         // text_delta
 		Thinking    string `json:"thinking"`     // thinking_delta
@@ -461,6 +548,63 @@ type streamEvent struct {
 		Type    string `json:"type"`
 		Message string `json:"message"`
 	} `json:"error"`
+}
+
+type wireContentBlock struct {
+	Type      string          `json:"type"`
+	ID        string          `json:"id,omitempty"`
+	Name      string          `json:"name,omitempty"`
+	Text      string          `json:"text,omitempty"`
+	Input     json.RawMessage `json:"input,omitempty"`
+	ToolUseID string          `json:"tool_use_id,omitempty"`
+	Content   json.RawMessage `json:"content,omitempty"`
+}
+
+func marshalTextNativeBlock(text string) json.RawMessage {
+	if text == "" {
+		return nil
+	}
+	return marshalNativeBlock(&wireContentBlock{Type: "text", Text: text})
+}
+
+func marshalToolUseNativeBlock(tc *provider.ToolCall) json.RawMessage {
+	if tc == nil {
+		return nil
+	}
+	input := json.RawMessage(tc.Arguments)
+	if len(input) == 0 {
+		input = json.RawMessage("{}")
+	}
+	return marshalNativeBlock(&wireContentBlock{Type: "tool_use", ID: tc.ID, Name: tc.Name, Input: input})
+}
+
+func marshalNativeBlock(block *wireContentBlock) json.RawMessage {
+	if block == nil || block.Type == "" {
+		return nil
+	}
+	if (block.Type == "server_tool_use" || block.Type == "tool_use") && len(block.Input) == 0 {
+		block = cloneWireContentBlock(block)
+		block.Input = json.RawMessage("{}")
+	}
+	b, err := json.Marshal(block)
+	if err != nil {
+		return nil
+	}
+	return b
+}
+
+func cloneWireContentBlock(block *wireContentBlock) *wireContentBlock {
+	if block == nil {
+		return nil
+	}
+	cp := *block
+	if len(block.Input) > 0 {
+		cp.Input = append(json.RawMessage(nil), block.Input...)
+	}
+	if len(block.Content) > 0 {
+		cp.Content = append(json.RawMessage(nil), block.Content...)
+	}
+	return &cp
 }
 
 type wireUsage struct {

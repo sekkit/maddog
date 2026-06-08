@@ -26,9 +26,13 @@ const (
 
 // Message is a single conversation message.
 type Message struct {
-	Role             Role   `json:"role"`
-	Content          string `json:"content,omitempty"`
-	ReasoningContent string `json:"reasoning_content,omitempty"` // assistant: thinking-mode chain-of-thought, round-tripped on multi-turn
+	Role    Role   `json:"role"`
+	Content string `json:"content,omitempty"`
+	// NativeBlocks preserves provider-specific assistant content blocks that
+	// must be round-tripped verbatim (for example Anthropic advisor_tool_result
+	// blocks). Providers that do not understand the blocks ignore them.
+	NativeBlocks     []json.RawMessage `json:"native_blocks,omitempty"`
+	ReasoningContent string            `json:"reasoning_content,omitempty"` // assistant: thinking-mode chain-of-thought, round-tripped on multi-turn
 	// ReasoningSignature is an opaque, provider-issued proof that ReasoningContent
 	// is genuine model output. Anthropic requires the signed thinking block be
 	// replayed on the next turn when a tool call followed thinking; providers
@@ -60,6 +64,18 @@ type Request struct {
 	Tools       []ToolSchema
 	Temperature float64
 	MaxTokens   int
+	// NativeAdvisor asks providers that support Anthropic's advisor server-side
+	// tool to expose it on this request. Providers that do not support native
+	// advisor ignore this field.
+	NativeAdvisor *NativeAdvisorConfig
+}
+
+// NativeAdvisorConfig describes the server-side advisor tool exposed by
+// providers that support Anthropic's advisor beta.
+type NativeAdvisorConfig struct {
+	Model     string
+	MaxUses   int
+	MaxTokens int
 }
 
 // interruptedToolResult stands in for a tool result that never landed — an
@@ -158,6 +174,7 @@ const (
 	ChunkReasoning                      // thinking-mode reasoning delta (before the visible answer)
 	ChunkToolCallStart                  // a tool call has begun (ToolCall: ID+Name; args still streaming)
 	ChunkToolCall                       // one complete tool call
+	ChunkNativeBlock                    // provider-specific assistant content block to preserve
 	ChunkUsage                          // token usage for the completion
 	ChunkDone                           // completion finished normally
 	ChunkError                          // an error occurred
@@ -209,12 +226,13 @@ func (p *Pricing) Symbol() string {
 
 // Chunk is a single streamed event. Read the field matching Type.
 type Chunk struct {
-	Type      ChunkType
-	Text      string    // ChunkText, ChunkReasoning
-	Signature string    // ChunkReasoning: opaque proof for the reasoning (Anthropic thinking signature), when issued
-	ToolCall  *ToolCall // ChunkToolCallStart (ID+Name only), ChunkToolCall (complete)
-	Usage     *Usage    // ChunkUsage
-	Err       error     // ChunkError
+	Type        ChunkType
+	Text        string          // ChunkText, ChunkReasoning
+	Signature   string          // ChunkReasoning: opaque proof for the reasoning (Anthropic thinking signature), when issued
+	ToolCall    *ToolCall       // ChunkToolCallStart (ID+Name only), ChunkToolCall (complete)
+	NativeBlock json.RawMessage // ChunkNativeBlock
+	Usage       *Usage          // ChunkUsage
+	Err         error           // ChunkError
 }
 
 // StreamInterruptedError marks a recoverable transport cut that happened after

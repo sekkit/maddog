@@ -14,6 +14,7 @@ type wireEvent struct {
 	Level        string          `json:"level,omitempty"`
 	Tool         *wireTool       `json:"tool,omitempty"`
 	Usage        *wireUsage      `json:"usage,omitempty"`
+	Advisor      *wireAdvisor    `json:"advisor,omitempty"`
 	Approval     *wireApproval   `json:"approval,omitempty"`
 	Ask          *wireAsk        `json:"ask,omitempty"`
 	Compaction   *wireCompaction `json:"compaction,omitempty"`
@@ -106,6 +107,18 @@ type wireApproval struct {
 	Subject string `json:"subject"`
 }
 
+type wireAdvisor struct {
+	Reason               string `json:"reason,omitempty"`
+	Question             string `json:"question,omitempty"`
+	Advice               string `json:"advice,omitempty"`
+	UsesThisTurn         int    `json:"usesThisTurn,omitempty"`
+	UsesThisSession      int    `json:"usesThisSession,omitempty"`
+	RemainingThisTurn    int    `json:"remainingThisTurn,omitempty"`
+	RemainingThisSession int    `json:"remainingThisSession,omitempty"`
+	MaxUsesPerTurn       int    `json:"maxUsesPerTurn,omitempty"`
+	MaxUsesPerSession    int    `json:"maxUsesPerSession,omitempty"`
+}
+
 // kindNames maps the event.Kind enum to stable wire strings.
 var kindNames = map[event.Kind]string{
 	event.TurnStarted:       "turn_started",
@@ -129,6 +142,7 @@ var kindNames = map[event.Kind]string{
 	event.SkillGenerated:    "skill_generated",
 	event.BudgetExceeded:    "budget_exceeded",
 	event.SkillPromoted:     "skill_promoted",
+	event.Advisor:           "advisor",
 }
 
 // toWireAsk converts an event.Ask into its JSON wire form.
@@ -154,6 +168,13 @@ func toWire(e event.Event) wireEvent {
 		} else {
 			w.Level = "info"
 		}
+	case event.Advisor:
+		if e.Level == event.LevelWarn {
+			w.Level = "warn"
+		} else {
+			w.Level = "info"
+		}
+		w.Advisor = toWireAdvisor(e.Advisor)
 	case event.ToolDispatch, event.ToolResult, event.ToolProgress:
 		wt := &wireTool{
 			ID: e.Tool.ID, Name: e.Tool.Name, Args: e.Tool.Args,
@@ -202,6 +223,20 @@ func toWire(e event.Event) wireEvent {
 		w.RetryMax = e.RetryMax
 	}
 	return w
+}
+
+func toWireAdvisor(a event.AdvisorConsultation) *wireAdvisor {
+	return &wireAdvisor{
+		Reason:               a.Reason,
+		Question:             a.Question,
+		Advice:               a.Advice,
+		UsesThisTurn:         a.UsesThisTurn,
+		UsesThisSession:      a.UsesThisSession,
+		RemainingThisTurn:    a.RemainingThisTurn,
+		RemainingThisSession: a.RemainingThisSession,
+		MaxUsesPerTurn:       a.MaxUsesPerTurn,
+		MaxUsesPerSession:    a.MaxUsesPerSession,
+	}
 }
 
 func toWireCacheDiagnostics(d *event.CacheDiagnostics) *wireCacheDiagnostics {

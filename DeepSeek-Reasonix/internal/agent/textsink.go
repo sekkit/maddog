@@ -104,7 +104,7 @@ func (s *TextSink) Emit(e event.Event) {
 		}
 		s.usageLine(e.Usage, e.Pricing, e.CacheDiagnostics)
 
-	case event.Notice, event.Upgrade, event.SkillGenerated, event.BudgetExceeded, event.SkillPromoted:
+	case event.Notice, event.Upgrade, event.SkillGenerated, event.BudgetExceeded, event.SkillPromoted, event.Advisor:
 		glyph := "·"
 		if e.Level == event.LevelWarn {
 			glyph = "!"

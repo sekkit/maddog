@@ -134,3 +134,28 @@ plan: docs/cc/maddog-fusion--3949/plan.md
 - **Depends on**: Unit B3, Unit B6, Unit C1-D, Unit C2-D
 - **Result**: Cross-stage focused Go tests, frontend typecheck, CSS checks, and previously captured real CLI/runtime-preview E2E validate the plan path end to end.
 - **Commit**: `a396d09a feat: implement maddog fusion runtime`; current branch adds validation fixture stabilization and persistent task state.
+
+## Unit B7: Automatic advisor consultation budget and context curation
+- **Status**: completed
+- **Execution note**: test-first
+- **Files**: `DeepSeek-Reasonix/internal/agent/upgrade.go`, `DeepSeek-Reasonix/internal/agent/advisor.go`, `DeepSeek-Reasonix/internal/agent/agent.go`, `DeepSeek-Reasonix/internal/agent/upgrade_test.go`, `DeepSeek-Reasonix/internal/config/config.go`, `DeepSeek-Reasonix/internal/config/default_test.go`, `DeepSeek-Reasonix/internal/boot/boot.go`, `DeepSeek-Reasonix/internal/skill/builtin_advisor.go`
+- **Depends on**: Unit B2, Unit B5, Unit B6
+- **Started-at-commit**: a5844225
+- **Result**: Automatic upgrade decisions now trigger a Go-native advisor consultation before frontier routing, with per-turn/session budgets, curated failure context, structured `event.Advisor`, and frontier-visible guidance. Verified by `go test ./internal/agent ./internal/config ./internal/provider/anthropic ./internal/boot ./internal/serve ./internal/cli -count=1` and full `go test ./... -count=1`.
+- **Commit**: pending
+
+## Unit B8: Anthropic native advisor tool support
+- **Status**: completed
+- **Execution note**: test-first
+- **Files**: `DeepSeek-Reasonix/internal/provider/provider.go`, `DeepSeek-Reasonix/internal/provider/anthropic/anthropic.go`, `DeepSeek-Reasonix/internal/provider/anthropic/anthropic_test.go`
+- **Depends on**: Unit B7
+- **Result**: Added opt-in provider-native advisor config, Anthropic beta header/tool schema support, native server-block preservation/replay, and request exposure tests. Native advisor remains disabled by default. Verified by `go test ./internal/provider ./internal/provider/anthropic -count=1` within full `go test ./... -count=1`.
+- **Commit**: pending
+
+## Unit B9: Desktop advisor event presentation
+- **Status**: completed
+- **Execution note**: test-first
+- **Files**: `DeepSeek-Reasonix/internal/event/event.go`, `DeepSeek-Reasonix/internal/event/event_test.go`, `DeepSeek-Reasonix/internal/serve/wire.go`, `DeepSeek-Reasonix/internal/serve/wire_test.go`, `DeepSeek-Reasonix/desktop/wire.go`, `DeepSeek-Reasonix/desktop/wire_test.go`, `DeepSeek-Reasonix/desktop/frontend/src/lib/types.ts`, `DeepSeek-Reasonix/desktop/frontend/src/components/Message.tsx`, `DeepSeek-Reasonix/desktop/frontend/src/components/Transcript.tsx`, `DeepSeek-Reasonix/desktop/frontend/src/styles.css`
+- **Depends on**: Unit B7
+- **Result**: Advisor events now serialize through serve and Wails wire contracts, render as a dedicated desktop transcript card with reason/question/advice/budget metadata, export to Markdown, and remain visible in CLI/TUI sinks. Verified by `go test ./internal/serve -count=1`, `go test . -count=1` in `DeepSeek-Reasonix/desktop`, plus `npm run typecheck`, `npm run check:css`, and `npm run build`.
+- **Commit**: pending
