@@ -1,5 +1,5 @@
 import { useCallback, useRef, useState } from "react";
-import logo from "../assets/logo.svg";
+import maddogIcon from "../assets/maddog-icon.png";
 import { useT } from "../lib/i18n";
 import { app, openExternal } from "../lib/bridge";
 
@@ -43,7 +43,7 @@ export function OnboardingOverlay({ onComplete }: { onComplete: () => void }) {
   return (
     <div className="onboarding">
       <div className="onboarding__card">
-        <img src={logo} className="onboarding__logo" alt="Reasonix" />
+        <img src={maddogIcon} className="onboarding__logo" alt="Maddog" />
         <div className="onboarding__title">{t("onboarding.title")}</div>
         <div className="onboarding__tag">{t("onboarding.tagline")}</div>
 

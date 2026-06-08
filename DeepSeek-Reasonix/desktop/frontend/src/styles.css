@@ -1208,10 +1208,11 @@ a[href] {
   overflow: hidden;
 }
 .welcome__logo {
-  width: clamp(220px, 38vw, 280px);
-  height: auto;
+  width: clamp(104px, 18vw, 140px);
+  height: clamp(104px, 18vw, 140px);
   margin-bottom: 24px;
-  border-radius: 0;
+  border-radius: 22px;
+  box-shadow: 0 18px 42px rgba(0, 0, 0, 0.26);
 }
 .welcome__title {
   font-size: 22px;
@@ -1273,8 +1274,8 @@ a[href] {
 
 @container (max-height: 560px) {
   .welcome__logo {
-    width: 220px;
-    height: auto;
+    width: 104px;
+    height: 104px;
     margin-bottom: 16px;
   }
   .welcome__title {
@@ -8333,6 +8334,7 @@ a[href] {
   height: 36px;
   align-self: flex-start;
   margin-bottom: 4px;
+  border-radius: 9px;
 }
 .onboarding__title {
   font-size: 18px;
@@ -8716,32 +8718,9 @@ a[href] {
 
 .app-chrome__logo {
   flex: 0 0 auto;
-  width: 116px;
-  height: auto;
-  max-height: 27px;
-  border-radius: 0;
-}
-
-.welcome__logo,
-.app-chrome__logo {
-  filter: brightness(0) invert(1);
-}
-
-@media (prefers-color-scheme: light) {
-  :root:not([data-theme]) .welcome__logo,
-  :root:not([data-theme]) .app-chrome__logo {
-    filter: none;
-  }
-}
-
-:root[data-theme="light"] .welcome__logo,
-:root[data-theme="light"] .app-chrome__logo {
-  filter: none;
-}
-
-:root[data-theme="dark"] .welcome__logo,
-:root[data-theme="dark"] .app-chrome__logo {
-  filter: brightness(0) invert(1);
+  width: 28px;
+  height: 28px;
+  border-radius: 7px;
 }
 
 .app-chrome__identity strong {
@@ -8793,7 +8772,6 @@ a[href] {
 
 .app--windows .app-chrome__logo {
   left: var(--app-chrome-sidebar-label-left);
-  max-width: max(64px, calc(var(--sidebar-width) - var(--app-chrome-sidebar-label-left) - 72px));
 }
 
 .app--windows .app-chrome__separator {

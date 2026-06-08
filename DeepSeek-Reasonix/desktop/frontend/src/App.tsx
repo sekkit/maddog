@@ -17,7 +17,7 @@ import {
   PanelRightOpen,
   Trash2,
 } from "lucide-react";
-import logoWordmark from "./assets/logo-wordmark.svg";
+import maddogIcon from "./assets/maddog-icon.png";
 import { asArray } from "./lib/array";
 import { clearLegacyLangPref, normalizeLangPref, readLegacyLangPref, t, useI18n, useT } from "./lib/i18n";
 import { useController, type Item, type LiveStream } from "./lib/useController";
@@ -1381,8 +1381,8 @@ export default function App() {
           >
             {sidebarCollapsed ? <PanelLeftOpen size={16} /> : <PanelLeftClose size={16} />}
           </button>
-          <div className="app-chrome__identity" aria-label="Reasonix">
-            <img src={logoWordmark} alt="" className="app-chrome__logo" />
+          <div className="app-chrome__identity" aria-label="Maddog">
+            <img src={maddogIcon} alt="" className="app-chrome__logo" />
             <span className="app-chrome__separator">/</span>
             <span className="app-chrome__scope">{appChromeScopeLabel(activeTab, state.meta)}</span>
           </div>

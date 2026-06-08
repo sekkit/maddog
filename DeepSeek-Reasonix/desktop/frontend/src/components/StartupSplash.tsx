@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from "react";
-import logoSymbol from "../assets/logo-symbol.svg";
+import maddogIcon from "../assets/maddog-icon.png";
 import { useT } from "../lib/i18n";
 
-const SPLASH_FLAG = "reasonix.splash.shown";
+const SPLASH_FLAG = "maddog.splash.shown";
 const MIN_VISIBLE_MS = 1400;
 const FADE_OUT_MS = 420;
 const MAX_HOLD_MS = 6000;
@@ -69,9 +69,9 @@ export function StartupSplash({ hold, onDone }: { hold: boolean; onDone: () => v
     <div className="startup-splash" data-leaving={leaving} onClick={() => finish(true)}>
       <div className="startup-splash__card">
         <div className="startup-splash__mark" aria-hidden="true">
-          <img src={logoSymbol} alt="" />
+          <img src={maddogIcon} alt="" />
         </div>
-        <div className="startup-splash__name">Reasonix</div>
+        <div className="startup-splash__name">Maddog</div>
         <div className="startup-splash__sub">{t("app.splashSubtitle")}</div>
         <div className="startup-splash__dots" aria-hidden="true">
           <span />
