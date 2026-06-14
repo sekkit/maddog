@@ -3,18 +3,17 @@ package main
 import (
 	"crypto/sha256"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
+	"reasonix/internal/agent"
+	"reasonix/internal/config"
+	"reasonix/internal/control"
 	"reasonix/internal/fileutil"
 )
-
-// errActiveSession is returned when a delete targets the session in use.
-var errActiveSession = errors.New("can't delete the session you're in — start a new one first")
 
 // sessions.go holds the desktop-only session-management state that the shared
 // kernel doesn't model: custom display titles. A session on disk is just a JSONL
@@ -31,6 +30,21 @@ const sessionTrashMetaFile = ".trash-meta.json"
 func sessionTitlesPath(dir string) string  { return filepath.Join(dir, sessionTitlesFile) }
 func sessionDisplayPath(dir string) string { return filepath.Join(dir, sessionDisplayFile) }
 func sessionTrashPath(dir string) string   { return filepath.Join(dir, sessionTrashDir) }
+
+func desktopSessionDir(root string) string {
+	root = strings.TrimSpace(root)
+	if root == "" {
+		cwd, err := os.Getwd()
+		if err != nil {
+			return config.SessionDir()
+		}
+		root = cwd
+	}
+	if dir := config.ProjectSessionDir(root); dir != "" {
+		return dir
+	}
+	return config.SessionDir()
+}
 
 // loadSessionTitles reads the basename→title map (missing/corrupt → empty).
 func loadSessionTitles(dir string) map[string]string {
@@ -102,6 +116,10 @@ type trashedSessionMeta struct {
 }
 
 func trashSessionArtifacts(dir, sessionPath, key string) error {
+	return trashSessionArtifactsBeforeMove(dir, sessionPath, key, nil)
+}
+
+func validateSessionTrashTarget(dir, sessionPath, key string) error {
 	if _, err := os.Stat(sessionPath); os.IsNotExist(err) {
 		return nil
 	} else if err != nil {
@@ -113,8 +131,24 @@ func trashSessionArtifacts(dir, sessionPath, key string) error {
 	} else if !os.IsNotExist(err) {
 		return err
 	}
+	return nil
+}
+
+func trashSessionArtifactsBeforeMove(dir, sessionPath, key string, beforeMove func()) error {
+	if err := validateSessionTrashTarget(dir, sessionPath, key); err != nil {
+		return err
+	}
+	if _, err := os.Stat(sessionPath); os.IsNotExist(err) {
+		return nil
+	} else if err != nil {
+		return err
+	}
+	itemDir := filepath.Join(sessionTrashPath(dir), key)
 	if err := os.MkdirAll(itemDir, 0o755); err != nil {
 		return err
+	}
+	if beforeMove != nil {
+		beforeMove()
 	}
 	if err := movePathIfExists(sessionPath, filepath.Join(itemDir, key)); err != nil {
 		return err
@@ -124,6 +158,9 @@ func trashSessionArtifacts(dir, sessionPath, key string) error {
 	}
 	ckptName := strings.TrimSuffix(key, ".jsonl") + ".ckpt"
 	if err := movePathIfExists(strings.TrimSuffix(sessionPath, ".jsonl")+".ckpt", filepath.Join(itemDir, ckptName)); err != nil {
+		return err
+	}
+	if err := trashSubagentArtifacts(dir, sessionPath, itemDir); err != nil {
 		return err
 	}
 	meta := trashedSessionMeta{Key: key, DeletedAt: time.Now().UnixMilli()}
@@ -193,6 +230,9 @@ func restoreTrashedSessionFile(dir, path string) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
+	if err := checkRestoreSubagentConflicts(dir, itemDir); err != nil {
+		return err
+	}
 	if err := movePathIfExists(trashPath, target); err != nil {
 		return err
 	}
@@ -201,6 +241,9 @@ func restoreTrashedSessionFile(dir, path string) error {
 	}
 	ckptName := strings.TrimSuffix(key, ".jsonl") + ".ckpt"
 	if err := movePathIfExists(filepath.Join(itemDir, ckptName), filepath.Join(dir, ckptName)); err != nil {
+		return err
+	}
+	if err := restoreSubagentArtifacts(dir, itemDir); err != nil {
 		return err
 	}
 	return os.RemoveAll(itemDir)
@@ -240,6 +283,66 @@ func movePathIfExists(src, dst string) error {
 		return err
 	}
 	return os.Rename(src, dst)
+}
+
+func trashSubagentArtifacts(dir, sessionPath, itemDir string) error {
+	artifacts, err := agent.ListSubagentsByParent(dir, agent.BranchID(sessionPath))
+	if err != nil {
+		return err
+	}
+	trashSubagentDir := filepath.Join(itemDir, "subagents")
+	for _, artifact := range artifacts {
+		if err := movePathIfExists(artifact.SessionPath, filepath.Join(trashSubagentDir, filepath.Base(artifact.SessionPath))); err != nil {
+			return err
+		}
+		if err := movePathIfExists(artifact.MetaPath, filepath.Join(trashSubagentDir, filepath.Base(artifact.MetaPath))); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func checkRestoreSubagentConflicts(dir, itemDir string) error {
+	trashSubagentDir := filepath.Join(itemDir, "subagents")
+	entries, err := os.ReadDir(trashSubagentDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		target := filepath.Join(dir, "subagents", entry.Name())
+		if _, err := os.Stat(target); err == nil {
+			return fmt.Errorf("subagent artifact already exists: %s", entry.Name())
+		} else if !os.IsNotExist(err) {
+			return err
+		}
+	}
+	return nil
+}
+
+func restoreSubagentArtifacts(dir, itemDir string) error {
+	trashSubagentDir := filepath.Join(itemDir, "subagents")
+	entries, err := os.ReadDir(trashSubagentDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		if err := movePathIfExists(filepath.Join(trashSubagentDir, entry.Name()), filepath.Join(dir, "subagents", entry.Name())); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func validateSessionPath(dir, sessionPath string) (string, string, error) {
@@ -394,14 +497,18 @@ func recordSessionDisplay(dir, sessionPath, content, display string) error {
 // sessionDisplayResolver loads the sidecar once and returns a per-message
 // resolver, so a transcript of N messages doesn't re-read .display.json N times.
 func sessionDisplayResolver(dir, sessionPath string) func(content string) string {
-	byHash := loadSessionDisplays(dir)[filepath.Base(sessionPath)]
+	return sessionDisplayResolverFromMap(loadSessionDisplays(dir), sessionPath)
+}
+
+func sessionDisplayResolverFromMap(displays sessionDisplayMap, sessionPath string) func(content string) string {
+	byHash := displays[filepath.Base(sessionPath)]
 	return func(content string) string {
 		if byHash != nil {
 			if display := byHash[messageDisplayKey(content)]; strings.TrimSpace(display) != "" {
 				return display
 			}
 		}
-		return content
+		return control.StripComposePrefixes(content)
 	}
 }
 

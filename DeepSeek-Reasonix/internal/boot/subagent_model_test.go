@@ -51,28 +51,6 @@ func TestSubagentModelRefAcceptsToolNameAliases(t *testing.T) {
 	}
 }
 
-func TestAdvisorDefaultsToFrontierModel(t *testing.T) {
-	cfg := config.Default()
-	cfg.Agent.SubagentModel = "mimo-pro"
-	cfg.Agent.FrontierModel = "claude-opus"
-
-	got := subagentModelRef(cfg, skill.Skill{Name: "advisor", RunAs: skill.RunSubagent})
-	if got != "claude-opus" {
-		t.Fatalf("advisor should default to frontier_model, got %q", got)
-	}
-}
-
-func TestAdvisorConfiguredModelOverridesFrontierDefault(t *testing.T) {
-	cfg := config.Default()
-	cfg.Agent.FrontierModel = "claude-opus"
-	cfg.Agent.SubagentModels = map[string]string{"advisor": "deepseek-pro"}
-
-	got := subagentModelRef(cfg, skill.Skill{Name: "advisor", RunAs: skill.RunSubagent})
-	if got != "deepseek-pro" {
-		t.Fatalf("advisor per-skill config should override frontier_model, got %q", got)
-	}
-}
-
 func TestSubagentEffortRefHonorsPrecedence(t *testing.T) {
 	cfg := config.Default()
 	cfg.Agent.SubagentEffort = "high"
@@ -109,5 +87,40 @@ func TestSubagentEffortRefAcceptsToolNameAliases(t *testing.T) {
 	got := subagentEffortRef(cfg, skill.Skill{Name: "security-review", RunAs: skill.RunSubagent})
 	if got != "max" {
 		t.Fatalf("security_review alias should configure security-review effort, got %q", got)
+	}
+}
+
+func TestSubagentEffectiveIdentityUsesResolvedModelAndEffort(t *testing.T) {
+	cfg := config.Default()
+	cfg.Providers = []config.ProviderEntry{{
+		Name:             "custom",
+		Kind:             "openai",
+		Models:           []string{"alpha", "beta"},
+		Default:          "beta",
+		SupportedEfforts: []string{"low", "high"},
+		DefaultEffort:    "high",
+	}}
+	base, ok := cfg.ResolveModel("custom")
+	if !ok {
+		t.Fatal("custom provider should resolve")
+	}
+
+	model, effort := subagentEffectiveIdentity(cfg, "custom", base, "", "")
+	if model != "custom/beta" || effort != "high" {
+		t.Fatalf("identity = %q/%q, want custom/beta/high", model, effort)
+	}
+
+	model, effort = subagentEffectiveIdentity(cfg, "custom", base, "alpha", "low")
+	if model != "custom/alpha" || effort != "low" {
+		t.Fatalf("override identity = %q/%q, want custom/alpha/low", model, effort)
+	}
+}
+
+func TestNewSubagentStoreRequiresSessionDir(t *testing.T) {
+	if got := newSubagentStore(""); got != nil {
+		t.Fatalf("empty session dir should disable subagent store, got %#v", got)
+	}
+	if got := newSubagentStore(t.TempDir()); got == nil {
+		t.Fatal("non-empty session dir should create subagent store")
 	}
 }

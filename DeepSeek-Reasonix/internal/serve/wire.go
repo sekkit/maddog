@@ -8,18 +8,16 @@ import "reasonix/internal/event"
 // error becomes a message — so a browser frontend renders the same typed stream
 // the TUI does.
 type wireEvent struct {
-	Kind         string          `json:"kind"`
-	Text         string          `json:"text,omitempty"`
-	Reasoning    string          `json:"reasoning,omitempty"`
-	Level        string          `json:"level,omitempty"`
-	Tool         *wireTool       `json:"tool,omitempty"`
-	Usage        *wireUsage      `json:"usage,omitempty"`
-	Approval     *wireApproval   `json:"approval,omitempty"`
-	Ask          *wireAsk        `json:"ask,omitempty"`
-	Compaction   *wireCompaction `json:"compaction,omitempty"`
-	Err          string          `json:"err,omitempty"`
-	RetryAttempt int             `json:"retryAttempt,omitempty"`
-	RetryMax     int             `json:"retryMax,omitempty"`
+	Kind       string          `json:"kind"`
+	Text       string          `json:"text,omitempty"`
+	Reasoning  string          `json:"reasoning,omitempty"`
+	Level      string          `json:"level,omitempty"`
+	Tool       *wireTool       `json:"tool,omitempty"`
+	Usage      *wireUsage      `json:"usage,omitempty"`
+	Approval   *wireApproval   `json:"approval,omitempty"`
+	Ask        *wireAsk        `json:"ask,omitempty"`
+	Compaction *wireCompaction `json:"compaction,omitempty"`
+	Err        string          `json:"err,omitempty"`
 }
 
 // wireCompaction is the JSON form of an event.Compaction. On a compaction_started
@@ -123,11 +121,8 @@ var kindNames = map[event.Kind]string{
 	event.CompactionStarted: "compaction_started",
 	event.CompactionDone:    "compaction_done",
 	event.ToolProgress:      "tool_progress",
-	event.Retrying:          "retrying",
-	event.Upgrade:           "upgrade",
-	event.SkillGenerated:    "skill_generated",
-	event.BudgetExceeded:    "budget_exceeded",
-	event.SkillPromoted:     "skill_promoted",
+	event.MCPSurfaceReady:   "mcp_surface_ready",
+	event.Steer:             "steer",
 }
 
 // toWireAsk converts an event.Ask into its JSON wire form.
@@ -147,7 +142,7 @@ func toWireAsk(a event.Ask) *wireAsk {
 func toWire(e event.Event) wireEvent {
 	w := wireEvent{Kind: kindNames[e.Kind], Text: e.Text, Reasoning: e.Reasoning}
 	switch e.Kind {
-	case event.Notice, event.Upgrade, event.SkillGenerated, event.BudgetExceeded, event.SkillPromoted:
+	case event.Notice:
 		if e.Level == event.LevelWarn {
 			w.Level = "warn"
 		} else {
@@ -196,9 +191,6 @@ func toWire(e event.Event) wireEvent {
 		if e.Err != nil {
 			w.Err = e.Err.Error()
 		}
-	case event.Retrying:
-		w.RetryAttempt = e.RetryAttempt
-		w.RetryMax = e.RetryMax
 	}
 	return w
 }

@@ -221,15 +221,6 @@ func builtinSkills() []Skill {
 			AllowedTools: append(append([]string(nil), readCodeTools...), "web_fetch"),
 		},
 		{
-			Name:         "advisor",
-			Description:  "Ask a frontier-profile advisor for a concise second opinion on the current task, next steps, and risks. Read-only.",
-			Body:         builtinAdvisorBody,
-			Scope:        ScopeBuiltin,
-			Path:         "(builtin)",
-			RunAs:        RunSubagent,
-			AllowedTools: append([]string(nil), readCodeTools...),
-		},
-		{
 			Name:        "install-capability",
 			Description: "Install or uninstall Reasonix MCP servers and skills from a URL, GitHub/raw file, local path/folder, .mcp.json, executable, or package name. Plans with install_source (op=install or op=uninstall) before applying, surfacing per-action riskLevel.",
 			Body:        builtinInstallCapabilityBody,

@@ -83,16 +83,11 @@ const (
 	// event — or TurnDone — clears. Appended last to keep the Kind values before
 	// it wire-stable.
 	Retrying
-	// === REASONIX-FUSION: appended, do not insert before this line ===
-	// Upgrade reports automatic routing changes between default and frontier
-	// providers. Text carries the user-visible reason.
-	Upgrade
-	// SkillGenerated reports that runtime orchestration created a dynamic skill.
-	SkillGenerated
-	// BudgetExceeded reports that frontier routing hit its configured budget.
-	BudgetExceeded
-	// SkillPromoted reports that offline evaluation promoted a skill revision.
-	SkillPromoted
+	// Steer fires when a mid-turn steer message is consumed from the queue and
+	// injected as a user message. Text carries the raw steer content (without the
+	// wrapper prefix), so a frontend can display it to the user as confirmation.
+	// Frontends use Steer to know a queued message has been delivered.
+	Steer
 )
 
 // Level classifies a Notice so sinks can style or filter it.
