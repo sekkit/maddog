@@ -59,7 +59,7 @@ func TestSkillsReflectStoreChangesAfterControllerBuild(t *testing.T) {
 	if _, ok := c.RunSkill("/hot now"); ok {
 		t.Fatal("skill should not exist before it is written")
 	}
-	writeControlSkill(t, project, ".reasonix/skills/hot/SKILL.md", "---\nname: hot\ndescription: Hot install\n---\nHot body")
+	writeControlSkill(t, project, "\.maddog/skills/hot/SKILL.md", "---\nname: hot\ndescription: Hot install\n---\nHot body")
 
 	if skills := c.Skills(); len(skills) != 1 || skills[0].Name != "hot" {
 		t.Fatalf("Skills() = %+v, want newly installed hot skill", skills)
@@ -374,7 +374,7 @@ func TestRunTurnAutoPlanScoresRawPromptNotResolvedRefs(t *testing.T) {
 
 func TestRunTurnAppliesRuntimeSkillOrchestrationHint(t *testing.T) {
 	home := t.TempDir()
-	writeControlSkill(t, home, ".reasonix/skills/docs.md", "---\nname: docs\ndescription: documentation writing helper\n---\nbody")
+	writeControlSkill(t, home, "\.maddog/skills/docs.md", "---\nname: docs\ndescription: documentation writing helper\n---\nbody")
 	store := skill.New(skill.Options{HomeDir: home, DisableBuiltins: true})
 	runner := &fakeTurnRunner{}
 	var generated []string
@@ -401,7 +401,7 @@ func TestRunTurnAppliesRuntimeSkillOrchestrationHint(t *testing.T) {
 
 func TestRunAppliesRuntimeSkillOrchestrationHint(t *testing.T) {
 	home := t.TempDir()
-	writeControlSkill(t, home, ".reasonix/skills/docs.md", "---\nname: docs\ndescription: documentation writing helper\n---\nbody")
+	writeControlSkill(t, home, "\.maddog/skills/docs.md", "---\nname: docs\ndescription: documentation writing helper\n---\nbody")
 	store := skill.New(skill.Options{HomeDir: home, DisableBuiltins: true})
 	runner := &fakeTurnRunner{}
 	c := New(Options{

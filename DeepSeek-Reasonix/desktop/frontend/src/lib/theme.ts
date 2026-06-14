@@ -47,8 +47,8 @@ const DEFAULT_THEME_STYLE: Record<ResolvedTheme, ThemeStyle> = {
 // user who manually changes the theme, keep their stored desktop config.
 const DEFAULT_THEME: Theme = "dark";
 
-const THEME_KEY = "reasonix-theme";
-const STYLE_KEY = "reasonix-theme-style";
+const THEME_KEY = "maddog-theme";
+const STYLE_KEY = "maddog-theme-style";
 let currentTheme: Theme = DEFAULT_THEME;
 let currentThemeStyle: ThemeStyle = DEFAULT_THEME_STYLE.dark;
 

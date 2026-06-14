@@ -186,14 +186,16 @@ func (a *App) ensureMediaTokenStore() *mediaTokenStore {
 	return a.mediaTokens
 }
 
+const workspaceMediaPrefix = "/__maddog_workspace_media/"
+
 // workspaceMediaMiddleware returns an HTTP middleware that intercepts
-// /__reasonix_workspace_media/{token}/{filename} requests and serves the
+// /__maddog_workspace_media/{token}/{filename} requests and serves the
 // corresponding workspace file. All other paths pass through to the Wails
 // default asset handler unchanged.
 func (a *App) workspaceMediaMiddleware() func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			prefix := "/__reasonix_workspace_media/"
+			prefix := workspaceMediaPrefix
 			if !strings.HasPrefix(r.URL.Path, prefix) {
 				next.ServeHTTP(w, r)
 				return
@@ -1561,7 +1563,7 @@ type CommandInfo struct {
 }
 
 // Commands lists the slash commands available this session — built-in actions,
-// custom commands (.reasonix/commands), and MCP prompts — for the composer's "/"
+// custom commands (.maddog/commands plus legacy dirs), and MCP prompts — for the composer's "/"
 // autocomplete menu.
 func (a *App) Commands() []CommandInfo {
 	out := []CommandInfo{
@@ -3210,7 +3212,7 @@ func (a *App) ReadFile(rel string) FilePreview {
 		token := a.ensureMediaTokenStore().create(path, info.Name(), mime, kind, info.Size(), info.ModTime())
 		out.Kind = kind
 		out.Mime = mime
-		out.URL = "/__reasonix_workspace_media/" + token + "/" + url.PathEscape(info.Name())
+		out.URL = workspaceMediaPrefix + token + "/" + url.PathEscape(info.Name())
 		return out
 	}
 	f, err := os.Open(path)
@@ -3402,13 +3404,13 @@ func (a *App) currentProviderEntryForTab(tabID string) (*config.ProviderEntry, e
 }
 
 // SavePastedImage stores a browser clipboard image data URL under
-// .reasonix/attachments and returns the relative @-reference path.
+// .maddog/attachments and returns the relative @-reference path.
 func (a *App) SavePastedImage(dataURL string) (string, error) {
 	return control.SaveImageDataURL(dataURL)
 }
 
 // SavePastedFile stores a dropped non-image file (the browser exposes its bytes
-// as a data URL but not a real path) under .reasonix/attachments and returns the
+// as a data URL but not a real path) under .maddog/attachments and returns the
 // relative @-reference path.
 func (a *App) SavePastedFile(name, dataURL string) (string, error) {
 	return control.SaveAttachmentDataURL(name, dataURL)
@@ -3421,7 +3423,7 @@ func (a *App) AttachmentDataURL(path string) (string, error) {
 
 // DroppedItem is one OS-dropped file resolved into a composer context entry: an
 // in-tree file becomes a workspace @reference (read in place, no copy), while an
-// image or out-of-tree file is copied into .reasonix/attachments.
+// image or out-of-tree file is copied into .maddog/attachments.
 type DroppedItem struct {
 	Kind       string `json:"kind"` // "workspace" | "attachment"
 	Path       string `json:"path"`
@@ -3432,7 +3434,7 @@ type DroppedItem struct {
 // AttachDropped turns an absolute path from the native file-drop bridge into a
 // composer context entry. Images are stored as attachments so the chip shows a
 // thumbnail; other in-workspace files are referenced relatively (no copy); files
-// outside the workspace are copied into .reasonix/attachments.
+// outside the workspace are copied into .maddog/attachments.
 func (a *App) AttachDropped(path string) (DroppedItem, error) {
 	info, err := os.Lstat(path)
 	if err != nil {
@@ -3517,7 +3519,7 @@ type MemoryView struct {
 // writableScopes are the quick-add targets the panel offers, broad → specific.
 var writableScopes = []memory.Scope{memory.ScopeUser, memory.ScopeProject, memory.ScopeLocal}
 
-// Memory returns the loaded memory for the panel: the REASONIX.md hierarchy, the
+// Memory returns the loaded memory for the panel: the MADDOG.md hierarchy, the
 // saved auto-memories, and the writable scopes. Read-only; mutations go through
 // Remember / SaveDoc.
 func (a *App) Memory() MemoryView {

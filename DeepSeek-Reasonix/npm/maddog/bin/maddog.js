@@ -1,17 +1,17 @@
 #!/usr/bin/env node
 const { spawnSync } = require("node:child_process");
 
-const pkg = `@reasonix/cli-${process.platform}-${process.arch}`;
-const exe = `reasonix${process.platform === "win32" ? ".exe" : ""}`;
+const pkg = `@maddog/cli-${process.platform}-${process.arch}`;
+const exe = `maddog${process.platform === "win32" ? ".exe" : ""}`;
 
 let binary;
 try {
   binary = require.resolve(`${pkg}/bin/${exe}`);
 } catch {
   console.error(
-    `reasonix: no prebuilt binary for ${process.platform}-${process.arch}.\n` +
+    `maddog: no prebuilt binary for ${process.platform}-${process.arch}.\n` +
       `Install the matching optional package (${pkg}), or build from source:\n` +
-      `  https://github.com/esengine/DeepSeek-Reasonix`,
+      `  https://github.com/sekkit/maddog`,
   );
   process.exit(1);
 }

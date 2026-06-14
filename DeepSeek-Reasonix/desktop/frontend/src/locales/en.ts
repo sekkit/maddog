@@ -42,7 +42,7 @@ export const en = {
   "sidebar.trash": "Trash",
   "sidebar.workspace": "Workspace",
   "sidebar.changeWorkspace": "Change",
-  "sidebar.navigation": "Reasonix navigation",
+  "sidebar.navigation": "Maddog navigation",
   "sidebar.collapse": "Collapse sidebar",
   "sidebar.expand": "Expand sidebar",
   "sidebar.expandBlocked": "Close the right file panel before expanding the sidebar",
@@ -225,7 +225,7 @@ export const en = {
   "welcome.ex3": "Where is the agent run loop, and what does it do?",
 
   // composer
-  "composer.placeholder": "Message Reasonix…  ( / commands · @ files )",
+  "composer.placeholder": "Message Maddog…  ( / commands · @ files )",
   "composer.planMode": "plan mode",
   "composer.planModeOn": "plan mode on",
   "composer.planHint": "shift+tab",
@@ -407,7 +407,7 @@ export const en = {
   "memory.instructionFiles": "Instruction files",
   "memory.instructionFilesHint": "These Markdown files stay in context and are best for durable rules and project conventions.",
   "memory.expandDoc": "Expand preview",
-  "memory.noDocs": "No REASONIX.md found. Quick-add one above.",
+  "memory.noDocs": "No MADDOG.md found. Quick-add one above.",
   "memory.savedMemories": "Saved memories",
   "memory.memoryEntries": "Memory entries",
   "memory.addMemory": "+ Add memory",
@@ -479,7 +479,7 @@ export const en = {
   "settings.updatesMeta": "version · config",
   "settings.closeBehavior": "When closing window",
   "settings.closeBehavior.background": "Keep running",
-  "settings.closeBehavior.quit": "Quit Reasonix",
+  "settings.closeBehavior.quit": "Quit Maddog",
   "settings.manageProviders": "Manage providers",
   "settings.activeProvider": "Active provider",
   "settings.plannerStatus": "Planning mode",
@@ -631,7 +631,7 @@ export const en = {
   "settings.pageDesc.providers": "Manage model providers, API endpoints, keys, and available models.",
   "settings.pageDesc.mcp": "Manage MCP server connections and tool discovery.",
   "settings.pageDesc.skills": "Browse, enable, and manage agent skills and skill sources.",
-  "settings.pageDesc.memory": "Manage preferences, project conventions, and instruction files Reasonix keeps referencing.",
+  "settings.pageDesc.memory": "Manage preferences, project conventions, and instruction files Maddog keeps referencing.",
   "settings.pageDesc.network": "Proxy and network configuration.",
   "settings.pageDesc.permissions": "Writer mode and fine-grained tool permission rules.",
   "settings.pageDesc.sandbox": "Bash sandbox, network egress, and workspace root.",
@@ -660,7 +660,7 @@ export const en = {
   "settings.addProvider.chooseTitle": "Add provider",
   "settings.addProvider.chooseHint": "Choose an official preset, or add a custom OpenAI-compatible access.",
   "settings.addProvider.officialChoice": "Official provider",
-  "settings.addProvider.officialChoiceHint": "Choose from Reasonix presets for DeepSeek and Mimo.",
+  "settings.addProvider.officialChoiceHint": "Choose from Maddog presets for DeepSeek and Mimo.",
   "settings.addProvider.customChoice": "Custom provider",
   "settings.addProvider.customChoiceHint": "Configure base_url, models, key env, and related parameters manually.",
   "settings.addProvider.officialTitle": "Add official provider",
@@ -855,7 +855,7 @@ export const en = {
   "updater.dismiss": "Later",
 
   // onboarding — first-run API-key overlay
-  "onboarding.title": "Connect Reasonix",
+  "onboarding.title": "Connect Maddog",
   "onboarding.tagline": "Paste a DeepSeek API key to start. Stored locally in this app's credentials, never sent anywhere else.",
   "onboarding.inputLabel": "API key",
   "onboarding.inputPlaceholder": "sk-…",
@@ -906,7 +906,7 @@ export const en = {
   "context.durationMinutesSeconds": "{minutes}m {seconds}s",
 
   // crash page
-  "crash.title": "Reasonix hit an error — screenshot this and send it over",
+  "crash.title": "Maddog hit an error — screenshot this and send it over",
   "crash.copy": "Copy",
 
   // mock / demo seed data (browser dev only)
@@ -942,8 +942,8 @@ export const en = {
   "mock.askQ1Opt2Desc": "Abandon all local changes, force sync with remote",
   "mock.askQ1Opt3Label": "Create branch to save changes",
   "mock.askQ1Opt3Desc": "Create a branch to save local changes first, then pull main branch",
-  "mock.askQ2Header": "Reasonix build",
-  "mock.askQ2Prompt": "What do you want to do about the missing reasonix binary?",
+  "mock.askQ2Header": "Maddog build",
+  "mock.askQ2Prompt": "What do you want to do about the missing maddog binary?",
   "mock.askQ2Opt1Label": "Check docs first",
   "mock.askQ2Opt1Desc": "Read README / build docs to determine the correct build command",
   "mock.askQ2Opt2Label": "Check build config",
@@ -959,7 +959,7 @@ export const en = {
   "mock.changedFile1Prompt": "Update draft spec v0.3",
   "mock.changedFile2Prompt": "Record project context",
   "mock.changedFile1Path": "docs/dev-standard.md",
-  "mock.changedFile2Path": ".reasonix/project.md",
+  "mock.changedFile2Path": ".maddog/project.md",
 };
 
 export type DictKey = keyof typeof en;

@@ -384,9 +384,9 @@ function makeMockApp(): AppBindings {
   let cancelled = false;
   let pendingAskPreview = false;
   let pendingApprovalPreview = false;
-  const globalWorkspaceRoot = "~/Library/Application Support/reasonix/global-workspace";
+  const globalWorkspaceRoot = "~/Library/Application Support/maddog/global-workspace";
   let cwd = freshMock ? globalWorkspaceRoot : "~/projects/joyquant-db"; // mutable so PickWorkspace is visible in dev
-  let workspaces = freshMock ? [] : ["~/projects/joyquant-db", "~/projects/joyquant-sys", "~/projects/reasonix", "~/projects/blade"];
+  let workspaces = freshMock ? [] : ["~/projects/joyquant-db", "~/projects/joyquant-sys", "~/projects/maddog", "~/projects/blade"];
   let mockEffort = "auto";
   const day = 86_400_000;
   const t0 = Date.now();
@@ -440,10 +440,10 @@ function makeMockApp(): AppBindings {
   const capSkills: SkillView[] = [
     { name: "explore", description: "Investigate the codebase in an isolated subagent", scope: "builtin", runAs: "subagent", enabled: true },
     { name: "review", description: "Review the staged diff", scope: "project", runAs: "inline", enabled: false },
-    { name: "init", description: "Scaffold a REASONIX.md for this repo", scope: "builtin", runAs: "inline", enabled: true },
+    { name: "init", description: "Scaffold a MADDOG.md for this repo", scope: "builtin", runAs: "inline", enabled: true },
   ];
   let capSkillRoots: SkillRootView[] = [
-    { dir: "~/projects/reasonix/.reasonix/skills", scope: "project", priority: 1, status: "missing", configured: false, removable: true, skills: 0 },
+    { dir: "~/projects/maddog/.maddog/skills", scope: "project", priority: 1, status: "missing", configured: false, removable: true, skills: 0 },
     {
       dir: "~/my-skills",
       scope: "custom",
@@ -455,7 +455,7 @@ function makeMockApp(): AppBindings {
       skillItems: [{ name: "review", description: "Review the staged diff", scope: "custom", runAs: "inline" }],
     },
     {
-      dir: "~/.reasonix/skills",
+      dir: "~/.maddog/skills",
       scope: "global",
       priority: 6,
       status: "ok",
@@ -464,7 +464,7 @@ function makeMockApp(): AppBindings {
       skills: 2,
       skillItems: [
         { name: "explore", description: "Investigate the codebase in an isolated subagent", scope: "global", runAs: "subagent" },
-        { name: "init", description: "Scaffold a REASONIX.md for this repo", scope: "global", runAs: "inline" },
+        { name: "init", description: "Scaffold a MADDOG.md for this repo", scope: "global", runAs: "inline" },
       ],
     },
   ];
@@ -592,12 +592,12 @@ function makeMockApp(): AppBindings {
       noProxy: "",
       proxy: { type: "socks5", server: "127.0.0.1", port: 7890, username: "", password: "" },
     },
-    agent: { temperature: 0.2, maxSteps: 0, systemPrompt: "You are Reasonix, a coding agent." },
+    agent: { temperature: 0.2, maxSteps: 0, systemPrompt: "You are Maddog, a coding agent." },
     desktopLanguage: "",
     desktopTheme: "dark",
     desktopThemeStyle: "graphite",
     closeBehavior: "background",
-    configPath: "~/projects/reasonix/reasonix.toml",
+    configPath: "~/projects/maddog/maddog.toml",
     providerKinds: ["openai"],
     bypass: false,
   };
@@ -605,7 +605,7 @@ function makeMockApp(): AppBindings {
     provider.apiKeyEnv === "DEEPSEEK_API_KEY" ? { ...provider, keySet: !freshMock } : provider,
   );
   if (freshMock) {
-    settings.configPath = "~/.config/reasonix/config.toml";
+    settings.configPath = "~/.config/maddog/config.toml";
   }
   const mockProjectTree: ProjectNode[] = freshMock ? [] : [
     {
@@ -1107,7 +1107,7 @@ function makeMockApp(): AppBindings {
     async PickWorkspace() {
       // Browser dev has no native dialog; simulate picking a folder and re-root so
       // the topbar folder chip visibly changes.
-      return mockSwitchWorkspace(cwd.endsWith("another-project") ? "~/projects/reasonix" : "~/projects/another-project");
+      return mockSwitchWorkspace(cwd.endsWith("another-project") ? "~/projects/maddog" : "~/projects/another-project");
     },
     async SwitchWorkspace(path: string) {
       return mockSwitchWorkspace(path);
@@ -1356,8 +1356,8 @@ function makeMockApp(): AppBindings {
     },
     async ReadFile(rel: string) {
       const samples: Record<string, string> = {
-        "README.md": "# Reasonix\n\nBrowser-dev workspace preview.\n\n- Chat in the center\n- Browse files on the right\n- Keep sessions on the left\n",
-        "go.mod": "module reasonix\n\ngo 1.23\n",
+        "README.md": "# Maddog\n\nBrowser-dev workspace preview.\n\n- Chat in the center\n- Browse files on the right\n- Keep sessions on the left\n",
+        "go.mod": "module maddog\n\ngo 1.23\n",
         "desktop/file.go": "package desktop\n\nfunc main() {\n\tprintln(\"workspace preview\")\n}\n",
         "internal/event.go": "package internal\n\n// mock file used by the browser dev seam\n",
       };
@@ -1403,14 +1403,14 @@ function makeMockApp(): AppBindings {
       console.info("mock RevealPath", path);
     },
     async SavePastedImage(_dataUrl: string) {
-      return ".reasonix/attachments/mock.png";
+      return ".maddog/attachments/mock.png";
     },
     async SavePastedFile(name: string, _dataUrl: string) {
-      return `.reasonix/attachments/mock-${name}`;
+      return `.maddog/attachments/mock-${name}`;
     },
     async AttachDropped(path: string) {
       const name = path.split(/[/\\]/).filter(Boolean).pop() ?? path;
-      return { kind: "attachment" as const, path: `.reasonix/attachments/mock-${name}` };
+      return { kind: "attachment" as const, path: `.maddog/attachments/mock-${name}` };
     },
     async AttachmentDataURL(_path: string) {
       return "data:image/png;base64,iVBORw0KGgo=";
@@ -1443,15 +1443,15 @@ function makeMockApp(): AppBindings {
     async Memory() {
       return {
         available: true,
-        storeDir: "~/.config/reasonix/projects/-mock/memory",
+        storeDir: "~/.config/maddog/projects/-mock/memory",
         docs: [
           {
-            path: "REASONIX.md",
+            path: "MADDOG.md",
             scope: "project",
-            body: "# Reasonix project memory\n\nMock doc shown in the browser dev seam.\n\n## Notes\n\n- prefers concise replies",
+            body: "# Maddog project memory\n\nMock doc shown in the browser dev seam.\n\n## Notes\n\n- prefers concise replies",
           },
           {
-            path: "~/.config/reasonix/REASONIX.md",
+            path: "~/.config/maddog/MADDOG.md",
             scope: "user",
             body: t("mock.memoryBody"),
           },
@@ -1465,15 +1465,15 @@ function makeMockApp(): AppBindings {
           },
         ],
         scopes: [
-          { scope: "user", path: "~/.config/reasonix/REASONIX.md" },
-          { scope: "project", path: "REASONIX.md" },
-          { scope: "local", path: "REASONIX.local.md" },
+          { scope: "user", path: "~/.config/maddog/MADDOG.md" },
+          { scope: "project", path: "MADDOG.md" },
+          { scope: "local", path: "MADDOG.local.md" },
         ],
       };
     },
     async Remember(scope: string, note: string) {
       emit({ kind: "notice", level: "info", text: `remembered → ${scope}` });
-      return `${scope} REASONIX.md (mock): ${note}`;
+      return `${scope} MADDOG.md (mock): ${note}`;
     },
     async Forget(name: string) {
       emit({ kind: "notice", level: "info", text: `forgot → ${name}` });
@@ -1622,7 +1622,7 @@ function makeMockApp(): AppBindings {
     },
     async OpenDownloadPage() {
       if (typeof window !== "undefined") {
-        window.open("https://github.com/esengine/reasonix/releases/latest", "_blank", "noopener");
+        window.open("https://github.com/sekkit/maddog/releases/latest", "_blank", "noopener");
       }
     },
     // Dev seam: drives the overlay flow in the browser until ConnectKey sets the
@@ -1787,7 +1787,7 @@ function makeMockApp(): AppBindings {
         sessionCurrency: "¥",
         sessionCostUsd: 0.018,
         readFiles: [
-          { path: "REASONIX.md", turn: 2, time: now - 34 * 60 * 1000 },
+          { path: "MADDOG.md", turn: 2, time: now - 34 * 60 * 1000 },
           { path: "pyproject.toml", turn: 3, time: now - 30 * 60 * 1000 },
           { path: "docs/dev-standard.md", turn: 5, time: now - 13 * 60 * 1000, offset: 0, limit: 180 },
           { path: "scripts/db_migrate.sh", turn: 6, time: now - 4 * 60 * 1000, offset: 120, limit: 80, truncated: true },

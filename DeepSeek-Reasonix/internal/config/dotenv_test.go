@@ -6,11 +6,10 @@ import (
 	"testing"
 )
 
-// TestLoadDotEnvFallsBackToHome proves the unified-key behaviour: the working
-// directory's .env wins, but a key only present in ~/.env is still picked up —
-// so a key set once in the home .env (the desktop app writes there) reaches the
-// CLI run from any project directory. Existing env vars beat both files.
-func TestLoadDotEnvFallsBackToHome(t *testing.T) {
+// TestLoadDotEnvIgnoresHomeEnv proves Maddog no longer imports ~/.env: a project
+// .env is still honored, but user-home env files remain owned by the user and
+// other installed clients.
+func TestLoadDotEnvIgnoresHomeEnv(t *testing.T) {
 	cwd := t.TempDir()
 	home := t.TempDir()
 
@@ -38,16 +37,16 @@ func TestLoadDotEnvFallsBackToHome(t *testing.T) {
 	if got := os.Getenv("KEY_CWD"); got != "from_cwd" {
 		t.Errorf("cwd-only key not loaded: KEY_CWD=%q", got)
 	}
-	if got := os.Getenv("KEY_HOME"); got != "from_home" {
-		t.Errorf("~/.env fallback failed: KEY_HOME=%q want from_home", got)
+	if got := os.Getenv("KEY_HOME"); got != "" {
+		t.Errorf("~/.env must not be auto-loaded: KEY_HOME=%q", got)
 	}
 	if got := os.Getenv("KEY_SHARED"); got != "cwd_wins" {
-		t.Errorf("cwd .env should take precedence over ~/.env: KEY_SHARED=%q want cwd_wins", got)
+		t.Errorf("cwd .env should load before Maddog credentials: KEY_SHARED=%q want cwd_wins", got)
 	}
 }
 
-// TestLoadDotEnvReadsGlobalCredentials proves `reasonix setup`'s target — the
-// reasonix-owned credentials file in the user config dir — is loaded from any
+// TestLoadDotEnvReadsGlobalCredentials proves `maddog setup`'s target — the
+// Maddog-owned credentials file in the user config dir — is loaded from any
 // working directory, while a project ./.env still wins on a shared key.
 func TestLoadDotEnvReadsGlobalCredentials(t *testing.T) {
 	cwd := t.TempDir()

@@ -1,12 +1,12 @@
-# Reasonix configuration.
-# Resolution order: flag > ./reasonix.toml > ~/.config/reasonix/config.toml > built-in defaults.
+# Maddog configuration.
+# Resolution order: flag > ./maddog.toml > ~/.config/maddog/config.toml > built-in defaults.
 # Secrets come from the environment via api_key_env; never put keys here.
 
 default_model = "deepseek"   # a provider name (→ its default model) or "provider/model"
-# language      = "zh"   # ui language; empty = auto-detect from $LANG / $REASONIX_LANG
+# language      = "zh"   # ui language; empty = auto-detect from $LANG / $MADDOG_LANG
 
 [ui]
-theme = "auto"   # auto|dark|light; controls CLI colors only; REASONIX_THEME can override per run
+theme = "auto"   # auto|dark|light; controls CLI colors only; MADDOG_THEME can override per run
 # theme_style = "graphite"   # graphite|ember|aurora|midnight|sandstone|porcelain|linen|glacier
 
 [notifications]
@@ -17,7 +17,7 @@ ask_request = true   # notify when a question is waiting
 
 [agent]
 system_prompt = """
-You are Reasonix, a coding agent focused on executing code tasks.
+You are Maddog, a coding agent focused on executing code tasks.
 Use the provided tools to read and write files and run shell commands.
 Principles: understand the request before acting; verify with tools instead of
 guessing; keep changes minimal and correct; briefly summarize what you did."""
@@ -33,7 +33,7 @@ compact_force_ratio = 0.9   # force compacting at this high-water mark
 # subagent_model = "deepseek-pro"   # optional default for runAs=subagent skills
 # subagent_models = { review = "deepseek-pro", security_review = "deepseek-pro" }   # per-skill overrides
 # output_style = "explanatory"   # persona/tone folded into the prompt: explanatory | learning | concise,
-#                                  or a custom .reasonix/output-styles/<name>.md ; empty = default
+#                                  or a custom .maddog/output-styles/<name>.md ; empty = default
 
 # A provider is a vendor endpoint (one base_url + key) that offers one or more
 # models. Use `models = [...]` to expose several under a single entry — switching
@@ -118,10 +118,10 @@ bash_timeout_seconds = 120   # foreground safety cap; set 0 for no tool-local ca
 # [codegraph]
 # enabled      = false
 # auto_install = true
-# path         = ""   # empty = cache, then PATH, then a bundle beside reasonix
+# path         = ""   # empty = cache, then PATH, then a bundle beside maddog
 
 # Skills are invokable playbooks (SKILL.md / <name>.md with frontmatter), found
-# under .reasonix/skills, .agents/skills, .agent/skills, .claude/skills (project)
+# under .maddog/skills, .agents/skills, .agent/skills, .claude/skills (project)
 # and the same dirs under ~ (global). Built-ins (explore/research/review/security-review/test)
 # ship out of the box. The model invokes them via run_skill / explore / …; you
 # invoke them via /<name>. Manage with /skill (list, show, enable, disable, new, paths).
@@ -132,10 +132,10 @@ bash_timeout_seconds = 120   # foreground safety cap; set 0 for no tool-local ca
 
 # Hooks run shell commands around the loop (PreToolUse / PostToolUse /
 # UserPromptSubmit / Stop). They are NOT configured here — put them in
-# settings.json: ~/.reasonix/settings.json (global, always on) and
-# <project>/.reasonix/settings.json (project, runs only after `/hooks trust`).
+# settings.json: ~/.maddog/settings.json (global, always on) and
+# <project>/.maddog/settings.json (project, runs only after `/hooks trust`).
 # Exit 0 = pass, exit 2 = block (PreToolUse / UserPromptSubmit only). Example
-# ~/.reasonix/settings.json:
+# ~/.maddog/settings.json:
 #   { "hooks": {
 #       "PreToolUse":  [ { "match": "bash", "command": "my-guard.sh" } ],
 #       "PostToolUse": [ { "match": ".*file", "command": "gofmt -w ." } ],
@@ -149,6 +149,6 @@ bash_timeout_seconds = 120   # foreground safety cap; set 0 for no tool-local ca
 # External stdio plugins (MCP-compatible); each is a standalone executable.
 # [[plugins]]
 # name    = "example"
-# command = "reasonix-plugin-example"
+# command = "maddog-plugin-example"
 # # Enabled MCP servers connect automatically in the background after session
 # # start. Use /mcp or the desktop MCP panel to refresh, reconnect, or disable.

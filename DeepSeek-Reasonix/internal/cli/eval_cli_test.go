@@ -43,7 +43,7 @@ Use replay evidence to improve docs.
 	if rc != 0 {
 		t.Fatalf("eval guard rc = %d, want 0", rc)
 	}
-	if _, err := os.Stat(filepath.Join(project, ".reasonix", "skills", "better-docs", "SKILL.md")); err != nil {
+	if _, err := os.Stat(filepath.Join(project, ".maddog", "skills", "better-docs", "SKILL.md")); err != nil {
 		t.Fatalf("promoted skill missing: %v", err)
 	}
 }

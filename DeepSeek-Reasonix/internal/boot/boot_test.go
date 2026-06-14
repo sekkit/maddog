@@ -31,14 +31,14 @@ import (
 )
 
 // TestBuildFoldsProjectMemoryIntoSystemPrompt is the end-to-end proof of the
-// cache-first wiring: a project REASONIX.md is discovered at boot and folded
+// cache-first wiring: a project MADDOG.md is discovered at boot and folded
 // into the session's system message (the cached prefix), and the `remember`
 // tool is registered. It builds a real Controller from a throwaway project dir.
 func TestBuildFoldsProjectMemoryIntoSystemPrompt(t *testing.T) {
 	dir := robustTempDir(t)
 	t.Chdir(dir)
 
-	writeFile(t, dir, "reasonix.toml", `
+	writeFile(t, dir, "maddog.toml", `
 default_model = "test-model"
 
 [codegraph]
@@ -54,7 +54,7 @@ base_url = "https://example.invalid"
 model = "x"
 api_key_env = "REASONIX_TEST_KEY_UNSET"
 `)
-	writeFile(t, dir, "REASONIX.md", "Project rule: always run go vet before committing.")
+	writeFile(t, dir, "MADDOG.md", "Project rule: always run go vet before committing.")
 
 	ctrl, err := Build(context.Background(), Options{}) // RequireKey false: no network/key needed
 	if err != nil {
@@ -69,7 +69,7 @@ api_key_env = "REASONIX_TEST_KEY_UNSET"
 		t.Fatalf("base prompt missing from system message:\n%s", sys)
 	}
 	if !strings.Contains(sys, "always run go vet before committing") {
-		t.Fatalf("project REASONIX.md not folded into system message:\n%s", sys)
+		t.Fatalf("project MADDOG.md not folded into system message:\n%s", sys)
 	}
 	// Base must come first so it stays a valid cache prefix when memory changes.
 	if strings.Index(sys, "BASE SYSTEM PROMPT") > strings.Index(sys, "always run go vet") {
@@ -77,7 +77,7 @@ api_key_env = "REASONIX_TEST_KEY_UNSET"
 	}
 
 	if mem := ctrl.Memory(); mem == nil || len(mem.Docs) == 0 {
-		t.Fatal("controller memory set is empty after discovering REASONIX.md")
+		t.Fatal("controller memory set is empty after discovering MADDOG.md")
 	}
 }
 
@@ -168,7 +168,7 @@ func TestBuildDiscoversSkills(t *testing.T) {
 	t.Setenv("HOME", home)
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
 	t.Chdir(dir)
-	writeFile(t, dir, "reasonix.toml", `
+	writeFile(t, dir, "maddog.toml", `
 default_model = "test-model"
 
 [codegraph]
@@ -184,7 +184,7 @@ base_url = "https://example.invalid"
 model = "x"
 api_key_env = "REASONIX_TEST_KEY_UNSET"
 `)
-	writeFile(t, dir, ".reasonix/skills/projskill.md", "---\ndescription: a project skill\n---\nplaybook")
+	writeFile(t, dir, ".maddog/skills/projskill.md", "---\ndescription: a project skill\n---\nplaybook")
 
 	ctrl, err := Build(context.Background(), Options{})
 	if err != nil {
@@ -238,7 +238,7 @@ func TestBuildOmitsDisabledSkillsFromPromptAndRuntimeList(t *testing.T) {
 	t.Setenv("HOME", home)
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
 	t.Chdir(dir)
-	writeFile(t, dir, "reasonix.toml", `
+	writeFile(t, dir, "maddog.toml", `
 default_model = "test-model"
 
 [codegraph]
@@ -257,7 +257,7 @@ base_url = "https://example.invalid"
 model = "x"
 api_key_env = "REASONIX_TEST_KEY_UNSET"
 `)
-	writeFile(t, dir, ".reasonix/skills/projskill.md", "---\ndescription: a project skill\n---\nplaybook")
+	writeFile(t, dir, ".maddog/skills/projskill.md", "---\ndescription: a project skill\n---\nplaybook")
 
 	ctrl, err := Build(context.Background(), Options{})
 	if err != nil {
@@ -292,9 +292,9 @@ func TestBuildOmitsExcludedSkillRootsFromPromptAndRuntimeList(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
 	t.Chdir(dir)
 	excluded := filepath.Join(home, ".agents", "skills")
-	writeFile(t, home, ".reasonix/skills/keep.md", "---\ndescription: keep\n---\nplaybook")
+	writeFile(t, home, ".maddog/skills/keep.md", "---\ndescription: keep\n---\nplaybook")
 	writeFile(t, home, ".agents/skills/noisy.md", "---\ndescription: noisy\n---\nplaybook")
-	writeFile(t, dir, "reasonix.toml", fmt.Sprintf(`
+	writeFile(t, dir, "maddog.toml", fmt.Sprintf(`
 default_model = "test-model"
 
 [codegraph]
@@ -340,7 +340,7 @@ api_key_env = "REASONIX_TEST_KEY_UNSET"
 func TestBuildWithoutMemoryLeavesPromptUnchanged(t *testing.T) {
 	dir := robustTempDir(t)
 	t.Chdir(dir)
-	writeFile(t, dir, "reasonix.toml", `
+	writeFile(t, dir, "maddog.toml", `
 default_model = "test-model"
 
 [codegraph]
@@ -367,7 +367,7 @@ api_key_env = "REASONIX_TEST_KEY_UNSET"
 	// The built-in skills always append a "# Skills" index to the prefix; this
 	// test is about memory, so strip that and assert the remaining base is exactly
 	// the configured prompt — i.e. no *project/ancestor* memory leaked in. (A
-	// user-global REASONIX.md in the real config dir could append; the test
+	// user-global MADDOG.md in the real config dir could append; the test
 	// environment has none, so the base stands alone.)
 	base := sys
 	if i := strings.Index(sys, "\n\n# Skills"); i >= 0 {
@@ -384,7 +384,7 @@ api_key_env = "REASONIX_TEST_KEY_UNSET"
 func TestBuildLanguagePolicyIsAppended(t *testing.T) {
 	dir := robustTempDir(t)
 	t.Chdir(dir)
-	writeFile(t, dir, "reasonix.toml", `
+	writeFile(t, dir, "maddog.toml", `
 default_model = "test-model"
 
 [codegraph]
@@ -449,11 +449,11 @@ func TestRememberPermissionRuleUsesWorkspaceRoot(t *testing.T) {
 	cwd := robustTempDir(t)
 	workspace := robustTempDir(t)
 	t.Chdir(cwd)
-	writeFile(t, cwd, "reasonix.toml", `
+	writeFile(t, cwd, "maddog.toml", `
 [permissions]
 allow = ["bash(cwd*)"]
 `)
-	writeFile(t, workspace, "reasonix.toml", `
+	writeFile(t, workspace, "maddog.toml", `
 [permissions]
 allow = ["bash(workspace*)"]
 `)
@@ -461,11 +461,11 @@ allow = ["bash(workspace*)"]
 	const rule = "bash=go test ./..."
 	rememberPermissionRule(workspace, rule)
 
-	cwdCfg := config.LoadForEdit(filepath.Join(cwd, "reasonix.toml"))
+	cwdCfg := config.LoadForEdit(filepath.Join(cwd, "maddog.toml"))
 	if hasPermissionRule(cwdCfg.Permissions.Allow, rule) {
 		t.Fatalf("remembered rule was written to cwd config: %v", cwdCfg.Permissions.Allow)
 	}
-	workspaceCfg := config.LoadForEdit(filepath.Join(workspace, "reasonix.toml"))
+	workspaceCfg := config.LoadForEdit(filepath.Join(workspace, "maddog.toml"))
 	if !hasPermissionRule(workspaceCfg.Permissions.Allow, rule) {
 		t.Fatalf("remembered rule missing from workspace config: %v", workspaceCfg.Permissions.Allow)
 	}
@@ -493,7 +493,7 @@ allow = ["bash(user*)"]
 	if !hasPermissionRule(userCfg.Permissions.Allow, rule) {
 		t.Fatalf("empty root should remember into SourcePath config: %v", userCfg.Permissions.Allow)
 	}
-	if _, err := os.Stat(filepath.Join(cwd, "reasonix.toml")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(cwd, "maddog.toml")); !os.IsNotExist(err) {
 		t.Fatalf("empty root should not create cwd config when SourcePath exists, err=%v", err)
 	}
 }
@@ -507,22 +507,17 @@ func hasPermissionRule(rules []string, want string) bool {
 	return false
 }
 
-// TestBuildMigratesLegacyConfigEndToEnd drives the real boot path: a v0.x
-// ~/.reasonix/config.json with no v1+ config present must be imported during
-// Build — config written, key pinned into the env, and the user told via a notice.
-func TestBuildMigratesLegacyConfigEndToEnd(t *testing.T) {
+func TestBuildDoesNotMigrateOriginalReasonixConfigEndToEnd(t *testing.T) {
 	home := robustTempDir(t)
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)                               // os.UserHomeDir on Windows
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config")) // os.UserConfigDir on Linux
 	t.Setenv("AppData", filepath.Join(home, "AppData"))         // os.UserConfigDir on Windows
-	t.Setenv("DEEPSEEK_API_KEY", "")                            // track for cleanup; migration os.Setenv's it live
+	t.Setenv("DEEPSEEK_API_KEY", "")
 
 	proj := robustTempDir(t)
 	t.Chdir(proj)
-	// codegraph off keeps Build offline; it merges over the migrated user config
-	// without dropping the migrated plugins.
-	writeFile(t, proj, "reasonix.toml", "[codegraph]\nenabled = false\n")
+	writeFile(t, proj, "maddog.toml", "[codegraph]\nenabled = false\n")
 	writeFile(t, filepath.Join(home, ".reasonix"), "config.json",
 		`{"apiKey":"sk-e2e","lang":"zh","mcpServers":{"fs":{"command":"npx","args":["-y","server-fs"]}}}`)
 	writeFile(t, filepath.Join(home, ".reasonix", "sessions"), "chat-1.events.jsonl",
@@ -542,48 +537,36 @@ func TestBuildMigratesLegacyConfigEndToEnd(t *testing.T) {
 	}
 	defer ctrl.Close()
 
-	migrated := false
 	for _, n := range notices {
 		if strings.Contains(n, "migrated your previous configuration") {
-			migrated = true
+			t.Fatalf("Build should not migrate original Reasonix config; notices=%v", notices)
 		}
-	}
-	if !migrated {
-		t.Fatalf("no migration notice emitted; got %v", notices)
 	}
 
 	dest := config.UserConfigPath()
-	data, err := os.ReadFile(dest)
-	if err != nil {
-		t.Fatalf("v2 config not written to %s: %v", dest, err)
-	}
-	if !strings.Contains(string(data), `name    = "fs"`) || !strings.Contains(string(data), `language      = "zh"`) {
-		t.Errorf("migrated config missing plugin/lang:\n%s", data)
+	if _, err := os.Stat(dest); !os.IsNotExist(err) {
+		t.Fatalf("Build wrote Maddog user config from original Reasonix install, stat err=%v", err)
 	}
 
-	if got := os.Getenv("DEEPSEEK_API_KEY"); got != "sk-e2e" {
-		t.Errorf("DEEPSEEK_API_KEY not pinned into env after migration: %q", got)
+	if got := os.Getenv("DEEPSEEK_API_KEY"); got != "" {
+		t.Errorf("DEEPSEEK_API_KEY should not be pinned from original Reasonix config: %q", got)
 	}
 
-	if data, err := os.ReadFile(config.UserCredentialsPath()); err != nil || !strings.Contains(string(data), "DEEPSEEK_API_KEY=sk-e2e") {
-		t.Errorf("credentials store missing migrated key: %q (err %v)", data, err)
+	if _, err := os.Stat(config.UserCredentialsPath()); !os.IsNotExist(err) {
+		t.Errorf("credentials store should not be written from original Reasonix config, stat err=%v", err)
 	}
 	if _, err := os.Stat(filepath.Join(home, ".env")); !os.IsNotExist(err) {
-		t.Errorf("migration must not write the user's ~/.env, stat err=%v", err)
+		t.Errorf("Build must not write the user's ~/.env, stat err=%v", err)
 	}
 
-	sessionImported := false
 	for _, n := range notices {
 		if strings.Contains(n, "imported") && strings.Contains(n, "past session") {
-			sessionImported = true
+			t.Fatalf("Build should not import original Reasonix sessions; notices=%v", notices)
 		}
 	}
-	if !sessionImported {
-		t.Errorf("no session-import notice emitted; got %v", notices)
-	}
 	migratedSession := filepath.Join(config.SessionDir(), "chat-1.jsonl")
-	if _, err := os.Stat(migratedSession); err != nil {
-		t.Errorf("legacy session not imported to %s: %v", migratedSession, err)
+	if _, err := os.Stat(migratedSession); !os.IsNotExist(err) {
+		t.Errorf("original Reasonix session should not be imported to %s, stat err=%v", migratedSession, err)
 	}
 }
 
@@ -595,7 +578,7 @@ func TestBuildMigratesLegacySessionsFromConfigSessionDir(t *testing.T) {
 	t.Setenv("AppData", filepath.Join(home, "AppData"))
 
 	proj := robustTempDir(t)
-	writeFile(t, proj, "reasonix.toml", "[codegraph]\nenabled = false\n")
+	writeFile(t, proj, "maddog.toml", "[codegraph]\nenabled = false\n")
 
 	legacyDir := config.SessionDir()
 	writeFile(t, legacyDir, "custom-root.events.jsonl",
@@ -687,7 +670,7 @@ func TestBuildMigratesLegacyEagerTierToBackground(t *testing.T) {
 	dir := robustTempDir(t)
 	t.Chdir(dir)
 
-	writeFile(t, dir, "reasonix.toml", `
+	writeFile(t, dir, "maddog.toml", `
 default_model = "test-model"
 
 [codegraph]
@@ -721,7 +704,7 @@ tier = "eager"
 	if len(failures) != 1 || failures[0].Name != "legacy-eager" {
 		t.Fatalf("failures = %+v, want background startup failure for migrated legacy eager plugin", failures)
 	}
-	raw, err := os.ReadFile(filepath.Join(dir, "reasonix.toml"))
+	raw, err := os.ReadFile(filepath.Join(dir, "maddog.toml"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -735,7 +718,7 @@ func TestBuildMigratesLegacyLazyTierToBackground(t *testing.T) {
 	dir := robustTempDir(t)
 	t.Chdir(dir)
 
-	writeFile(t, dir, "reasonix.toml", `
+	writeFile(t, dir, "maddog.toml", `
 default_model = "test-model"
 
 [codegraph]
@@ -769,7 +752,7 @@ tier = "lazy"
 	if len(failures) != 1 || failures[0].Name != "legacy-lazy" {
 		t.Fatalf("failures = %+v, want background startup failure for migrated legacy lazy plugin", failures)
 	}
-	raw, err := os.ReadFile(filepath.Join(dir, "reasonix.toml"))
+	raw, err := os.ReadFile(filepath.Join(dir, "maddog.toml"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -785,7 +768,7 @@ func TestBuildColdCodegraphStartsInBackground(t *testing.T) {
 	launcher := writeCodegraphHelper(t, dir)
 	t.Setenv("GO_WANT_HELPER_PROCESS", "1")
 
-	writeFile(t, dir, "reasonix.toml", fmt.Sprintf(`
+	writeFile(t, dir, "maddog.toml", fmt.Sprintf(`
 default_model = "test-model"
 
 [codegraph]
@@ -858,7 +841,7 @@ func TestBuildMigratesLegacyEagerBeforeStatsDemotion(t *testing.T) {
 		}
 	}
 
-	writeFile(t, dir, "reasonix.toml", `
+	writeFile(t, dir, "maddog.toml", `
 default_model = "test-model"
 
 [codegraph]

@@ -1,0 +1,39 @@
+{
+  "name": "maddog",
+  "version": "0.0.0",
+  "description": "Cache-first Maddog coding agent for the terminal.",
+  "bin": {
+    "maddog": "bin/maddog.js"
+  },
+  "files": [
+    "bin/maddog.js"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "MIT",
+  "homepage": "https://github.com/sekkit/maddog#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/sekkit/maddog.git"
+  },
+  "bugs": {
+    "url": "https://github.com/sekkit/maddog/issues"
+  },
+  "keywords": [
+    "deepseek",
+    "ai",
+    "agent",
+    "cli",
+    "coding-assistant",
+    "tui"
+  ],
+  "optionalDependencies": {
+    "@maddog/cli-darwin-arm64": "0.0.0",
+    "@maddog/cli-darwin-x64": "0.0.0",
+    "@maddog/cli-linux-arm64": "0.0.0",
+    "@maddog/cli-linux-x64": "0.0.0",
+    "@maddog/cli-win32-arm64": "0.0.0",
+    "@maddog/cli-win32-x64": "0.0.0"
+  }
+}

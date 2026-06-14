@@ -1,5 +1,5 @@
-// Package config loads Reasonix's runtime configuration from TOML. Resolution order:
-// flag > project ./reasonix.toml > user ~/.config/reasonix/config.toml > built-in defaults.
+// Package config loads Maddog's runtime configuration from TOML. Resolution order:
+// flag > project ./maddog.toml > user ~/.config/maddog/config.toml > built-in defaults.
 // Secrets come from the environment via api_key_env and are never stored in
 // config files.
 package config
@@ -22,6 +22,13 @@ import (
 
 var validSkillName = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$`)
 
+const (
+	AppName               = "maddog"
+	AppDisplayName        = "Maddog"
+	ProjectConfigFilename = "maddog.toml"
+	ProjectConventionDir  = ".maddog"
+)
+
 // IsValidSkillName reports whether name is a usable skill identifier.
 func IsValidSkillName(name string) bool { return validSkillName.MatchString(name) }
 
@@ -37,11 +44,11 @@ func SkillNameKey(name string) string {
 	return name
 }
 
-// Config is Reasonix's runtime configuration.
+// Config is Maddog's runtime configuration.
 type Config struct {
 	ConfigVersion int                 `toml:"config_version"`
 	DefaultModel  string              `toml:"default_model"`
-	Language      string              `toml:"language"` // ui/model language tag (e.g. "zh"); empty = auto-detect from $LANG / $REASONIX_LANG
+	Language      string              `toml:"language"` // ui/model language tag (e.g. "zh"); empty = auto-detect from $LANG / $MADDOG_LANG
 	UI            UIConfig            `toml:"ui"`
 	Desktop       DesktopConfig       `toml:"desktop"`
 	Notifications NotificationsConfig `toml:"notifications"`
@@ -299,7 +306,7 @@ func (c *Config) NetworkProxyMode() string {
 
 // SkillsConfig configures skill discovery. Paths adds extra "custom"-scope skill
 // roots — each a directory of SKILL.md / <name>.md playbooks — scanned between
-// the project roots (.reasonix/.agents/.agent/.claude under the workspace) and
+// the project roots (.maddog/.agents/.agent/.claude under the workspace) and
 // the global roots. ExcludedPaths hides matching discovery roots without deleting
 // folders. ~, relative paths, and ${VAR} expansion are supported. DisabledSkills
 // hides named skills from the agent prompt, slash invocation, and skill tools
@@ -479,7 +486,7 @@ type AgentConfig struct {
 	AdvisorNativeMaxTokens    int               `toml:"advisor_native_max_tokens"`
 	// OutputStyle selects a persona/tone block folded into the system prompt at
 	// startup (a built-in like "explanatory"/"learning"/"concise", or a custom
-	// .reasonix/output-styles/<name>.md). Empty = the unmodified prompt.
+	// .maddog/output-styles/<name>.md). Empty = the unmodified prompt.
 	OutputStyle string `toml:"output_style"`
 	// AutoPlan controls whether interactive turns that look multi-step start in
 	// plan mode automatically: "off" keeps plan mode manual, "on" enables the
@@ -698,7 +705,7 @@ type PermissionsConfig struct {
 // static Headers. String fields support ${VAR} / ${VAR:-default} expansion so
 // secrets (bearer tokens, keys) come from the environment, not the file. The
 // fields mirror Claude Code's mcpServers spec, so entries can come from either
-// reasonix.toml's [[plugins]] or a project-root .mcp.json (see loadMCPJSON).
+// maddog.toml's [[plugins]] or a project-root .mcp.json (see loadMCPJSON).
 type PluginEntry struct {
 	Name    string            `toml:"name"`
 	Type    string            `toml:"type"` // "stdio" (default) | "http" | "sse"
@@ -758,7 +765,7 @@ func (c *Config) AutoStartPlugins() []PluginEntry {
 }
 
 // DefaultSystemPrompt is used when config provides none.
-const DefaultSystemPrompt = `You are Reasonix, a coding agent focused on executing code tasks.
+const DefaultSystemPrompt = `You are Maddog, a coding agent focused on executing code tasks.
 Use the provided tools to read and write files and run shell commands.
 Principles: understand the request before acting; verify with tools instead of
 guessing; keep changes minimal and correct; briefly summarize what you did.
@@ -818,8 +825,8 @@ func Default() *Config {
 			RuntimeOrchestration: true,
 			DynamicSkills:        true,
 		},
-		// Mode "ask" with no rules keeps `reasonix run` autonomous (no TTY → ask
-		// resolves to allow) while `reasonix chat` prompts before writers. Users add
+		// Mode "ask" with no rules keeps `maddog run` autonomous (no TTY → ask
+		// resolves to allow) while `maddog chat` prompts before writers. Users add
 		// deny/allow rules to harden or quiet specific tools.
 		Permissions: PermissionsConfig{Mode: "ask"},
 		// Sandbox on by default: bash is jailed (macOS), network allowed so
@@ -846,9 +853,8 @@ func Default() *Config {
 }
 
 // Load builds the configuration: defaults, then user config, then project
-// config, then MCP servers from Claude Code's .mcp.json, then (lowest priority)
-// the v0.x ~/.reasonix/config.json's mcpServers. A .env in the working directory
-// is loaded first so api_key_env can resolve.
+// config, then MCP servers from Claude Code's .mcp.json. A .env in the working
+// directory is loaded first so api_key_env can resolve.
 func Load() (*Config, error) {
 	return LoadForRoot(".")
 }
@@ -856,23 +862,18 @@ func Load() (*Config, error) {
 // LoadForRoot builds the configuration with project files resolved from root
 // instead of the current working directory. When root is "" or ".", it behaves
 // like Load(). This is the workspace-aware entry point: desktop tabs use it so
-// each project's reasonix.toml + .env + .mcp.json are resolved independently
+// each project's maddog.toml + .env + .mcp.json are resolved independently
 // without changing the process cwd.
 func LoadForRoot(root string) (*Config, error) {
 	root = resolveRoot(root)
 	loadDotEnvForRoot(root)
 	cfg := Default()
 
-	projectTOML := "reasonix.toml"
-	if root != "." {
-		projectTOML = filepath.Join(root, "reasonix.toml")
-	}
-
 	var tomlSources []string
 	if uc := userConfigPath(); uc != "" {
 		tomlSources = append(tomlSources, uc)
 	}
-	tomlSources = append(tomlSources, projectTOML)
+	tomlSources = append(tomlSources, projectConfigSourceForRoot(root))
 	sawConfigFile := false
 	for _, path := range tomlSources {
 		if _, err := os.Stat(path); err == nil {
@@ -887,7 +888,7 @@ func LoadForRoot(root string) (*Config, error) {
 	}
 	// toml.DecodeFile replaces [[plugins]] wholesale, so cfg.Plugins now holds
 	// only the last file's. Re-merge by name across all sources (later wins) so a
-	// project reasonix.toml doesn't drop the global config's MCP servers.
+	// project maddog.toml doesn't drop the global config's MCP servers.
 	plugins, err := mergeTOMLPlugins(tomlSources)
 	if err != nil {
 		return nil, err
@@ -896,7 +897,7 @@ func LoadForRoot(root string) (*Config, error) {
 
 	// Claude Code's .mcp.json (project root) is read last and merged into
 	// [[plugins]], so a server configured for Claude works here unchanged.
-	// reasonix.toml wins on a name collision (see mergeMCPJSON).
+	// maddog.toml wins on a name collision (see mergeMCPJSON).
 	mcpFile := mcpJSONFile
 	if root != "." {
 		mcpFile = filepath.Join(root, mcpJSONFile)
@@ -907,10 +908,6 @@ func LoadForRoot(root string) (*Config, error) {
 	}
 	cfg.mergeMCPJSON(entries)
 
-	// Lowest priority: the v0.x ~/.reasonix/config.json's mcpServers, so upgrading
-	// from the TypeScript line keeps MCP servers without rewriting them. Anything
-	// the v2 config or .mcp.json already declared wins on a name collision.
-	cfg.mergeMCPJSON(loadLegacyMCP(legacyConfigPath()))
 	normalizePluginCommandLines(cfg)
 	normalizeLegacyEffort(cfg)
 	normalizeLegacyMCPTiers(cfg)
@@ -1007,7 +1004,7 @@ func mergeTOMLPlugins(paths []string) ([]PluginEntry, error) {
 	return merged, nil
 }
 
-// LoadForEdit returns a config to seed the `reasonix setup` wizard when reconfiguring:
+// LoadForEdit returns a config to seed the `maddog setup` wizard when reconfiguring:
 // the built-in defaults with the file at path (if present) decoded on top, so a
 // reconfigure preserves the user's existing providers and agent settings instead
 // of resetting to defaults. .env is loaded so api_key_env resolution works while
@@ -1454,26 +1451,29 @@ func userConfigPath() string {
 	if err != nil {
 		return ""
 	}
-	return filepath.Join(dir, "reasonix", "config.toml")
+	return filepath.Join(dir, AppName, "config.toml")
 }
 
-// UserConfigPath is the user-global config file (~/.config/reasonix/config.toml),
+// UserConfigPath is the user-global config file (~/.config/maddog/config.toml),
 // or "" when the user config dir can't be resolved.
 func UserConfigPath() string { return userConfigPath() }
 
-// UserCredentialsPath is the reasonix-owned global secrets file, beside
-// config.toml in the user config dir (e.g. ~/.config/reasonix/credentials). It
+// UserCredentialsPath is the Maddog-owned global secrets file, usually beside
+// config.toml in the user config dir (e.g. ~/.config/maddog/credentials). It
 // holds KEY=value lines loaded into the environment by loadDotEnv. The setup
 // wizard writes API keys here, deliberately NOT named .env: keys never land in a
 // project's own .env (which can't be selectively gitignored), never get
-// committed, and resolve from any working directory. "" when the user config dir
-// can't be resolved.
+// committed, and resolve from any working directory. If the platform config dir
+// is unavailable, it falls back to ~/.maddog/credentials, then .maddog/credentials.
 func UserCredentialsPath() string {
 	dir, err := os.UserConfigDir()
-	if err != nil {
-		return ""
+	if err == nil {
+		return filepath.Join(dir, AppName, "credentials")
 	}
-	return filepath.Join(dir, "reasonix", "credentials")
+	if home, err := os.UserHomeDir(); err == nil {
+		return filepath.Join(home, "."+AppName, "credentials")
+	}
+	return filepath.Join(ProjectConventionDir, "credentials")
 }
 
 // ArchiveDir is where compacted conversation history is archived for
@@ -1484,23 +1484,23 @@ func ArchiveDir() string {
 	if err != nil {
 		return ""
 	}
-	return filepath.Join(dir, "reasonix", "archive")
+	return filepath.Join(dir, AppName, "archive")
 }
 
 // SessionDir is where chat sessions are persisted (one .jsonl per session).
-// Used by `reasonix chat --continue` / `--resume` to find the recent ones. Empty
+// Used by `maddog chat --continue` / `--resume` to find the recent ones. Empty
 // if the user config dir can't be resolved — sessions then aren't saved.
 func SessionDir() string {
 	dir, err := os.UserConfigDir()
 	if err != nil {
 		return ""
 	}
-	return filepath.Join(dir, "reasonix", "sessions")
+	return filepath.Join(dir, AppName, "sessions")
 }
 
 // CacheDir is the per-user cache root for derived/regenerable artefacts: MCP
 // handshake snapshots, plugin startup-latency telemetry. Lives beside the
-// existing dirs (UserConfigDir/reasonix/...) so the whole reasonix state tree
+// existing dirs (UserConfigDir/maddog/...) so the whole Maddog state tree
 // shares one root the user can wipe in a single rm. Empty when the OS dir is
 // unavailable — callers must tolerate that (caching is best-effort).
 func CacheDir() string {
@@ -1508,31 +1508,31 @@ func CacheDir() string {
 	if err != nil {
 		return ""
 	}
-	return filepath.Join(dir, "reasonix", "cache")
+	return filepath.Join(dir, AppName, "cache")
 }
 
-// MemoryUserDir returns the reasonix user config root (…/reasonix), under which
-// the user-global REASONIX.md and the per-project auto-memory store live. Empty
+// MemoryUserDir returns the Maddog user config root (…/maddog), under which
+// the user-global MADDOG.md and the per-project auto-memory store live. Empty
 // when the user config dir can't be resolved, which disables user-scoped memory.
 func MemoryUserDir() string {
 	dir, err := os.UserConfigDir()
 	if err != nil {
 		return ""
 	}
-	return filepath.Join(dir, "reasonix")
+	return filepath.Join(dir, AppName)
 }
 
 // ConventionDirs are the parent directories scanned for agent assets (skills,
-// commands), in canonical-first order. .reasonix is ours; .agents / .agent /
+// commands), in canonical-first order. .maddog is ours; .agents / .agent /
 // .claude let users drop in assets authored for other agent tools without moving
 // files. Shared so skills (internal/skill) and commands (CommandDirs) discover
 // the same set. Note: hooks are NOT scanned across these — a .claude/settings.json
 // uses a different hook schema that can't be parsed as ours, so hooks stay in
-// .reasonix/settings.json (see internal/hook).
-var ConventionDirs = []string{".reasonix", ".agents", ".agent", ".claude"}
+// .maddog/settings.json (see internal/hook).
+var ConventionDirs = []string{ProjectConventionDir, ".agents", ".agent", ".claude"}
 
 // conventionSubdirsAsc joins sub under each ConventionDir of base, in ascending
-// priority (reverse of ConventionDirs) so the canonical .reasonix ends up the
+// priority (reverse of ConventionDirs) so the canonical .maddog ends up the
 // highest-priority entry — command.Load lets a later directory win on a clash.
 func conventionSubdirsAsc(base, sub string) []string {
 	out := make([]string, 0, len(ConventionDirs))
@@ -1544,9 +1544,9 @@ func conventionSubdirsAsc(base, sub string) []string {
 
 // CommandDirs returns the directories scanned for custom slash commands, lowest
 // priority first, so a later (more specific) directory overrides an earlier one
-// on a name clash. Order: home-dir convention dirs (~/.claude/commands … ~/.reasonix/commands),
-// the legacy XDG user dir (~/.config/reasonix/commands), then the project's
-// convention dirs (.claude/commands … .reasonix/commands). Scanning the .claude /
+// on a name clash. Order: home-dir convention dirs (~/.claude/commands … ~/.maddog/commands),
+// the XDG user dir, then the project's convention dirs (.claude/commands … .maddog/commands).
+// Scanning the .claude /
 // .agents / .agent dirs lets commands authored for other agent tools (same .md +
 // frontmatter format) work here unchanged.
 func CommandDirs() []string {
@@ -1563,10 +1563,23 @@ func CommandDirsForRoot(root string) []string {
 		dirs = append(dirs, conventionSubdirsAsc(home, "commands")...)
 	}
 	if dir, err := os.UserConfigDir(); err == nil {
-		dirs = append(dirs, filepath.Join(dir, "reasonix", "commands")) // legacy XDG user dir
+		dirs = append(dirs, filepath.Join(dir, AppName, "commands"))
 	}
 	dirs = append(dirs, conventionSubdirsAsc(root, "commands")...)
 	return dirs
+}
+
+// ProjectConfigPathForRoot returns Maddog's canonical project config path.
+func ProjectConfigPathForRoot(root string) string {
+	root = resolveRoot(root)
+	if root == "." {
+		return ProjectConfigFilename
+	}
+	return filepath.Join(root, ProjectConfigFilename)
+}
+
+func projectConfigSourceForRoot(root string) string {
+	return ProjectConfigPathForRoot(root)
 }
 
 // SourcePath returns the highest-priority config file that exists, or "" if none.
@@ -1578,12 +1591,10 @@ func SourcePath() string {
 // root, or "" if none. Equivalent to SourcePath() when root is ".".
 func SourcePathForRoot(root string) string {
 	root = resolveRoot(root)
-	projectTOML := "reasonix.toml"
-	if root != "." {
-		projectTOML = filepath.Join(root, "reasonix.toml")
-	}
-	if _, err := os.Stat(projectTOML); err == nil {
-		return projectTOML
+	if p := ProjectConfigPathForRoot(root); p != "" {
+		if _, err := os.Stat(p); err == nil {
+			return p
+		}
 	}
 	if uc := userConfigPath(); uc != "" {
 		if _, err := os.Stat(uc); err == nil {

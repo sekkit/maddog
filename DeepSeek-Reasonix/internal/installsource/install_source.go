@@ -108,7 +108,7 @@ func (*installSourceTool) Name() string   { return "install_source" }
 func (*installSourceTool) ReadOnly() bool { return false }
 
 func (*installSourceTool) Description() string {
-	return "Plan, install, or uninstall a Reasonix skill or MCP server from a URL, local file/folder, .mcp.json, executable, or package name. Two-phase: with apply=false (default) returns a deterministic plan with per-action risk level; with apply=true copies/registers skills or connects and persists MCP servers after validation. op='uninstall' removes a previously installed skill (by name) or MCP server (by name) from the active config and the live session."
+	return "Plan, install, or uninstall a Maddog skill or MCP server from a URL, local file/folder, .mcp.json, executable, or package name. Two-phase: with apply=false (default) returns a deterministic plan with per-action risk level; with apply=true copies/registers skills or connects and persists MCP servers after validation. op='uninstall' removes a previously installed skill (by name) or MCP server (by name) from the active config and the live session."
 }
 
 func (*installSourceTool) Schema() json.RawMessage {
@@ -186,7 +186,7 @@ func (t *installSourceTool) Execute(ctx context.Context, raw json.RawMessage) (s
 			Mode:     req.Mode,
 			PlanID:   planID,
 			Warnings: warnings,
-			Next:     "No installable Reasonix skill or MCP server was detected. Ask the user for a direct SKILL.md, skill root, .mcp.json, MCP endpoint, or package name.",
+			Next:     "No installable Maddog skill or MCP server was detected. Ask the user for a direct SKILL.md, skill root, .mcp.json, MCP endpoint, or package name.",
 		}
 		return marshalJSON(out), nil
 	}
@@ -392,22 +392,28 @@ func (t *installSourceTool) resolveSkillPath(name, scope string) (string, bool) 
 	if !config.IsValidSkillName(name) {
 		return "", false
 	}
-	var root string
+	var roots []string
 	if scope == "global" {
 		if t.home == "" {
 			return "", false
 		}
-		root = filepath.Join(t.home, ".reasonix", skill.SkillsDirname)
+		roots = []string{
+			filepath.Join(t.home, config.ProjectConventionDir, skill.SkillsDirname),
+		}
 	} else {
-		root = filepath.Join(t.root, ".reasonix", skill.SkillsDirname)
+		roots = []string{
+			filepath.Join(t.root, config.ProjectConventionDir, skill.SkillsDirname),
+		}
 	}
-	flat := filepath.Join(root, name+".md")
-	if _, err := lstat(flat); err == nil {
-		return flat, true
-	}
-	dir := filepath.Join(root, name)
-	if _, err := lstat(filepath.Join(dir, skill.SkillFile)); err == nil {
-		return dir, true
+	for _, root := range roots {
+		flat := filepath.Join(root, name+".md")
+		if _, err := lstat(flat); err == nil {
+			return flat, true
+		}
+		dir := filepath.Join(root, name)
+		if _, err := lstat(filepath.Join(dir, skill.SkillFile)); err == nil {
+			return dir, true
+		}
 	}
 	return "", false
 }
@@ -458,7 +464,7 @@ func (t *installSourceTool) configPath(scope string) string {
 			return p
 		}
 	}
-	return filepath.Join(t.root, "reasonix.toml")
+	return config.ProjectConfigPathForRoot(t.root)
 }
 
 func (t *installSourceTool) normalizeScope(scope string) string {

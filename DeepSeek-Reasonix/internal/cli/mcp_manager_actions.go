@@ -380,7 +380,7 @@ func mcpConfigLocation() string {
 	if path := config.UserConfigPath(); path != "" {
 		return path
 	}
-	return "reasonix.toml"
+	return config.ProjectConfigFilename
 }
 
 type mcpEditConfigLaunch struct {

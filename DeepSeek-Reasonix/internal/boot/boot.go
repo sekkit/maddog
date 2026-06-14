@@ -15,7 +15,6 @@ import (
 	"io"
 	"log/slog"
 	"os"
-	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -75,14 +74,14 @@ type Options struct {
 	// cwd — enabling concurrent multi-project sessions.
 	WorkspaceRoot string
 	// SessionDir, ArchiveDir, and MemoryUserDir let an embedding frontend keep
-	// its runtime state separate from the default Reasonix CLI state tree. Empty
+	// its runtime state separate from the default Maddog CLI state tree. Empty
 	// values preserve the shared defaults from internal/config.
 	SessionDir    string
 	ArchiveDir    string
 	MemoryUserDir string
 	// ExtraPlugins are session-scoped MCP servers supplied by a host transport
 	// (for example ACP session/new). They are connected eagerly for this
-	// controller but are not persisted to reasonix.toml.
+	// controller but are not persisted to maddog.toml.
 	ExtraPlugins []plugin.Spec
 }
 
@@ -104,10 +103,6 @@ func Build(ctx context.Context, opts Options) (*control.Controller, error) {
 	sessionDir := firstNonEmpty(opts.SessionDir, config.SessionDir())
 	archiveDir := firstNonEmpty(opts.ArchiveDir, config.ArchiveDir())
 	memoryUserDir := firstNonEmpty(opts.MemoryUserDir, config.MemoryUserDir())
-	// One-time import of v1/v0.5 legacy config — runs before Load so the freshly
-	// written config + ~/.env are picked up this same boot. CLI Run also calls this
-	// before config-only commands; this call stays as the shared frontend fallback.
-	migrated, migErr := config.MigrateLegacyIfNeeded()
 	cfg, err := config.LoadForRoot(root)
 	if err != nil {
 		return nil, err
@@ -118,7 +113,7 @@ func Build(ctx context.Context, opts Options) (*control.Controller, error) {
 	}
 	entry, ok := cfg.ResolveModel(modelName)
 	if !ok {
-		return nil, fmt.Errorf("%w %q (configured: %s); note: defining [[providers]] replaces the built-in presets, so add a [[providers]] entry for it or use a configured name, or run `reasonix setup` to reconfigure", ErrUnknownModel, modelName, providerNames(cfg))
+		return nil, fmt.Errorf("%w %q (configured: %s); note: defining [[providers]] replaces the built-in presets, so add a [[providers]] entry for it or use a configured name, or run `maddog setup` to reconfigure", ErrUnknownModel, modelName, providerNames(cfg))
 	}
 	if opts.EffortOverride != nil {
 		entry.Effort = *opts.EffortOverride
@@ -137,13 +132,6 @@ func Build(ctx context.Context, opts Options) (*control.Controller, error) {
 	// shares this synchronized sink. The job manager is session-scoped — its jobs
 	// outlive a turn and are cancelled by Controller.Close.
 	sink := event.Sync(opts.Sink)
-
-	if migErr != nil {
-		sink.Emit(event.Event{Kind: event.Notice, Level: event.LevelWarn, Text: "config migration from ~/.reasonix failed: " + migErr.Error()})
-	} else if migrated != nil {
-		sink.Emit(event.Event{Kind: event.Notice, Level: event.LevelInfo, Text: migrated.Notice()})
-	}
-	migrateLegacySessionSources(sink, sessionDir)
 
 	// A resolvable model whose API key env is unset would otherwise build fine
 	// (RequireKey is false so the UI stays reachable) and then fail silently on the
@@ -213,7 +201,7 @@ func Build(ctx context.Context, opts Options) (*control.Controller, error) {
 	}
 	sysPrompt += "\n\n" + config.LanguagePolicy
 
-	// Persistent memory (REASONIX.md / AGENTS.md hierarchy + auto-memory index)
+	// Persistent memory (MADDOG.md / AGENTS.md / CLAUDE.md hierarchy + auto-memory index)
 	// folds into the system prompt exactly here, once: it becomes part of the
 	// durable, cache-stable prefix every turn reuses, so memory costs nothing per
 	// turn. Mid-session changes never touch this prefix — they ride the
@@ -359,7 +347,7 @@ func Build(ctx context.Context, opts Options) (*control.Controller, error) {
 			}
 		default:
 			sink.Emit(event.Event{Kind: event.Notice, Level: event.LevelInfo,
-				Text: "codegraph: not installed — run `reasonix codegraph install` to enable symbol-graph tools"})
+				Text: "codegraph: not installed — run `maddog codegraph install` to enable symbol-graph tools"})
 		}
 	}
 	eagerSpecs = append(eagerSpecs, opts.ExtraPlugins...)
@@ -451,7 +439,7 @@ func Build(ctx context.Context, opts Options) (*control.Controller, error) {
 	}
 
 	// Permission policy gates every tool call. The headless gate (no Approver)
-	// resolves "ask" to allow — preserving `reasonix run` autonomy — while deny
+	// resolves "ask" to allow — preserving `maddog run` autonomy — while deny
 	// rules hard-block in every mode. Interactive frontends (chat, desktop) swap
 	// in an interactive gate later via Controller.EnableInteractiveApproval.
 	// Sub-agents always run headless: they have no UI to answer a prompt, so they
@@ -662,7 +650,7 @@ func Build(ctx context.Context, opts Options) (*control.Controller, error) {
 		ArchiveDir:        archiveDir,
 	}, sink)
 
-	// Custom slash commands (.reasonix/commands + user dir). Best-effort: a malformed
+	// Custom slash commands (.maddog/commands + shared/user dirs). Best-effort: a malformed
 	// file is skipped, and a load error never blocks the session.
 	cmds, _ := command.Load(config.CommandDirsForRoot(root)...)
 
@@ -771,48 +759,6 @@ func Build(ctx context.Context, opts Options) (*control.Controller, error) {
 	return control.New(ctrlOpts), nil
 }
 
-func migrateLegacySessionSources(sink event.Sink, dest string) {
-	if strings.TrimSpace(dest) == "" {
-		return
-	}
-	type legacySource struct {
-		dir     string
-		label   string
-		migrate func(srcDir, destDir string) (int, error)
-	}
-	var sources []legacySource
-	if home, herr := os.UserHomeDir(); herr == nil {
-		sources = append(sources, legacySource{
-			dir:     filepath.Join(home, ".reasonix", "sessions"),
-			label:   "~/.reasonix/sessions",
-			migrate: agent.MigrateLegacySessions,
-		})
-	}
-	// Back-fill v0.x sessions from the current user config session directory as
-	// well. This covers users whose platform config root was redirected before the
-	// Go rewrite; their event logs can already live where v2 stores sessions.
-	sources = append(sources, legacySource{
-		dir:     dest,
-		label:   dest,
-		migrate: agent.MigrateLegacySessionsFromConfigDir,
-	})
-
-	seen := map[string]bool{}
-	for _, src := range sources {
-		if strings.TrimSpace(src.dir) == "" {
-			continue
-		}
-		key := filepath.Clean(src.dir)
-		if seen[key] {
-			continue
-		}
-		seen[key] = true
-		if n, serr := src.migrate(src.dir, dest); serr == nil && n > 0 {
-			sink.Emit(event.Event{Kind: event.Notice, Level: event.LevelInfo, Text: fmt.Sprintf("imported %d past session(s) from %s — resume them with --resume or the history panel", n, src.label)})
-		}
-	}
-}
-
 func rememberPermissionRule(workspaceRoot, rule string) {
 	path := rememberPermissionConfigPath(workspaceRoot)
 	edit := config.LoadForEdit(path)
@@ -828,11 +774,11 @@ func rememberPermissionRule(workspaceRoot, rule string) {
 func rememberPermissionConfigPath(workspaceRoot string) string {
 	workspaceRoot = strings.TrimSpace(workspaceRoot)
 	if workspaceRoot != "" {
-		return filepath.Join(workspaceRoot, "reasonix.toml")
+		return config.ProjectConfigPathForRoot(workspaceRoot)
 	}
 	path := config.SourcePath()
 	if path == "" {
-		path = "reasonix.toml" // match Config.Save() fallback
+		path = config.ProjectConfigFilename // match Config.Save() fallback
 	}
 	return path
 }

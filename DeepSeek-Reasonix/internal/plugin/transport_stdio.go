@@ -242,7 +242,7 @@ func defaultStdioShellPATH(ctx context.Context) string {
 	if shell == "" {
 		return ""
 	}
-	const marker = "__REASONIX_PATH__="
+	const marker = "__MADDOG_PATH__="
 	script := "printf '\\n" + marker + "%s\\n' \"$PATH\""
 	for _, args := range [][]string{
 		{"-l", "-i", "-c", script},

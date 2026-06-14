@@ -7,8 +7,8 @@
 //
 // Desktop UI language is intentionally separate from the CLI/kernel `language`
 // config for prompts and terminal text. The desktop preference is persisted in
-// the user-level [desktop] config; localStorage is only read once for legacy
-// migration from older desktop builds.
+// the user-level [desktop] config; localStorage is only read once for Maddog
+// builds that stored preferences before the desktop config existed.
 
 import { createContext, useCallback, useContext, useState } from "react";
 import type { ReactNode } from "react";
@@ -21,7 +21,7 @@ export type { DictKey };
 export type LangPref = "" | "en" | "zh";
 
 const DICTS: Record<Locale, Record<DictKey, string>> = { en, zh };
-const STORAGE_KEY = "reasonix-lang";
+const STORAGE_KEY = "maddog-lang";
 
 // currentLocale mirrors the active locale for callers outside React (lib/tools.ts).
 let currentLocale: Locale = "en";

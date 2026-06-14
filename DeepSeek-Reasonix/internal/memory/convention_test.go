@@ -32,26 +32,25 @@ func TestSymlinkedAgentAndClaudeDocsComposeOnce(t *testing.T) {
 	}
 }
 
-func TestDocPathDefaultsToAgents(t *testing.T) {
+func TestDocPathDefaultsToMaddog(t *testing.T) {
 	proj := t.TempDir()
 	set := Load(Options{CWD: proj})
-	if got := set.DocPath(ScopeProject); filepath.Base(got) != "AGENTS.md" {
-		t.Errorf("fresh project should default to AGENTS.md, got %s", got)
+	if got := set.DocPath(ScopeProject); filepath.Base(got) != "MADDOG.md" {
+		t.Errorf("fresh project should default to MADDOG.md, got %s", got)
 	}
-	if got := set.DocPath(ScopeLocal); filepath.Base(got) != "AGENTS.local.md" {
-		t.Errorf("fresh local should default to AGENTS.local.md, got %s", got)
+	if got := set.DocPath(ScopeLocal); filepath.Base(got) != "MADDOG.local.md" {
+		t.Errorf("fresh local should default to MADDOG.local.md, got %s", got)
 	}
 }
 
 func TestDocPathPrefersExisting(t *testing.T) {
 	proj := t.TempDir()
-	// An existing REASONIX.md should keep receiving notes (no split to AGENTS.md).
 	if err := os.WriteFile(filepath.Join(proj, "REASONIX.md"), []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	set := Load(Options{CWD: proj})
-	if got := set.DocPath(ScopeProject); filepath.Base(got) != "REASONIX.md" {
-		t.Errorf("should append to the existing REASONIX.md, got %s", got)
+	if got := set.DocPath(ScopeProject); filepath.Base(got) != "MADDOG.md" {
+		t.Errorf("should ignore original Reasonix memory and default to MADDOG.md, got %s", got)
 	}
 
 	// With only a CLAUDE.md present, that's the target.

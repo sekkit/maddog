@@ -1,6 +1,6 @@
-# Reasonix Engineering Spec
+# Maddog Engineering Spec
 
-> Reasonix is a coding agent: a thin harness driving multiple models, with **all
+> Maddog is a coding agent: a thin harness driving multiple models, with **all
 > capabilities supplied by configuration and plugins**. This document is the
 > contract — code follows it. Change the contract first, then the code.
 
@@ -26,14 +26,14 @@ README is bilingual (`README.md` English + `README.zh-CN.md`).
 ## 2. Layout
 
 ```
-reasonix/
-├── go.mod / go.sum          # module reasonix; require BurntSushi/toml
+maddog/
+├── go.mod / go.sum          # module maddog; require BurntSushi/toml
 ├── Makefile                 # build / cross / vet / fmt / test
 ├── README.md / README.zh-CN.md
-├── reasonix.example.toml         # sample config
+├── maddog.example.toml         # sample config
 ├── docs/SPEC.md             # this file
-├── cmd/reasonix/main.go          # entry; blank-imports built-in providers/tools
-├── cmd/reasonix-plugin-example/  # reference MCP stdio plugin (a runnable example)
+├── cmd/maddog/main.go          # entry; blank-imports built-in providers/tools
+├── cmd/maddog-plugin-example/  # reference MCP stdio plugin (a runnable example)
 └── internal/
     ├── cli/                 # subcommand routing, flags, assembly, exit codes
     ├── config/              # TOML loading (flag > project > user > defaults)
@@ -42,7 +42,7 @@ reasonix/
     ├── tool/                # Tool interface + Registry
     │   └── builtin/         # read_file/write_file/edit_file/bash/ls/glob/grep
     ├── permission/          # per-call Policy: allow/ask/deny rules → Decision
-    ├── command/             # custom slash commands loaded from .reasonix/commands/*.md
+    ├── command/             # custom slash commands loaded from .maddog/commands/*.md
     ├── plugin/              # stdio JSON-RPC (MCP) client; adapts remote tools
     └── agent/               # Session + harness loop
 ```
@@ -146,7 +146,7 @@ interface (`call` / `notify` / `close`) abstracts that, so the MCP-level logic
 - `prompts/list` + `prompts/get` surface as `/mcp__<server>__<prompt>` slash
   commands; `resources/list` + `resources/read` are referenced as
   `@<server>:<uri>` in chat. `/mcp` shows connected servers and their counts.
-- `cmd/reasonix-plugin-example` is a runnable reference stdio server (`echo`,
+- `cmd/maddog-plugin-example` is a runnable reference stdio server (`echo`,
   `wordcount`), driven by an end-to-end test that builds the real binary.
 
 ### 3.4 Agent (`internal/agent`)
@@ -178,7 +178,7 @@ prefix cache-stable:
 
 ### 3.6 Context management (compaction)
 
-Long tasks eventually fill the model's context window. Reasonix manages this with
+Long tasks eventually fill the model's context window. Maddog manages this with
 **low-frequency compaction** that respects the cache-first design:
 
 - Each provider declares its `context_window` (tokens). When a turn's reported
@@ -190,7 +190,7 @@ Long tasks eventually fill the model's context window. Reasonix manages this wit
   messages. The boundary is aligned backward off any tool result so the recent
   tail never begins with an orphan tool message whose `tool_calls` were
   summarized away.
-- The dropped originals are archived to `~/.config/reasonix/archive/<timestamp>.jsonl`
+- The dropped originals are archived to `~/.config/maddog/archive/<timestamp>.jsonl`
   (one message per line), so the full history stays traceable.
 
 This is the **only** point where the prompt prefix changes — a deliberate, rare
@@ -227,7 +227,7 @@ func (p Policy) Decide(toolName string, readOnly bool, args json.RawMessage) Dec
   conversely `ask` overrides a broad `allow` to force a prompt on a risky subset.
 - **Resolving `Ask`.** The interactive front-end (the chat TUI) prompts the user
   — allow once / always allow / deny — via an `Approver`. A non-interactive run
-  (`reasonix run`, a sub-agent, anything with no TTY / no approver) cannot prompt, so
+  (`maddog run`, a sub-agent, anything with no TTY / no approver) cannot prompt, so
   it resolves `Ask` to **allow** — preserving autonomous behaviour. A `Deny` is a
   hard block in *every* mode: the tool never executes and the model receives a
   "blocked" result it can adapt to (the same shape as a plan-mode refusal).
@@ -235,8 +235,8 @@ func (p Policy) Decide(toolName string, readOnly bool, args json.RawMessage) Dec
   that refuses *all* writers regardless of policy; it is checked first. The
   permission layer is the fine-grained, always-on gate underneath it.
 
-Out of the box (`mode = "ask"`, no rules) `reasonix run` behaves exactly as before
-(writers resolve `Ask`→allow with no TTY), while `reasonix chat` now prompts before
+Out of the box (`mode = "ask"`, no rules) `maddog run` behaves exactly as before
+(writers resolve `Ask`→allow with no TTY), while `maddog chat` now prompts before
 each writer/bash call. `deny` rules harden both modes.
 
 ### 3.8 Slash commands (`internal/command`)
@@ -245,8 +245,8 @@ The chat TUI accepts `/command` input. Three kinds share one dispatch:
 
 - **Built-in actions** (`/compact`, `/new`, `/effort`, `/mcp`, `/help`) manipulate session
   state locally and never reach the model.
-- **Custom commands** are Markdown files under `.reasonix/commands/` (project) and
-  `~/.config/reasonix/commands/` (user); the project dir overrides the user dir on a
+- **Custom commands** are Markdown files under `.maddog/commands/` (project) and
+  `~/.config/maddog/commands/` (user); the project dir overrides the user dir on a
   name clash. A file `review.md` becomes `/review`; a subdirectory namespaces it
   (`git/commit.md` → `/git:commit`). Invoking one renders its body and sends the
   result as the next user turn.
@@ -261,7 +261,7 @@ Review the staged diff. Focus on $ARGUMENTS, list bugs with file:line.
 ```
 
 - Frontmatter is an optional `---`-fenced block of simple `key: value` lines;
-  `description` and `argument-hint` are recognised (no YAML dependency — Reasonix
+  `description` and `argument-hint` are recognised (no YAML dependency — Maddog
   stays lean). The remainder is the body template.
 - Substitution in the body: `$ARGUMENTS` (all args, space-joined), `$1`…`$N`
   (positional, empty when absent), `$$` (a literal `$`). Arguments are the
@@ -341,17 +341,17 @@ type Chunk struct {
 
 ## 5. Configuration (TOML)
 
-Resolution order: **flag > project `./reasonix.toml` > user `~/.config/reasonix/config.toml`
+Resolution order: **flag > project `./maddog.toml` > user `~/.config/maddog/config.toml`
 > built-in defaults**. Secrets come from the environment via `api_key_env` and
 are never stored in config files. A `.env` in the working directory is loaded if
 present.
 
 ```toml
 default_model = "deepseek"   # provider name (→ its default model) or "provider/model"
-# language    = "zh"                # ui language tag; empty = auto-detect from $LANG / $REASONIX_LANG
+# language    = "zh"                # ui language tag; empty = auto-detect from $LANG / $MADDOG_LANG
 
 [agent]
-system_prompt = "You are Reasonix, a coding agent..."  # or system_prompt_file = "..."
+system_prompt = "You are Maddog, a coding agent..."  # or system_prompt_file = "..."
 max_steps     = 25
 temperature   = 0.0
 # planner_model = "mimo"   # optional: two-model collaboration (low-frequency planner)
@@ -404,7 +404,7 @@ ask   = []                                 # force a prompt even if otherwise al
 
 [[plugins]]
 name    = "example"            # type defaults to "stdio"
-command = "reasonix-plugin-example"
+command = "maddog-plugin-example"
 args    = []
 # env   = { FOO = "bar" }
 
@@ -415,14 +415,14 @@ args    = []
 # headers = { Authorization = "Bearer ${STRIPE_KEY}" }   # ${VAR} / ${VAR:-default} expanded
 ```
 
-`reasonix setup` writes this default config so the CLI is usable out of the box.
+`maddog setup` writes this default config so the CLI is usable out of the box.
 
 MCP servers may also be declared in a project-root `.mcp.json` using Claude
 Code's exact `mcpServers` schema (`command`/`args`/`env`, `type`/`url`/`headers`,
 `${VAR}` expansion). It is read after the TOML files and merged into
-`[[plugins]]`; on a name collision `reasonix.toml` wins (it is the more explicit,
-Reasonix-specific source). This lets a server already configured for Claude work in
-Reasonix unchanged.
+`[[plugins]]`; on a name collision `maddog.toml` wins (it is the more explicit,
+Maddog-specific source). This lets a server already configured for Claude work in
+Maddog unchanged.
 
 ```json
 { "mcpServers": {
@@ -460,7 +460,7 @@ running unconfined. The escape-prompt and Linux support are Phase 1's remainder 
 
 ## 8. Distribution
 
-- Build: `CGO_ENABLED=0 go build -ldflags "-s -w -X main.version=$(VERSION)" -o reasonix ./cmd/reasonix`
+- Build: `CGO_ENABLED=0 go build -ldflags "-s -w -X main.version=$(VERSION)" -o maddog ./cmd/maddog`
 - Cross matrix: `darwin|linux|windows` × `amd64|arm64`.
 - Version injected via ldflags (`git describe --tags --always`).
 - Install: prebuilt binary / `go install` / future `brew tap`.
@@ -471,7 +471,7 @@ running unconfined. The escape-prompt and Linux support are Phase 1's remainder 
   file-writer built-ins (Phase 0) — are confined to the workspace. **macOS
   (Seatbelt via `sandbox-exec`) ships, on by default** (see §5). Remaining: (a)
   the escape-prompt — detect a sandbox-denied failure and offer to re-run the
-  command unconfined via the permission gate (in `reasonix run`, the command just
+  command unconfined via the permission gate (in `maddog run`, the command just
   fails and the model adapts), which completes the "allow inside the box, prompt
   at its edge" model; (b) Linux (bubblewrap / landlock). Shells out to OS tooling
   so the binary stays dependency-free; Windows is out of scope. With this in
@@ -484,4 +484,4 @@ running unconfined. The escape-prompt and Linux support are Phase 1's remainder 
 - An Anthropic-native provider `kind` (native prompt-cache control), proving the
   registry generalises beyond one wire format.
 - "Always allow" persistence writing learned rules back to project config; a
-  per-session permission override flag for `reasonix run`.
+  per-session permission override flag for `maddog run`.

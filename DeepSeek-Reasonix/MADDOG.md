@@ -1,8 +1,8 @@
-# Reasonix project memory
+# Maddog project memory
 
 This file is loaded into every session's system prompt (the cache-stable prefix),
 so keep it concise and durable — it is the project's standing instructions to the
-agent. It is the Reasonix analog of Claude Code's CLAUDE.md.
+agent. It is the Maddog analog of Claude Code's CLAUDE.md.
 
 ## Conventions
 
@@ -17,9 +17,9 @@ agent. It is the Reasonix analog of Claude Code's CLAUDE.md.
 
 ## Memory
 
-- Hierarchical docs: `REASONIX.md` (this file, committed/shared), `REASONIX.local.md`
-  (personal, git-ignored), user-global `~/.config/reasonix/REASONIX.md`, and any
-  `REASONIX.md` in an ancestor dir. `AGENTS.md` is accepted as a fallback name.
+- Hierarchical docs: `MADDOG.md` (this file, committed/shared), `MADDOG.local.md`
+  (personal, git-ignored), user-global `~/.config/maddog/MADDOG.md`, and any
+  `MADDOG.md` in an ancestor dir. `AGENTS.md` is accepted as a fallback name.
 - `@path` on its own line imports another file's contents.
 - `#<note>` in chat quick-adds a line here. The `remember` tool saves durable
   facts to the per-project auto-memory store (frontmatter files + `MEMORY.md`

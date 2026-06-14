@@ -1,8 +1,8 @@
 // Package hook runs user-configured shell-command hooks around the agent loop:
 // PreToolUse / PostToolUse fire around each tool call, UserPromptSubmit before a
 // turn, Stop after it. Hooks come from settings.json — a project
-// (.reasonix/settings.json, only when the project is trusted) and a global
-// (~/.reasonix/settings.json) file. A hook's exit
+// (.maddog/settings.json, only when the project is trusted) and a global
+// (~/.maddog/settings.json) file. A hook's exit
 // code is its verdict: 0 = pass, 2 = block (only on the gating events), other =
 // warn. The payload is delivered as JSON on stdin; output is captured (capped)
 // and surfaced to the user. This package only loads, matches, and runs hooks;
@@ -24,6 +24,7 @@ import (
 	"strings"
 	"time"
 
+	"reasonix/internal/config"
 	"reasonix/internal/proc"
 )
 
@@ -122,16 +123,16 @@ func (h ResolvedHook) timeout() time.Duration {
 
 // SettingsDirname / SettingsFilename locate a scope's settings.json.
 const (
-	SettingsDirname  = ".reasonix"
+	SettingsDirname  = config.ProjectConventionDir
 	SettingsFilename = "settings.json"
 )
 
-// GlobalSettingsPath is ~/.reasonix/settings.json (homeDir overrides ~).
+// GlobalSettingsPath is ~/.maddog/settings.json (homeDir overrides ~).
 func GlobalSettingsPath(homeDir string) string {
 	return filepath.Join(home(homeDir), SettingsDirname, SettingsFilename)
 }
 
-// ProjectSettingsPath is <root>/.reasonix/settings.json.
+// ProjectSettingsPath is <root>/.maddog/settings.json.
 func ProjectSettingsPath(projectRoot string) string {
 	return filepath.Join(projectRoot, SettingsDirname, SettingsFilename)
 }

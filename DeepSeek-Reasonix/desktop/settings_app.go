@@ -323,7 +323,7 @@ func orDefault(s, def string) string {
 // applyConfigChange mutates the user-global config and rebuilds the controller so
 // the change takes effect this session. Desktop settings such as providers and
 // keys are account-level, not per-project: writing them to the global config
-// rather than the cwd's reasonix.toml is what lets them survive a workspace switch.
+// rather than the cwd's maddog.toml is what lets them survive a workspace switch.
 func (a *App) applyConfigChange(mutate func(*config.Config) error) error {
 	cfg, path, err := a.loadDesktopUserConfigForEdit()
 	if err != nil {
@@ -409,10 +409,7 @@ func (a *App) activeWorkspaceRoot() string {
 }
 
 func projectConfigPathForRoot(root string) string {
-	if strings.TrimSpace(root) == "" || root == "." {
-		return "reasonix.toml"
-	}
-	return filepath.Join(root, "reasonix.toml")
+	return config.ProjectConfigPathForRoot(root)
 }
 
 func sameConfigPath(a, b string) bool {

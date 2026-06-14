@@ -357,12 +357,12 @@ func TestSessionAggregateCacheRate(t *testing.T) {
 }
 
 func TestReleaseCacheHitGuard(t *testing.T) {
-	if os.Getenv("REASONIX_RELEASE_CACHE_GUARD") == "" {
-		t.Skip("set REASONIX_RELEASE_CACHE_GUARD=1 to run the release cache guard")
+	if firstNonEmptyEnv("MADDOG_RELEASE_CACHE_GUARD") == "" {
+		t.Skip("set MADDOG_RELEASE_CACHE_GUARD=1 to run the release cache guard")
 	}
 
-	threshold := envInt("REASONIX_CACHE_GUARD_THRESHOLD", 90)
-	maxLowCases := envInt("REASONIX_CACHE_GUARD_MAX_LOW_CASES", 1)
+	threshold := envInt("MADDOG_CACHE_GUARD_THRESHOLD", 90)
+	maxLowCases := envInt("MADDOG_CACHE_GUARD_MAX_LOW_CASES", 1)
 
 	cases := []struct {
 		name string
@@ -451,7 +451,7 @@ func TestReleaseCacheHitGuard(t *testing.T) {
 		}
 		msg := fmt.Sprintf("%d cache guard cases are below %d%%: %s", len(lows), threshold, strings.Join(parts, ", "))
 		t.Logf("CACHE_GUARD_WARNING: %s", msg)
-		if os.Getenv("REASONIX_CACHE_GUARD_STRICT") != "" {
+		if firstNonEmptyEnv("MADDOG_CACHE_GUARD_STRICT") != "" {
 			t.Fatal(msg)
 		}
 	}
@@ -517,8 +517,17 @@ func tailAverage(xs []int, n int) int {
 	return sum / n
 }
 
-func envInt(name string, fallback int) int {
-	raw := os.Getenv(name)
+func firstNonEmptyEnv(names ...string) string {
+	for _, name := range names {
+		if value := os.Getenv(name); value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func envInt(name string, fallback int, legacyNames ...string) int {
+	raw := firstNonEmptyEnv(append([]string{name}, legacyNames...)...)
 	if raw == "" {
 		return fallback
 	}

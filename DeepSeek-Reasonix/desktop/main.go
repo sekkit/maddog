@@ -1,4 +1,4 @@
-// Command reasonix-desktop is the Wails shell around the Reasonix kernel: a native
+// Command maddog-dev is the Wails shell around the Maddog kernel: a native
 // window hosting a webview frontend, with the Go-side control.Controller bound
 // directly to the UI (no HTTP hop — bindings in, runtime events out). It lives in
 // a nested module (reasonix/desktop) so the CGO/WebKit desktop build never touches
@@ -17,7 +17,7 @@ import (
 	"github.com/wailsapp/wails/v2/pkg/options/windows"
 
 	// Blank imports wire compile-time built-ins into their registries, exactly as
-	// cmd/reasonix does — boot.Build resolves providers/tools from these registries.
+	// the CLI does — boot.Build resolves providers/tools from these registries.
 	_ "reasonix/internal/provider/anthropic"
 	_ "reasonix/internal/provider/openai"
 	_ "reasonix/internal/tool/builtin"
@@ -31,7 +31,7 @@ import (
 var assets embed.FS
 
 // version is injected at build time via `wails build -ldflags "-X main.version=..."`,
-// mirroring cmd/reasonix/main.go. The auto-updater reads it (App.Version) to compare
+// mirroring the CLI main. The auto-updater reads it (App.Version) to compare
 // against the published manifest; an un-injected dev build stays "dev" and never
 // prompts to update.
 var version = "dev"

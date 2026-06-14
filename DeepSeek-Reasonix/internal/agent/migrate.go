@@ -53,7 +53,7 @@ func MigrateLegacySessions(srcDir, destDir string) (int, error) {
 
 // MigrateLegacySessionsFromConfigDir imports v0.x event-log sessions found in
 // the current user config session directory. It uses an independent marker so a
-// previous ~/.reasonix import marker cannot hide sessions from a redirected
+// a previous home-directory import marker cannot hide sessions from a redirected
 // config root on Windows/macOS.
 func MigrateLegacySessionsFromConfigDir(srcDir, destDir string) (int, error) {
 	return migrateLegacySessions(srcDir, destDir, legacyEventsConfigImportMarker, false)

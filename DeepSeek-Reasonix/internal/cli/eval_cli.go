@@ -209,7 +209,7 @@ func promoteCandidateSkill(path, scopeName, projectRoot string) (string, error) 
 
 func evalUsage() {
 	fmt.Print(`Usage:
-  reasonix eval list  --dir <replay-dir>
-  reasonix eval guard --dir <replay-dir> [--min-bundles N] [--min-score F] [--model NAME] [--promote-skill skill.md] [--scope project|global]
+  maddog eval list  --dir <replay-dir>
+  maddog eval guard --dir <replay-dir> [--min-bundles N] [--min-score F] [--model NAME] [--promote-skill skill.md] [--scope project|global]
 `)
 }

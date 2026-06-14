@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	"reasonix/internal/config"
 )
 
 // maxFileRefBytes caps how much of an @-referenced file is injected into a
@@ -23,7 +25,7 @@ type refKind int
 const (
 	refResource refKind = iota // an MCP resource: @<server>:<uri>
 	refFile                    // a local file or directory: @<path>
-	refImage                   // a local image attachment: @.reasonix/attachments/<file>
+	refImage                   // a local image attachment: @.maddog/attachments/<file>
 )
 
 // ref is a resolved @reference found in a submitted line.
@@ -75,7 +77,8 @@ func classifyRef(token string, known map[string]bool, exists func(string) bool) 
 }
 
 func isAttachmentRef(token string) bool {
-	return strings.HasPrefix(filepath.ToSlash(token), ".reasonix/attachments/")
+	p := filepath.ToSlash(token)
+	return strings.HasPrefix(p, config.ProjectConventionDir+"/attachments/")
 }
 
 func isImageAttachmentRef(token string) bool {

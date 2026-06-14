@@ -1,4 +1,4 @@
-const attachmentRefRe = /@(\.reasonix\/attachments\/[^\s]+)/g;
+const attachmentRefRe = /@(\.maddog\/attachments\/[^\s]+)/g;
 const trailingPunctuationRe = /[.,;!?)\]}]+$/;
 
 function splitTrailingPunctuation(token: string): { core: string; suffix: string } {

@@ -14,6 +14,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"reasonix/internal/config"
 	"reasonix/internal/proc"
 )
 
@@ -27,7 +28,7 @@ var safeAttachmentExt = regexp.MustCompile(`^\.[a-z0-9]{1,12}$`)
 
 // SaveAttachmentDataURL stores a non-image file (dropped/pasted in the desktop
 // app, where the browser exposes bytes but not a real path) under
-// .reasonix/attachments and returns its repo-relative path for @referencing.
+// .maddog/attachments and returns its repo-relative path for @referencing.
 // origName supplies only the extension; the stored name is generated.
 func SaveAttachmentDataURL(origName, dataURL string) (string, error) {
 	const marker = ";base64,"
@@ -317,11 +318,15 @@ func cleanAttachmentPath(path string) (string, error) {
 		return "", fmt.Errorf("attachment path must be relative")
 	}
 	clean := filepath.Clean(filepath.FromSlash(path))
-	root := filepath.Join(".reasonix", "attachments")
-	if clean == "." || clean == root || strings.HasPrefix(clean, ".."+string(filepath.Separator)) || !strings.HasPrefix(clean, root+string(filepath.Separator)) {
-		return "", fmt.Errorf("attachment path is outside .reasonix/attachments")
+	root, ok := attachmentRootForPath(clean)
+	if !ok || clean == "." || clean == root || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("attachment path is outside .maddog/attachments")
 	}
-	if err := ensureAttachmentRoot(); err != nil {
+	if root == attachmentRoot() {
+		if err := ensureAttachmentRootAt(root); err != nil {
+			return "", err
+		}
+	} else if err := validateAttachmentRoot(root); err != nil {
 		return "", err
 	}
 	if err := rejectSymlinkComponents(clean, root); err != nil {
@@ -336,7 +341,7 @@ func rejectSymlinkComponents(path, root string) error {
 		return err
 	}
 	if rel == "." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || rel == ".." {
-		return fmt.Errorf("attachment path is outside .reasonix/attachments")
+		return fmt.Errorf("attachment path is outside .maddog/attachments")
 	}
 	cur := root
 	for _, part := range strings.Split(rel, string(filepath.Separator)) {
@@ -356,7 +361,10 @@ func rejectSymlinkComponents(path, root string) error {
 }
 
 func ensureAttachmentRoot() error {
-	root := filepath.Join(".reasonix", "attachments")
+	return ensureAttachmentRootAt(attachmentRoot())
+}
+
+func ensureAttachmentRootAt(root string) error {
 	if info, err := os.Lstat(root); err == nil {
 		if info.Mode()&os.ModeSymlink != 0 {
 			return fmt.Errorf("attachment directory must not be a symlink")
@@ -377,6 +385,20 @@ func ensureAttachmentRoot() error {
 	}
 	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
 		return fmt.Errorf("attachment directory is invalid")
+	}
+	return nil
+}
+
+func validateAttachmentRoot(root string) error {
+	info, err := os.Lstat(root)
+	if err != nil {
+		return err
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("attachment directory must not be a symlink")
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("attachment path exists but is not a directory")
 	}
 	return nil
 }
@@ -439,6 +461,9 @@ end try
 }
 
 func createAttachmentFile(ext string) (string, *os.File, error) {
+	if err := ensureAttachmentRoot(); err != nil {
+		return "", nil, err
+	}
 	for range maxAttachmentCreateAttempts {
 		rel := attachmentPath(ext)
 		f, err := os.OpenFile(rel, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
@@ -456,7 +481,19 @@ func createAttachmentFile(ext string) (string, *os.File, error) {
 func attachmentPath(ext string) string {
 	seq := attachmentPathSeq.Add(1)
 	name := fmt.Sprintf("clipboard-%s-%06d%s", attachmentNow().Format("20060102-150405.000000"), seq, ext)
-	return filepath.Join(".reasonix", "attachments", name)
+	return filepath.Join(attachmentRoot(), name)
+}
+
+func attachmentRoot() string {
+	return filepath.Join(config.ProjectConventionDir, "attachments")
+}
+
+func attachmentRootForPath(path string) (string, bool) {
+	root := attachmentRoot()
+	if path == root || strings.HasPrefix(path, root+string(filepath.Separator)) {
+		return root, true
+	}
+	return "", false
 }
 
 func detectedImageMime(raw []byte) string {

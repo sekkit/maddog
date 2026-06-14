@@ -35,7 +35,7 @@ type pinResult struct {
 func runDiff(o diffOpts) string {
 	srcFiles := changedGoFiles(o.repo, o.base, false)
 	if len(srcFiles) == 0 {
-		return "## 🤖 Reasonix e2e — diff test-gen\n\nNo Go source changes in this PR (excluding `_test.go`); nothing to generate tests for.\n"
+		return "## 🤖 Maddog e2e — diff test-gen\n\nNo Go source changes in this PR (excluding `_test.go`); nothing to generate tests for.\n"
 	}
 	pkgs := packagesOf(srcFiles)
 	prompt := buildDiffPrompt(srcFiles, pkgs, truncate(gitOut(o.repo, "diff", o.base+"...HEAD", "--")))
@@ -146,7 +146,7 @@ func ratio(n, d int) float64 {
 // attempt's generated tests but keeping the provider config the workflow wrote.
 func resetTree(repo string) {
 	_ = exec.Command("git", "-C", repo, "checkout", "--", ".").Run()
-	_ = exec.Command("git", "-C", repo, "clean", "-fd", "-e", "reasonix.toml").Run()
+	_ = exec.Command("git", "-C", repo, "clean", "-fd", "-e", "maddog.toml").Run()
 }
 
 func goBuildAll(repo string) (bool, string) {
@@ -201,7 +201,7 @@ func renderDiff(r diffReport) string {
 	if r.passed {
 		result = "✅ pass"
 	}
-	fmt.Fprintf(&b, "## 🤖 Reasonix e2e — diff test-gen\n\n")
+	fmt.Fprintf(&b, "## 🤖 Maddog e2e — diff test-gen\n\n")
 	fmt.Fprintf(&b, "**Result:** %s · **%d** changed source file(s) across **%d** package(s)\n\n", result, len(r.srcFiles), len(r.pkgs))
 
 	pinned, byAssert := countPins(r.pins), countAssertionPins(r.pins)

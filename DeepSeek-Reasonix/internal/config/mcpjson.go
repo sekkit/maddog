@@ -11,7 +11,7 @@ import (
 	"reasonix/internal/mcpdiag"
 )
 
-// mcpJSONFile is the project-root file Claude Code calls .mcp.json. Reasonix reads
+// mcpJSONFile is the project-root file Claude Code calls .mcp.json. Maddog reads
 // it so an MCP server already configured for Claude works here unchanged — the
 // server specs map field-for-field onto PluginEntry.
 const mcpJSONFile = ".mcp.json"
@@ -68,43 +68,6 @@ func specsToEntries(specs map[string]mcpServerSpec, skip map[string]bool) []Plug
 	return entries
 }
 
-// legacyConfigPath is the v0.x (TypeScript line) config file, ~/.reasonix/config.json.
-func legacyConfigPath() string {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return ""
-	}
-	return filepath.Join(home, ".reasonix", "config.json")
-}
-
-// loadLegacyMCP reads the v0.x ~/.reasonix/config.json and returns its enabled
-// mcpServers as PluginEntry values (servers listed in its mcpDisabled are
-// skipped), so upgrading from v0.x keeps MCP servers working without rewriting
-// them as [[plugins]]. Absent or malformed → nil: a stale legacy file must never
-// block startup, and it is the lowest-priority source anyway (the v2 config and
-// .mcp.json win on a name collision — see Load).
-func loadLegacyMCP(path string) []PluginEntry {
-	if path == "" {
-		return nil
-	}
-	b, err := os.ReadFile(path)
-	if err != nil {
-		return nil
-	}
-	var doc struct {
-		MCPServers  map[string]mcpServerSpec `json:"mcpServers"`
-		MCPDisabled []string                 `json:"mcpDisabled"`
-	}
-	if err := json.Unmarshal(b, &doc); err != nil {
-		return nil
-	}
-	disabled := make(map[string]bool, len(doc.MCPDisabled))
-	for _, n := range doc.MCPDisabled {
-		disabled[n] = true
-	}
-	return specsToEntries(doc.MCPServers, disabled)
-}
-
 func pluginEntryFromMCPSpec(name string, s mcpServerSpec) PluginEntry {
 	e := PluginEntry{
 		Name:      name,
@@ -121,8 +84,8 @@ func pluginEntryFromMCPSpec(name string, s mcpServerSpec) PluginEntry {
 }
 
 // mergeMCPJSON appends servers from .mcp.json that the TOML config did not
-// already declare. reasonix.toml's [[plugins]] win on a name collision: it is the
-// Reasonix-specific, more explicit of the two, so it overrides the shared,
+// already declare. maddog.toml's [[plugins]] win on a name collision: it is the
+// Maddog-specific, more explicit of the two, so it overrides the shared,
 // checked-in .mcp.json rather than the other way round.
 func (c *Config) mergeMCPJSON(entries []PluginEntry) {
 	have := make(map[string]bool, len(c.Plugins))

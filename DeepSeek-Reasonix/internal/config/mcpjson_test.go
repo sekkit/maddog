@@ -149,7 +149,7 @@ func TestLoadMergesMCPJSON(t *testing.T) {
 name = "shared"
 command = "local-bin"
 `
-	if err := os.WriteFile("reasonix.toml", []byte(toml), 0o644); err != nil {
+	if err := os.WriteFile("maddog.toml", []byte(toml), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	mcp := `{ "mcpServers": {
@@ -172,7 +172,7 @@ command = "local-bin"
 		t.Fatalf("plugins = %+v, want shared + extra", cfg.Plugins)
 	}
 	if byName["shared"].Command != "local-bin" || byName["shared"].URL != "" {
-		t.Errorf("reasonix.toml should win the collision, got %+v", byName["shared"])
+		t.Errorf("maddog.toml should win the collision, got %+v", byName["shared"])
 	}
 	if byName["extra"].Command != "extra-bin" {
 		t.Errorf("extra not merged from .mcp.json, got %+v", byName["extra"])
@@ -199,7 +199,7 @@ func TestLoadMergesPluginsAcrossTOMLSources(t *testing.T) {
 	if err := os.WriteFile(gpath, []byte("[[plugins]]\nname = \"globalmcp\"\ncommand = \"global-bin\"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile("reasonix.toml", []byte("[[plugins]]\nname = \"projectmcp\"\ncommand = \"project-bin\"\n"), 0o644); err != nil {
+	if err := os.WriteFile("maddog.toml", []byte("[[plugins]]\nname = \"projectmcp\"\ncommand = \"project-bin\"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -212,7 +212,7 @@ func TestLoadMergesPluginsAcrossTOMLSources(t *testing.T) {
 		names[p.Name] = true
 	}
 	if !names["globalmcp"] || !names["projectmcp"] {
-		t.Fatalf("a project reasonix.toml [[plugins]] dropped the global config's server; got %+v", cfg.Plugins)
+		t.Fatalf("a project maddog.toml [[plugins]] dropped the global config's server; got %+v", cfg.Plugins)
 	}
 }
 
@@ -223,7 +223,7 @@ func TestLoadNormalizesTOMLPastedCommandLine(t *testing.T) {
 	t.Setenv("AppData", filepath.Join(home, "AppData"))
 	t.Chdir(t.TempDir())
 
-	if err := os.WriteFile("reasonix.toml", []byte("[[plugins]]\nname = \"playwright\"\ncommand = \"npx -y @playwright/mcp\"\n"), 0o644); err != nil {
+	if err := os.WriteFile("maddog.toml", []byte("[[plugins]]\nname = \"playwright\"\ncommand = \"npx -y @playwright/mcp\"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	cfg, err := Load()
@@ -242,8 +242,8 @@ func TestLoadNormalizesTOMLPastedCommandLine(t *testing.T) {
 }
 
 func TestMergeMCPJSONPrecedence(t *testing.T) {
-	// reasonix.toml already declares "shared" (stdio); .mcp.json offers a colliding
-	// "shared" (http) plus a fresh "extra". reasonix.toml must win on the collision;
+	// maddog.toml already declares "shared" (stdio); .mcp.json offers a colliding
+	// "shared" (http) plus a fresh "extra". maddog.toml must win on the collision;
 	// "extra" gets appended.
 	cfg := &Config{Plugins: []PluginEntry{
 		{Name: "shared", Command: "local-bin"},
@@ -257,7 +257,7 @@ func TestMergeMCPJSONPrecedence(t *testing.T) {
 		t.Fatalf("plugins = %+v, want 2 (shared kept, extra added)", cfg.Plugins)
 	}
 	if cfg.Plugins[0].Name != "shared" || cfg.Plugins[0].Command != "local-bin" || cfg.Plugins[0].URL != "" {
-		t.Errorf("collision not won by reasonix.toml: %+v", cfg.Plugins[0])
+		t.Errorf("collision not won by maddog.toml: %+v", cfg.Plugins[0])
 	}
 	if cfg.Plugins[1].Name != "extra" || cfg.Plugins[1].Command != "extra-bin" {
 		t.Errorf("non-colliding entry not appended: %+v", cfg.Plugins[1])
@@ -345,7 +345,7 @@ func TestClearPluginAuthenticationInSourcePrefersTOML(t *testing.T) {
 	t.Setenv("AppData", filepath.Join(root, "AppData"))
 	t.Chdir(t.TempDir())
 
-	if err := os.WriteFile("reasonix.toml", []byte(`[[plugins]]
+	if err := os.WriteFile("maddog.toml", []byte(`[[plugins]]
 name = "dida"
 type = "http"
 url = "https://reasonix.example/mcp?access_token=toml"
@@ -372,19 +372,19 @@ Authorization = "Bearer ${TOML_TOKEN}"
 	if !changed {
 		t.Fatal("ClearPluginAuthenticationInSource should report changed")
 	}
-	if source != "reasonix.toml" {
-		t.Fatalf("source = %q, want reasonix.toml", source)
+	if source != "maddog.toml" {
+		t.Fatalf("source = %q, want maddog.toml", source)
 	}
 	if updated.URL != "https://reasonix.example/mcp" {
 		t.Fatalf("updated URL = %q", updated.URL)
 	}
 
-	projectRaw, err := os.ReadFile("reasonix.toml")
+	projectRaw, err := os.ReadFile("maddog.toml")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if strings.Contains(string(projectRaw), "access_token=toml") || strings.Contains(string(projectRaw), "Authorization") {
-		t.Fatalf("reasonix.toml auth material should be removed:\n%s", projectRaw)
+		t.Fatalf("maddog.toml auth material should be removed:\n%s", projectRaw)
 	}
 	mcpRaw, err := os.ReadFile(mcpJSONFile)
 	if err != nil {
@@ -392,52 +392,5 @@ Authorization = "Bearer ${TOML_TOKEN}"
 	}
 	if !strings.Contains(string(mcpRaw), "access_token=json") {
 		t.Fatalf(".mcp.json collision entry should be left untouched:\n%s", mcpRaw)
-	}
-}
-
-func TestLoadLegacyMCP(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "config.json")
-	doc := `{
-  "mcpServers": {
-    "github":  { "command": "npx", "args": ["-y", "server-github"], "env": { "TOKEN": "x" } },
-    "old":     { "command": "foo" },
-    "remote":  { "type": "sse", "url": "https://x/sse", "headers": { "Authorization": "Bearer y" } }
-  },
-  "mcpDisabled": ["old"],
-  "projects": { "/some/root": { "shellAllowed": [] } }
-}`
-	if err := os.WriteFile(path, []byte(doc), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	got := loadLegacyMCP(path)
-	// "old" is in mcpDisabled and dropped; github + remote remain, name-sorted.
-	if len(got) != 2 {
-		t.Fatalf("got %d entries, want 2: %+v", len(got), got)
-	}
-	if got[0].Name != "github" || got[1].Name != "remote" {
-		t.Fatalf("names = %q, %q; want github, remote", got[0].Name, got[1].Name)
-	}
-	if got[0].Command != "npx" || got[0].Env["TOKEN"] != "x" {
-		t.Errorf("github mapped wrong: %+v", got[0])
-	}
-	if got[1].Type != "sse" || got[1].URL != "https://x/sse" || got[1].Headers["Authorization"] != "Bearer y" {
-		t.Errorf("remote mapped wrong: %+v", got[1])
-	}
-
-	// Absent, malformed, and empty paths must not error — just yield nil, so a
-	// stale legacy file can never block startup.
-	if got := loadLegacyMCP(filepath.Join(dir, "nope.json")); got != nil {
-		t.Errorf("absent file: got %+v, want nil", got)
-	}
-	if err := os.WriteFile(path, []byte("{not json"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if got := loadLegacyMCP(path); got != nil {
-		t.Errorf("malformed file: got %+v, want nil", got)
-	}
-	if got := loadLegacyMCP(""); got != nil {
-		t.Errorf("empty path: got %+v, want nil", got)
 	}
 }

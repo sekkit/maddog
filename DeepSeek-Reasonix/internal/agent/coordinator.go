@@ -39,7 +39,7 @@ func PlannerMaxSteps(configured int) int {
 }
 
 // PlannerPromptWithContext appends cache-stable standing context, such as loaded
-// REASONIX.md / AGENTS.md memory, to the planner's smaller system prompt.
+// MADDOG.md / AGENTS.md memory, to the planner's smaller system prompt.
 func PlannerPromptWithContext(context string) string {
 	context = strings.TrimSpace(context)
 	if context == "" {

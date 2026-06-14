@@ -338,7 +338,7 @@ func (a *App) OpenProjectTab(workspaceRoot, topicID string) (TabMeta, error) {
 }
 
 // OpenGlobalTab opens a new global-scope tab (no project root). The global
-// workspace root is the reasonix user config directory.
+	// workspace root is the Maddog user config directory.
 func (a *App) OpenGlobalTab(topicID string) (TabMeta, error) {
 	globalRoot := globalWorkspaceRoot()
 	if err := os.MkdirAll(globalRoot, 0o755); err != nil {
@@ -1229,19 +1229,20 @@ func topicTitlesPath(workspaceRoot string) string {
 	if workspaceRoot == "" {
 		return filepath.Join(desktopConfigDir(), "global", topicTitlesFile)
 	}
-	return filepath.Join(workspaceRoot, ".reasonix", topicTitlesFile)
+	return filepath.Join(workspaceRoot, config.ProjectConventionDir, topicTitlesFile)
 }
 
 func topicTitleSourcesPath(workspaceRoot string) string {
 	if workspaceRoot == "" {
 		return filepath.Join(desktopConfigDir(), "global", topicTitleSourcesFile)
 	}
-	return filepath.Join(workspaceRoot, ".reasonix", topicTitleSourcesFile)
+	return filepath.Join(workspaceRoot, config.ProjectConventionDir, topicTitleSourcesFile)
 }
 
 func loadTopicTitles(workspaceRoot string) map[string]string {
 	m := map[string]string{}
-	b, err := os.ReadFile(topicTitlesPath(workspaceRoot))
+	path := topicTitlesPath(workspaceRoot)
+	b, err := os.ReadFile(path)
 	if err != nil {
 		return m
 	}
@@ -1251,7 +1252,8 @@ func loadTopicTitles(workspaceRoot string) map[string]string {
 
 func loadTopicTitleSources(workspaceRoot string) map[string]string {
 	m := map[string]string{}
-	b, err := os.ReadFile(topicTitleSourcesPath(workspaceRoot))
+	path := topicTitleSourcesPath(workspaceRoot)
+	b, err := os.ReadFile(path)
 	if err != nil {
 		return m
 	}

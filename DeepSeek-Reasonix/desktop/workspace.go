@@ -172,7 +172,7 @@ func cwdWritable() bool {
 	if err != nil {
 		return false
 	}
-	f, err := os.CreateTemp(cwd, ".reasonix-wtest-*")
+	f, err := os.CreateTemp(cwd, ".maddog-wtest-*")
 	if err != nil {
 		return false
 	}

@@ -83,7 +83,7 @@ func TestMetadataCommandsDoNotProbeTerminalTheme(t *testing.T) {
 			t.Fatalf("version rc = %d, want 0", rc)
 		}
 	})
-	if !strings.Contains(out, "reasonix test-version") {
+	if !strings.Contains(out, "maddog test-version") {
 		t.Fatalf("version output = %q", out)
 	}
 
@@ -111,7 +111,7 @@ func TestRunDispatchesACPLongFlagAlias(t *testing.T) {
 	}
 }
 
-func TestRunMigratesLegacyConfigBeforeConfigOnlyCommands(t *testing.T) {
+func TestRunDoesNotMigrateReasonixConfigBeforeConfigOnlyCommands(t *testing.T) {
 	isolateCLIConfigHome(t)
 	legacyPath := filepath.Join(filepath.Dir(config.UserConfigPath()), "reasonix.toml")
 	if err := os.MkdirAll(filepath.Dir(legacyPath), 0o755); err != nil {
@@ -132,18 +132,11 @@ command = "legacy-bin"
 			t.Fatalf("mcp list rc = %d, want 0", rc)
 		}
 	})
-	if !strings.Contains(out, "legacy-cli") {
-		t.Fatalf("mcp list should include migrated legacy config:\n%s", out)
+	if strings.Contains(out, "legacy-cli") {
+		t.Fatalf("mcp list should not include original Reasonix config:\n%s", out)
 	}
-
-	body, err := os.ReadFile(config.UserConfigPath())
-	if err != nil {
-		t.Fatalf("read migrated user config: %v", err)
-	}
-	for _, want := range []string{`config_version = 2`, `[desktop]`, `name    = "legacy-cli"`} {
-		if !strings.Contains(string(body), want) {
-			t.Fatalf("migrated config missing %q:\n%s", want, body)
-		}
+	if _, err := os.Stat(config.UserConfigPath()); !os.IsNotExist(err) {
+		t.Fatalf("config command should not migrate original Reasonix config, stat err=%v", err)
 	}
 }
 
@@ -162,7 +155,7 @@ func TestRunMetadataCommandsDoNotMigrateLegacyConfig(t *testing.T) {
 			t.Fatalf("version rc = %d, want 0", rc)
 		}
 	})
-	if !strings.Contains(out, "reasonix test-version") {
+	if !strings.Contains(out, "maddog test-version") {
 		t.Fatalf("version output = %q", out)
 	}
 	if _, err := os.Stat(config.UserConfigPath()); !os.IsNotExist(err) {
@@ -205,7 +198,7 @@ func TestConfigAutoPlanLocalCreatesMinimalProjectOverride(t *testing.T) {
 		t.Fatalf("config auto-plan --local output = %q", out)
 	}
 
-	body, err := os.ReadFile("reasonix.toml")
+	body, err := os.ReadFile("maddog.toml")
 	if err != nil {
 		t.Fatalf("read project config: %v", err)
 	}
@@ -232,10 +225,10 @@ func TestWelcomePromptMissingKeysRequiresConfigSource(t *testing.T) {
 	if welcomeShouldPromptMissingKeys("", nil) {
 		t.Fatal("built-in defaults without a config source should not prompt for missing provider keys")
 	}
-	if welcomeShouldPromptMissingKeys("reasonix.toml", errors.New("bad config")) {
+	if welcomeShouldPromptMissingKeys("maddog.toml", errors.New("bad config")) {
 		t.Fatal("invalid config should not enter the missing-key prompt path")
 	}
-	if !welcomeShouldPromptMissingKeys("reasonix.toml", nil) {
+	if !welcomeShouldPromptMissingKeys("maddog.toml", nil) {
 		t.Fatal("valid config source should enter the missing-key prompt path")
 	}
 }
@@ -642,7 +635,7 @@ func TestProviderSlug(t *testing.T) {
 
 // TestFilterStaleCustomEntries covers the wizard's auto-cleanup of legacy
 // "custom" / "anthropic" magic-name entries that previous versions wrote
-// into reasonix.toml. These collide with the wizard's own menu items, so
+// into maddog.toml. These collide with the wizard's own menu items, so
 // they're dropped from the providers list before grouping — but the caller
 // still gets them back in the dropped slice to surface a warning.
 func TestFilterStaleCustomEntries(t *testing.T) {
@@ -690,7 +683,7 @@ func TestFilterStaleCustomEntries(t *testing.T) {
 }
 
 func TestWithBuiltinFamiliesAddsMissingMiMo(t *testing.T) {
-	// The user's case: a reasonix.toml that defines only deepseek providers.
+	// The user's case: a maddog.toml that defines only deepseek providers.
 	cfg := []config.ProviderEntry{
 		{Name: "deepseek-flash", Kind: "openai", BaseURL: "https://api.deepseek.com"},
 		{Name: "deepseek-pro", Kind: "openai", BaseURL: "https://api.deepseek.com"},
@@ -715,7 +708,7 @@ func groupByFamilyKeys(ps []config.ProviderEntry, key string) []int {
 }
 
 func TestWriteDefaultConfigDisablesCodegraph(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "reasonix.toml")
+	path := filepath.Join(t.TempDir(), "maddog.toml")
 	if rc := writeDefaultConfig(path); rc != 0 {
 		t.Fatalf("writeDefaultConfig rc = %d", rc)
 	}

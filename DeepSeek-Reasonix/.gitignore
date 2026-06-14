@@ -28,23 +28,28 @@ mem.prof
 /desktop/frontend/wailsjs/
 /desktop/frontend/package.json.md5
 
-# Environment / local config (reasonix.example.toml is the shared template)
+# Environment / local config (maddog.example.toml is the shared template)
 .env
 .env.local
 *.local
 /reasonix.toml
+/maddog.toml
 /desktop/.env
 /desktop/reasonix.toml
+/desktop/maddog.toml
 
 # Node / frontend dependencies and caches
 node_modules/
 .pnpm-store/
 .npm/
 
-# Project-local Reasonix state; keep the checked-in review command.
+# Project-local app state; keep checked-in command examples when present.
 /.reasonix/*
 !/.reasonix/commands/
 !/.reasonix/commands/review.md
+/.maddog/*
+!/.maddog/commands/
+!/.maddog/commands/review.md
 
 # CodeGraph per-project index (rebuilt locally; never committed)
 .codegraph/

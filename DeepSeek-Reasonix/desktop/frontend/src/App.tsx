@@ -58,7 +58,7 @@ import {
 } from "./lib/theme";
 import { useWindowStatePersistence } from "./lib/windowState";
 
-const SIDEBAR_COLLAPSED_KEY = "reasonix.sidebar.collapsed";
+const SIDEBAR_COLLAPSED_KEY = "maddog.sidebar.collapsed";
 const SIDEBAR_DEFAULT_WIDTH = 264;
 const SIDEBAR_DEFAULT_RATIO = 0.175;
 const SIDEBAR_MIN_WIDTH = 228;
@@ -246,7 +246,7 @@ function fence(label: string, value: string): string {
 }
 
 function sessionItemsToMarkdown(title: string, items: Item[], live?: LiveStream): string {
-  const lines: string[] = [`# ${title.trim() || "Reasonix session"}`, ""];
+  const lines: string[] = [`# ${title.trim() || "Maddog session"}`, ""];
   for (const item of materializeLiveItems(items, live)) {
     switch (item.kind) {
       case "user":
@@ -315,7 +315,7 @@ function sessionItemsToJson(title: string, items: Item[], live?: LiveStream): st
 
 function safeFilename(name: string): string {
   const cleaned = name.trim().replace(/[\\/:*?"<>|]+/g, "-").replace(/\s+/g, " ").slice(0, 80);
-  return cleaned || "reasonix-session";
+  return cleaned || "maddog-session";
 }
 
 function downloadTextFile(filename: string, text: string, mime: string): void {
@@ -1381,7 +1381,7 @@ export default function App() {
           >
             {sidebarCollapsed ? <PanelLeftOpen size={16} /> : <PanelLeftClose size={16} />}
           </button>
-          <div className="app-chrome__identity" aria-label="Reasonix">
+          <div className="app-chrome__identity" aria-label="Maddog">
             <img src={logoWordmark} alt="" className="app-chrome__logo" />
             <span className="app-chrome__separator">/</span>
             <span className="app-chrome__scope">{appChromeScopeLabel(activeTab, state.meta)}</span>
