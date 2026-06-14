@@ -11,12 +11,14 @@
 #            Maddog-windows-<arch>.zip                 (portable human download)
 #   Linux:   Maddog-linux-<arch>.tar.gz                (bare binary)
 #
-# Usage: scripts/desktop-build.sh <os/arch> <version>
+# Usage: scripts/desktop-build.sh <os/arch> <version> [channel]
 #   e.g. scripts/desktop-build.sh darwin/arm64 v1.1.0
+#        scripts/desktop-build.sh darwin/arm64 v1.5.0-canary.20260608.42 canary
 set -euo pipefail
 
-PLATFORM="${1:?usage: desktop-build.sh <os/arch> <version>}"
-VERSION="${2:?usage: desktop-build.sh <os/arch> <version>}"
+PLATFORM="${1:?usage: desktop-build.sh <os/arch> <version> [channel]}"
+VERSION="${2:?usage: desktop-build.sh <os/arch> <version> [channel]}"
+CHANNEL="${3:-stable}"
 
 os="${PLATFORM%/*}"
 arch="${PLATFORM#*/}"
@@ -36,8 +38,8 @@ numver="${VERSION#v}"; numver="${numver%%-*}"
 node -e 'const fs=require("fs"),f="wails.json",j=JSON.parse(fs.readFileSync(f,"utf8"));j.info.productVersion=process.argv[1];fs.writeFileSync(f,JSON.stringify(j,null,2)+"\n")' "$numver"
 
 # NSIS installer is Windows-only (Wails requires a single windows target for -nsis).
-build_args=(-clean -platform "$PLATFORM" -ldflags "-X main.version=$VERSION")
-[ "$os" = windows ] && build_args+=(-nsis)
+build_args=(-clean -platform "$PLATFORM" -ldflags "-X main.version=$VERSION -X main.channel=$CHANNEL")
+[ "$os" = windows ] && build_args+=(-nsis -webview2 embed)
 # Link cgo against WebKitGTK 4.1: 4.0 (libwebkit2gtk-4.0.so.37) is gone on
 # Ubuntu 24.04+/Fedora 40+, while 4.1 ships from Ubuntu 22.04 onward.
 [ "$os" = linux ] && build_args+=(-tags webkit2_41)
@@ -83,6 +85,16 @@ darwin)
 		--no-internet-enable \
 		"$dmg" "$dmgsrc" || true
 	[ -f "$dmg" ] || { echo "create-dmg did not produce $dmg" >&2; exit 1; }
+	# The .dmg is a separately-downloaded artifact, so sign + notarize + staple the
+	# disk image itself too — the stapled .app inside isn't enough for the image.
+	if [ "${HAS_APPLE_CERT:-}" = "true" ]; then
+		codesign --force --timestamp -s "$identity" "$dmg"
+		echo "==> notarytool submit (dmg)"
+		xcrun notarytool submit "$dmg" \
+			--key "$APPLE_API_KEY_PATH" --key-id "$APPLE_API_KEY_ID" \
+			--issuer "$APPLE_API_ISSUER_ID" --wait
+		xcrun stapler staple "$dmg"
+	fi
 	rm -rf "$staging" "$dmgsrc"
 	;;
 windows)
@@ -102,6 +114,13 @@ windows)
 	;;
 linux)
 	tar -czf "$ROOT/dist/${APPNAME}-linux-${arch}.tar.gz" -C build/bin "$BINNAME"
+	# Also build a .deb for Debian/Ubuntu users (goreleaser/nfpm; see
+	# desktop/build/linux/nfpm.yaml). Human-download only: the Linux updater channel
+	# stays the tarball and cmd/sign's manifest skips .deb files. nfpm reads
+	# $DEB_VERSION/$DEB_ARCH — dpkg wants a strict numeric version, so reuse numver.
+	DEB_VERSION="$numver" DEB_ARCH="$arch" \
+		nfpm package --config build/linux/nfpm.yaml --packager deb \
+		--target "$ROOT/dist/${APPNAME}-linux-${arch}.deb"
 	;;
 *)
 	echo "unsupported os: $os" >&2

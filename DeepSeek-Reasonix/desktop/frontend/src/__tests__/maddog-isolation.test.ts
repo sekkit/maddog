@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { replaceAttachmentRefsForDisplay } from "../lib/attachmentDisplay";
-import { snapshot } from "../lib/composerHistory";
+import { invalidateCache, snapshot } from "../lib/composerHistory";
 import { getFontFamily } from "../lib/fontFamily";
 import { readLegacyLangPref } from "../lib/i18n";
 import { loadLayoutSize } from "../lib/layoutPreferences";
@@ -10,9 +10,9 @@ import { getTextSize } from "../lib/textSize";
 let passed = 0;
 let failed = 0;
 
-function check(label: string, fn: () => boolean) {
+async function check(label: string, fn: () => boolean | Promise<boolean>) {
   try {
-    if (fn()) {
+    if (await fn()) {
       process.stdout.write(`  PASS  ${label}\n`);
       passed += 1;
     } else {
@@ -65,47 +65,48 @@ function resetStorage(): void {
 
 console.log("\nMaddog isolation");
 
-check("attachment display ignores .reasonix refs", () => {
+await check("attachment display ignores .reasonix refs", () => {
   const input = "see @.reasonix/attachments/clipboard-20260601-010203.000001.png";
   return replaceAttachmentRefsForDisplay(input) === input;
 });
 
-check("composer history ignores reasonix localStorage", () => {
+await check("composer history ignores reasonix localStorage", () => {
   resetStorage();
+  invalidateCache();
   localStorage.setItem("reasonix.composer.history", JSON.stringify([{ text: "from reasonix", at: 1 }]));
-  return snapshot().length === 0;
+  return snapshot().then((entries) => !entries.some((entry) => entry.text === "from reasonix"));
 });
 
-check("layout preferences ignore reasonix aggregate key", () => {
+await check("layout preferences ignore reasonix aggregate key", () => {
   resetStorage();
   localStorage.setItem("reasonix.layoutPreferences.v1", JSON.stringify({ sizes: { composerHeight: 300 } }));
   return loadLayoutSize("composerHeight", 100) === 100;
 });
 
-check("layout preferences ignore reasonix scalar keys", () => {
+await check("layout preferences ignore reasonix scalar keys", () => {
   resetStorage();
   localStorage.setItem("reasonix.composerHeight", "300");
   return loadLayoutSize("composerHeight", 100) === 100;
 });
 
-check("language migration ignores reasonix localStorage", () => {
+await check("language migration ignores reasonix localStorage", () => {
   resetStorage();
   localStorage.setItem("reasonix-lang", "zh");
   return readLegacyLangPref() === "";
 });
 
-check("theme migration ignores reasonix localStorage", () => {
+await check("theme migration ignores reasonix localStorage", () => {
   const themeSource = readFileSync(fileURLToPath(new URL("../lib/theme.ts", import.meta.url)), "utf8");
   return themeSource.includes('"maddog-theme"') && !themeSource.includes("reasonix-theme");
 });
 
-check("font family ignores reasonix localStorage", () => {
+await check("font family ignores reasonix localStorage", () => {
   resetStorage();
   localStorage.setItem("reasonix-font-family", "yahei");
   return getFontFamily() === "system";
 });
 
-check("text size ignores reasonix localStorage", () => {
+await check("text size ignores reasonix localStorage", () => {
   resetStorage();
   localStorage.setItem("reasonix-text-size", "large");
   return getTextSize() === "default";

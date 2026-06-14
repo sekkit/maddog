@@ -8,13 +8,9 @@ func TestDefaultAutoPlanOff(t *testing.T) {
 	}
 }
 
-func TestDefaultRuntimeSkillOrchestrationOn(t *testing.T) {
-	cfg := Default()
-	if !cfg.Skills.RuntimeOrchestration {
-		t.Fatal("runtime skill orchestration should default on")
-	}
-	if !cfg.Skills.DynamicSkills {
-		t.Fatal("dynamic skill generation should default on")
+func TestDefaultReasoningLanguageAuto(t *testing.T) {
+	if got := Default().ReasoningLanguage(); got != "auto" {
+		t.Fatalf("default reasoning_language = %q, want auto", got)
 	}
 }
 

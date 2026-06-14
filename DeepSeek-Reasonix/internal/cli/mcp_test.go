@@ -476,7 +476,7 @@ func TestApplyMCPModeRecordsCodegraphConnectFailure(t *testing.T) {
 		}}},
 	}
 
-	_, _ = m.applyMCPMode("background")
+	_, _ = m.applyMCPMode("eager")
 
 	failures := m.ctrl.Host().Failures()
 	if len(failures) != 1 || failures[0].Name != "codegraph" {

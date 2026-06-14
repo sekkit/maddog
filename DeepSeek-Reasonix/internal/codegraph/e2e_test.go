@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -68,7 +70,11 @@ func TestE2ECodegraphMCP(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StartAll: %v", err)
 	}
-	defer host.Close()
+	defer func() {
+		host.Close()
+		// Reap the daemon that escapes process-group kill via setsid.
+		KillDaemon(root)
+	}()
 	if len(tools) == 0 {
 		t.Fatal("codegraph exposed no MCP tools")
 	}

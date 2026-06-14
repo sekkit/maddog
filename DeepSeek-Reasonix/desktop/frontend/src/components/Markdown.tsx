@@ -1,4 +1,4 @@
-import { memo, useDeferredValue } from "react";
+import { memo, useMemo, useRef } from "react";
 import ReactMarkdown from "react-markdown";
 import type { Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -37,22 +37,34 @@ const components: Components = {
         e.preventDefault();
         if (href) openExternal(href);
       }}
+      onAuxClick={(e) => {
+        e.preventDefault();
+        if (href) openExternal(href);
+      }}
+      onMouseDown={(e) => {
+        if (e.button === 1) e.preventDefault();
+      }}
     >
       {children}
     </a>
   ),
 };
 
-export const Markdown = memo(function Markdown({ text }: { text: string }) {
-  const deferred = useDeferredValue(text);
+export const Markdown = memo(function Markdown({
+  text,
+}: {
+  text: string;
+}) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const mathContent = useMemo(() => normalizeMath(text), [text]);
   return (
-    <div className="md">
+    <div className="md" ref={containerRef}>
       <ReactMarkdown
         remarkPlugins={[remarkGfm, remarkMath]}
         rehypePlugins={[rehypeKatex]}
         components={components}
       >
-        {normalizeMath(deferred)}
+        {mathContent}
       </ReactMarkdown>
     </div>
   );

@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
+	"strings"
 
 	"reasonix/internal/fileutil"
 	"reasonix/internal/mcpdiag"

@@ -165,6 +165,14 @@ func TestToWireTurnDoneNoError(t *testing.T) {
 
 // --- kindNames completeness ---
 
+func TestToWireSteer(t *testing.T) {
+	e := event.Event{Kind: event.Steer, Text: "please use smaller diffs"}
+	w := toWire(e)
+	if w.Kind != "steer" || w.Text != "please use smaller diffs" {
+		t.Errorf("steer wire = %+v", w)
+	}
+}
+
 func TestKindNamesComplete(t *testing.T) {
 	// Advisor is the last Kind; every value through it must have a wire name,
 	// or toWire emits kind:"" and the frontend reducer falls through to undefined.

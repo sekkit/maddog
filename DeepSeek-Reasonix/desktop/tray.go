@@ -42,16 +42,16 @@ func (a *App) startTray() {
 		a.trayReady = true
 		a.mu.Unlock()
 
-		go func() {
+		a.goSafe("trayOpenLoop", func() {
 			for range t.openItem.ClickedCh {
 				a.showFromTray()
 			}
-		}()
-		go func() {
+		})
+		a.goSafe("trayQuitLoop", func() {
 			for range t.quitItem.ClickedCh {
 				a.quitFromTray()
 			}
-		}()
+		})
 	}, func() {
 		a.mu.Lock()
 		a.trayReady = false
@@ -92,11 +92,7 @@ func (a *App) trayLocale() string {
 }
 
 func (a *App) showFromTray() {
-	ctx := a.ctx
-	if ctx == nil {
-		return
-	}
-	showFromBackground(ctx)
+	a.showMainWindow()
 }
 
 func (a *App) quitFromTray() {

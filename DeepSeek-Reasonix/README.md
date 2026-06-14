@@ -7,6 +7,8 @@
   &nbsp;·&nbsp;
   <a href="./README.zh-CN.md">简体中文</a>
   &nbsp;·&nbsp;
+  <a href="./docs/GUIDE.md">Guide</a>
+  &nbsp;·&nbsp;
   <a href="./docs/SPEC.md">Spec</a>
   &nbsp;·&nbsp;
   <a href="https://sekkit.github.io/maddog/">Website</a>
@@ -70,6 +72,12 @@ brew install sekkit/maddog/maddog   # macOS
 
 Prebuilt archives (`darwin|linux|windows × amd64|arm64`) and `SHA256SUMS` are on
 every [GitHub release](https://github.com/sekkit/maddog/releases).
+
+### Code signing
+
+Windows builds are code-signed with a free certificate provided by the
+[SignPath Foundation](https://signpath.org/), with signing through
+[SignPath.io](https://signpath.io/).
 
 ### Build from source
 
@@ -142,15 +150,7 @@ always allow; writers fall back to `mode`). `maddog chat` prompts before writers
 (`y` once · `a` this session · `n` no); `maddog run` stays autonomous but still
 honours `deny`. See [`docs/SPEC.md`](docs/SPEC.md) for the full schema and contract.
 
-Permissions are *policy* (which calls to allow / prompt). The **sandbox** is
-*enforcement*: the file-writers (`write_file` / `edit_file` / `multi_edit`)
-refuse any path outside `[sandbox] workspace_root` (default: the current dir, so
-edits stay in the project), resolving symlinks and `..` so a link can't tunnel
-out. Reads are unrestricted. `bash` is itself jailed on macOS by default
-(`[sandbox] bash`, Seatbelt): commands may write only those same roots (plus
-temp and toolchain caches) and reach the network only when `[sandbox] network`
-is set. Other platforms fall back to running unconfined for now (see
-`docs/SPEC.md` §9 for the escape-prompt and Linux support still to come).
+## Documentation
 
 ### Plugins (MCP)
 

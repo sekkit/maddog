@@ -7,6 +7,8 @@
   &nbsp;·&nbsp;
   <strong>简体中文</strong>
   &nbsp;·&nbsp;
+  <a href="./docs/GUIDE.zh-CN.md">指南</a>
+  &nbsp;·&nbsp;
   <a href="./docs/SPEC.md">规格</a>
   &nbsp;·&nbsp;
   <a href="https://sekkit.github.io/maddog/">官方网站</a>
@@ -67,6 +69,11 @@ brew install sekkit/maddog/maddog   # macOS
 
 预编译归档(`darwin|linux|windows × amd64|arm64`)和 `SHA256SUMS` 见每个
 [GitHub release](https://github.com/sekkit/maddog/releases)。
+
+### 代码签名
+
+Windows 构建使用 [SignPath 基金会](https://signpath.org/) 提供的免费代码签名证书,
+通过 [SignPath.io](https://signpath.io/) 完成签名。
 
 ### 从源码构建
 
@@ -138,12 +145,7 @@ command = "maddog-plugin-example"
 `maddog run` 保持自主运行但仍然遵守 `deny`。完整 schema 与契约见
 [`docs/SPEC.md`](docs/SPEC.md)。
 
-权限是**策略**（哪些调用放行/询问），**沙盒**是**强制**：文件写工具
-（`write_file` / `edit_file` / `multi_edit`）拒绝 `[sandbox] workspace_root`
-之外的任何路径（默认当前目录，编辑不出项目），并解析符号链接与 `..`，使链接无法
-打洞越界。读不受限。`bash` 本身在 macOS 默认进沙盒（`[sandbox] bash`，Seatbelt）：
-命令只能写这些 root（外加临时目录与工具链缓存），`[sandbox] network` 为真时才能联网；
-其它平台暂回退为不沙盒运行（越界问一次与 Linux 支持见 `docs/SPEC.md` §9）。
+## 文档
 
 ### 插件（MCP）
 

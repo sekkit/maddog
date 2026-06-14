@@ -1,5 +1,6 @@
 export type LayoutSizeKey =
   | "sidebarWidth"
+  | "sidebarWidthGraphite"
   | "rightDockWidth"
   | "rightDockTreeWidth"
   | "rightDockPreviewWidth"
@@ -17,6 +18,7 @@ const STORAGE_KEY = "maddog.layoutPreferences.v1";
 
 const LEGACY_SIZE_KEYS: Record<LayoutSizeKey, string[]> = {
   sidebarWidth: ["maddog.sidebar.width"],
+  sidebarWidthGraphite: [],
   rightDockWidth: [],
   rightDockTreeWidth: [],
   rightDockPreviewWidth: [],

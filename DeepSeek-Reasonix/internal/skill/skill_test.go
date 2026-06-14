@@ -1,7 +1,6 @@
 package skill
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -9,7 +8,6 @@ import (
 	"testing"
 
 	"reasonix/internal/config"
-	"reasonix/internal/provider"
 )
 
 func writeSkill(t *testing.T, base, rel, content string) string {
@@ -248,7 +246,6 @@ func TestBuiltinSubagentSkillsDeclareAllowedTools(t *testing.T) {
 	cases := map[string][]string{
 		"explore":         {"read_file", "ls", "glob", "grep"},
 		"research":        {"read_file", "ls", "glob", "grep", "web_fetch"},
-		"advisor":         {"read_file", "ls", "glob", "grep"},
 		"review":          {"read_file", "ls", "glob", "grep", "bash"},
 		"security-review": {"read_file", "ls", "glob", "grep", "bash"},
 	}
@@ -267,27 +264,6 @@ func TestBuiltinSubagentSkillsDeclareAllowedTools(t *testing.T) {
 			if containsString(sk.AllowedTools, meta) {
 				t.Errorf("%s AllowedTools should not include meta-tool %q: %v", name, meta, sk.AllowedTools)
 			}
-		}
-	}
-}
-
-func TestAdvisorBuiltinCarriesFrontierSecondOpinionContract(t *testing.T) {
-	st := New(Options{HomeDir: t.TempDir()})
-	sk, ok := st.Read("advisor")
-	if !ok {
-		t.Fatal("advisor builtin skill not found")
-	}
-	if sk.RunAs != RunSubagent {
-		t.Fatalf("advisor RunAs = %s, want subagent", sk.RunAs)
-	}
-	for _, want := range []string{"100 words", "numbered steps", "Risks:", "Stay read-only"} {
-		if !strings.Contains(sk.Body, want) {
-			t.Fatalf("advisor body missing %q:\n%s", want, sk.Body)
-		}
-	}
-	for _, forbidden := range []string{"write_file", "edit_file", "bash", "remember", "forget"} {
-		if containsString(sk.AllowedTools, forbidden) {
-			t.Fatalf("advisor should stay read-only; allowed tools include %q: %v", forbidden, sk.AllowedTools)
 		}
 	}
 }
