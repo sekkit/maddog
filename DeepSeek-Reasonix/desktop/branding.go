@@ -6,11 +6,14 @@ import (
 	"strings"
 
 	"reasonix/internal/boot"
+	"reasonix/internal/config"
 )
 
 const (
 	desktopAppTitle       = "Maddog Dev"
 	desktopStateDirName   = "maddog-dev"
+	desktopConfigFileName = "maddog.toml"
+	desktopProjectDirName = ".maddog"
 	desktopSingleInstance = "com.maddog.desktop"
 )
 
@@ -19,14 +22,26 @@ const (
 // side during development.
 const singleInstanceID = desktopSingleInstance
 
+func init() {
+	configureDesktopBranding()
+}
+
+func configureDesktopBranding() {
+	config.ConfigureBranding(config.Branding{
+		ProjectConfigFile: desktopConfigFileName,
+		UserStateDir:      desktopStateDirName,
+		ProjectStateDir:   desktopProjectDirName,
+		EnvPrefix:         "MADDOG",
+	})
+}
+
 func desktopConfigDir() string {
-	dir, err := os.UserConfigDir()
-	if err == nil && strings.TrimSpace(dir) != "" {
-		return filepath.Join(dir, desktopStateDirName)
+	if dir := config.MemoryUserDir(); strings.TrimSpace(dir) != "" {
+		return dir
 	}
 	home, err := os.UserHomeDir()
 	if err == nil && strings.TrimSpace(home) != "" {
-		return filepath.Join(home, "."+desktopStateDirName)
+		return filepath.Join(home, "."+config.UserStateDir())
 	}
 	return ""
 }

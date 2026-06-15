@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+
+	"reasonix/internal/config"
 )
 
 // Trust gates project hooks. A project's .reasonix/settings.json can run
@@ -23,7 +25,7 @@ type trustFile struct {
 
 // TrustPath is ~/.reasonix/trust.json (homeDir overrides ~).
 func TrustPath(homeDir string) string {
-	return filepath.Join(home(homeDir), SettingsDirname, TrustFilename)
+	return filepath.Join(home(homeDir), config.ProjectStateDir(), TrustFilename)
 }
 
 // IsTrusted reports whether projectRoot has been trusted to run its hooks.

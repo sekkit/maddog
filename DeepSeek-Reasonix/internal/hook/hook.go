@@ -24,6 +24,7 @@ import (
 	"strings"
 	"time"
 
+	"reasonix/internal/config"
 	"reasonix/internal/proc"
 )
 
@@ -120,20 +121,20 @@ func (h ResolvedHook) timeout() time.Duration {
 	return defaultTimeout(h.Event)
 }
 
-// SettingsDirname / SettingsFilename locate a scope's settings.json.
+// SettingsFilename locates a scope's settings.json. The parent directory comes
+// from config branding so desktop forks can keep hooks isolated.
 const (
-	SettingsDirname  = ".reasonix"
 	SettingsFilename = "settings.json"
 )
 
 // GlobalSettingsPath is ~/.reasonix/settings.json (homeDir overrides ~).
 func GlobalSettingsPath(homeDir string) string {
-	return filepath.Join(home(homeDir), SettingsDirname, SettingsFilename)
+	return filepath.Join(home(homeDir), config.ProjectStateDir(), SettingsFilename)
 }
 
 // ProjectSettingsPath is <root>/.reasonix/settings.json.
 func ProjectSettingsPath(projectRoot string) string {
-	return filepath.Join(projectRoot, SettingsDirname, SettingsFilename)
+	return filepath.Join(projectRoot, config.ProjectStateDir(), SettingsFilename)
 }
 
 // LoadOptions configure Load. Project hooks load only when Trusted; global hooks

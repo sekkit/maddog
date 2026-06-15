@@ -2082,7 +2082,7 @@ func isConventionSkillRoot(path, workspaceRoot string) bool {
 		if base == "" {
 			continue
 		}
-		for _, dir := range config.ConventionDirs {
+		for _, dir := range config.ProjectConventionDirs() {
 			if want == config.CanonicalSkillPath(filepath.Join(base, dir, skill.SkillsDirname)) {
 				return true
 			}

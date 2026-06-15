@@ -174,14 +174,14 @@ func (s *Store) roots() []Root {
 	}
 	var dirs []de
 	if s.projectRoot != "" {
-		for _, c := range config.ConventionDirs {
+		for _, c := range config.ProjectConventionDirs() {
 			dirs = append(dirs, de{filepath.Join(s.projectRoot, c, SkillsDirname), ScopeProject})
 		}
 	}
 	for _, d := range s.customPaths {
 		dirs = append(dirs, de{d, ScopeCustom})
 	}
-	for _, c := range config.ConventionDirs {
+	for _, c := range config.ProjectConventionDirs() {
 		dirs = append(dirs, de{filepath.Join(s.homeDir, c, SkillsDirname), ScopeGlobal})
 	}
 	out := make([]Root, 0, len(dirs))
@@ -524,9 +524,9 @@ func (s *Store) CreateWithContent(name string, scope Scope, content string) (str
 		if s.projectRoot == "" {
 			return "", fmt.Errorf("project scope requires a workspace — run from a project directory, or use global scope")
 		}
-		root = filepath.Join(s.projectRoot, ".reasonix", SkillsDirname)
+		root = filepath.Join(s.projectRoot, config.ProjectStateDir(), SkillsDirname)
 	default:
-		root = filepath.Join(s.homeDir, ".reasonix", SkillsDirname)
+		root = filepath.Join(s.homeDir, config.ProjectStateDir(), SkillsDirname)
 	}
 	flat := filepath.Join(root, name+".md")
 	folder := filepath.Join(root, name, SkillFile)

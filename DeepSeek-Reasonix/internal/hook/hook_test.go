@@ -7,11 +7,13 @@ import (
 	"runtime"
 	"testing"
 	"time"
+
+	"reasonix/internal/config"
 )
 
 func writeSettings(t *testing.T, dir, json string) {
 	t.Helper()
-	d := filepath.Join(dir, SettingsDirname)
+	d := filepath.Join(dir, config.ProjectStateDir())
 	if err := os.MkdirAll(d, 0o755); err != nil {
 		t.Fatal(err)
 	}

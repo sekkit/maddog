@@ -22,6 +22,49 @@ import (
 
 var validSkillName = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$`)
 
+// Branding controls the small set of filesystem names that must be isolated
+// when the Reasonix kernel is embedded by a branded desktop app.
+type Branding struct {
+	ProjectConfigFile string
+	UserStateDir      string
+	ProjectStateDir   string
+	EnvPrefix         string
+}
+
+var activeBranding = Branding{
+	ProjectConfigFile: "reasonix.toml",
+	UserStateDir:      "reasonix",
+	ProjectStateDir:   ".reasonix",
+	EnvPrefix:         "REASONIX",
+}
+
+// ConfigureBranding changes the filesystem names used by the config package.
+// It is intended for embedding frontends during process startup. Empty fields
+// keep the current value so callers can override only the names they own.
+func ConfigureBranding(b Branding) {
+	if s := strings.TrimSpace(b.ProjectConfigFile); s != "" {
+		activeBranding.ProjectConfigFile = s
+	}
+	if s := strings.TrimSpace(b.UserStateDir); s != "" {
+		activeBranding.UserStateDir = s
+	}
+	if s := strings.TrimSpace(b.ProjectStateDir); s != "" {
+		activeBranding.ProjectStateDir = s
+	}
+	if s := strings.TrimSpace(b.EnvPrefix); s != "" {
+		activeBranding.EnvPrefix = s
+	}
+}
+
+// ActiveBranding returns the current process branding names.
+func ActiveBranding() Branding { return activeBranding }
+
+func ProjectConfigFile() string { return activeBranding.ProjectConfigFile }
+
+func UserStateDir() string { return activeBranding.UserStateDir }
+
+func ProjectStateDir() string { return activeBranding.ProjectStateDir }
+
 // IsValidSkillName reports whether name is a usable skill identifier.
 func IsValidSkillName(name string) bool { return validSkillName.MatchString(name) }
 
@@ -863,9 +906,9 @@ func LoadForRoot(root string) (*Config, error) {
 	loadDotEnvForRoot(root)
 	cfg := Default()
 
-	projectTOML := "reasonix.toml"
+	projectTOML := activeBranding.ProjectConfigFile
 	if root != "." {
-		projectTOML = filepath.Join(root, "reasonix.toml")
+		projectTOML = filepath.Join(root, activeBranding.ProjectConfigFile)
 	}
 
 	var tomlSources []string
@@ -910,7 +953,9 @@ func LoadForRoot(root string) (*Config, error) {
 	// Lowest priority: the v0.x ~/.reasonix/config.json's mcpServers, so upgrading
 	// from the TypeScript line keeps MCP servers without rewriting them. Anything
 	// the v2 config or .mcp.json already declared wins on a name collision.
-	cfg.mergeMCPJSON(loadLegacyMCP(legacyConfigPath()))
+	if activeBranding.UserStateDir == "reasonix" {
+		cfg.mergeMCPJSON(loadLegacyMCP(legacyConfigPath()))
+	}
 	normalizePluginCommandLines(cfg)
 	normalizeLegacyEffort(cfg)
 	normalizeLegacyMCPTiers(cfg)
@@ -1454,7 +1499,7 @@ func userConfigPath() string {
 	if err != nil {
 		return ""
 	}
-	return filepath.Join(dir, "reasonix", "config.toml")
+	return filepath.Join(dir, activeBranding.UserStateDir, "config.toml")
 }
 
 // UserConfigPath is the user-global config file (~/.config/reasonix/config.toml),
@@ -1473,7 +1518,7 @@ func UserCredentialsPath() string {
 	if err != nil {
 		return ""
 	}
-	return filepath.Join(dir, "reasonix", "credentials")
+	return filepath.Join(dir, activeBranding.UserStateDir, "credentials")
 }
 
 // ArchiveDir is where compacted conversation history is archived for
@@ -1484,7 +1529,7 @@ func ArchiveDir() string {
 	if err != nil {
 		return ""
 	}
-	return filepath.Join(dir, "reasonix", "archive")
+	return filepath.Join(dir, activeBranding.UserStateDir, "archive")
 }
 
 // SessionDir is where chat sessions are persisted (one .jsonl per session).
@@ -1495,7 +1540,7 @@ func SessionDir() string {
 	if err != nil {
 		return ""
 	}
-	return filepath.Join(dir, "reasonix", "sessions")
+	return filepath.Join(dir, activeBranding.UserStateDir, "sessions")
 }
 
 // CacheDir is the per-user cache root for derived/regenerable artefacts: MCP
@@ -1508,7 +1553,7 @@ func CacheDir() string {
 	if err != nil {
 		return ""
 	}
-	return filepath.Join(dir, "reasonix", "cache")
+	return filepath.Join(dir, activeBranding.UserStateDir, "cache")
 }
 
 // MemoryUserDir returns the reasonix user config root (…/reasonix), under which
@@ -1519,7 +1564,7 @@ func MemoryUserDir() string {
 	if err != nil {
 		return ""
 	}
-	return filepath.Join(dir, "reasonix")
+	return filepath.Join(dir, activeBranding.UserStateDir)
 }
 
 // ConventionDirs are the parent directories scanned for agent assets (skills,
@@ -1531,13 +1576,30 @@ func MemoryUserDir() string {
 // .reasonix/settings.json (see internal/hook).
 var ConventionDirs = []string{".reasonix", ".agents", ".agent", ".claude"}
 
+func ProjectConventionDirs() []string {
+	dirs := make([]string, 0, len(ConventionDirs)+1)
+	if s := strings.TrimSpace(activeBranding.ProjectStateDir); s != "" {
+		dirs = append(dirs, s)
+	}
+	for _, dir := range ConventionDirs {
+		if activeBranding.ProjectStateDir != ".reasonix" && dir == ".reasonix" {
+			continue
+		}
+		if dir != activeBranding.ProjectStateDir {
+			dirs = append(dirs, dir)
+		}
+	}
+	return dirs
+}
+
 // conventionSubdirsAsc joins sub under each ConventionDir of base, in ascending
 // priority (reverse of ConventionDirs) so the canonical .reasonix ends up the
 // highest-priority entry — command.Load lets a later directory win on a clash.
 func conventionSubdirsAsc(base, sub string) []string {
-	out := make([]string, 0, len(ConventionDirs))
-	for i := len(ConventionDirs) - 1; i >= 0; i-- {
-		out = append(out, filepath.Join(base, ConventionDirs[i], sub))
+	dirs := ProjectConventionDirs()
+	out := make([]string, 0, len(dirs))
+	for i := len(dirs) - 1; i >= 0; i-- {
+		out = append(out, filepath.Join(base, dirs[i], sub))
 	}
 	return out
 }
@@ -1563,7 +1625,7 @@ func CommandDirsForRoot(root string) []string {
 		dirs = append(dirs, conventionSubdirsAsc(home, "commands")...)
 	}
 	if dir, err := os.UserConfigDir(); err == nil {
-		dirs = append(dirs, filepath.Join(dir, "reasonix", "commands")) // legacy XDG user dir
+		dirs = append(dirs, filepath.Join(dir, activeBranding.UserStateDir, "commands")) // legacy XDG user dir
 	}
 	dirs = append(dirs, conventionSubdirsAsc(root, "commands")...)
 	return dirs
@@ -1578,9 +1640,9 @@ func SourcePath() string {
 // root, or "" if none. Equivalent to SourcePath() when root is ".".
 func SourcePathForRoot(root string) string {
 	root = resolveRoot(root)
-	projectTOML := "reasonix.toml"
+	projectTOML := activeBranding.ProjectConfigFile
 	if root != "." {
-		projectTOML = filepath.Join(root, "reasonix.toml")
+		projectTOML = filepath.Join(root, activeBranding.ProjectConfigFile)
 	}
 	if _, err := os.Stat(projectTOML); err == nil {
 		return projectTOML

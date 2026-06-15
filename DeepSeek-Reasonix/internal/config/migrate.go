@@ -65,6 +65,9 @@ func (r *MigrationResult) Notice() string {
 // modifies or deletes the legacy files. Returns nil when there is nothing to
 // migrate, or when the current user config already exists.
 func MigrateLegacyIfNeeded() (*MigrationResult, error) {
+	if activeBranding.UserStateDir != "reasonix" {
+		return nil, nil
+	}
 	dest := userConfigPath()
 	if dest == "" {
 		return nil, nil
