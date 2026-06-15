@@ -6,6 +6,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { asArray } from "./array";
 import { app, onEvent, onReady } from "./bridge";
+import { createTraceEntry, type FlowTraceEntry } from "./flowTrace";
 import { createRafBatch } from "./rafBatch";
 import { t } from "./i18n";
 import type {
@@ -32,6 +33,7 @@ export type ToolStatus = "running" | "done" | "error" | "stopped";
 export type LiveStream = { id: string; text: string; reasoning: string };
 export type MessageActionScope = "fork" | "summ-from" | "summ-upto" | "conversation" | "code" | "both";
 export type MessageActionState = { turn: number; scope: MessageActionScope };
+const MAX_TRACE_EVENTS = 1000;
 
 export type Item =
   | { kind: "user"; id: string; text: string }
@@ -67,6 +69,7 @@ export type Item =
 
 interface State {
   items: Item[];
+  flowTrace: FlowTraceEntry[];
   running: boolean;
   turnActive: boolean;
   approval?: WireApproval;
@@ -95,6 +98,7 @@ interface State {
 
 const initialState: State = {
   items: [],
+  flowTrace: [],
   running: false,
   turnActive: false,
   context: { used: 0, window: 0 },
@@ -124,6 +128,7 @@ type Action =
   | { type: "local_notice"; level: "info" | "warn"; text: string }
   | { type: "clearApproval" }
   | { type: "clearAsk" }
+  | { type: "clearFlowTrace" }
   | { type: "reset" };
 
 // ---- reducer helpers (unchanged logic) ----
@@ -247,13 +252,15 @@ function flushPendingUser(s: State): State {
 }
 
 function applyEvent(s: State, e: WireEvent): State {
+  const trace = appendTrace(s.flowTrace, e);
   if (s.discardTurn) {
-    if (e.kind === "turn_done") return { ...s, discardTurn: false, running: false, turnActive: false, currentAssistant: undefined, live: undefined };
-    return s;
+    if (e.kind === "turn_done") return { ...s, flowTrace: trace, discardTurn: false, running: false, turnActive: false, currentAssistant: undefined, live: undefined };
+    return { ...s, flowTrace: trace };
   }
   if (s.pendingUser !== undefined && e.kind !== "turn_done") {
     s = flushPendingUser(s);
   }
+  s = { ...s, flowTrace: trace };
   if (e.kind === "retrying") {
     return { ...s, retry: { attempt: e.retryAttempt ?? 0, max: e.retryMax ?? 0 } };
   }
@@ -437,9 +444,16 @@ function reducer(s: State, a: Action): State {
     case "clearApproval": return { ...s, approval: undefined };
     case "clearAsk": return { ...s, ask: undefined };
     case "reset": return { ...initialState, meta: s.meta, context: { ...s.context, used: 0 }, balance: s.balance, effort: s.effort, jobs: s.jobs };
+    case "clearFlowTrace": return { ...s, flowTrace: [] };
     case "event": return applyEvent(s, a.e);
     default: return s;
   }
+}
+
+function appendTrace(trace: FlowTraceEntry[], e: WireEvent): FlowTraceEntry[] {
+  const next = [...trace, createTraceEntry((trace[trace.length - 1]?.seq ?? 0) + 1, e)];
+  if (next.length <= MAX_TRACE_EVENTS) return next;
+  return next.slice(next.length - MAX_TRACE_EVENTS);
 }
 
 // ---- per-tab state map ----
@@ -845,14 +859,21 @@ export function useController() {
     } catch { /* ignore */ }
   }, []);
 
+  const clearFlowTrace = useCallback(() => {
+    if (!activeTabId) return;
+    dispatchTo(activeTabId, { type: "clearFlowTrace" });
+  }, [activeTabId, dispatchTo]);
+
   return {
     state: activeState,
+    flowTrace: activeState.flowTrace,
     activeTabId,
     send, runShell, notice, cancel, approve, answerQuestion, setControllerMode,
     newSession, listSessions, listTrashedSessions, resumeSession, previewSession, deleteSession, restoreSession, purgeTrashedSession, renameSession,
     refreshMeta, pickWorkspace, switchWorkspace, compact, rewind, setModel, setEffort,
     fetchMemory, remember, forget, saveDoc,
     switchTab, openProjectTab, openGlobalTab, closeTab, reorderTabs,
+    clearFlowTrace,
     syncActiveTab: syncActiveTabFromBackend,
   };
 }
