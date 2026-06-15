@@ -66,6 +66,20 @@ export const zh: Record<DictKey, string> = {
   "topicBar.exportMarkdown": "导出 Markdown",
   "topicBar.exportJson": "导出 JSON",
 
+  // AI 数据流调试
+  "flow.title": "AI Flow",
+  "flow.summary": "{events} 个事件 · {tools} 个工具 · {usage} 条用量 · {failures} 个失败",
+  "flow.copyTrace": "复制 trace",
+  "flow.exportTrace": "导出 trace",
+  "flow.clearTrace": "清空 trace",
+  "flow.close": "关闭 AI Flow",
+  "flow.empty": "当前标签页还没有捕获到 agent 事件。",
+  "flow.timeline": "AI 事件时间线",
+  "flow.detail": "选中事件 JSON",
+  "flow.event": "事件",
+  "flow.copyJson": "复制 JSON",
+  "flow.exportJsonl": "AI Flow JSONL",
+
   // 范围标签
   "scope.global": "范围：全局",
   "scope.project": "项目 · {name}",

@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	"reasonix/internal/config"
 )
 
 // maxFileRefBytes caps how much of an @-referenced file is injected into a
@@ -75,7 +77,8 @@ func classifyRef(token string, known map[string]bool, exists func(string) bool) 
 }
 
 func isAttachmentRef(token string) bool {
-	return strings.HasPrefix(filepath.ToSlash(token), ".reasonix/attachments/")
+	prefix := filepath.ToSlash(filepath.Join(config.ProjectStateDir(), "attachments")) + "/"
+	return strings.HasPrefix(filepath.ToSlash(token), prefix)
 }
 
 func isImageAttachmentRef(token string) bool {

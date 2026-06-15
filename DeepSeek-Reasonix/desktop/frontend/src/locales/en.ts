@@ -65,6 +65,20 @@ export const en = {
   "topicBar.exportMarkdown": "Export Markdown",
   "topicBar.exportJson": "Export JSON",
 
+  // AI flow inspector
+  "flow.title": "AI Flow",
+  "flow.summary": "{events} events · {tools} tools · {usage} usage · {failures} failed",
+  "flow.copyTrace": "Copy trace",
+  "flow.exportTrace": "Export trace",
+  "flow.clearTrace": "Clear trace",
+  "flow.close": "Close AI Flow",
+  "flow.empty": "No agent events captured for this tab yet.",
+  "flow.timeline": "AI event timeline",
+  "flow.detail": "Selected event JSON",
+  "flow.event": "Event",
+  "flow.copyJson": "Copy JSON",
+  "flow.exportJsonl": "AI Flow JSONL",
+
   // scope labels
   "scope.global": "Scope: Global",
   "scope.project": "Project · {name}",

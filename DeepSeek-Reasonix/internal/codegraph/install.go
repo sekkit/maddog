@@ -16,6 +16,8 @@ import (
 	"runtime"
 	"strings"
 	"time"
+
+	"reasonix/internal/config"
 )
 
 const (
@@ -29,11 +31,12 @@ const (
 )
 
 // CacheDir is where the CodeGraph bundle is unpacked on first use:
-// <user cache>/reasonix/codegraph/<Version>. Versioned so a bump installs cleanly
-// beside the old one. REASONIX_CACHE_DIR overrides the base (relocate the cache,
-// or isolate it in tests). Empty when no cache/config dir resolves.
+// <user cache>/<brand>/codegraph/<Version>. Versioned so a bump installs cleanly
+// beside the old one. <BRAND>_CACHE_DIR overrides the base (REASONIX_CACHE_DIR
+// by default; MADDOG_CACHE_DIR for Maddog). Empty when no cache/config dir resolves.
 func CacheDir() string {
-	base := os.Getenv("REASONIX_CACHE_DIR")
+	prefix := config.ActiveBranding().EnvPrefix
+	base := os.Getenv(prefix + "_CACHE_DIR")
 	if base == "" {
 		var err error
 		if base, err = os.UserCacheDir(); err != nil {
@@ -41,7 +44,7 @@ func CacheDir() string {
 				return ""
 			}
 		}
-		base = filepath.Join(base, "reasonix")
+		base = filepath.Join(base, config.ActiveBranding().UserStateDir)
 	}
 	return filepath.Join(base, "codegraph", Version)
 }
@@ -152,7 +155,7 @@ func InstallWithClient(ctx context.Context, client *http.Client, log func(string
 		if p, ok := cached(); ok {
 			return p, nil // a concurrent winner landed during our retries
 		}
-		return "", fmt.Errorf("codegraph: install to %s failed: %w — the cache directory may be read-only or locked by antivirus; set REASONIX_CACHE_DIR to a writable location to relocate it", dir, err)
+		return "", fmt.Errorf("codegraph: install to %s failed: %w — the cache directory may be read-only or locked by antivirus; set %s_CACHE_DIR to a writable location to relocate it", dir, err, config.ActiveBranding().EnvPrefix)
 	}
 	p, ok := cached()
 	if !ok {

@@ -14,6 +14,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"reasonix/internal/config"
 	"reasonix/internal/proc"
 )
 
@@ -317,9 +318,9 @@ func cleanAttachmentPath(path string) (string, error) {
 		return "", fmt.Errorf("attachment path must be relative")
 	}
 	clean := filepath.Clean(filepath.FromSlash(path))
-	root := filepath.Join(".reasonix", "attachments")
+	root := attachmentRoot()
 	if clean == "." || clean == root || strings.HasPrefix(clean, ".."+string(filepath.Separator)) || !strings.HasPrefix(clean, root+string(filepath.Separator)) {
-		return "", fmt.Errorf("attachment path is outside .reasonix/attachments")
+		return "", fmt.Errorf("attachment path is outside %s", filepath.ToSlash(root))
 	}
 	if err := ensureAttachmentRoot(); err != nil {
 		return "", err
@@ -336,7 +337,7 @@ func rejectSymlinkComponents(path, root string) error {
 		return err
 	}
 	if rel == "." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || rel == ".." {
-		return fmt.Errorf("attachment path is outside .reasonix/attachments")
+		return fmt.Errorf("attachment path is outside %s", filepath.ToSlash(root))
 	}
 	cur := root
 	for _, part := range strings.Split(rel, string(filepath.Separator)) {
@@ -356,7 +357,7 @@ func rejectSymlinkComponents(path, root string) error {
 }
 
 func ensureAttachmentRoot() error {
-	root := filepath.Join(".reasonix", "attachments")
+	root := attachmentRoot()
 	if info, err := os.Lstat(root); err == nil {
 		if info.Mode()&os.ModeSymlink != 0 {
 			return fmt.Errorf("attachment directory must not be a symlink")
@@ -456,7 +457,11 @@ func createAttachmentFile(ext string) (string, *os.File, error) {
 func attachmentPath(ext string) string {
 	seq := attachmentPathSeq.Add(1)
 	name := fmt.Sprintf("clipboard-%s-%06d%s", attachmentNow().Format("20060102-150405.000000"), seq, ext)
-	return filepath.Join(".reasonix", "attachments", name)
+	return filepath.Join(attachmentRoot(), name)
+}
+
+func attachmentRoot() string {
+	return filepath.Join(config.ProjectStateDir(), "attachments")
 }
 
 func detectedImageMime(raw []byte) string {

@@ -2,6 +2,7 @@ import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } f
 import type { CSSProperties, KeyboardEvent, PointerEvent as ReactPointerEvent } from "react";
 import { ShellExpandProvider, useShellExpand } from "./lib/shellExpand";
 import {
+  Activity,
   Download,
   SquarePen,
   CircleGauge,
@@ -40,6 +41,8 @@ import { TabBar } from "./components/TabBar";
 import { ProjectTree } from "./components/ProjectTree";
 import { CopyButton } from "./components/CopyButton";
 import { CommandPalette, type PaletteItem } from "./components/CommandPalette";
+import { FlowInspector } from "./components/FlowInspector";
+import { traceToJsonl } from "./lib/flowTrace";
 import { parseTodos } from "./lib/tools";
 import { shouldShowTodoPanel } from "./lib/todoVisibility";
 import type { ComposerInsertRequest, Meta, Mode, SessionMeta, SettingsTab, TabMeta } from "./lib/types";
@@ -351,6 +354,7 @@ function ShellHotkeys() {
 export default function App() {
   const {
     state,
+    flowTrace,
     activeTabId,
     send,
     runShell,
@@ -379,6 +383,7 @@ export default function App() {
     openGlobalTab,
     closeTab,
     reorderTabs,
+    clearFlowTrace,
     syncActiveTab,
   } = useController();
   const { locale, setPref: setLocalePref } = useI18n();
@@ -410,6 +415,7 @@ export default function App() {
   const [renamingTopicId, setRenamingTopicId] = useState<string | null>(null);
   const [topicTitleDraft, setTopicTitleDraft] = useState("");
   const [topicExportOpen, setTopicExportOpen] = useState(false);
+  const [flowInspectorOpen, setFlowInspectorOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const topicRenameSkipCommitRef = useRef(false);
   const topicRenameCommitHandledRef = useRef(false);
@@ -692,6 +698,10 @@ export default function App() {
     },
     [getSessionJson, getSessionMarkdown, sessionTitle],
   );
+  const exportFlowTrace = useCallback(() => {
+    downloadTextFile(`${safeFilename(sessionTitle)}-flow.jsonl`, traceToJsonl(flowTrace), "application/x-ndjson");
+    setTopicExportOpen(false);
+  }, [flowTrace, sessionTitle]);
 
   useEffect(() => {
     if (!pendingPlanRevision || state.running) return;
@@ -1542,6 +1552,17 @@ export default function App() {
             </div>
             <div className="topicbar__spacer" />
             <div className="topicbar__actions">
+              <Tooltip label={t("flow.title")}>
+                <button
+                  className="topicbar__action-btn topicbar__action-btn--icon"
+                  type="button"
+                  disabled={!flowTrace.length}
+                  aria-label={t("flow.title")}
+                  onClick={() => setFlowInspectorOpen(true)}
+                >
+                  <Activity size={14} />
+                </button>
+              </Tooltip>
               <CopyButton
                 getText={getSessionMarkdown}
                 label={t("topicBar.copyAll")}
@@ -1553,7 +1574,7 @@ export default function App() {
                   <button
                     className="topicbar__action-btn topicbar__action-btn--icon"
                     type="button"
-                    disabled={!sessionHasContent}
+                    disabled={!sessionHasContent && !flowTrace.length}
                     aria-label={t("topicBar.export")}
                     aria-haspopup="menu"
                     aria-expanded={topicExportOpen}
@@ -1571,6 +1592,10 @@ export default function App() {
                     <button type="button" role="menuitem" onClick={() => exportSession("json")}>
                       <FileJson size={13} />
                       <span>{t("topicBar.exportJson")}</span>
+                    </button>
+                    <button type="button" role="menuitem" disabled={!flowTrace.length} onClick={exportFlowTrace}>
+                      <Activity size={13} />
+                      <span>{t("flow.exportJsonl")}</span>
                     </button>
                   </div>
                 )}
@@ -1785,6 +1810,15 @@ export default function App() {
           initialTab={settingsTarget}
           onClose={() => setSettingsTarget(null)}
           onChanged={() => void refreshMeta()}
+        />
+      )}
+
+      {flowInspectorOpen && (
+        <FlowInspector
+          entries={flowTrace}
+          onClose={() => setFlowInspectorOpen(false)}
+          onClear={clearFlowTrace}
+          onExport={exportFlowTrace}
         />
       )}
 

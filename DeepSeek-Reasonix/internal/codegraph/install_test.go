@@ -15,6 +15,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"reasonix/internal/config"
 )
 
 func TestAssetNameForCurrentPlatform(t *testing.T) {
@@ -166,6 +168,37 @@ func TestInstallReturnsCachedWithoutNetwork(t *testing.T) {
 	// Resolve should also find it (no override, cache wins).
 	if p, ok := Resolve(""); !ok || p != launcher {
 		t.Fatalf("Resolve = %q, %v; want %q", p, ok, launcher)
+	}
+}
+
+func TestCacheDirUsesBrandedOverrideOnly(t *testing.T) {
+	old := config.ActiveBranding()
+	config.ConfigureBranding(config.Branding{
+		ProjectConfigFile: "maddog.toml",
+		UserStateDir:      "maddog-dev",
+		ProjectStateDir:   ".maddog",
+		EnvPrefix:         "MADDOG",
+	})
+	t.Cleanup(func() { config.ConfigureBranding(old) })
+
+	home := t.TempDir()
+	reasonixCache := filepath.Join(home, "reasonix-cache")
+	maddogCache := filepath.Join(home, "maddog-cache")
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(home, ".cache"))
+	t.Setenv("LOCALAPPDATA", filepath.Join(home, "LocalAppData"))
+	t.Setenv("REASONIX_CACHE_DIR", reasonixCache)
+
+	if got := CacheDir(); strings.HasPrefix(got, reasonixCache) {
+		t.Fatalf("CacheDir = %q, should ignore REASONIX_CACHE_DIR for Maddog branding", got)
+	}
+	if !strings.Contains(filepath.ToSlash(CacheDir()), "maddog-dev/codegraph") {
+		t.Fatalf("CacheDir = %q, want branded maddog-dev codegraph cache", CacheDir())
+	}
+
+	t.Setenv("MADDOG_CACHE_DIR", maddogCache)
+	if got := CacheDir(); !strings.HasPrefix(got, maddogCache) {
+		t.Fatalf("CacheDir = %q, want MADDOG_CACHE_DIR prefix %q", got, maddogCache)
 	}
 }
 

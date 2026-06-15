@@ -6,6 +6,10 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"reasonix/internal/codegraph"
+	"reasonix/internal/config"
+	"reasonix/internal/hook"
 )
 
 func TestWailsDevBinaryNameIsMaddog(t *testing.T) {
@@ -77,6 +81,51 @@ func TestDesktopStatePathsUseMaddogDevRoot(t *testing.T) {
 		if hasReasonixRoot {
 			t.Fatalf("%s = %q, should not use the reasonix desktop state root", name, path)
 		}
+	}
+}
+
+func TestDesktopConfigBrandingUsesMaddogFiles(t *testing.T) {
+	isolateDesktopUserDirs(t)
+
+	if got := config.ProjectConfigFile(); got != "maddog.toml" {
+		t.Fatalf("ProjectConfigFile = %q, want maddog.toml", got)
+	}
+	if got := config.ProjectStateDir(); got != ".maddog" {
+		t.Fatalf("ProjectStateDir = %q, want .maddog", got)
+	}
+	if got := config.UserStateDir(); got != "maddog-dev" {
+		t.Fatalf("UserStateDir = %q, want maddog-dev", got)
+	}
+	if got := projectConfigPathForRoot("/tmp/workspace"); got != filepath.Join("/tmp/workspace", "maddog.toml") {
+		t.Fatalf("projectConfigPathForRoot = %q, want maddog.toml", got)
+	}
+	if got := topicTitlesPath("/tmp/workspace"); strings.Contains(got, ".reasonix") || !strings.Contains(got, ".maddog") {
+		t.Fatalf("topicTitlesPath = %q, want .maddog and no .reasonix", got)
+	}
+	if got := hook.ProjectSettingsPath("/tmp/workspace"); strings.Contains(got, ".reasonix") || !strings.Contains(got, ".maddog") {
+		t.Fatalf("ProjectSettingsPath = %q, want .maddog and no .reasonix", got)
+	}
+	if got := hook.TrustPath("/tmp/home"); strings.Contains(got, ".reasonix") || !strings.Contains(got, ".maddog") {
+		t.Fatalf("TrustPath = %q, want .maddog and no .reasonix", got)
+	}
+}
+
+func TestDesktopCacheUsesMaddogNamespaceAcrossPlatforms(t *testing.T) {
+	home := isolateDesktopUserDirs(t)
+	reasonixCache := filepath.Join(home, "reasonix-cache")
+	maddogCache := filepath.Join(home, "maddog-cache")
+	t.Setenv("REASONIX_CACHE_DIR", reasonixCache)
+
+	if got := codegraph.CacheDir(); strings.HasPrefix(got, reasonixCache) {
+		t.Fatalf("CacheDir = %q, should ignore REASONIX_CACHE_DIR in Maddog", got)
+	}
+	if !strings.Contains(filepath.ToSlash(codegraph.CacheDir()), "maddog-dev/codegraph") {
+		t.Fatalf("CacheDir = %q, want maddog-dev codegraph cache", codegraph.CacheDir())
+	}
+
+	t.Setenv("MADDOG_CACHE_DIR", maddogCache)
+	if got := codegraph.CacheDir(); !strings.HasPrefix(got, maddogCache) {
+		t.Fatalf("CacheDir = %q, want MADDOG_CACHE_DIR prefix %q", got, maddogCache)
 	}
 }
 

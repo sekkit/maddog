@@ -410,9 +410,9 @@ func (a *App) activeWorkspaceRoot() string {
 
 func projectConfigPathForRoot(root string) string {
 	if strings.TrimSpace(root) == "" || root == "." {
-		return "reasonix.toml"
+		return config.ProjectConfigFile()
 	}
-	return filepath.Join(root, "reasonix.toml")
+	return filepath.Join(root, config.ProjectConfigFile())
 }
 
 func sameConfigPath(a, b string) bool {
