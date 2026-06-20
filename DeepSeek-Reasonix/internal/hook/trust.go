@@ -6,14 +6,14 @@ import (
 	"path/filepath"
 )
 
-// Trust gates project hooks. A project's .reasonix/settings.json can run
+// Trust gates project hooks. A project's .maddog/settings.json can run
 // arbitrary shell commands, so cloning a repo must not silently execute its
 // hooks: project hooks load only after the user explicitly trusts that project
-// root. The trust flag lives in user-global state (~/.reasonix/trust.json),
+// root. The trust flag lives in user-global state (~/.maddog/trust.json),
 // NOT in the project file itself — an attacker controls the latter. Global
-// hooks (~/.reasonix/settings.json) are the user's own and always run.
+// hooks (~/.maddog/settings.json) are the user's own and always run.
 
-// TrustFilename is the user-global trust store under ~/.reasonix.
+// TrustFilename is the user-global trust store under ~/.maddog.
 const TrustFilename = "trust.json"
 
 type trustFile struct {
@@ -21,7 +21,7 @@ type trustFile struct {
 	Projects map[string]bool `json:"projects"`
 }
 
-// TrustPath is ~/.reasonix/trust.json (homeDir overrides ~).
+// TrustPath is ~/.maddog/trust.json (homeDir overrides ~).
 func TrustPath(homeDir string) string {
 	return filepath.Join(home(homeDir), SettingsDirname, TrustFilename)
 }
@@ -56,7 +56,8 @@ func absRoot(root string) string {
 
 func readTrust(homeDir string) trustFile {
 	var tf trustFile
-	b, err := os.ReadFile(TrustPath(homeDir))
+	path := TrustPath(homeDir)
+	b, err := os.ReadFile(path)
 	if err != nil {
 		return tf
 	}

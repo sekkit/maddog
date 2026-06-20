@@ -1,12 +1,47 @@
 package config
 
 import (
+	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/BurntSushi/toml"
 )
+
+func isolateUserConfigHome(t *testing.T) string {
+	t.Helper()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("AppData", filepath.Join(home, "AppData", "Roaming"))
+	return home
+}
+
+func TestUserConfigDisplayPathCollapsesHome(t *testing.T) {
+	home := isolateUserConfigHome(t)
+	got := userConfigDisplayPath()
+	if !strings.HasPrefix(got, "~/") {
+		t.Fatalf("display path = %q, want ~/ prefix", got)
+	}
+	if !strings.HasSuffix(got, "reasonix/config.toml") {
+		t.Fatalf("display path = %q, want reasonix/config.toml suffix", got)
+	}
+	if strings.Contains(got, home) {
+		t.Fatalf("display path %q must not embed the absolute home", got)
+	}
+}
+
+func TestRenderTOMLHeaderShowsResolvedConfigPath(t *testing.T) {
+	isolateUserConfigHome(t)
+	out := RenderTOML(Default())
+	want := "> " + userConfigDisplayPath() + " > built-in defaults."
+	if !strings.Contains(out, want) {
+		t.Fatalf("rendered header missing resolved config path %q", want)
+	}
+}
 
 // TestRenderTOMLRoundTrips ensures the annotated TOML we emit parses back into
 // an equivalent config — i.e. the wizard never writes a file it can't read.
@@ -16,22 +51,29 @@ func TestRenderTOMLRoundTrips(t *testing.T) {
 	orig.Language = "zh"
 	orig.UI.Theme = "light"
 	orig.UI.ThemeStyle = "glacier"
+	orig.UI.ShortcutLayout = "desktop"
 	orig.Desktop.Language = "en"
+	orig.Desktop.LayoutStyle = "workbench"
 	orig.Desktop.Theme = "dark"
 	orig.Desktop.ThemeStyle = "graphite"
 	orig.Desktop.CloseBehavior = "background"
+	orig.Desktop.StatusBarStyle = "text"
+	orig.Desktop.StatusBarItems = []string{"model", "balance", "cache"}
+	orig.Desktop.CheckUpdates = boolPtr(false)
+	orig.Desktop.Telemetry = boolPtr(false)
 	orig.Notifications.Enabled = true
 	orig.Notifications.TurnDone = true
 	orig.Notifications.ApprovalRequest = true
 	orig.Notifications.AskRequest = true
 	orig.Agent.AutoPlanClassifier = "deepseek-flash"
+	orig.Agent.ReasoningLanguage = "zh"
 	orig.Agent.SubagentModel = "mimo-pro"
 	orig.Agent.SubagentModels = map[string]string{"review": "deepseek-pro"}
 	orig.Tools.BashTimeoutSeconds = intPtr(900)
 	orig.Permissions = PermissionsConfig{
 		Mode:  "deny",
-		Deny:  []string{"bash(rm -rf*)"},
-		Allow: []string{"bash(go test*)", "read_file"},
+		Deny:  []string{"Bash(rm -rf*)"},
+		Allow: []string{"Bash(go test:*)", "read_file"},
 	}
 	orig.Network = NetworkConfig{
 		ProxyMode: "custom",
@@ -49,6 +91,27 @@ func TestRenderTOMLRoundTrips(t *testing.T) {
 	orig.Skills.DisabledSkills = []string{"review", "explore"}
 	orig.Skills.MaxDepth = 2
 	orig.Codegraph = CodegraphConfig{Enabled: true, AutoInstall: false, Path: "/opt/codegraph", Tier: "background"}
+	orig.BuiltInMCPUpdates = BuiltInMCPUpdatesConfig{Mode: BuiltInMCPUpdateModeDownload, CheckInterval: "12h"}
+	orig.Bot.ToolApprovalMode = "auto"
+	orig.Bot.Connections = []BotConnectionConfig{{
+		ID:               "feishu-lark",
+		Provider:         "feishu",
+		Domain:           "lark",
+		Label:            "Lark",
+		Enabled:          true,
+		Status:           "connected",
+		Model:            "deepseek-pro",
+		ToolApprovalMode: "yolo",
+		WorkspaceRoot:    "/tmp/reasonix-bot",
+		Credential:       BotConnectionCredential{AppID: "cli_lark", AppSecretEnv: "LARK_BOT_APP_SECRET"},
+		SessionMappings: []BotConnectionSessionMapping{{
+			RemoteID:      "ou_123",
+			SessionID:     "topic:topic_bot",
+			Scope:         "project",
+			WorkspaceRoot: "/tmp/reasonix-bot",
+			UpdatedAt:     "2026-06-11T00:00:00Z",
+		}},
+	}}
 	orig.LSP = LSPConfig{
 		Enabled: true,
 		Servers: map[string]LSPServer{
@@ -63,7 +126,7 @@ func TestRenderTOMLRoundTrips(t *testing.T) {
 		},
 	}
 	orig.Plugins = []PluginEntry{
-		{Name: "example", Command: "reasonix-plugin-example"},
+		{Name: "example", Command: "maddog-plugin-example"},
 		{Name: "stripe", Type: "http", URL: "https://mcp.stripe.com", Headers: map[string]string{"Authorization": "Bearer x"}, AutoStart: boolPtr(false), Tier: "background"},
 	}
 	mm, _ := orig.Provider("mimo-pro")
@@ -95,8 +158,14 @@ func TestRenderTOMLRoundTrips(t *testing.T) {
 	if got.UI.ThemeStyle != "glacier" {
 		t.Errorf("ui.theme_style = %q, want glacier", got.UI.ThemeStyle)
 	}
+	if got.UI.ShortcutLayout != "desktop" {
+		t.Errorf("ui.shortcut_layout = %q, want desktop", got.UI.ShortcutLayout)
+	}
 	if got.Desktop.Language != "en" {
 		t.Errorf("desktop.language = %q, want en", got.Desktop.Language)
+	}
+	if got.Desktop.LayoutStyle != "workbench" {
+		t.Errorf("desktop.layout_style = %q, want workbench", got.Desktop.LayoutStyle)
 	}
 	if got.Desktop.Theme != "dark" {
 		t.Errorf("desktop.theme = %q, want dark", got.Desktop.Theme)
@@ -107,11 +176,32 @@ func TestRenderTOMLRoundTrips(t *testing.T) {
 	if got.Desktop.CloseBehavior != "background" {
 		t.Errorf("desktop.close_behavior = %q, want background", got.Desktop.CloseBehavior)
 	}
+	if got.Desktop.StatusBarStyle != "text" {
+		t.Errorf("desktop.status_bar_style = %q, want text", got.Desktop.StatusBarStyle)
+	}
+	if want := []string{"model", "balance", "cache"}; !reflect.DeepEqual(got.Desktop.StatusBarItems, want) {
+		t.Errorf("desktop.status_bar_items = %v, want %v", got.Desktop.StatusBarItems, want)
+	}
+	if got.Desktop.CheckUpdates == nil || *got.Desktop.CheckUpdates {
+		t.Errorf("desktop.check_updates = %+v, want false", got.Desktop.CheckUpdates)
+	}
 	if !got.Notifications.Enabled || !got.Notifications.TurnDone || !got.Notifications.ApprovalRequest || !got.Notifications.AskRequest {
 		t.Errorf("notifications not preserved: %+v", got.Notifications)
 	}
 	if got.Agent.MaxSteps != orig.Agent.MaxSteps {
 		t.Errorf("max_steps = %d, want %d", got.Agent.MaxSteps, orig.Agent.MaxSteps)
+	}
+	if got.Agent.PlannerMaxSteps != orig.Agent.PlannerMaxSteps {
+		t.Errorf("planner_max_steps = %d, want %d", got.Agent.PlannerMaxSteps, orig.Agent.PlannerMaxSteps)
+	}
+	if len(got.Bot.Connections) != 1 || got.Bot.Connections[0].Model != "deepseek-pro" || got.Bot.Connections[0].WorkspaceRoot != "/tmp/reasonix-bot" {
+		t.Errorf("bot connection not preserved: %+v", got.Bot.Connections)
+	}
+	if got.Bot.ToolApprovalMode != "auto" || got.Bot.Connections[0].ToolApprovalMode != "yolo" {
+		t.Errorf("bot tool approval mode not preserved: bot=%q connection=%q", got.Bot.ToolApprovalMode, got.Bot.Connections[0].ToolApprovalMode)
+	}
+	if len(got.Bot.Connections[0].SessionMappings) != 1 || got.Bot.Connections[0].SessionMappings[0].Scope != "project" || got.Bot.Connections[0].SessionMappings[0].WorkspaceRoot != "/tmp/reasonix-bot" {
+		t.Errorf("bot session mapping scope not preserved: %+v", got.Bot.Connections[0].SessionMappings)
 	}
 	if got.Agent.Temperature != orig.Agent.Temperature {
 		t.Errorf("temperature = %v, want %v", got.Agent.Temperature, orig.Agent.Temperature)
@@ -121,6 +211,9 @@ func TestRenderTOMLRoundTrips(t *testing.T) {
 	}
 	if got.Agent.AutoPlanClassifier != "deepseek-flash" {
 		t.Errorf("auto_plan_classifier = %q, want deepseek-flash", got.Agent.AutoPlanClassifier)
+	}
+	if got.Agent.ReasoningLanguage != "zh" {
+		t.Errorf("reasoning_language = %q, want zh", got.Agent.ReasoningLanguage)
 	}
 	if got.Agent.SoftCompactRatio != orig.Agent.SoftCompactRatio {
 		t.Errorf("soft_compact_ratio = %v, want %v", got.Agent.SoftCompactRatio, orig.Agent.SoftCompactRatio)
@@ -145,6 +238,12 @@ func TestRenderTOMLRoundTrips(t *testing.T) {
 	}
 	if got.Codegraph.Tier != "" {
 		t.Errorf("codegraph.tier = %q, want migrated empty", got.Codegraph.Tier)
+	}
+	if got.BuiltInMCPUpdates.ResolvedMode() != BuiltInMCPUpdateModeDownload {
+		t.Errorf("builtin_mcp_updates.mode = %q, want download", got.BuiltInMCPUpdates.ResolvedMode())
+	}
+	if got.BuiltInMCPUpdates.ResolvedCheckInterval() != "12h0m0s" {
+		t.Errorf("builtin_mcp_updates.check_interval = %q, want 12h0m0s", got.BuiltInMCPUpdates.ResolvedCheckInterval())
 	}
 	if !got.LSP.Enabled {
 		t.Error("lsp.enabled = false, want true")
@@ -183,8 +282,8 @@ func TestRenderTOMLRoundTrips(t *testing.T) {
 	if got.Permissions.Mode != "deny" {
 		t.Errorf("permissions.mode = %q, want deny", got.Permissions.Mode)
 	}
-	if len(got.Permissions.Deny) != 1 || got.Permissions.Deny[0] != "bash(rm -rf*)" {
-		t.Errorf("permissions.deny = %v, want [bash(rm -rf*)]", got.Permissions.Deny)
+	if len(got.Permissions.Deny) != 1 || got.Permissions.Deny[0] != "Bash(rm -rf*)" {
+		t.Errorf("permissions.deny = %v, want [Bash(rm -rf*)]", got.Permissions.Deny)
 	}
 	if len(got.Permissions.Allow) != 2 {
 		t.Errorf("permissions.allow = %v, want 2 entries", got.Permissions.Allow)
@@ -346,16 +445,18 @@ func TestScopedRenderSeparatesUserAndProjectConfig(t *testing.T) {
 	c.Desktop.Theme = "dark"
 	c.Desktop.ThemeStyle = "graphite"
 	c.Desktop.CloseBehavior = "background"
+	c.Desktop.StatusBarStyle = "text"
+	c.Desktop.CheckUpdates = boolPtr(false)
 
 	user := RenderTOMLForScope(c, RenderScopeUser)
-	for _, want := range []string{"config_version = 2", "[desktop]", `theme = "dark"`, `close_behavior = "background"`, "[notifications]"} {
+	for _, want := range []string{"config_version = 2", "[desktop]", `theme = "dark"`, `close_behavior = "background"`, `status_bar_style = "text"`, `check_updates = false`, "[notifications]", "[builtin_mcp_updates]"} {
 		if !strings.Contains(user, want) {
 			t.Fatalf("user render missing %q:\n%s", want, user)
 		}
 	}
 
 	project := RenderTOMLForScope(c, RenderScopeProject)
-	for _, forbidden := range []string{"[desktop]", "[notifications]", "close_behavior ="} {
+	for _, forbidden := range []string{"[desktop]", "[notifications]", "[builtin_mcp_updates]", "close_behavior =", "check_updates ="} {
 		if strings.Contains(project, forbidden) {
 			t.Fatalf("project render should not contain %q:\n%s", forbidden, project)
 		}

@@ -13,7 +13,7 @@ import (
 func TestCatalogsComplete(t *testing.T) {
 	en := reflect.ValueOf(English)
 	typ := en.Type()
-	catalogs := map[string]reflect.Value{"zh": reflect.ValueOf(Chinese)}
+	catalogs := map[string]reflect.Value{"zh": reflect.ValueOf(Chinese), "zh-TW": reflect.ValueOf(ChineseTraditional)}
 	for tag, cat := range catalogs {
 		for i := 0; i < typ.NumField(); i++ {
 			name := typ.Field(i).Name
@@ -41,6 +41,10 @@ func TestCatalogsAgreeOnPlaceholders(t *testing.T) {
 		if want != got {
 			t.Errorf("%s: en has %d verbs, zh has %d", name, want, got)
 		}
+		gotTW := countVerbs(reflect.ValueOf(ChineseTraditional).Field(i).String())
+		if want != gotTW {
+			t.Errorf("%s: en has %d verbs, zh-TW has %d", name, want, gotTW)
+		}
 	}
 }
 
@@ -62,20 +66,26 @@ func countVerbs(s string) int {
 }
 
 // TestNormalize covers the locale-string shapes likely to land in $LANG /
-// $LC_ALL / $REASONIX_LANG. Unknown locales return "" so DetectLanguage falls
+// $LC_ALL / $MADDOG_LANG. Unknown locales return "" so DetectLanguage falls
 // through to the next candidate instead of mis-routing.
 func TestNormalize(t *testing.T) {
 	cases := map[string]string{
-		"":                "",
-		"en":              "en",
-		"en_US.UTF-8":     "en",
-		"zh":              "zh",
-		"zh_CN.UTF-8":     "zh",
-		"zh-Hans-CN":      "zh",
-		"Chinese (China)": "zh",
-		"中文":              "zh",
-		"fr_FR.UTF-8":     "",
-		"  ZH_TW  ":       "zh",
+		"":                    "",
+		"en":                  "en",
+		"en_US.UTF-8":         "en",
+		"zh":                  "zh",
+		"zh_CN.UTF-8":         "zh",
+		"zh-Hans-CN":          "zh",
+		"Chinese (China)":     "zh",
+		"中文":                  "zh",
+		"zh-TW":               "zh-TW",
+		"zh_TW.UTF-8":         "zh-TW",
+		"zh-Hant-TW":          "zh-TW",
+		"zh-Hant":             "zh-TW",
+		"Chinese Traditional": "zh-TW",
+		"繁體":                  "zh-TW",
+		"fr_FR.UTF-8":         "",
+		"  ZH_TW  ":           "zh-TW",
 	}
 	for in, want := range cases {
 		if got := normalize(in); got != want {
@@ -84,10 +94,10 @@ func TestNormalize(t *testing.T) {
 	}
 }
 
-// TestDetectLanguagePriority verifies override beats env and that REASONIX_LANG
+// TestDetectLanguagePriority verifies override beats env and that MADDOG_LANG
 // beats LANG. With a clean env we fall back to English.
 func TestDetectLanguagePriority(t *testing.T) {
-	t.Setenv("REASONIX_LANG", "")
+	t.Setenv("MADDOG_LANG", "")
 	t.Setenv("LC_ALL", "")
 	t.Setenv("LC_MESSAGES", "")
 	t.Setenv("LANG", "")
@@ -102,9 +112,9 @@ func TestDetectLanguagePriority(t *testing.T) {
 		t.Errorf("LANG=zh_CN.UTF-8: got %q, want zh", got)
 	}
 
-	t.Setenv("REASONIX_LANG", "en")
+	t.Setenv("MADDOG_LANG", "en")
 	if got := DetectLanguage(""); got != "en" {
-		t.Errorf("REASONIX_LANG=en overriding LANG=zh: got %q, want en", got)
+		t.Errorf("MADDOG_LANG=en overriding LANG=zh: got %q, want en", got)
 	}
 
 	if got := DetectLanguage("zh"); got != "zh" {

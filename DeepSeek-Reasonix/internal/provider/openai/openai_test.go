@@ -10,17 +10,8 @@ import (
 	"strings"
 	"testing"
 
-	"reasonix/internal/netclient"
 	"reasonix/internal/provider"
 )
-
-func testProviderConfig(name, baseURL, model, apiKey string, extra map[string]any) provider.Config {
-	merged := map[string]any{"proxy_spec": netclient.ProxySpec{Mode: netclient.ModeOff}}
-	for k, v := range extra {
-		merged[k] = v
-	}
-	return provider.Config{Name: name, BaseURL: baseURL, Model: model, APIKey: apiKey, Extra: merged}
-}
 
 // TestStreamRetriesThenSucceeds drives the real retry path end-to-end: the
 // server returns 503 twice, then a valid SSE stream. The provider must back off,
@@ -40,7 +31,7 @@ func TestStreamRetriesThenSucceeds(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	p, err := New(testProviderConfig("deepseek", srv.URL, "deepseek-v4", "k", nil))
+	p, err := New(provider.Config{Name: "deepseek", BaseURL: srv.URL, Model: "deepseek-v4", APIKey: "k"})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -88,7 +79,7 @@ func TestStreamInsufficientBalance(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	p, _ := New(testProviderConfig("deepseek", srv.URL, "deepseek-v4", "k", nil))
+	p, _ := New(provider.Config{Name: "deepseek", BaseURL: srv.URL, Model: "deepseek-v4", APIKey: "k"})
 	_, err := p.Stream(context.Background(), provider.Request{Messages: []provider.Message{{Role: provider.RoleUser, Content: "hi"}}})
 	var apiErr *provider.APIError
 	if !errors.As(err, &apiErr) || apiErr.Status != 402 {
@@ -108,7 +99,13 @@ func TestStreamAuthError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	p, err := New(testProviderConfig("deepseek", srv.URL, "deepseek-v4", "bad", map[string]any{"api_key_env": "DEEPSEEK_API_KEY"}))
+	p, err := New(provider.Config{
+		Name:    "deepseek",
+		BaseURL: srv.URL,
+		Model:   "deepseek-v4",
+		APIKey:  "bad",
+		Extra:   map[string]any{"api_key_env": "DEEPSEEK_API_KEY"},
+	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -279,9 +276,10 @@ func TestResponsesWireStreamsFunctionCall(t *testing.T) {
 }
 
 // TestBuildRequestAlwaysSerializesContent guards the DeepSeek 400 regression:
-// an assistant turn that is pure tool_calls (no preamble text) has empty
-// content, and DeepSeek rejects a message missing the `content` field. Every
-// message — including that one — must serialize a content field.
+// DeepSeek rejects a message missing the `content` field, so every message must
+// serialize one. A pure tool_calls assistant turn carries null (OpenAI-spec,
+// and accepted by DeepSeek — verified against a live multi-tool session); other
+// roles serialize a string. The field must never be absent.
 func TestBuildRequestAlwaysSerializesContent(t *testing.T) {
 	c := &client{model: "deepseek-v4"}
 	req := c.buildRequest(provider.Request{
@@ -309,9 +307,9 @@ func TestBuildRequestAlwaysSerializesContent(t *testing.T) {
 			t.Errorf("messages[%d] is missing the content field: %s", i, b)
 		}
 	}
-	// The tool-call-only assistant message must carry content:"" and its tool_calls.
-	if got := string(raw[1]["content"]); got != `""` {
-		t.Errorf("assistant content = %s, want \"\"", got)
+	// The tool-call-only assistant message must carry content:null and its tool_calls.
+	if got := string(raw[1]["content"]); got != `null` {
+		t.Errorf("assistant content = %s, want null", got)
 	}
 	if _, ok := raw[1]["tool_calls"]; !ok {
 		t.Errorf("assistant message lost its tool_calls: %s", b)
@@ -362,7 +360,7 @@ func TestStreamRepairsDanglingToolCalls(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	p, err := New(testProviderConfig("deepseek-flash", srv.URL, "deepseek-v4", "k", nil))
+	p, err := New(provider.Config{Name: "deepseek-flash", BaseURL: srv.URL, Model: "deepseek-v4", APIKey: "k"})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -441,8 +439,8 @@ func TestNormaliseUsageMiMoShape(t *testing.T) {
 // back in the outgoing request. DeepSeek otherwise counts it as paid prompt
 // input (~500 tok/turn on a reasoner chain). The session keeps it for
 // display/archive; the wire request must not carry it.
-func TestBuildRequestDropsReasoningContent(t *testing.T) {
-	c := &client{model: "deepseek-reasoner"}
+func TestBuildRequestDropsReasoningOnPlainAssistantTurn(t *testing.T) {
+	c := &client{model: "deepseek-reasoner", deepseek: true}
 	req := c.buildRequest(provider.Request{
 		Messages: []provider.Message{
 			{Role: provider.RoleUser, Content: "explain"},
@@ -455,14 +453,37 @@ func TestBuildRequestDropsReasoningContent(t *testing.T) {
 		t.Fatalf("marshal: %v", err)
 	}
 	if strings.Contains(string(b), "reasoning_content") {
-		t.Errorf("outgoing request must not carry a reasoning_content field: %s", b)
+		t.Errorf("a no-tool-calls assistant turn must not carry reasoning_content: %s", b)
 	}
 	if strings.Contains(string(b), "SECRET-CHAIN-OF-THOUGHT") {
 		t.Errorf("the assistant chain-of-thought leaked into the request: %s", b)
 	}
-	// The visible answer must survive — we only drop reasoning, not content.
 	if !strings.Contains(string(b), "the answer") {
 		t.Errorf("assistant content was dropped along with reasoning: %s", b)
+	}
+}
+
+// DeepSeek thinking mode 400s a tool_calls turn whose reasoning_content was
+// dropped on a cache-miss replay, so it must be round-tripped — but only on the
+// turn that carries tool calls, and only for the DeepSeek protocol.
+func TestBuildRequestRoundTripsReasoningOnDeepSeekToolCalls(t *testing.T) {
+	msgs := []provider.Message{
+		{Role: provider.RoleUser, Content: "count the go files"},
+		{
+			Role:             provider.RoleAssistant,
+			ReasoningContent: "CHAIN-OF-THOUGHT",
+			ToolCalls:        []provider.ToolCall{{ID: "c1", Name: "bash", Arguments: `{"command":"ls"}`}},
+		},
+		{Role: provider.RoleTool, Content: "14", ToolCallID: "c1", Name: "bash"},
+	}
+	deepseek, _ := json.Marshal((&client{model: "deepseek-v4", deepseek: true}).buildRequest(provider.Request{Messages: msgs}).Messages)
+	if !strings.Contains(string(deepseek), "reasoning_content") || !strings.Contains(string(deepseek), "CHAIN-OF-THOUGHT") {
+		t.Errorf("DeepSeek tool_calls turn must round-trip reasoning_content: %s", deepseek)
+	}
+
+	other, _ := json.Marshal((&client{model: "mimo-v2"}).buildRequest(provider.Request{Messages: msgs}).Messages)
+	if strings.Contains(string(other), "CHAIN-OF-THOUGHT") {
+		t.Errorf("non-DeepSeek backends must not re-upload reasoning_content: %s", other)
 	}
 }
 
@@ -501,6 +522,88 @@ func TestBuildRequestDeepSeekThinking(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestBuildRequestMiniMaxThinking covers the M3 wire shape: thinking.type is
+// the only knob (no reasoning_effort), and the empty-effort / auto case still
+// emits an explicit "adaptive" because that's what the M3 model default means
+// (M3 has no implicit "no thinking" mode at the wire level).
+func TestBuildRequestMiniMaxThinking(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		effort       string
+		wantThinking string
+	}{
+		{name: "auto-defaults-to-adaptive", effort: "", wantThinking: "adaptive"},
+		{name: "adaptive", effort: "adaptive", wantThinking: "adaptive"},
+		{name: "disabled", effort: "disabled", wantThinking: "disabled"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req := (&client{model: "MiniMax-M3", minimax: true, effort: tc.effort}).buildRequest(provider.Request{})
+			if req.Thinking == nil || req.Thinking.Type != tc.wantThinking {
+				t.Fatalf("Thinking = %+v, want %q", req.Thinking, tc.wantThinking)
+			}
+			if req.ReasoningEffort != "" {
+				t.Fatalf("MiniMax must not send reasoning_effort, got %q", req.ReasoningEffort)
+			}
+		})
+	}
+}
+
+// TestNewMiniMaxEffortValidation locks in the boot-time validation for the
+// MiniMax path. The config effort layer remaps legacy level names, so by the
+// time effort reaches this factory it must be one of: "", "adaptive",
+// "disabled". Anything else is a config bug, surfaced now (not at request
+// time) for an actionable error.
+func TestNewMiniMaxEffortValidation(t *testing.T) {
+	base := provider.Config{Name: "m3", BaseURL: "https://api.minimaxi.com/v1", Model: "MiniMax-M3", APIKey: "k"}
+	// happy path: auto (empty effort) and both explicit values are accepted
+	for _, ok := range []string{"", "adaptive", "disabled"} {
+		if _, err := New(withEffort(base, ok)); err != nil {
+			t.Errorf("effort=%q should be accepted: %v", ok, err)
+		}
+	}
+	// unhappy: anything else is rejected up front
+	for _, bad := range []string{"high", "low", "max", "turbo"} {
+		if _, err := New(withEffort(base, bad)); err == nil {
+			t.Errorf("effort=%q should be rejected", bad)
+		}
+	}
+}
+
+// TestNewMiniMaxSetsFlag is a smoke test for base-URL detection: the factory
+// must set the `minimax` flag when the base URL points at api.minimaxi.com
+// (with or without the /v1 suffix) so buildRequest picks the right wire shape.
+func TestNewMiniMaxSetsFlag(t *testing.T) {
+	for _, baseURL := range []string{
+		"https://api.minimaxi.com/v1",
+		"https://api.minimaxi.com",
+	} {
+		p, err := New(provider.Config{Name: "m3", BaseURL: baseURL, Model: "MiniMax-M3", APIKey: "k"})
+		if err != nil {
+			t.Fatalf("New(%q): %v", baseURL, err)
+		}
+		c := p.(*client)
+		if !c.minimax {
+			t.Errorf("minimax flag not set for baseURL=%q", baseURL)
+		}
+	}
+}
+
+func withEffort(c provider.Config, effort string) provider.Config {
+	extra := c.Extra
+	if extra == nil {
+		extra = map[string]any{}
+	} else {
+		cp := make(map[string]any, len(extra)+1)
+		for k, v := range extra {
+			cp[k] = v
+		}
+		extra = cp
+	}
+	extra["effort"] = effort
+	c.Extra = extra
+	return c
 }
 
 func TestBuildRequestNonDeepSeekOmitsThinking(t *testing.T) {
@@ -578,7 +681,9 @@ func TestBuildRequestPreservesEmptyIDToolResults(t *testing.T) {
 	var toolContents []string
 	for _, m := range req.Messages {
 		if m.Role == string(provider.RoleTool) {
-			toolContents = append(toolContents, m.Content)
+			if s, ok := m.Content.(string); ok {
+				toolContents = append(toolContents, s)
+			}
 		}
 	}
 	if len(toolContents) != 2 {
@@ -602,7 +707,7 @@ func TestStreamSynthesizesMissingToolCallIDs(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	p, err := New(testProviderConfig("local", srv.URL, "qwen", "k", nil))
+	p, err := New(provider.Config{Name: "local", BaseURL: srv.URL, Model: "qwen", APIKey: "k"})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -624,5 +729,37 @@ func TestStreamSynthesizesMissingToolCallIDs(t *testing.T) {
 	}
 	if ids[0] == ids[1] {
 		t.Errorf("synthesized ids must be distinct, got %v", ids)
+	}
+}
+
+func TestBuildRequestContentNullForAssistantToolCalls(t *testing.T) {
+	c := &client{name: "x", model: "m", baseURL: "https://api.example.com/v1"}
+	req := provider.Request{
+		Messages: []provider.Message{
+			{Role: provider.RoleAssistant, Content: "", ToolCalls: []provider.ToolCall{{ID: "c1", Name: "ls", Arguments: `{}`}}},
+			{Role: provider.RoleTool, Content: "", ToolCallID: "c1", Name: "ls"},
+			{Role: provider.RoleAssistant, Content: "all done"},
+		},
+		Tools: []provider.ToolSchema{{Name: "noargs", Parameters: provider.CanonicalizeSchema(nil)}},
+	}
+	body, err := json.Marshal(c.buildRequest(req))
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if !json.Valid(body) {
+		t.Fatalf("invalid JSON body: %s", body)
+	}
+	s := string(body)
+	if !strings.Contains(s, `"tool_calls"`) || !strings.Contains(s, `"content":null`) {
+		t.Errorf("assistant tool_calls turn should carry null content: %s", s)
+	}
+	if !strings.Contains(s, `{"role":"tool","content":""`) {
+		t.Errorf("tool message should keep empty-string content, not null: %s", s)
+	}
+	if !strings.Contains(s, `"content":"all done"`) {
+		t.Errorf("text assistant turn should keep its string content: %s", s)
+	}
+	if !strings.Contains(s, `"parameters":{"type":"object"}`) {
+		t.Errorf("no-param tool should serialize a valid empty-object schema: %s", s)
 	}
 }

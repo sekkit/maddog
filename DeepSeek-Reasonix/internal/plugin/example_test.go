@@ -15,12 +15,12 @@ import (
 	"reasonix/internal/tool"
 )
 
-// buildExamplePlugin compiles cmd/reasonix-plugin-example into a temp binary and
+// buildExamplePlugin compiles the reference plugin into a temp binary and
 // returns its path. Building from inside the module lets `go build` resolve the
 // import path regardless of the test's working directory.
 func buildExamplePlugin(t *testing.T) string {
 	t.Helper()
-	bin := filepath.Join(t.TempDir(), "reasonix-plugin-example")
+	bin := filepath.Join(t.TempDir(), "maddog-plugin-example")
 	if runtime.GOOS == "windows" {
 		bin += ".exe"
 	}

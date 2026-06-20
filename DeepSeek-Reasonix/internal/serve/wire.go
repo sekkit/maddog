@@ -218,9 +218,6 @@ func toWire(e event.Event) wireEvent {
 		if e.Err != nil {
 			w.Err = e.Err.Error()
 		}
-	case event.Retrying:
-		w.RetryAttempt = e.RetryAttempt
-		w.RetryMax = e.RetryMax
 	}
 	return w
 }

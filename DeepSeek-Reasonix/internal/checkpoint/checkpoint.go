@@ -1,4 +1,4 @@
-// Package checkpoint is reasonix's snapshot-based edit safety net. Before a writer
+// Package checkpoint is maddog's snapshot-based edit safety net. Before a writer
 // tool changes a file, the agent records the file's pre-edit content here, keyed
 // to the current user turn; a frontend can then rewind the workspace (and, via the
 // controller, the conversation) to an earlier turn.
@@ -17,7 +17,6 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strings"
 	"sync"
 	"time"
 
@@ -212,6 +211,12 @@ func (s *Store) List() []Meta {
 		for i, f := range c.Files {
 			paths[i] = f.Path
 		}
+		// The current in-progress turn's files haven't been committed
+		// yet — they must not participate in CanCode propagation.
+		// Include the turn itself so it still appears as a rewind point.
+		if c == s.cur {
+			paths = nil
+		}
 		out = append(out, Meta{Turn: c.Turn, Time: c.Time, Prompt: c.Prompt, Paths: paths})
 	}
 	return out
@@ -305,7 +310,8 @@ func safePath(root, p string) (string, error) {
 	abs = filepath.Clean(abs)
 	if root != "" {
 		r := filepath.Clean(root)
-		if abs != r && !strings.HasPrefix(abs, r+string(os.PathSeparator)) {
+		rel, err := filepath.Rel(r, abs)
+		if err != nil || !filepath.IsLocal(rel) {
 			return "", fmt.Errorf("checkpoint path %q escapes workspace %q", p, root)
 		}
 	}

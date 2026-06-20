@@ -13,7 +13,7 @@
     "companyName": "Maddog",
     "productName": "Maddog Dev",
     "productVersion": "0.0.0",
-    "copyright": "Copyright © 2026 Reasonix Contributors",
+    "copyright": "Copyright © 2026 Maddog Contributors",
     "comments": "Maddog Dev desktop shell around the Go kernel."
   }
 }

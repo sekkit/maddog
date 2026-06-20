@@ -1,13 +1,13 @@
 import maddogIcon from "../assets/maddog-icon.png";
 import { useT } from "../lib/i18n";
 
-// Welcome is the empty-state landing: brand, a one-liner, the input affordances
+// Welcome is the empty-state landing: a one-liner, the input affordances
 // (/ commands, @ files, Enter), and a few clickable example prompts that send
 // immediately so a first turn is one click away.
 
 export function Welcome({ onPrompt }: { onPrompt: (text: string) => void }) {
   const t = useT();
-  const examples = [t("welcome.ex1"), t("welcome.ex2"), t("welcome.ex3")];
+  const examples = [t("welcome.ex1"), t("welcome.ex2"), t("welcome.ex3"), t("welcome.ex4")];
   return (
     <div className="welcome">
       <img src={maddogIcon} className="welcome__logo" alt="Maddog" />

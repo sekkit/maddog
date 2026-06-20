@@ -10,17 +10,15 @@ import (
 // loadDotEnv loads KEY=value files into the process environment without
 // overriding variables that are already set (first file to set a key wins).
 // Order: a project ./.env (read-only back-compat, so a manual project override
-// takes precedence), then the reasonix-owned global credentials file in the user
-// config dir (where `reasonix setup` writes keys, so they resolve from any
-// directory without ever touching a project's own .env), then ~/.env as a legacy
-// fallback (the desktop app writes there). Existing environment variables always
-// win over all three.
+// takes precedence), then the Maddog-owned global credentials file in the user
+// config dir (where setup writes keys, so they resolve from any directory without
+// ever touching a project's own .env). Existing environment variables always win.
 func loadDotEnv() {
 	loadDotEnvForRoot(".")
 }
 
-// loadDotEnvForRoot loads a root's .env file (if present) before the home .env
-// fallback. When root is "." it behaves like loadDotEnv().
+// loadDotEnvForRoot loads a root's .env file (if present) before the Maddog
+// credentials file. When root is "." it behaves like loadDotEnv().
 func loadDotEnvForRoot(root string) {
 	dotEnvPath := ".env"
 	if root != "" && root != "." {
@@ -29,9 +27,6 @@ func loadDotEnvForRoot(root string) {
 	loadDotEnvFile(dotEnvPath)
 	if p := UserCredentialsPath(); p != "" {
 		loadDotEnvFile(p)
-	}
-	if home, err := os.UserHomeDir(); err == nil {
-		loadDotEnvFile(filepath.Join(home, ".env"))
 	}
 }
 

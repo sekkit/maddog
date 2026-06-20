@@ -83,7 +83,7 @@ const (
 	// event — or TurnDone — clears. Appended last to keep the Kind values before
 	// it wire-stable.
 	Retrying
-	// === REASONIX-FUSION: appended, do not insert before this line ===
+	// === MADDOG-FUSION: appended, do not insert before this line ===
 	// Upgrade reports automatic routing changes between default and frontier
 	// providers. Text carries the user-visible reason.
 	Upgrade

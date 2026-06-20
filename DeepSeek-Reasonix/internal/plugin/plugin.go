@@ -1,4 +1,4 @@
-// Package plugin is Reasonix's MCP client. It connects to external MCP servers and
+// Package plugin is Maddog's MCP client. It connects to external MCP servers and
 // adapts their tools to the tool.Tool interface, so the agent treats plugin
 // tools and built-ins uniformly. The wire protocol is JSON-RPC 2.0 in every
 // case; only the transport differs (stdio subprocess, Streamable HTTP, or the
@@ -23,7 +23,7 @@ import (
 	"reasonix/internal/tool"
 )
 
-// protocolVersion is the MCP revision Reasonix advertises during initialize.
+// protocolVersion is the MCP revision Maddog advertises during initialize.
 const protocolVersion = "2024-11-05"
 
 // Spec declares an external MCP server. Type selects the transport: "stdio"
@@ -38,7 +38,7 @@ type Spec struct {
 	URL     string
 	Headers map[string]string
 	// Dir, when set, is the working directory of a stdio subprocess. Empty means
-	// inherit reasonix's cwd (the default for user-configured plugins). It exists
+	// inherit maddog's cwd (the default for user-configured plugins). It exists
 	// for cwd-aware servers like CodeGraph, which detect the project from the
 	// directory they are launched in — they must be pinned to the project root.
 	Dir string
@@ -56,12 +56,15 @@ type Spec struct {
 	// instead of the redundant "mcp__codegraph__codegraph_context". The original
 	// raw name is preserved for MCP protocol calls.
 	StripRawPrefix string
+	// LowPriority runs a stdio subprocess below normal scheduling priority, for
+	// background indexers (CodeGraph) that must not starve the user's machine.
+	LowPriority bool
 }
 
 // transport carries JSON-RPC messages to and from one MCP server. call sends a
 // request and returns its result (correlating by id internally); notify sends a
 // fire-and-forget notification; close releases resources. Server-initiated
-// messages (notifications, requests like roots/list) are ignored — Reasonix is a
+// messages (notifications, requests like roots/list) are ignored — Maddog is a
 // tools/prompts/resources consumer, not a sampling/roots provider (see SPEC §9).
 type transport interface {
 	call(ctx context.Context, method string, params any) (json.RawMessage, error)
@@ -81,6 +84,14 @@ type Host struct {
 	prompts   []Prompt
 	resources []Resource
 	failures  []Failure
+	closed    bool
+
+	// Lazy/background servers may still be handshaking when a session closes.
+	// Close cancels those startup contexts and waits for their goroutines before
+	// taking the client snapshot, so a just-connected stdio child cannot escape
+	// teardown and keep a Windows workspace directory locked.
+	deferredCancels []context.CancelFunc
+	deferredWG      sync.WaitGroup
 
 	// Detached stats/schema-cache writers from Start; off the boot path but
 	// drained by Close so cleanup can't race a still-open cache file.
@@ -240,13 +251,20 @@ func Start(ctx context.Context, specs []Spec, p StartPolicy) (*Host, []tool.Tool
 			}
 
 			phaseAStart := time.Now()
+			recordedPhaseADur := func() time.Duration {
+				dur := time.Since(phaseAStart)
+				if p.PerPluginTimeout > 0 && callCtx.Err() == context.DeadlineExceeded && dur < p.PerPluginTimeout {
+					return p.PerPluginTimeout
+				}
+				return dur
+			}
 
 			// Transport on the parent ctx, startup RPCs on the timed callCtx: the
 			// per-plugin timeout caps initialize+listTools, but the long-lived
 			// stdio child must outlive the startup scope and later phase-B calls.
 			c, err := start(ctx, callCtx, spec)
 			if err != nil {
-				phaseADur := time.Since(phaseAStart)
+				phaseADur := recordedPhaseADur()
 				cancelStartup()
 				h.bgWrites.Add(1)
 				go func() { defer h.bgWrites.Done(); _ = RecordStartup(spec.Name, phaseADur) }()
@@ -256,7 +274,7 @@ func Start(ctx context.Context, specs []Spec, p StartPolicy) (*Host, []tool.Tool
 
 			ts, err := c.listTools(callCtx)
 			if err != nil {
-				phaseADur := time.Since(phaseAStart)
+				phaseADur := recordedPhaseADur()
 				cancelStartup()
 				h.bgWrites.Add(1)
 				go func() { defer h.bgWrites.Done(); _ = RecordStartup(spec.Name, phaseADur) }()
@@ -269,7 +287,7 @@ func Start(ctx context.Context, specs []Spec, p StartPolicy) (*Host, []tool.Tool
 			// Persist for next launch on the side: a slow stats/cache write
 			// must not delay tools coming online, and either failure is
 			// recoverable (we just re-handshake or skip auto-demote).
-			phaseADur := time.Since(phaseAStart)
+			phaseADur := recordedPhaseADur()
 			cancelStartup()
 			h.bgWrites.Add(1)
 			go func() {
@@ -326,6 +344,20 @@ func Start(ctx context.Context, specs []Spec, p StartPolicy) (*Host, []tool.Tool
 
 // Close terminates all plugin connections.
 func (h *Host) Close() {
+	h.mu.Lock()
+	if h.closed {
+		h.mu.Unlock()
+		return
+	}
+	h.closed = true
+	cancels := append([]context.CancelFunc(nil), h.deferredCancels...)
+	h.mu.Unlock()
+
+	for _, cancel := range cancels {
+		cancel()
+	}
+	h.deferredWG.Wait()
+
 	h.mu.RLock()
 	clients := append([]*Client(nil), h.clients...) // snapshot; close outside the lock
 	h.mu.RUnlock()
@@ -547,6 +579,30 @@ func (h *Host) clearFailure(name string) {
 // command), which keeps the controller's host pointer stable for the session.
 func NewHost() *Host { return &Host{} }
 
+func (h *Host) registerDeferredCancel(cancel context.CancelFunc) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.closed {
+		cancel()
+		return
+	}
+	h.deferredCancels = append(h.deferredCancels, cancel)
+}
+
+func (h *Host) beginDeferredSpawn() bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.closed {
+		return false
+	}
+	h.deferredWG.Add(1)
+	return true
+}
+
+func (h *Host) endDeferredSpawn() {
+	h.deferredWG.Done()
+}
+
 // has reports whether a server with this name is already connected.
 func (h *Host) has(name string) bool {
 	h.mu.RLock()
@@ -572,6 +628,13 @@ func (h *Host) Add(ctx context.Context, s Spec) ([]tool.Tool, error) {
 }
 
 func (h *Host) addConnected(ctx context.Context, s Spec) ([]tool.Tool, error) {
+	h.mu.RLock()
+	if h.closed {
+		h.mu.RUnlock()
+		return nil, fmt.Errorf("plugin host is closed")
+	}
+	h.mu.RUnlock()
+
 	c, err := start(ctx, ctx, s)
 	if err != nil {
 		return nil, err
@@ -583,6 +646,11 @@ func (h *Host) addConnected(ctx context.Context, s Spec) ([]tool.Tool, error) {
 	}
 	c.toolCount = len(ts)
 	h.mu.Lock()
+	if h.closed {
+		h.mu.Unlock()
+		c.close()
+		return nil, fmt.Errorf("plugin host is closed")
+	}
 	h.clients = append(h.clients, c)
 	h.clearFailure(s.Name)
 	h.mu.Unlock()
@@ -698,7 +766,7 @@ func (c *Client) initialize(ctx context.Context) error {
 	res, err := c.call(ctx, "initialize", map[string]any{
 		"protocolVersion": protocolVersion,
 		"capabilities":    map[string]any{},
-		"clientInfo":      map[string]any{"name": "reasonix", "version": "dev"},
+		"clientInfo":      map[string]any{"name": "maddog", "version": "dev"},
 	})
 	if err != nil {
 		return err
@@ -722,7 +790,7 @@ type mcpTool struct {
 	Description string          `json:"description"`
 	InputSchema json.RawMessage `json:"inputSchema"`
 	// Annotations carries MCP's optional tool hints. We read readOnlyHint: a
-	// plugin that declares a tool read-only opts it into Reasonix's parallel-dispatch
+	// plugin that declares a tool read-only opts it into Maddog's parallel-dispatch
 	// path and the permission layer's "readers default to allow". Absent
 	// annotations stay false — opaque by default, never trusted implicitly.
 	Annotations *struct {

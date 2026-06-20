@@ -1,6 +1,6 @@
-# Reasonix Desktop (Wails shell)
+# Maddog Dev Desktop (Wails shell)
 
-A native desktop window around the Reasonix Go kernel. The same
+A native desktop window around the Maddog Go kernel. The same
 transport-agnostic `control.Controller` that backs the chat TUI and the HTTP/SSE
 server is bound **directly** to a React webview — Go methods in, typed events
 out, no HTTP hop.
@@ -66,7 +66,7 @@ diff seam can all be built without rebuilding Go.
 
 ```sh
 cd desktop
-wails build          # → build/bin/Reasonix(.app/.exe)
+wails build          # -> build/bin/maddog(.app/.exe)
 ```
 
 **Linux on WebKitGTK 4.1 only** (Fedora 40+, Ubuntu 24.04+, Arch — no
@@ -113,11 +113,11 @@ has a manual check. Self-update behavior by platform:
 There are no Apple/Windows code-signing certificates yet, so a downloaded build
 trips the OS gatekeepers on first run:
 
-- **macOS** — open `Reasonix-darwin-universal.dmg` and drag Reasonix into
+- **macOS** — open `Maddog-darwin-universal.dmg` and drag Maddog into
   Applications. Gatekeeper may then report the app "is damaged" or is from an
   unidentified developer; clear the quarantine attribute and open it:
   ```sh
-  xattr -dr com.apple.quarantine /Applications/Reasonix.app
+  xattr -dr com.apple.quarantine /Applications/Maddog.app
   ```
 - **Windows** — SmartScreen shows "Windows protected your PC". Click *More info →
   Run anyway*.
@@ -132,7 +132,7 @@ signature sits next to each artifact in the release; verify with the
 [minisign](https://jedisct1.github.io/minisign/) CLI:
 
 ```sh
-minisign -Vm Reasonix-darwin-arm64.zip \
+minisign -Vm Maddog-darwin-arm64.zip \
   -P RWSw66n0RsoSr6Zhh6qt5YO95YkpCayTOCMFVDNUQSjJYwxoYngNVBSq
 ```
 
@@ -177,7 +177,10 @@ handled here, and what to reach for if a target misbehaves:
   release; the CSS deliberately avoids `backdrop-filter`/blur (slow & inconsistent
   there).
 - **Windows / WebView2** — `Theme: SystemDefault` follows the OS light/dark
-  setting; the runtime must be installed (bundle it for distribution).
+  setting; the installer embeds the WebView2 bootstrapper. Canary builds disable
+  WebView2 GPU acceleration by default to smoke-test blank-window reports; set
+  `MADDOG_DESKTOP_DISABLE_WEBVIEW2_GPU=1` or `0` to force the fallback on or
+  off.
 - **macOS / WebKit** — inset/hidden title bar (`TitleBarHiddenInset`); the CSS
   marks the top bar as an OS drag region (`--wails-draggable: drag`) and leaves
   room for the traffic lights.
@@ -207,3 +210,15 @@ desktop/
         Markdown, CodeViewer, DiffView
         editors/  PlainCode, PlainDiff   ← editor seam impls (swap targets)
 ```
+
+## Telemetry
+
+The desktop app sends one anonymous ping per launch to `crash.reasonix.io`:
+a random install id (generated locally, tied to nothing), app version, OS,
+arch, and OS version. It exists solely to count active installs. It never
+includes conversations, API keys, file contents, or paths.
+
+Opt out any time: Settings > Updates > "Anonymous usage ping", or set
+`telemetry = false` under `[desktop]` in the global config. Dev builds
+never ping. Crash and performance-pressure reports are separate and only
+ever sent when the user clicks "Send report" on the diagnostic UI.

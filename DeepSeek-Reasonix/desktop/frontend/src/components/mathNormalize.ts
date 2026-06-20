@@ -29,9 +29,9 @@ import { latexNormalizeForKatex } from "./latexNormalize";
 // rather than split at stray $ signs inside \text{}.
 const TEXT_MODE_PAIR = /\$\s*(\\[A-Za-z]+\{(?:[^{}]|\{[^{}]*\})*\}[^$]*?)\s*\$/g;
 
-const DM = "__REASONIX_MATH_DISPLAY__";
-const IM = "__REASONIX_MATH_INLINE__";
-const LB = "__REASONIX_LATEX_LINEBREAK__";
+const DM = "__MADDOG_MATH_DISPLAY__";
+const IM = "__MADDOG_MATH_INLINE__";
+const LB = "__MADDOG_LATEX_LINEBREAK__";
 const DOLLAR = "&#36;";
 
 export function normalizeMath(s: string): string {
@@ -123,11 +123,11 @@ function protectMarkdownCode(s: string): { text: string; prefix: string; segment
 }
 
 function unusedPlaceholderPrefix(s: string): string {
-  let prefix = "__REASONIX_PROTECTED_CODE__";
+  let prefix = "__MADDOG_PROTECTED_CODE__";
   let n = 0;
   while (s.includes(prefix)) {
     n += 1;
-    prefix = `__REASONIX_PROTECTED_CODE_${n}__`;
+    prefix = `__MADDOG_PROTECTED_CODE_${n}__`;
   }
   return prefix;
 }

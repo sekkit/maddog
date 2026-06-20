@@ -7,10 +7,20 @@
 
 import type * as GeneratedApp from "../../wailsjs/go/main/App";
 
+import { addBreadcrumb } from "./breadcrumbs";
 import { t } from "./i18n";
+import { normalizeStatusBarItems } from "./statusBarItems";
+import { modeWithAutoApproveTools, modeWithPlan, normalizeCollaborationMode, normalizeMode, normalizeTokenMode, normalizeToolApprovalMode } from "./types";
 
 import type {
   BalanceInfo,
+  BotConnectionDiagnostic,
+  BotInstallPollResult,
+  BotInstallStartResult,
+  BotRuntimeStatusView,
+  BotSettingsView,
+  BuiltInMCPUpdateResult,
+  BuiltInMCPUpdateStatus,
   CapabilitiesView,
   CheckpointMeta,
   CommandInfo,
@@ -21,19 +31,26 @@ import type {
   EffortInfo,
   FilePreview,
   HistoryMessage,
+  HookConfigView,
+  HooksSettingsView,
   JobView,
   MCPServerInput,
+  MemorySuggestion,
+  MemorySuggestionsView,
   MemoryView,
   Meta,
   ModelInfo,
   NetworkView,
   ProjectNode,
+  PromptHistoryEntry,
+  PromptHistoryResult,
   ProviderView,
   QuestionAnswer,
   ServerView,
   SessionMeta,
   SettingsView,
   SkillRootView,
+  SkillSuggestion,
   SkillView,
   SlashArgsResult,
   TabMeta,
@@ -42,8 +59,12 @@ import type {
   UpdateProgress,
   WireEvent,
   WorkspaceChangesView,
+  GitCommitView,
+  GitCommitDetailView,
   WorkspaceView,
 } from "./types";
+
+const GLOBAL_PROJECT_ORDER_KEY = "__global__";
 
 // AppBindings is derived from the Wails-generated Go → TS method signatures, so
 // the compiler catches drift between the Go binding surface and the frontend mock.
@@ -83,17 +104,30 @@ export interface AppBindings {
   SubmitDisplayToTab(tabID: string, display: string, input: string): Promise<void>;
   RunShell(command: string): Promise<void>;
   RunShellForTab(tabID: string, command: string): Promise<void>;
+  Steer(text: string): Promise<void>;
+  SteerForTab(tabID: string, text: string): Promise<void>;
   Cancel(): Promise<void>;
   CancelTab(tabID: string): Promise<void>;
   Approve(id: string, allow: boolean, session: boolean, persist: boolean): Promise<void>;
   ApproveTab(tabID: string, id: string, allow: boolean, session: boolean, persist: boolean): Promise<void>;
   AnswerQuestion(id: string, answers: QuestionAnswer[]): Promise<void>;
   AnswerQuestionForTab(tabID: string, id: string, answers: QuestionAnswer[]): Promise<void>;
+  ReplayPendingPrompts(): Promise<void>;
   SetPlanMode(on: boolean): Promise<void>;
   SetMode(mode: string): Promise<void>;
   SetModeForTab(tabID: string, mode: string): Promise<void>;
+  SetAutoApproveTools(on: boolean): Promise<void>;
+  SetCollaborationMode(mode: string): Promise<void>;
+  SetCollaborationModeForTab(tabID: string, mode: string): Promise<void>;
+  SetToolApprovalMode(mode: string): Promise<void>;
+  SetToolApprovalModeForTab(tabID: string, mode: string): Promise<void>;
+  SetGoal(goal: string): Promise<void>;
+  SetGoalForTab(tabID: string, goal: string): Promise<void>;
+  ClearGoal(): Promise<void>;
+  ClearGoalForTab(tabID: string): Promise<void>;
   Compact(): Promise<void>;
   NewSession(): Promise<void>;
+  ClearSession(): Promise<void>;
   History(): Promise<HistoryMessage[]>;
   HistoryForTab(tabID: string): Promise<HistoryMessage[]>;
   Checkpoints(): Promise<CheckpointMeta[]>;
@@ -111,6 +145,7 @@ export interface AppBindings {
   RestoreSession(path: string): Promise<void>;
   PurgeTrashedSession(path: string): Promise<void>;
   RenameSession(path: string, title: string): Promise<void>;
+  ScanPromptHistory(nonce: string): Promise<PromptHistoryResult>;
   ListWorkspaces(): Promise<WorkspaceView[]>;
   PickWorkspace(): Promise<string>;
   SwitchWorkspace(path: string): Promise<string>;
@@ -121,6 +156,7 @@ export interface AppBindings {
   BalanceForTab(tabID: string): Promise<BalanceInfo>;
   Jobs(): Promise<JobView[]>;
   JobsForTab(tabID: string): Promise<JobView[]>;
+  ToolResultForTab(tabID: string, toolID: string): Promise<{ args: string; output: string } | null>;
   Meta(): Promise<Meta>;
   MetaForTab(tabID: string): Promise<Meta>;
   Commands(): Promise<CommandInfo[]>;
@@ -129,6 +165,8 @@ export interface AppBindings {
   UpdateMCPServer(name: string, input: MCPServerInput): Promise<void>;
   RemoveMCPServer(name: string): Promise<void>;
   ReconnectMCPServer(name: string): Promise<void>;
+  UpdateBuiltInMCPServer(name: string): Promise<BuiltInMCPUpdateResult>;
+  BuiltInMCPUpdateStatuses(): Promise<BuiltInMCPUpdateStatus[]>;
   ClearMCPServerAuthentication(name: string): Promise<void>;
   PickSkillFolder(): Promise<string>;
   AddSkillPath(path: string): Promise<void>;
@@ -144,11 +182,16 @@ export interface AppBindings {
   WorkspaceChanges(): Promise<WorkspaceChangesView>;
   GitBranches(): Promise<string[]>;
   GitCheckout(branch: string): Promise<void>;
+  WorkspaceGitHistory(path: string): Promise<GitCommitView[]>;
+  WorkspaceGitCommitDetail(hash: string, path: string): Promise<GitCommitDetailView>;
   OpenWorkspacePath(rel: string): Promise<void>;
   RevealWorkspacePath(rel: string): Promise<void>;
   RevealPath(path: string): Promise<void>;
   SavePastedImage(dataUrl: string): Promise<string>;
+  SaveClipboardImage(): Promise<string>;
   SavePastedFile(name: string, dataUrl: string): Promise<string>;
+  PickExportFile(defaultFilename: string, mimeType: string): Promise<string>;
+  SaveExportFile(path: string, payload: string, base64Encoded: boolean): Promise<void>;
   AttachDropped(path: string): Promise<DroppedItem>;
   AttachmentDataURL(path: string): Promise<string>;
   Models(): Promise<ModelInfo[]>;
@@ -159,11 +202,28 @@ export interface AppBindings {
   SetEffort(level: string): Promise<void>;
   EffortForTab(tabID: string): Promise<EffortInfo>;
   SetEffortForTab(tabID: string, level: string): Promise<void>;
+  SetTokenMode(mode: string): Promise<void>;
+  SetTokenModeForTab(tabID: string, mode: string): Promise<void>;
   Memory(): Promise<MemoryView>;
+  MemorySuggestions(): Promise<MemorySuggestionsView>;
+  AcceptMemorySuggestion(suggestion: MemorySuggestion): Promise<string>;
+  AcceptSkillSuggestion(suggestion: SkillSuggestion): Promise<string>;
+  MemoryForTab(tabID: string): Promise<MemoryView>;
+  MemorySuggestionsForTab(tabID: string): Promise<MemorySuggestionsView>;
+  AcceptMemorySuggestionForTab(tabID: string, suggestion: MemorySuggestion): Promise<string>;
+  AcceptSkillSuggestionForTab(tabID: string, suggestion: SkillSuggestion): Promise<string>;
   Remember(scope: string, note: string): Promise<string>;
+  RememberForTab(tabID: string, scope: string, note: string): Promise<string>;
   Forget(name: string): Promise<void>;
+  ForgetForTab(tabID: string, name: string): Promise<void>;
   SaveDoc(path: string, body: string): Promise<string>;
+  SaveDocForTab(tabID: string, path: string, body: string): Promise<string>;
   Settings(): Promise<SettingsView>;
+  HooksSettings(scope: string): Promise<HooksSettingsView>;
+  SaveHooksSettings(scope: string, hooks: HookConfigView[]): Promise<void>;
+  SaveHooksSettingsForRoot(scope: string, projectRoot: string, hooks: HookConfigView[]): Promise<void>;
+  TrustProjectHooks(): Promise<void>;
+  TrustProjectHooksForRoot(projectRoot: string): Promise<void>;
   SetDefaultModel(ref: string): Promise<void>;
   SetPlannerModel(ref: string): Promise<void>;
   SetSubagentModel(ref: string): Promise<void>;
@@ -180,16 +240,35 @@ export interface AppBindings {
   SetPermissionMode(mode: string): Promise<void>;
   AddPermissionRule(list: string, rule: string): Promise<void>;
   RemovePermissionRule(list: string, rule: string): Promise<void>;
-  SetSandbox(bash: string, network: boolean, workspaceRoot: string, allowWrite: string[]): Promise<void>;
+  SetSandbox(bash: string, network: boolean, workspaceRoot: string, allowWrite: string[], shell: string): Promise<void>;
   SetNetwork(n: NetworkView): Promise<void>;
+  SetBotSettings(b: BotSettingsView): Promise<void>;
+  SetBotSecret(envName: string, value: string): Promise<void>;
+  ClearBotSecret(envName: string): Promise<void>;
+  StartBotConnectionInstall(provider: string, domain: string): Promise<BotInstallStartResult>;
+  PollBotConnectionInstall(installID: string): Promise<BotInstallPollResult>;
+  BotRuntimeStatus(): Promise<BotRuntimeStatusView>;
+  DiagnoseBotConnection(id: string): Promise<BotConnectionDiagnostic>;
+  TestBotConnection(id: string, target?: string): Promise<BotConnectionDiagnostic>;
   SetCloseBehavior(mode: string): Promise<void>;
+  SetDisplayMode(mode: string): Promise<void>;
+  SetStatusBarStyle(style: string): Promise<void>;
+  SetStatusBarItems(items: string[]): Promise<void>;
   SetDesktopLanguage(lang: string): Promise<void>;
   SetDesktopAppearance(theme: string, style: string): Promise<void>;
+  SetDesktopLayoutStyle(style: string): Promise<void>;
+  SetDesktopCheckUpdates(enabled: boolean): Promise<void>;
+  SetDesktopTelemetry(enabled: boolean): Promise<void>;
+  SetDesktopMetrics(enabled: boolean): Promise<void>;
+  SetExpandThinking(on: boolean): Promise<void>;
   MigrateDesktopPreferences(language: string, theme: string, style: string): Promise<void>;
-  SetAgentParams(temperature: number, maxSteps: number, systemPrompt: string): Promise<void>;
-  SetTrayLocale(locale: "en" | "zh"): Promise<void>;
-  // SetBypass toggles YOLO mode (auto-approve every tool call this session; deny
-  // rules still apply). Runtime-only — not written to config.
+  SetAgentParams(temperature: number, maxSteps: number, plannerMaxSteps: number, systemPrompt: string): Promise<void>;
+  SetColdResumePrune(enabled: boolean): Promise<void>;
+  SetReasoningLanguage(lang: string): Promise<void>;
+  SetTrayLocale(locale: "en" | "zh" | "zh-TW"): Promise<void>;
+  // SetBypass is the legacy Wails name for YOLO/full-access tool auto-approval
+  // (ask questions and plan approvals still wait; deny rules still apply).
+  // Runtime-only.
   SetBypass(on: boolean): Promise<void>;
   Version(): Promise<string>;
   CheckUpdate(): Promise<UpdateInfo | null>;
@@ -197,31 +276,37 @@ export interface AppBindings {
   OpenDownloadPage(): Promise<void>;
   NeedsOnboarding(): Promise<boolean>;
   ConnectKey(apiKey: string): Promise<void>;
+  // Crash overlay "Send report" (desktop/crash_app.go): scrubs user paths, attaches
+  // version/os/arch, POSTs to the collection endpoint. Only ever sent on user click.
+  ReportCrash(kind: string, detail: string): Promise<void>;
   ListTabs(): Promise<TabMeta[]>;
   OpenProjectTab(workspaceRoot: string, topicID: string): Promise<TabMeta>;
   OpenGlobalTab(topicID: string): Promise<TabMeta>;
+  OpenTopicSession(scope: string, workspaceRoot: string, topicID: string, sessionPath: string): Promise<TabMeta>;
+  EnsureBlankTab(scope: string, workspaceRoot: string): Promise<TabMeta>;
   SetActiveTab(tabID: string): Promise<void>;
   ReorderTabs(tabIDs: string[]): Promise<void>;
   CloseTab(tabID: string): Promise<void>;
   ListProjectTree(): Promise<ProjectNode[]>;
   RenameProject(workspaceRoot: string, title: string): Promise<void>;
   SetProjectColor(workspaceRoot: string, color: string): Promise<void>;
+  SetProjectPinned(workspaceRoot: string, pinned: boolean): Promise<void>;
   ReorderProjects(workspaceRoots: string[]): Promise<void>;
   CreateTopic(scope: string, workspaceRoot: string, title: string): Promise<TopicMeta>;
   RenameTopic(topicID: string, title: string): Promise<void>;
   DeleteTopic(topicID: string): Promise<void>;
   TrashTopic(topicID: string): Promise<void>;
+  SetTopicPinned(topicID: string, pinned: boolean): Promise<void>;
   ContextPanel(tabID: string): Promise<ContextPanelInfo>;
   // New native-feel bindings (added with the desktop native-feel plan).
   ConfirmAction(req: NativeConfirmRequest): Promise<boolean>;
   SaveWindowState(state: DesktopWindowState): Promise<void>;
 }
 
-// Bidirectional compile-time drift checks. Exclude<A, B> extracts keys in A that
-// are missing from B. If that set is non-empty, AssertNever<non-never> fails with
-// "Type 'X' does not satisfy the constraint 'never'". In other words:
-//   _CheckGenToApp errors → a Go method has no TS counterpart (add it to AppBindings)
-//   _CheckAppToGen errors → a TS method has no Go counterpart (stale / removed)
+// Compile-time drift check. Exclude<A, B> extracts keys in A that are missing
+// from B. If that set is non-empty, AssertNever<non-never> fails with
+// "Type 'X' does not satisfy the constraint 'never'".
+// _CheckGenToApp errors mean a generated Go method has no TS counterpart.
 // These compare method *names* only; full signature checking isn't possible here
 // because local types (types.ts) use plain interfaces while generated types
 // (models.ts) use classes with a convertValues prototype method. The structural
@@ -229,7 +314,6 @@ export interface AppBindings {
 // are caught at the call sites by tsc when components invoke app.<method>(...).
 type AssertNever<T extends never> = T;
 export type _CheckGenToApp = AssertNever<Exclude<keyof typeof GeneratedApp, keyof AppBindings>>;
-export type _CheckAppToGen = AssertNever<Exclude<keyof AppBindings, keyof typeof GeneratedApp>>;
 
 interface WailsRuntime {
   EventsOn(name: string, cb: (...data: unknown[]) => void): () => void;
@@ -285,16 +369,45 @@ export function onUpdaterProgress(cb: (p: UpdateProgress) => void): () => void {
   };
 }
 
+export function onBuiltInMCPUpdate(cb: (status: BuiltInMCPUpdateStatus) => void): () => void {
+  if (realApp() && typeof window !== "undefined" && window.runtime) {
+    return window.runtime.EventsOn("builtin-mcp:update", (status) => cb(status as BuiltInMCPUpdateStatus));
+  }
+  return () => {};
+}
+
 // onFilesDropped subscribes to native OS file drops landing on the composer (the
 // --wails-drop-target element); the callback gets the dropped files' absolute
 // paths. No-op in the browser dev mock, where the runtime is absent.
 export function onFilesDropped(cb: (paths: string[]) => void): () => void {
   const rt = typeof window !== "undefined" ? window.runtime : undefined;
   if (!rt?.OnFileDrop) return () => {};
+
+  // Wails' internal ResolveFilePaths throws when a non-file object (e.g. the
+  // window icon) is dragged onto the webview. The error is uncaught and crashes
+  // the app. Intercept it here so only real file drops reach the callback.
+  const suppressNonFileDragError = (e: ErrorEvent) => {
+    if (e.message?.includes("additional File object is not a file on the disk")) {
+      e.preventDefault();
+    }
+  };
+  const suppressNonFileDragRejection = (e: PromiseRejectionEvent) => {
+    const msg = e.reason?.message ?? String(e.reason);
+    if (msg.includes("additional File object is not a file on the disk")) {
+      e.preventDefault();
+    }
+  };
+  window.addEventListener("error", suppressNonFileDragError);
+  window.addEventListener("unhandledrejection", suppressNonFileDragRejection);
+
   rt.OnFileDrop((_x, _y, paths) => {
     if (Array.isArray(paths) && paths.length > 0) cb(paths);
   }, true);
-  return () => rt.OnFileDropOff?.();
+  return () => {
+    rt.OnFileDropOff?.();
+    window.removeEventListener("error", suppressNonFileDragError);
+    window.removeEventListener("unhandledrejection", suppressNonFileDragRejection);
+  };
 }
 
 // onReady subscribes to the agent:ready event fired when boot.Build completes.
@@ -317,11 +430,49 @@ export function onProjectTreeChanged(cb: () => void): () => void {
 
 // app proxies each call to the live binding (or the dev mock only when truly
 // outside the shell), so a late-injected window.go is picked up transparently.
+function bridgeBreadcrumb(method: string): string {
+  if (method === "ReportCrash") return "";
+  if (/^(Submit|SubmitDisplay|RunShell|Steer|Cancel|Approve|AnswerQuestion|ReplayPendingPrompts)/.test(method))
+    return `turn ${method}`;
+  if (/^(SetModel|SetEffort|SetTokenMode|SetDefaultModel|SetPlannerModel|SetSubagentModel|SetSubagentEffort)/.test(method))
+    return `model ${method}`;
+  if (/^(SetDesktop|SetCloseBehavior|SetDisplayMode|SetStatusBar|SetExpandThinking|SetAutoPlan|SetReasoningLanguage)/.test(method))
+    return `settings ${method}`;
+  if (/^(SaveProvider|AddOfficialProviderAccess|RemoveProviderAccess|DeleteProvider|SetProviderKey|ClearProviderKey|FetchProviderModels|ConnectKey)/.test(method))
+    return `provider ${method}`;
+  if (/^(CheckUpdate|ApplyUpdate|OpenDownloadPage)/.test(method)) return `update ${method}`;
+  if (/^(AddMCPServer|UpdateMCPServer|RemoveMCPServer|ReconnectMCPServer|UpdateBuiltInMCPServer|BuiltInMCPUpdateStatuses|ClearMCPServerAuthentication|SetMCPServer)/.test(method))
+    return `mcp ${method}`;
+  if (/^(AddSkillPath|RemoveSkillPath|RefreshSkills|SetSkillEnabled|AcceptSkillSuggestion)/.test(method))
+    return `skill ${method}`;
+  if (/^(OpenProjectTab|OpenGlobalTab|EnsureBlankTab|SetActiveTab|CloseTab|ReorderTabs|CreateTopic|RenameTopic|DeleteTopic|TrashTopic|RenameProject|RemoveWorkspace|SwitchWorkspace|PickWorkspace)/.test(method))
+    return `nav ${method}`;
+  return "";
+}
+
 export const app: AppBindings = new Proxy({} as AppBindings, {
   get(_t, prop) {
     const target = realApp() ?? getMock();
     const v = (target as unknown as Record<string, unknown>)[String(prop)];
-    return typeof v === "function" ? (v as (...a: unknown[]) => unknown).bind(target) : v;
+    if (typeof v !== "function") return v;
+    return (...args: unknown[]) => {
+      const method = String(prop);
+      const crumb = bridgeBreadcrumb(method);
+      if (crumb) addBreadcrumb("bridge", crumb);
+      try {
+        const result = (v as (...a: unknown[]) => unknown).apply(target, args);
+        if (result && typeof (result as Promise<unknown>).then === "function") {
+          return (result as Promise<unknown>).catch((err) => {
+            if (crumb) addBreadcrumb("bridge.error", method);
+            throw err;
+          });
+        }
+        return result;
+      } catch (err) {
+        if (crumb) addBreadcrumb("bridge.error", method);
+        throw err;
+      }
+    };
   },
 });
 
@@ -339,6 +490,7 @@ export function openExternal(url: string): void {
 // --- browser dev mock --------------------------------------------------------
 
 const listeners = new Set<(e: WireEvent) => void>();
+let mockScopedTabId: string | undefined;
 
 function mockSubscribe(cb: (e: WireEvent) => void): () => void {
   listeners.add(cb);
@@ -348,7 +500,18 @@ function mockSubscribe(cb: (e: WireEvent) => void): () => void {
 }
 
 function emit(e: WireEvent) {
-  listeners.forEach((l) => l(e));
+  const event = mockScopedTabId && !e.tabId ? { ...e, tabId: mockScopedTabId } : e;
+  listeners.forEach((l) => l(event));
+}
+
+async function withMockTabScope<T>(tabId: string, fn: () => Promise<T>): Promise<T> {
+  const previous = mockScopedTabId;
+  mockScopedTabId = tabId || previous;
+  try {
+    return await fn();
+  } finally {
+    mockScopedTabId = previous;
+  }
 }
 
 // Updater progress has its own listener set so the browser dev mock's ApplyUpdate
@@ -373,20 +536,24 @@ function browserPlatformOverride(): "darwin" | "windows" | "linux" | "" {
   return value === "darwin" || value === "windows" || value === "linux" ? value : "";
 }
 
-function mockScenario(): "demo" | "fresh" {
+function mockScenario(): "demo" | "fresh" | "running" {
   if (typeof window === "undefined") return "demo";
   const value = new URLSearchParams(window.location.search).get("mock")?.trim().toLowerCase();
-  return value === "fresh" || value === "empty" || value === "first-run" ? "fresh" : "demo";
+  if (value === "fresh" || value === "empty" || value === "first-run") return "fresh";
+  if (value === "running" || value === "busy" || value === "streaming") return "running";
+  return "demo";
 }
 
 function makeMockApp(): AppBindings {
-  const freshMock = mockScenario() === "fresh";
+  const scenario = mockScenario();
+  const freshMock = scenario === "fresh";
+  const runningMock = scenario === "running";
   let cancelled = false;
   let pendingAskPreview = false;
   let pendingApprovalPreview = false;
-  const globalWorkspaceRoot = "~/Library/Application Support/reasonix/global-workspace";
+  const globalWorkspaceRoot = "~/Library/Application Support/maddog/global-workspace";
   let cwd = freshMock ? globalWorkspaceRoot : "~/projects/joyquant-db"; // mutable so PickWorkspace is visible in dev
-  let workspaces = freshMock ? [] : ["~/projects/joyquant-db", "~/projects/joyquant-sys", "~/projects/reasonix", "~/projects/blade"];
+  let workspaces = freshMock ? [] : ["~/projects/joyquant-db", "~/projects/joyquant-sys", "~/projects/maddog", "~/projects/blade"];
   let mockEffort = "auto";
   const day = 86_400_000;
   const t0 = Date.now();
@@ -400,6 +567,8 @@ function makeMockApp(): AppBindings {
       configured: true,
       autoStart: false,
       tier: "background",
+      command: "codegraph",
+      args: ["serve", "--mcp"],
       tools: 0,
       prompts: 0,
       resources: 0,
@@ -409,6 +578,34 @@ function makeMockApp(): AppBindings {
         { name: "trace", description: "Follow callers and callees across the code graph." },
         { name: "node", description: "Inspect a specific graph node." },
       ],
+    },
+    {
+      name: "time",
+      transport: "stdio",
+      status: "deferred",
+      builtIn: true,
+      configured: true,
+      autoStart: true,
+      tier: "lazy",
+      command: "reasonix",
+      args: ["builtin-mcp", "time"],
+      tools: 0,
+      prompts: 0,
+      resources: 0,
+    },
+    {
+      name: "context7",
+      transport: "stdio",
+      status: "disabled",
+      builtIn: true,
+      configured: true,
+      autoStart: false,
+      tier: "lazy",
+      command: "npx",
+      args: ["-y", "@upstash/context7-mcp"],
+      tools: 0,
+      prompts: 0,
+      resources: 0,
     },
     { name: "github", transport: "stdio", status: "connected", configured: true, autoStart: true, tier: "background", command: "npx", args: ["-y", "@modelcontextprotocol/server-github"], tools: 12, prompts: 2, resources: 0 },
     {
@@ -437,13 +634,22 @@ function makeMockApp(): AppBindings {
     },
     { name: "figma", transport: "http", status: "failed", configured: true, autoStart: true, tier: "background", url: "https://mcp.figma.com/mcp", authStatus: "required", authUrl: "https://mcp.figma.com/mcp", tools: 0, prompts: 0, resources: 0, error: "connect: 401 unauthorized" },
   ];
+  let builtInMCPUpdates: BuiltInMCPUpdateStatus[] = [
+    {
+      name: "codegraph",
+      mode: "notify",
+      current: "v0.9.7",
+      latest: "v0.10.0",
+      phase: "available",
+    },
+  ];
   const capSkills: SkillView[] = [
     { name: "explore", description: "Investigate the codebase in an isolated subagent", scope: "builtin", runAs: "subagent", enabled: true },
     { name: "review", description: "Review the staged diff", scope: "project", runAs: "inline", enabled: false },
-    { name: "init", description: "Scaffold a REASONIX.md for this repo", scope: "builtin", runAs: "inline", enabled: true },
+    { name: "init", description: "Scaffold a MADDOG.md for this repo", scope: "builtin", runAs: "inline", enabled: true },
   ];
   let capSkillRoots: SkillRootView[] = [
-    { dir: "~/projects/reasonix/.reasonix/skills", scope: "project", priority: 1, status: "missing", configured: false, removable: true, skills: 0 },
+    { dir: "~/projects/maddog/.maddog/skills", scope: "project", priority: 1, status: "missing", configured: false, removable: true, skills: 0 },
     {
       dir: "~/my-skills",
       scope: "custom",
@@ -455,7 +661,7 @@ function makeMockApp(): AppBindings {
       skillItems: [{ name: "review", description: "Review the staged diff", scope: "custom", runAs: "inline" }],
     },
     {
-      dir: "~/.reasonix/skills",
+      dir: "~/.maddog/skills",
       scope: "global",
       priority: 6,
       status: "ok",
@@ -464,7 +670,7 @@ function makeMockApp(): AppBindings {
       skills: 2,
       skillItems: [
         { name: "explore", description: "Investigate the codebase in an isolated subagent", scope: "global", runAs: "subagent" },
-        { name: "init", description: "Scaffold a REASONIX.md for this repo", scope: "global", runAs: "inline" },
+        { name: "init", description: "Scaffold a MADDOG.md for this repo", scope: "global", runAs: "inline" },
       ],
     },
   ];
@@ -584,29 +790,103 @@ function makeMockApp(): AppBindings {
       providerDefaults({ name: "mimo-api", builtIn: true, added: false, kind: "openai", baseUrl: "https://api.xiaomimimo.com/v1", models: ["mimo-v2.5-pro"], default: "mimo-v2.5-pro", apiKeyEnv: "MIMO_API_KEY", contextWindow: 1_048_576 }),
       providerDefaults({ name: "mimo-token-plan", builtIn: true, added: false, kind: "openai", baseUrl: "https://token-plan-cn.xiaomimimo.com/v1", models: ["mimo-v2.5-pro"], default: "mimo-v2.5-pro", apiKeyEnv: "MIMO_API_KEY", contextWindow: 1_048_576 }),
     ],
-    permissions: { mode: "ask", allow: ["ls", "read_file"], ask: [], deny: ["bash(rm *)"] },
-    sandbox: { bash: "enforce", network: true, workspaceRoot: "", allowWrite: [] },
+    permissions: { mode: "ask", allow: ["ls", "read_file"], ask: [], deny: ["Bash(rm:*)"] },
+    sandbox: { bash: "enforce", network: true, workspaceRoot: "", allowWrite: [], shell: "auto" },
     network: {
       proxyMode: "auto",
       proxyUrl: "",
       noProxy: "",
       proxy: { type: "socks5", server: "127.0.0.1", port: 7890, username: "", password: "" },
     },
-    agent: { temperature: 0.2, maxSteps: 0, systemPrompt: "You are Reasonix, a coding agent." },
+    agent: {
+      temperature: 0.2,
+      maxSteps: 0,
+      plannerMaxSteps: 12,
+      systemPrompt: "You are Maddog, a coding agent.",
+      coldResumePrune: true,
+      reasoningLanguage: "auto",
+    },
+    bot: {
+      enabled: false,
+      model: "",
+      toolApprovalMode: "ask",
+      maxSteps: 25,
+      debounceMs: 1500,
+      allowlist: {
+        enabled: true,
+        allowAll: false,
+        qqUsers: [],
+        feishuUsers: [],
+        weixinUsers: [],
+        qqGroups: [],
+        feishuGroups: [],
+        weixinGroups: [],
+      },
+      qq: { enabled: false, appId: "", appSecretEnv: "QQ_BOT_APP_SECRET", secretSet: false, sandbox: false },
+      feishu: {
+        enabled: false,
+        domain: "feishu",
+        appId: "",
+        appSecretEnv: "FEISHU_BOT_APP_SECRET",
+        secretSet: false,
+        verificationToken: "",
+        mode: "webhook",
+        webhookPort: 8080,
+        requireMention: true,
+      },
+      weixin: {
+        enabled: false,
+        accountId: "default",
+        tokenEnv: "WEIXIN_BOT_TOKEN",
+        tokenSet: false,
+        apiBase: "https://ilinkai.weixin.qq.com",
+      },
+      connections: [],
+    },
     desktopLanguage: "",
-    desktopTheme: "dark",
+    desktopLayoutStyle: "classic",
+    desktopTheme: "light",
     desktopThemeStyle: "graphite",
     closeBehavior: "background",
-    configPath: "~/projects/reasonix/reasonix.toml",
+    displayMode: "standard",
+    statusBarStyle: "icon",
+    statusBarItems: normalizeStatusBarItems([]),
+    checkUpdates: true,
+    telemetry: true,
+    metrics: false,
+    configPath: "~/projects/maddog/maddog.toml",
     providerKinds: ["openai"],
+    autoApproveTools: false,
     bypass: false,
+  };
+  const hookEvents = ["PreToolUse", "PostToolUse", "UserPromptSubmit", "Stop", "PostLLMCall", "SessionStart", "SessionEnd", "SubagentStop", "Notification", "PreCompact"];
+  const hookSettings: Record<string, HooksSettingsView> = {
+    global: {
+      scope: "global",
+      path: "~/.maddog/settings.json",
+      projectRoot: "",
+      trusted: true,
+      events: hookEvents,
+      hooks: [
+        { event: "Stop", command: "echo turn done", description: "Notify after each turn" },
+      ],
+    },
+    project: {
+      scope: "project",
+      path: "./.maddog/settings.json",
+      projectRoot: "/mock/project",
+      trusted: false,
+      events: hookEvents,
+      hooks: [],
+    },
   };
   settings.providers = settings.providers.map((provider) =>
     provider.apiKeyEnv === "DEEPSEEK_API_KEY" ? { ...provider, keySet: !freshMock } : provider,
   );
   if (freshMock) {
-    settings.configPath = "~/.config/reasonix/config.toml";
+    settings.configPath = "~/.config/maddog/config.toml";
   }
+  const mockNow = Date.now();
   const mockProjectTree: ProjectNode[] = freshMock ? [] : [
     {
       key: "project_~/projects/joyquant-db",
@@ -615,9 +895,9 @@ function makeMockApp(): AppBindings {
       root: "~/projects/joyquant-db",
       projectColor: "blue",
       children: [
-        { key: "topic_dev_standard", kind: "topic", label: `● ${t("mock.topicDevStandard")}`, root: "~/projects/joyquant-db", topicId: "topic_dev_standard", projectColor: "blue" },
-        { key: "topic_db_maint", kind: "topic", label: t("mock.topicDbMaint"), root: "~/projects/joyquant-db", topicId: "topic_db_maint", projectColor: "blue" },
-        { key: "topic_env", kind: "topic", label: t("mock.topicEnv"), root: "~/projects/joyquant-db", topicId: "topic_env", projectColor: "blue" },
+        { key: "topic_dev_standard", kind: "topic", label: `● ${t("mock.topicDevStandard")}`, root: "~/projects/joyquant-db", topicId: "topic_dev_standard", projectColor: "blue", turns: 18, lastActivityAt: mockNow - 8 * 60_000, open: true, running: runningMock },
+        { key: "topic_db_maint", kind: "topic", label: t("mock.topicDbMaint"), root: "~/projects/joyquant-db", topicId: "topic_db_maint", projectColor: "blue", turns: 7, lastActivityAt: mockNow - 2 * 60 * 60_000 },
+        { key: "topic_env", kind: "topic", label: t("mock.topicEnv"), root: "~/projects/joyquant-db", topicId: "topic_env", projectColor: "blue", turns: 3, lastActivityAt: mockNow - 26 * 60 * 60_000 },
       ],
     },
     {
@@ -627,11 +907,12 @@ function makeMockApp(): AppBindings {
       root: "~/projects/joyquant-sys",
       projectColor: "purple",
       children: [
-        { key: "topic_p3b_pd", kind: "topic", label: `● ${t("mock.topicP3b")}`, root: "~/projects/joyquant-sys", topicId: "topic_p3b_pd", projectColor: "purple" },
-        { key: "topic_p3a_pd", kind: "topic", label: t("mock.topicP3a"), root: "~/projects/joyquant-sys", topicId: "topic_p3a_pd", projectColor: "purple" },
-        { key: "topic_hotfix", kind: "topic", label: t("mock.topicHotfix"), root: "~/projects/joyquant-sys", topicId: "topic_hotfix", projectColor: "purple" },
-        { key: "topic_sys_coord", kind: "topic", label: t("mock.topicSysCoord"), root: "~/projects/joyquant-sys", topicId: "topic_sys_coord", projectColor: "purple" },
-        { key: "topic_sys_standard", kind: "topic", label: t("mock.topicSysStandard"), root: "~/projects/joyquant-sys", topicId: "topic_sys_standard", projectColor: "purple" },
+        { key: "topic_p3b_pd", kind: "topic", label: `● ${t("mock.topicP3b")}`, root: "~/projects/joyquant-sys", topicId: "topic_p3b_pd", projectColor: "purple", turns: 11, lastActivityAt: mockNow - 3 * 24 * 60 * 60_000, status: runningMock ? "streaming" : undefined },
+        { key: "topic_p3a_pd", kind: "topic", label: t("mock.topicP3a"), root: "~/projects/joyquant-sys", topicId: "topic_p3a_pd", projectColor: "purple", turns: 9, lastActivityAt: mockNow - 4 * 24 * 60 * 60_000, status: runningMock ? "thinking" : undefined },
+        { key: "topic_hotfix", kind: "topic", label: t("mock.topicHotfix"), root: "~/projects/joyquant-sys", topicId: "topic_hotfix", projectColor: "purple", turns: 4, lastActivityAt: mockNow - 5 * 24 * 60 * 60_000, status: runningMock ? "thinking" : undefined },
+        { key: "topic_sys_coord", kind: "topic", label: t("mock.topicSysCoord"), root: "~/projects/joyquant-sys", topicId: "topic_sys_coord", projectColor: "purple", turns: 14, lastActivityAt: mockNow - 6 * 24 * 60 * 60_000, status: runningMock ? "waiting_confirmation" : undefined },
+        { key: "topic_sys_standard", kind: "topic", label: t("mock.topicSysStandard"), root: "~/projects/joyquant-sys", topicId: "topic_sys_standard", projectColor: "purple", turns: 6, lastActivityAt: mockNow - 7 * 24 * 60 * 60_000, status: "paused" },
+        { key: "topic_sys_exception", kind: "topic", label: t("mock.topicSysException"), root: "~/projects/joyquant-sys", topicId: "topic_sys_exception", projectColor: "purple", turns: 2, lastActivityAt: mockNow - 8 * 24 * 60 * 60_000, status: "error" },
       ],
     },
     {
@@ -640,13 +921,36 @@ function makeMockApp(): AppBindings {
       label: "Global",
       root: globalWorkspaceRoot,
       children: [
-        { key: "global_topic_product", kind: "global_topic", label: t("mock.topicProduct"), topicId: "topic_product" },
-        { key: "global_topic_ai", kind: "global_topic", label: t("mock.topicAi"), topicId: "topic_ai" },
-        { key: "global_topic_lab", kind: "global_topic", label: t("mock.topicLab"), topicId: "topic_lab" },
+        { key: "global_topic_product", kind: "global_topic", label: t("mock.topicProduct"), topicId: "topic_product", turns: 5, lastActivityAt: mockNow - 8 * 24 * 60 * 60_000 },
+        { key: "global_topic_ai", kind: "global_topic", label: t("mock.topicAi"), topicId: "topic_ai", turns: 8, lastActivityAt: mockNow - 10 * 24 * 60 * 60_000 },
+        { key: "global_topic_lab", kind: "global_topic", label: t("mock.topicLab"), topicId: "topic_lab", turns: 2, lastActivityAt: mockNow - 12 * 24 * 60 * 60_000 },
       ],
     },
   ];
-  const cloneProjectTree = () => JSON.parse(JSON.stringify(mockProjectTree)) as ProjectNode[];
+  const ensureMockGlobalFolder = (): ProjectNode => {
+    let node = mockProjectTree.find((item) => item.kind === "global_folder");
+    if (!node) {
+      node = {
+        key: "global_folder",
+        kind: "global_folder",
+        label: "Global",
+        root: globalWorkspaceRoot,
+        children: [],
+      };
+      mockProjectTree.push(node);
+    }
+    return node;
+  };
+  const mockProjectTreeForDisplay = () => {
+    const pinnedProjects = mockProjectTree.filter((node) => node.kind === "project" && node.pinned);
+    if (pinnedProjects.length === 0) return mockProjectTree;
+    const rest = mockProjectTree.filter((node) => !(node.kind === "project" && node.pinned));
+    return [...pinnedProjects, ...rest];
+  };
+  const cloneProjectTree = () => {
+    if (mockProjectTree.length === 0) ensureMockGlobalFolder();
+    return JSON.parse(JSON.stringify(mockProjectTreeForDisplay())) as ProjectNode[];
+  };
   const projectChildren = (node: ProjectNode): ProjectNode[] => Array.isArray(node.children) ? node.children : [];
   const findMockTopic = (topicId: string): ProjectNode | null => {
     for (const parent of mockProjectTree) {
@@ -655,14 +959,200 @@ function makeMockApp(): AppBindings {
     }
     return null;
   };
+  const setMockTopicPinned = (topicId: string, pinned: boolean) => {
+    for (const parent of mockProjectTree) {
+      const children = projectChildren(parent);
+      const index = children.findIndex((child) => child.topicId === topicId);
+      if (index < 0) continue;
+      const topic = { ...children[index], pinned: pinned || undefined };
+      if (!pinned) {
+        parent.children = children.map((child, i) => (i === index ? topic : child));
+        return;
+      }
+      const remaining = children.filter((_, i) => i !== index);
+      parent.children = [topic, ...remaining];
+      return;
+    }
+  };
+  const setMockProjectPinned = (workspaceRoot: string, pinned: boolean) => {
+    const index = mockProjectTree.findIndex((node) => node.kind === "project" && node.root === workspaceRoot);
+    if (index < 0) return;
+    mockProjectTree[index] = { ...mockProjectTree[index], pinned: pinned || undefined };
+  };
   const deleteMockTopic = (topicId: string) => {
     for (const parent of mockProjectTree) {
       parent.children = projectChildren(parent).filter((child) => child.topicId !== topicId);
     }
   };
   const topicLabel = (topicId: string, fallback: string) => (findMockTopic(topicId)?.label || fallback).replace(/^●\s*/, "");
+  const mockTopicStatus = (topicId: string) => findMockTopic(topicId)?.status ?? "";
+  const mockTopicIsRunning = (topicId: string) => {
+    const status = mockTopicStatus(topicId);
+    return status === "streaming" || status === "thinking" || status === "waiting_confirmation";
+  };
+  const mockTopicIsBlank = (topicId: string) => {
+    const topic = findMockTopic(topicId);
+    return Boolean(topic && topic.label === t("mock.newSession") && !topic.turns && !topic.lastActivityAt && !topic.status);
+  };
+  const mockTopicRunsInScenario = (topicId: string) => runningMock && mockTopicIsRunning(topicId);
+  const mockTopicHistory = (topicId: string): HistoryMessage[] => {
+    switch (topicId) {
+      case "topic_product":
+        return [
+          {
+            role: "user",
+            content: [
+              "[[reasonix-im]]",
+              "provider=lark",
+              "label=Feishu / Lark",
+              "sender=ou_mock_user_001",
+              "chat=p2p 会话",
+              "[[/reasonix-im]]",
+              "你可以做什么",
+            ].join("\n"),
+          },
+          {
+            role: "assistant",
+            content: "这是 Global 范围下的 IM 会话。我可以先处理不依赖项目文件的问答、计划和信息整理；需要进入项目时，再由桌面端显式绑定或迁移到项目话题。",
+          },
+        ];
+      case "topic_ai":
+        return [
+          {
+            role: "user",
+            content: [
+              "[[reasonix-im]]",
+              "provider=weixin",
+              "label=微信",
+              "sender=wxid_mock_user_001",
+              "chat=单聊",
+              "[[/reasonix-im]]",
+              "帮我整理一下今天要做的事",
+            ].join("\n"),
+          },
+          {
+            role: "assistant",
+            content: "可以。我会先在 Global 范围里整理任务清单；如果某条任务需要读取项目文件，再切到你授权的项目话题处理。",
+          },
+        ];
+      case "topic_dev_standard":
+        return [
+          {
+            role: "user",
+            content: [
+              "[[reasonix-im]]",
+              "provider=lark",
+              "label=Feishu / Lark",
+              "sender=ou_mock_user_001",
+              "chat=p2p 会话",
+              "[[/reasonix-im]]",
+              "你可以做什么",
+            ].join("\n"),
+          },
+          {
+            role: "assistant",
+            content: "我可以在桌面端帮你处理代码编写、文件操作、项目分析和问题定位。来自 IM 的请求会进入同一条聊天时间线，桌面端继续承载模型调用、工具执行和上下文管理。",
+          },
+        ];
+      case "topic_p3b_pd":
+        return [
+          { role: "user", content: "把 p3b P&D 的范围和风险重新整理成可执行计划。" },
+          { role: "phase", content: "分析需求范围" },
+        ];
+      case "topic_p3a_pd":
+        return [
+          { role: "user", content: "复盘 p3a 的技术方案，先不要写文件，先说明你的判断。" },
+        ];
+      case "topic_hotfix":
+        return [
+          { role: "user", content: "检查 post-p3-hotfix 的回归风险，重点看最近的 shell 输出和 git 改动。" },
+          { role: "assistant", content: "", reasoning: "我先定位最近一次 hotfix 的上下文，然后用只读命令检查状态；左侧保持“思考中”，工具细节在这里展开。" },
+        ];
+      case "topic_sys_coord":
+        return [
+          { role: "user", content: "准备执行 joyquant-sys 的同步脚本，但需要我确认后再运行。" },
+          { role: "assistant", content: "", reasoning: "这个动作会运行脚本并可能刷新本地缓存，所以需要先等用户确认。" },
+        ];
+      case "topic_sys_standard":
+        return [
+          { role: "user", content: "继续制定 SYS 项目开发规范，先停在当前检查点。" },
+          { role: "assistant", content: "已暂停在规范整理阶段。当前保留了目录约定、分支策略和待确认的发布检查项；继续时可以从这里恢复。" },
+          { role: "notice", level: "info", content: "会话已暂停：未继续执行命令，等待用户恢复或切换任务。" },
+        ];
+      case "topic_sys_exception":
+        return [
+          { role: "user", content: "演练异常处理流程，看看失败时界面怎么提示。" },
+          { role: "assistant", content: "我尝试校验恢复脚本时遇到异常，已停止继续执行。" },
+          { role: "notice", level: "warn", content: "运行异常：恢复脚本缺少必要环境变量 JOYQUANT_SYS_TOKEN。请补齐配置后重试。" },
+        ];
+      default:
+        return [];
+    }
+  };
+  const mockRuntimeInjected = new Set<string>();
+  const queueMockTopicRuntime = (tab: TabMeta) => {
+    if (!runningMock) return;
+    const status = mockTopicStatus(tab.topicId);
+    if (status !== "streaming" && status !== "thinking" && status !== "waiting_confirmation") return;
+    const key = `${tab.id}:${tab.topicId}:${status}`;
+    if (mockRuntimeInjected.has(key)) return;
+    mockRuntimeInjected.add(key);
+    window.setTimeout(() => {
+      void withMockTabScope(tab.id, async () => {
+        emitMockTurnStarted();
+        await delay(120);
+        if (tab.topicId === "topic_p3b_pd") {
+          const text = "我会先把范围拆成三层：目标、依赖、风险。当前已经确认 p3b 的交付边界，接下来补充每个模块的验收口径...";
+          for (const ch of text) {
+            emit({ kind: "text", text: ch });
+            await delay(5);
+          }
+          return;
+        }
+        if (tab.topicId === "topic_p3a_pd") {
+          emit({ kind: "reasoning", text: "我正在对比 p3a 和 p3b 的差异：先看约束，再看变更风险，最后判断是否需要拆成独立任务。\n\n" });
+          await delay(220);
+          emit({ kind: "reasoning", text: "当前倾向：先保留 p3a 的兼容路径，不急于删除旧逻辑。" });
+          return;
+        }
+        if (tab.topicId === "topic_hotfix") {
+          const id = "mock-hotfix-shell";
+          emit({ kind: "tool_dispatch", tool: { id, name: "bash", args: JSON.stringify({ command: "git status --short && npm test" }), readOnly: true } });
+          await delay(180);
+          emit({ kind: "tool_progress", tool: { id, name: "bash", readOnly: true, output: "$ git status --short\n M internal/sys/runner.go\n\n$ npm test\nrunning targeted regression tests...\n" } });
+          return;
+        }
+        if (tab.topicId === "topic_sys_coord") {
+          pendingApprovalPreview = true;
+          emit({ kind: "reasoning", text: "我已经准备好执行同步脚本，但这个操作会影响本地 workspace，需要用户确认。" });
+          await delay(160);
+          emit({
+            kind: "approval_request",
+            approval: {
+              id: "mock-sys-confirm",
+              tool: "bash",
+              subject: "npm run sync:joyquant-sys\n\n该命令会同步 SYS 项目配置并刷新本地缓存。",
+            },
+          });
+        }
+      });
+    }, 180);
+  };
   const setMockActiveTab = (tabId: string) => {
     mockTabs = mockTabs.map((tab) => ({ ...tab, active: tab.id === tabId }));
+  };
+  const currentMockTurnTabId = () => mockScopedTabId || mockTabs.find((tab) => tab.active)?.id;
+  const setMockTabRunning = (tabId: string | undefined, running: boolean) => {
+    if (!tabId) return;
+    mockTabs = mockTabs.map((tab) => (tab.id === tabId ? { ...tab, running } : tab));
+  };
+  const emitMockTurnStarted = () => {
+    setMockTabRunning(currentMockTurnTabId(), true);
+    emit({ kind: "turn_started" });
+  };
+  const emitMockTurnDone = () => {
+    setMockTabRunning(currentMockTurnTabId(), false);
+    emit({ kind: "turn_done" });
   };
   let mockTabs: TabMeta[] = freshMock ? [
     {
@@ -676,6 +1166,9 @@ function makeMockApp(): AppBindings {
       ready: true,
       running: false,
       mode: "normal",
+      collaborationMode: "normal",
+      toolApprovalMode: "ask",
+      tokenMode: "full",
       active: true,
       cwd: globalWorkspaceRoot,
     },
@@ -688,12 +1181,15 @@ function makeMockApp(): AppBindings {
       topicId: "topic_dev_standard",
       topicTitle: t("mock.trashDevStandardTitle"),
       projectColor: "blue",
-	      label: "DeepSeek-R1",
-	      ready: true,
-	      running: false,
-	      mode: "normal",
-	      active: true,
-	      cwd: "~/projects/joyquant-db",
+      label: "DeepSeek-R1",
+      ready: true,
+      running: false,
+      mode: "normal",
+      collaborationMode: "normal",
+      toolApprovalMode: "ask",
+      tokenMode: "full",
+      active: true,
+      cwd: "~/projects/joyquant-db",
     },
     {
       id: "tab_joyquant_sys",
@@ -703,12 +1199,15 @@ function makeMockApp(): AppBindings {
       topicId: "topic_p3b_pd",
       topicTitle: "p3b P&D",
       projectColor: "purple",
-	      label: "DeepSeek-R1",
-	      ready: true,
-	      running: false,
-	      mode: "normal",
-	      active: false,
-	      cwd: "~/projects/joyquant-sys",
+      label: "DeepSeek-R1",
+      ready: true,
+      running: runningMock && mockTopicIsRunning("topic_p3b_pd"),
+      mode: "normal",
+      collaborationMode: "normal",
+      toolApprovalMode: "ask",
+      tokenMode: "full",
+      active: false,
+      cwd: "~/projects/joyquant-sys",
     },
     {
       id: "tab_global",
@@ -717,14 +1216,46 @@ function makeMockApp(): AppBindings {
       workspaceName: "Global",
       topicId: "topic_global",
       topicTitle: "Global",
-	      label: "DeepSeek-R1",
-	      ready: true,
-	      running: false,
-	      mode: "normal",
-	      active: false,
-	      cwd: "~/projects/joyquant-db",
+      label: "DeepSeek-R1",
+      ready: true,
+      running: false,
+      mode: "normal",
+      collaborationMode: "normal",
+      toolApprovalMode: "ask",
+      tokenMode: "full",
+      active: false,
+      cwd: "~/projects/joyquant-db",
     },
   ];
+  const mockModelCatalog = [
+    { ref: "deepseek/deepseek-v4-flash", provider: "deepseek", model: "deepseek-v4-flash" },
+    { ref: "deepseek/deepseek-v4-pro", provider: "deepseek", model: "deepseek-v4-pro" },
+  ];
+  const defaultMockModelRef = mockModelCatalog[0].ref;
+  const mockModelRef = (name: string): string => {
+    const trimmed = name.trim();
+    if (!trimmed || trimmed === "DeepSeek-R1") return defaultMockModelRef;
+    const exact = mockModelCatalog.find((model) => model.ref === trimmed);
+    if (exact) return exact.ref;
+    const byModel = mockModelCatalog.find((model) => model.model === trimmed);
+    return byModel?.ref ?? trimmed;
+  };
+  const mockModelLabel = (ref: string): string => mockModelCatalog.find((model) => model.ref === mockModelRef(ref))?.model ?? ref.split("/").pop() ?? ref;
+  const mockTabModelRef = (tab?: TabMeta): string => mockModelRef(tab?.label ?? "");
+  const setMockTabModel = (tabID: string | undefined, name: string) => {
+    const ref = mockModelRef(name);
+    const label = mockModelLabel(ref);
+    let applied = false;
+    mockTabs = mockTabs.map((tab) => {
+      const match = tabID ? tab.id === tabID : tab.active;
+      if (!match) return tab;
+      applied = true;
+      return { ...tab, label };
+    });
+    if (!applied && mockTabs.length > 0) {
+      mockTabs = mockTabs.map((tab, index) => (index === 0 ? { ...tab, label } : tab));
+    }
+  };
   return {
     async Platform() {
       const override = browserPlatformOverride();
@@ -737,8 +1268,35 @@ function makeMockApp(): AppBindings {
     },
         async Submit(input) {
           cancelled = false;
-      emit({ kind: "turn_started" });
+      emitMockTurnStarted();
       const trimmedInput = input.trim().toLowerCase();
+      const goalMatch = /^\/goal(?:\s+([\s\S]*))?$/.exec(input.trim());
+      if (goalMatch) {
+        const arg = (goalMatch[1] ?? "").trim();
+        const lowered = arg.toLowerCase();
+        const active = mockTabs.find((tab) => tab.active);
+        if (!arg || lowered === "status") {
+          emit({ kind: "notice", level: "info", text: active?.goal ? `goal: ${active.goal}` : "goal: none" });
+          emitMockTurnDone();
+          return;
+        }
+        if (["clear", "off", "stop", "done"].includes(lowered)) {
+          mockTabs = mockTabs.map((tab) => (tab.active ? { ...tab, goal: "", goalStatus: "stopped", collaborationMode: "normal" } : tab));
+          emit({ kind: "notice", level: "info", text: "goal cleared" });
+          emitMockTurnDone();
+          return;
+        }
+        mockTabs = mockTabs.map((tab) => (tab.active ? { ...tab, goal: arg, goalStatus: "running", collaborationMode: "goal" } : tab));
+        emit({ kind: "notice", level: "info", text: `goal set: ${arg}` });
+        await delay(350);
+        if (cancelled) return;
+        const reply = `Autonomous goal run started for: **${arg}**\n\nMock run completed.\n\n[goal:complete]`;
+        emit({ kind: "message", text: reply });
+        mockTabs = mockTabs.map((tab) => (tab.active ? { ...tab, goal: "", goalStatus: "complete", collaborationMode: "normal" } : tab));
+        emit({ kind: "notice", level: "info", text: "goal complete" });
+        emitMockTurnDone();
+        return;
+      }
       if (trimmedInput === "/approve-preview" || trimmedInput === "approve preview" || trimmedInput === "approve预览") {
         pendingApprovalPreview = true;
         await delay(250);
@@ -841,7 +1399,7 @@ function makeMockApp(): AppBindings {
             durationMs: 150,
           },
         });
-        emit({ kind: "turn_done" });
+        emitMockTurnDone();
         return;
       }
       if (trimmedInput === "/process-preview" || trimmedInput === "process preview" || trimmedInput === "过程预览") {
@@ -864,22 +1422,7 @@ function makeMockApp(): AppBindings {
           },
         });
         emit({ kind: "message", text: "Process card preview complete." });
-        emit({ kind: "turn_done" });
-        return;
-      }
-      if (trimmedInput === "/runtime-preview" || trimmedInput === "runtime preview" || trimmedInput === "运行时预览") {
-        await delay(200);
-        if (cancelled) return;
-        emit({ kind: "upgrade", level: "info", text: "Upgraded route to frontier model after repeated tool failures." });
-        await delay(120);
-        emit({ kind: "skill_generated", level: "info", text: "Generated runtime skill: inspect-failing-build." });
-        await delay(120);
-        emit({ kind: "budget_exceeded", level: "warn", text: "Frontier budget reached; falling back to default model." });
-        await delay(120);
-        emit({ kind: "skill_promoted", level: "info", text: "Promoted skill inspect-failing-build to project scope after replay guard passed." });
-        await delay(120);
-        emit({ kind: "message", text: "Runtime route and skill preview complete." });
-        emit({ kind: "turn_done" });
+        emitMockTurnDone();
         return;
       }
       // Simulate the server's pre-first-token latency so the deferred user bubble
@@ -924,20 +1467,20 @@ function makeMockApp(): AppBindings {
           sessionCacheMissTokens: 256,
         },
       });
-          emit({ kind: "turn_done" });
+          emitMockTurnDone();
         },
         async SubmitToTab(_tabID, input) {
-          await this.Submit(input);
+          await withMockTabScope(_tabID, () => this.Submit(input));
         },
         async SubmitDisplay(_display, input) {
           await this.Submit(input);
         },
         async SubmitDisplayToTab(_tabID, display, input) {
-          await this.SubmitDisplay(display, input);
+          await withMockTabScope(_tabID, () => this.SubmitDisplay(display, input));
         },
         async RunShell(command) {
           cancelled = false;
-          emit({ kind: "turn_started" });
+          emitMockTurnStarted();
           await delay(100);
           if (cancelled) return;
           const id = `shell-${command.slice(0, 32)}`;
@@ -948,30 +1491,37 @@ function makeMockApp(): AppBindings {
           await delay(100);
           if (cancelled) return;
           emit({ kind: "tool_result", tool: { id, name: "bash", output: `$ ${command}\n(mock output)\n`, readOnly: false, durationMs: 300 } });
-          emit({ kind: "turn_done" });
+          emitMockTurnDone();
         },
         async RunShellForTab(_tabID, command) {
-          await this.RunShell(command);
+          await withMockTabScope(_tabID, () => this.RunShell(command));
+        },
+        async Steer(_text) {
+          // Mock: emit a steer event as confirmation in the transcript.
+          emit({ kind: "steer", text: _text });
+        },
+        async SteerForTab(_tabID, _text) {
+          await this.Steer(_text);
         },
         async Cancel() {
           cancelled = true;
-          emit({ kind: "turn_done" });
+          emitMockTurnDone();
         },
         async CancelTab(_tabID) {
-          await this.Cancel();
+          await withMockTabScope(_tabID, () => this.Cancel());
         },
         async Approve(_id, allow, session, persist) {
           if (!pendingApprovalPreview) return;
-      pendingApprovalPreview = false;
-      const suffix = persist ? "persisted" : session ? "allowed for session" : "allowed once";
-      emit({
-        kind: "message",
-        text: `approval preview answered: ${allow ? suffix : "denied"}`,
-      });
-          emit({ kind: "turn_done" });
+          pendingApprovalPreview = false;
+          const suffix = persist ? "grant saved" : session ? "grant active this session" : "allowed once";
+          emit({
+            kind: "message",
+            text: `approval preview answered: ${allow ? suffix : "denied"}`,
+          });
+          emitMockTurnDone();
         },
         async ApproveTab(_tabID, id, allow, session, persist) {
-          await this.Approve(id, allow, session, persist);
+          await withMockTabScope(_tabID, () => this.Approve(id, allow, session, persist));
         },
         async AnswerQuestion(_id, answers) {
       if (!pendingAskPreview) return;
@@ -980,26 +1530,99 @@ function makeMockApp(): AppBindings {
         .map((answer) => `${answer.questionId}: ${(answer.selected ?? []).join(", ") || "(no answer)"}`)
         .join("\n");
       emit({ kind: "message", text: `ask preview answered:\n\n${summary}` });
-          emit({ kind: "turn_done" });
+          emitMockTurnDone();
         },
         async AnswerQuestionForTab(_tabID, id, answers) {
-          await this.AnswerQuestion(id, answers);
+          await withMockTabScope(_tabID, () => this.AnswerQuestion(id, answers));
         },
-    async ConfirmAction(req) {
-      void req;
-      return false;
-    },
-        async SetPlanMode() {},
-	        async SetMode(mode) {
-	          const active = mockTabs.find((tab) => tab.active);
-	          if (active) await this.SetModeForTab(active.id, mode);
-	        },
-	        async SetModeForTab(tabID, mode) {
-	          const nextMode = mode === "plan" || mode === "yolo" ? mode : "normal";
-	          mockTabs = mockTabs.map((tab) => tab.id === tabID ? { ...tab, mode: nextMode } : tab);
-	        },
-    async Compact() {},
-    async NewSession() {},
+        async ReplayPendingPrompts() {},
+        async ConfirmAction(req) {
+          void req;
+          return false;
+        },
+        async SetPlanMode(on) {
+          const active = mockTabs.find((tab) => tab.active);
+          if (active) await this.SetModeForTab(active.id, modeWithPlan(normalizeMode(active.mode), on));
+        },
+        async SetMode(mode) {
+          const active = mockTabs.find((tab) => tab.active);
+          if (active) await this.SetModeForTab(active.id, mode);
+        },
+        async SetModeForTab(tabID, mode) {
+          const nextMode = normalizeMode(mode);
+          mockTabs = mockTabs.map((tab) =>
+            tab.id === tabID
+              ? {
+                  ...tab,
+                  mode: nextMode,
+                  collaborationMode: normalizeCollaborationMode(undefined, tab.goal, nextMode),
+                  toolApprovalMode: normalizeToolApprovalMode(undefined, nextMode),
+                }
+              : tab,
+          );
+        },
+        async SetCollaborationMode(mode) {
+          const active = mockTabs.find((tab) => tab.active);
+          if (active) await this.SetCollaborationModeForTab(active.id, mode);
+        },
+        async SetCollaborationModeForTab(tabID, mode) {
+          const next = normalizeCollaborationMode(mode);
+          mockTabs = mockTabs.map((tab) => {
+            if (tab.id !== tabID) return tab;
+            const toolMode = normalizeToolApprovalMode(tab.toolApprovalMode, normalizeMode(tab.mode));
+            return {
+              ...tab,
+              collaborationMode: next,
+              goal: next === "normal" || next === "plan" ? "" : tab.goal,
+              mode: modeWithPlan(modeWithAutoApproveTools(normalizeMode(tab.mode), toolMode === "yolo"), next === "plan"),
+            };
+          });
+        },
+        async SetToolApprovalMode(mode) {
+          const active = mockTabs.find((tab) => tab.active);
+          if (active) await this.SetToolApprovalModeForTab(active.id, mode);
+        },
+        async SetToolApprovalModeForTab(tabID, mode) {
+          const next = normalizeToolApprovalMode(mode);
+          settings.autoApproveTools = next === "yolo";
+          settings.bypass = next === "yolo";
+          mockTabs = mockTabs.map((tab) =>
+            tab.id === tabID
+              ? {
+                  ...tab,
+                  toolApprovalMode: next,
+                  mode: modeWithAutoApproveTools(normalizeMode(tab.mode), next === "yolo"),
+                }
+              : tab,
+          );
+        },
+        async SetGoal(goal) {
+          const active = mockTabs.find((tab) => tab.active);
+          if (active) await this.SetGoalForTab(active.id, goal);
+        },
+        async SetGoalForTab(tabID, goal) {
+          const nextGoal = goal.trim();
+          mockTabs = mockTabs.map((tab) =>
+            tab.id === tabID
+              ? {
+                  ...tab,
+                  goal: nextGoal,
+                  goalStatus: nextGoal ? "running" : "stopped",
+                  collaborationMode: nextGoal ? "goal" : "normal",
+                  mode: modeWithPlan(normalizeMode(tab.mode), false),
+                }
+              : tab,
+          );
+        },
+        async ClearGoal() {
+          await this.SetGoal("");
+        },
+        async ClearGoalForTab(tabID) {
+          await this.SetGoalForTab(tabID, "");
+        },
+        async Compact() {},
+        async NewSession() {},
+        async ClearSession() {},
     async Checkpoints() {
       return [
         { turn: 0, prompt: "你好呀", files: ["src/App.tsx"], time: Date.now() - 30_000, canCode: true, canConversation: true },
@@ -1027,7 +1650,12 @@ function makeMockApp(): AppBindings {
         async History() {
           return [];
         },
-        async HistoryForTab() {
+        async HistoryForTab(tabID?: string) {
+          const tab = mockTabs.find((item) => item.id === tabID) ?? mockTabs.find((item) => item.active);
+          if (tab?.topicId) {
+            queueMockTopicRuntime(tab);
+            return mockTopicHistory(tab.topicId);
+          }
           return this.History();
         },
     async ListSessions() {
@@ -1095,6 +1723,15 @@ function makeMockApp(): AppBindings {
       const s = sessions.find((x) => x.path === path);
       if (s) s.title = title.trim() || undefined;
     },
+	    async ScanPromptHistory(nonce: string) {
+	      // Dev mock returns a static set of sample prompts for UI development.
+	      const entries: PromptHistoryEntry[] = [
+	        { text: "Explain the architecture of this project", at: Date.now() - 60000, sessionPath: "/mock/sessions/arch.jsonl", turn: 0 },
+	        { text: "Fix the login button styling", at: Date.now() - 120000, sessionPath: "/mock/sessions/arch.jsonl", turn: 1 },
+	        { text: "What is the capital of France?", at: Date.now() - 300000, sessionPath: "/mock/sessions/general.jsonl", turn: 0 },
+	      ];
+	      return { entries, nonce: "mock-" + nonce, olderCursor: "", hasOlder: false };
+	    },
     async ListWorkspaces() {
       return mockProjectTree
         .filter((node) => node.kind === "project" && node.root)
@@ -1107,7 +1744,7 @@ function makeMockApp(): AppBindings {
     async PickWorkspace() {
       // Browser dev has no native dialog; simulate picking a folder and re-root so
       // the topbar folder chip visibly changes.
-      return mockSwitchWorkspace(cwd.endsWith("another-project") ? "~/projects/reasonix" : "~/projects/another-project");
+      return mockSwitchWorkspace(cwd.endsWith("another-project") ? "~/projects/maddog" : "~/projects/another-project");
     },
     async SwitchWorkspace(path: string) {
       return mockSwitchWorkspace(path);
@@ -1118,7 +1755,7 @@ function makeMockApp(): AppBindings {
       if (index >= 0) mockProjectTree.splice(index, 1);
     },
         async ContextUsage() {
-          return { used: 42124, window: 128000, compactRatio: 0.8 };
+          return { used: 42124, window: 128000, sessionTokens: 34479, compactRatio: 0.8 };
         },
         async ContextUsageForTab() {
           return this.ContextUsage();
@@ -1138,21 +1775,51 @@ function makeMockApp(): AppBindings {
         async JobsForTab() {
           return this.Jobs();
         },
+        async ToolResultForTab() {
+          return null;
+        },
         async Meta() {
-      return {
-        label: "DeepSeek-R1",
-        ready: true,
-        eventChannel: EVENT_CHANNEL,
-        cwd,
-            bypass: settings.bypass,
+          const active = mockTabs.find((tab) => tab.active) ?? mockTabs[0];
+          const toolApprovalMode = normalizeToolApprovalMode(active?.toolApprovalMode, active ? normalizeMode(active.mode) : "normal", settings.autoApproveTools);
+          const autoApproveTools = toolApprovalMode === "yolo";
+          const collaborationMode = normalizeCollaborationMode(active?.collaborationMode, active?.goal, active ? normalizeMode(active.mode) : "normal");
+          return {
+            label: active?.label ?? "DeepSeek-R1",
+            ready: active?.ready ?? true,
+            eventChannel: EVENT_CHANNEL,
+            cwd: active?.cwd || cwd,
+            autoApproveTools,
+            bypass: autoApproveTools,
+            collaborationMode,
+            toolApprovalMode,
+            tokenMode: normalizeTokenMode(active?.tokenMode),
+            goal: active?.goal ?? "",
+            goalStatus: active?.goalStatus ?? (active?.goal ? "running" : "stopped"),
           };
         },
-        async MetaForTab() {
-          return this.Meta();
+        async MetaForTab(tabID) {
+          const tab = mockTabs.find((item) => item.id === tabID) ?? mockTabs.find((item) => item.active) ?? mockTabs[0];
+          const toolApprovalMode = normalizeToolApprovalMode(tab?.toolApprovalMode, tab ? normalizeMode(tab.mode) : "normal", settings.autoApproveTools);
+          const autoApproveTools = toolApprovalMode === "yolo";
+          const collaborationMode = normalizeCollaborationMode(tab?.collaborationMode, tab?.goal, tab ? normalizeMode(tab.mode) : "normal");
+          return {
+            label: tab?.label ?? "DeepSeek-R1",
+            ready: tab?.ready ?? true,
+            eventChannel: EVENT_CHANNEL,
+            cwd: tab?.cwd || cwd,
+            autoApproveTools,
+            bypass: autoApproveTools,
+            collaborationMode,
+            toolApprovalMode,
+            tokenMode: normalizeTokenMode(tab?.tokenMode),
+            goal: tab?.goal ?? "",
+            goalStatus: tab?.goalStatus ?? (tab?.goal ? "running" : "stopped"),
+          };
         },
     async Commands() {
       return [
-        { name: "new", description: "Start a new session", kind: "builtin" as const },
+        { name: "new", description: "start new session; save transcript", kind: "builtin" as const },
+        { name: "clear", description: "discard current context", kind: "builtin" as const },
         { name: "compact", description: "Summarize older history to free up context", kind: "builtin" as const },
         { name: "model", description: "Switch model", kind: "builtin" as const },
         { name: "effort", description: "Set reasoning effort", kind: "builtin" as const },
@@ -1224,6 +1891,28 @@ function makeMockApp(): AppBindings {
       capServers = capServers.map((s) =>
         s.name === name ? { ...s, status: "connected", tools: s.tools || 4 } : s,
       );
+    },
+    async UpdateBuiltInMCPServer(name: string) {
+      if (name !== "codegraph") throw new Error(`${name} is not an updatable built-in MCP server`);
+      capServers = capServers.map((s) =>
+        s.name === name
+          ? { ...s, status: s.autoStart ? "connected" : s.status, tools: s.autoStart ? s.tools || 4 : s.tools, error: undefined }
+          : s,
+      );
+      builtInMCPUpdates = [
+        {
+          name,
+          mode: "manual",
+          current: "v0.10.0",
+          latest: "v0.10.0",
+          phase: "activated",
+          path: "/tmp/reasonix/codegraph/mock/codegraph",
+        },
+      ];
+      return { name, version: "v0.10.0", path: "/tmp/reasonix/codegraph/mock/codegraph" };
+    },
+    async BuiltInMCPUpdateStatuses() {
+      return builtInMCPUpdates.map((s) => ({ ...s }));
     },
     async ClearMCPServerAuthentication(name: string) {
       capServers = capServers.map((s) =>
@@ -1356,8 +2045,8 @@ function makeMockApp(): AppBindings {
     },
     async ReadFile(rel: string) {
       const samples: Record<string, string> = {
-        "README.md": "# Reasonix\n\nBrowser-dev workspace preview.\n\n- Chat in the center\n- Browse files on the right\n- Keep sessions on the left\n",
-        "go.mod": "module reasonix\n\ngo 1.23\n",
+        "README.md": "# Maddog\n\nBrowser-dev workspace preview.\n\n- Chat in the center\n- Browse files on the right\n- Keep sessions on the left\n",
+        "go.mod": "module maddog\n\ngo 1.23\n",
         "desktop/file.go": "package desktop\n\nfunc main() {\n\tprintln(\"workspace preview\")\n}\n",
         "internal/event.go": "package internal\n\n// mock file used by the browser dev seam\n",
       };
@@ -1393,6 +2082,17 @@ function makeMockApp(): AppBindings {
     async GitCheckout(_branch: string) {
       console.info("mock GitCheckout", _branch);
     },
+    async WorkspaceGitHistory(path: string) {
+      return [
+        { hash: "abcdef123456", author: "Mock Author", date: new Date().toISOString(), message: "Mock commit message for " + path },
+      ];
+    },
+    async WorkspaceGitCommitDetail(_hash: string, path: string) {
+      if (path) {
+        return { diff: "--- a/mock\n+++ b/mock\n@@ -1,1 +1,1 @@\n-mock\n+mock diff" };
+      }
+      return { files: ["mock_file_1.ts", "mock_file_2.ts"] };
+    },
     async OpenWorkspacePath(rel: string) {
       console.info("mock OpenWorkspacePath", rel);
     },
@@ -1403,30 +2103,54 @@ function makeMockApp(): AppBindings {
       console.info("mock RevealPath", path);
     },
     async SavePastedImage(_dataUrl: string) {
-      return ".reasonix/attachments/mock.png";
+      return ".maddog/attachments/mock.png";
+    },
+    async SaveClipboardImage() {
+      return ".maddog/attachments/mock-clipboard.png";
     },
     async SavePastedFile(name: string, _dataUrl: string) {
-      return `.reasonix/attachments/mock-${name}`;
+      return `.maddog/attachments/mock-${name}`;
+    },
+    async PickExportFile(defaultFilename: string, _mimeType: string) {
+      return defaultFilename;
+    },
+    async SaveExportFile(path: string, payload: string, base64Encoded: boolean) {
+      const a = document.createElement("a");
+      let url = "";
+      if (base64Encoded) {
+        url = `data:application/octet-stream;base64,${payload}`;
+      } else {
+        url = URL.createObjectURL(new Blob([payload], { type: "text/plain;charset=utf-8" }));
+      }
+      a.href = url;
+      a.download = path;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      if (!base64Encoded) URL.revokeObjectURL(url);
     },
     async AttachDropped(path: string) {
       const name = path.split(/[/\\]/).filter(Boolean).pop() ?? path;
-      return { kind: "attachment" as const, path: `.reasonix/attachments/mock-${name}` };
+      return { kind: "attachment" as const, path: `.maddog/attachments/mock-${name}` };
     },
     async AttachmentDataURL(_path: string) {
       return "data:image/png;base64,iVBORw0KGgo=";
     },
         async Models() {
-          return [
-            { ref: "deepseek/deepseek-v4-flash", provider: "deepseek", model: "deepseek-v4-flash", current: true },
-            { ref: "deepseek/deepseek-v4-pro", provider: "deepseek", model: "deepseek-v4-pro", current: false },
-          ];
+          const active = mockTabs.find((tab) => tab.active) ?? mockTabs[0];
+          const current = mockTabModelRef(active);
+          return mockModelCatalog.map((model) => ({ ...model, current: model.ref === current }));
         },
-        async ModelsForTab() {
-          return this.Models();
+        async ModelsForTab(tabID) {
+          const tab = mockTabs.find((item) => item.id === tabID) ?? mockTabs.find((item) => item.active) ?? mockTabs[0];
+          const current = mockTabModelRef(tab);
+          return mockModelCatalog.map((model) => ({ ...model, current: model.ref === current }));
         },
-        async SetModel() {},
-        async SetModelForTab(_tabID, name) {
-          await this.SetModel(name);
+        async SetModel(name) {
+          setMockTabModel(undefined, name);
+        },
+        async SetModelForTab(tabID, name) {
+          setMockTabModel(tabID, name);
         },
         async Effort() {
           return { supported: true, current: mockEffort, default: "high", levels: ["auto", "high", "max"] };
@@ -1440,18 +2164,26 @@ function makeMockApp(): AppBindings {
         async SetEffortForTab(_tabID, level) {
           await this.SetEffort(level);
         },
+        async SetTokenMode(mode: string) {
+          const active = mockTabs.find((tab) => tab.active);
+          if (active) await this.SetTokenModeForTab(active.id, mode);
+        },
+        async SetTokenModeForTab(tabID, mode) {
+          const tokenMode = normalizeTokenMode(mode);
+          mockTabs = mockTabs.map((tab) => (tab.id === tabID ? { ...tab, tokenMode } : tab));
+        },
     async Memory() {
       return {
         available: true,
-        storeDir: "~/.config/reasonix/projects/-mock/memory",
+        storeDir: "~/.config/maddog/projects/-mock/memory",
         docs: [
           {
-            path: "REASONIX.md",
+            path: "MADDOG.md",
             scope: "project",
-            body: "# Reasonix project memory\n\nMock doc shown in the browser dev seam.\n\n## Notes\n\n- prefers concise replies",
+            body: "# Maddog project memory\n\nMock doc shown in the browser dev seam.\n\n## Notes\n\n- prefers concise replies",
           },
           {
-            path: "~/.config/reasonix/REASONIX.md",
+            path: "~/.config/maddog/MADDOG.md",
             scope: "user",
             body: t("mock.memoryBody"),
           },
@@ -1464,26 +2196,94 @@ function makeMockApp(): AppBindings {
             body: "Indent with tabs.",
           },
         ],
+        archives: [
+          {
+            name: "old-plan",
+            description: "Superseded planning note",
+            type: "project",
+            body: "This plan was archived after the implementation changed.",
+            path: "~/.config/maddog/projects/-mock/memory/.archive/20260612-021500.000-old-plan.md",
+            archivedAt: "2026-06-12T02:15:00Z",
+          },
+        ],
         scopes: [
-          { scope: "user", path: "~/.config/reasonix/REASONIX.md" },
-          { scope: "project", path: "REASONIX.md" },
-          { scope: "local", path: "REASONIX.local.md" },
+          { scope: "user", path: "~/.config/maddog/MADDOG.md" },
+          { scope: "project", path: "MADDOG.md" },
+          { scope: "local", path: "MADDOG.local.md" },
         ],
       };
     },
     async Remember(scope: string, note: string) {
       emit({ kind: "notice", level: "info", text: `remembered → ${scope}` });
-      return `${scope} REASONIX.md (mock): ${note}`;
+      return `${scope} MADDOG.md (mock): ${note}`;
     },
-    async Forget(name: string) {
-      emit({ kind: "notice", level: "info", text: `forgot → ${name}` });
+    async AcceptMemorySuggestion(suggestion: MemorySuggestion) {
+      emit({ kind: "notice", level: "info", text: `saved suggested memory → ${suggestion.name}` });
+      return `${suggestion.name}.md`;
     },
-    async SaveDoc(path: string, _body: string) {
-      emit({ kind: "notice", level: "info", text: `saved → ${path}` });
-      return path;
+    async AcceptSkillSuggestion(suggestion: SkillSuggestion) {
+      emit({ kind: "notice", level: "info", text: `created suggested skill → ${suggestion.name}` });
+      return `.maddog/skills/${suggestion.name}/SKILL.md`;
+    },
+    async MemorySuggestions() {
+      return {
+        memories: [],
+        skills: [],
+        generatedAt: new Date().toISOString(),
+        available: true,
+        source: "mock",
+      };
+    },
+    async MemorySuggestionsForTab(_tabID: string) {
+      return this.MemorySuggestions();
+    },
+    async AcceptMemorySuggestionForTab(_tabID: string, suggestion: MemorySuggestion) {
+      return this.AcceptMemorySuggestion(suggestion);
+    },
+    async AcceptSkillSuggestionForTab(_tabID: string, suggestion: SkillSuggestion) {
+      return this.AcceptSkillSuggestion(suggestion);
+    },
+    async MemoryForTab(_tabID: string) {
+      return this.Memory();
+    },
+    async RememberForTab(_tabID: string, scope: string, note: string) {
+      return this.Remember(scope, note);
+    },
+    async Forget(_name: string) {
+      emit({ kind: "notice", level: "info", text: `forgot → ${_name}` });
+    },
+    async ForgetForTab(_tabID: string, name: string) {
+      return this.Forget(name);
+    },
+    async SaveDoc(_path: string, _body: string) {
+      emit({ kind: "notice", level: "info", text: `saved → ${_path}` });
+      return _path;
+    },
+    async SaveDocForTab(_tabID: string, path: string, body: string) {
+      return this.SaveDoc(path, body);
     },
     async Settings() {
       return JSON.parse(JSON.stringify(settings)) as SettingsView;
+    },
+    async HooksSettings(scope: string) {
+      const key = scope === "project" ? "project" : "global";
+      return JSON.parse(JSON.stringify(hookSettings[key])) as HooksSettingsView;
+    },
+    async SaveHooksSettings(scope: string, hooks: HookConfigView[]) {
+      const key = scope === "project" ? "project" : "global";
+      hookSettings[key].hooks = JSON.parse(JSON.stringify(hooks)) as HookConfigView[];
+    },
+    async SaveHooksSettingsForRoot(scope: string, _projectRoot: string, hooks: HookConfigView[]) {
+      const key = scope === "project" ? "project" : "global";
+      hookSettings[key].hooks = JSON.parse(JSON.stringify(hooks)) as HookConfigView[];
+    },
+    async TrustProjectHooks() {
+      hookSettings.project.trusted = true;
+    },
+    async TrustProjectHooksForRoot(projectRoot: string) {
+      if (projectRoot && projectRoot === hookSettings.project.projectRoot) {
+        hookSettings.project.trusted = true;
+      }
     },
     async SetDefaultModel(ref: string) {
       settings.defaultModel = ref;
@@ -1561,14 +2361,118 @@ function makeMockApp(): AppBindings {
       const k = list as "allow" | "ask" | "deny";
       settings.permissions[k] = settings.permissions[k].filter((r) => r !== rule);
     },
-        async SetSandbox(bash: string, network: boolean, workspaceRoot: string, allowWrite: string[]) {
-          settings.sandbox = { bash, network, workspaceRoot, allowWrite };
+        async SetSandbox(bash: string, network: boolean, workspaceRoot: string, allowWrite: string[], shell: string) {
+          settings.sandbox = { bash, network, workspaceRoot, allowWrite, shell };
         },
         async SetNetwork(n: NetworkView) {
           settings.network = n;
         },
+        async SetBotSettings(b: BotSettingsView) {
+          settings.bot = JSON.parse(JSON.stringify(b)) as BotSettingsView;
+        },
+        async SetBotSecret(envName: string, _value: string) {
+          const name = envName.trim();
+          if (settings.bot.qq.appSecretEnv === name) settings.bot.qq.secretSet = true;
+          if (settings.bot.feishu.appSecretEnv === name) settings.bot.feishu.secretSet = true;
+          if (settings.bot.weixin.tokenEnv === name) settings.bot.weixin.tokenSet = true;
+          settings.bot.connections = settings.bot.connections.map((connection) => ({
+            ...connection,
+            credential: connection.credential.appSecretEnv === name || connection.credential.tokenEnv === name
+              ? { ...connection.credential, secretSet: true }
+              : connection.credential,
+          }));
+        },
+        async ClearBotSecret(envName: string) {
+          const name = envName.trim();
+          if (settings.bot.qq.appSecretEnv === name) settings.bot.qq.secretSet = false;
+          if (settings.bot.feishu.appSecretEnv === name) settings.bot.feishu.secretSet = false;
+          if (settings.bot.weixin.tokenEnv === name) settings.bot.weixin.tokenSet = false;
+          settings.bot.connections = settings.bot.connections.map((connection) => ({
+            ...connection,
+            credential: connection.credential.appSecretEnv === name || connection.credential.tokenEnv === name
+              ? { ...connection.credential, secretSet: false }
+              : connection.credential,
+          }));
+        },
+        async BotRuntimeStatus() {
+          const qqRunning = settings.bot.qq.enabled && settings.bot.qq.appId.trim() && settings.bot.qq.secretSet;
+          const runningConnections = (qqRunning ? 1 : 0) + settings.bot.connections.filter((connection) => connection.enabled && connection.status === "connected").length;
+          return {
+            running: settings.bot.enabled && runningConnections > 0,
+            status: settings.bot.enabled && runningConnections > 0 ? "running" : "stopped",
+            message: settings.bot.enabled && runningConnections > 0 ? `${runningConnections} bot connection(s) running` : "bot runtime is not started",
+            connections: runningConnections,
+            startedAt: settings.bot.enabled && runningConnections > 0 ? new Date(t0).toISOString() : "",
+          };
+        },
+        async StartBotConnectionInstall(provider: string, domain: string) {
+          const normalizedProvider = provider === "weixin" ? "weixin" : "feishu";
+          const normalizedDomain = normalizedProvider === "weixin" ? "weixin" : domain === "lark" ? "lark" : "feishu";
+          return {
+            ok: true,
+            provider: normalizedProvider,
+            domain: normalizedDomain,
+            installId: `mock-${normalizedProvider}-${normalizedDomain}`,
+            url: "https://example.com/reasonix-bot-qr",
+            deviceCode: "MOCKDEVICE",
+            userCode: normalizedProvider === "weixin" ? "" : "MOCK-CODE",
+            interval: 3,
+            expireIn: 300,
+            message: "",
+          };
+        },
+        async PollBotConnectionInstall(installID: string) {
+          const isWeixin = installID.includes("weixin");
+          const domain = installID.includes("lark") ? "lark" : isWeixin ? "weixin" : "feishu";
+          const provider = isWeixin ? "weixin" : "feishu";
+          const connection = {
+            id: `${provider}-${domain}`,
+            provider,
+            domain,
+            label: domain === "lark" ? "Lark" : domain === "weixin" ? "微信" : "飞书",
+            enabled: true,
+            status: "connected",
+            model: "",
+            toolApprovalMode: "",
+            workspaceRoot: "",
+            credential: {
+              appId: provider === "feishu" ? "cli_mock" : "",
+              appSecretEnv: provider === "feishu" ? (domain === "lark" ? "LARK_BOT_APP_SECRET" : "FEISHU_BOT_APP_SECRET") : "",
+              accountId: provider === "weixin" ? "mock-account" : "",
+              tokenEnv: provider === "weixin" ? "WEIXIN_BOT_TOKEN" : "",
+              secretSet: true,
+            },
+            sessionMappings: [],
+            lastError: "",
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+          };
+          settings.bot.connections = [...settings.bot.connections.filter((c) => c.id !== connection.id), connection];
+          return { done: true, connection, status: "connected", message: "connected", error: "" };
+        },
+        async DiagnoseBotConnection(id: string) {
+          const connection = settings.bot.connections.find((c) => c.id === id);
+          const occurredAt = new Date().toISOString();
+          return connection
+            ? { id, label: connection.label, status: connection.enabled ? "ok" : "disabled", message: connection.enabled ? "连接配置已保存。" : "连接已保存但未启用。", messageId: "", phase: "config", code: connection.enabled ? "config_ok" : "connection_disabled", reportKind: "", reportDetail: "", occurredAt }
+            : { id, label: "", status: "missing", message: "未找到连接。", messageId: "", phase: "config", code: "connection_missing", reportKind: "bot", reportDetail: JSON.stringify({ schemaVersion: 2, kind: "bot", source: "bot.runtime", label: "bot.mock.config", message: "mock missing bot connection", errorType: "BotConnectionDiagnostic", errorMessage: "bot connection record was not found", topFrame: "bot.config", occurredAt }), occurredAt };
+        },
+        async TestBotConnection(id: string, target?: string) {
+          const diag = await this.DiagnoseBotConnection(id);
+          if (target?.trim()) return { ...diag, message: `Mock test sent to ${target.trim()}`, messageId: "mock-message-id" };
+          return diag;
+        },
         async SetCloseBehavior(mode: string) {
           settings.closeBehavior = mode === "quit" ? "quit" : "background";
+        },
+        async SetDisplayMode(mode: string) {
+          settings.displayMode = mode;
+        },
+        async SetStatusBarStyle(style: string) {
+          settings.statusBarStyle = style === "text" ? "text" : "icon";
+        },
+        async SetStatusBarItems(items: string[]) {
+          settings.statusBarItems = normalizeStatusBarItems(items);
         },
         async SetDesktopLanguage(lang: string) {
           settings.desktopLanguage = lang === "en" || lang === "zh" ? lang : "";
@@ -1577,19 +2481,42 @@ function makeMockApp(): AppBindings {
           settings.desktopTheme = theme === "auto" || theme === "light" ? theme : "dark";
           settings.desktopThemeStyle = style;
         },
+        async SetDesktopLayoutStyle(style: string) {
+          settings.desktopLayoutStyle = style === "workbench" ? "workbench" : "classic";
+        },
+        async SetDesktopCheckUpdates(enabled: boolean) {
+          settings.checkUpdates = enabled;
+        },
+        async SetDesktopTelemetry(enabled: boolean) {
+          settings.telemetry = enabled;
+        },
+        async SetDesktopMetrics(enabled: boolean) {
+          settings.metrics = enabled;
+        },
+        async SetExpandThinking(_on: boolean) {},
         async MigrateDesktopPreferences(language: string, theme: string, style: string) {
-          if (!settings.desktopLanguage) settings.desktopLanguage = language === "en" || language === "zh" ? language : "";
+          if (!settings.desktopLanguage) settings.desktopLanguage = language === "en" || language === "zh" || language === "zh-TW" ? language : "";
           if (!settings.desktopTheme && !settings.desktopThemeStyle) {
             settings.desktopTheme = theme === "auto" || theme === "light" ? theme : "dark";
             settings.desktopThemeStyle = style;
           }
         },
-    async SetAgentParams(temperature: number, maxSteps: number, systemPrompt: string) {
-      settings.agent = { temperature, maxSteps, systemPrompt };
+    async SetAgentParams(temperature: number, maxSteps: number, plannerMaxSteps: number, systemPrompt: string) {
+      settings.agent = { ...settings.agent, temperature, maxSteps, plannerMaxSteps, systemPrompt };
     },
-    async SetTrayLocale(_locale: "en" | "zh") {},
+    async SetColdResumePrune(enabled: boolean) {
+      settings.agent = { ...settings.agent, coldResumePrune: enabled };
+    },
+    async SetReasoningLanguage(lang: string) {
+      const normalized = lang === "zh" || lang === "en" ? lang : "auto";
+      settings.agent = { ...settings.agent, reasoningLanguage: normalized };
+    },
+    async SetTrayLocale(_locale: "en" | "zh" | "zh-TW") {},
+    async SetAutoApproveTools(on: boolean) {
+      await this.SetToolApprovalMode(on ? "yolo" : "ask");
+    },
     async SetBypass(on: boolean) {
-      settings.bypass = on;
+      await this.SetAutoApproveTools(on);
     },
     async Version() {
       return "v1.0.0 (browser dev)";
@@ -1622,7 +2549,7 @@ function makeMockApp(): AppBindings {
     },
     async OpenDownloadPage() {
       if (typeof window !== "undefined") {
-        window.open("https://github.com/esengine/reasonix/releases/latest", "_blank", "noopener");
+        window.open("https://github.com/sekkit/maddog/releases/latest", "_blank", "noopener");
       }
     },
     // Dev seam: drives the overlay flow in the browser until ConnectKey sets the
@@ -1637,6 +2564,9 @@ function makeMockApp(): AppBindings {
       });
       await delay(300);
     },
+    async ReportCrash() {
+      await delay(300);
+    },
     // Tab management mocks.
     async ListTabs() {
       return mockTabs.map((tab) => ({ ...tab }));
@@ -1644,8 +2574,9 @@ function makeMockApp(): AppBindings {
     async OpenProjectTab(workspaceRoot: string, _topicID: string) {
       const existing = mockTabs.find((tab) => tab.scope === "project" && tab.workspaceRoot === workspaceRoot && tab.topicId === _topicID);
       if (existing) {
-        setMockActiveTab(existing.id);
-        return { ...existing, active: true };
+        const active = { ...existing, active: true, running: mockTopicRunsInScenario(_topicID) };
+        mockTabs = mockTabs.map((tab) => (tab.id === existing.id ? active : { ...tab, active: false }));
+        return { ...active };
       }
       const tab: TabMeta = {
         id: "tab_" + Date.now(),
@@ -1654,13 +2585,17 @@ function makeMockApp(): AppBindings {
         workspaceName: workspaceRoot.split("/").filter(Boolean).pop() ?? workspaceRoot,
         topicId: _topicID,
         topicTitle: topicLabel(_topicID, t("mock.newSession")),
+        sessionPath: `/mock/sessions/${_topicID}.jsonl`,
         projectColor: mockProjectTree.find((node) => node.root === workspaceRoot)?.projectColor,
-	        label: "deepseek-v4-flash",
-	        ready: true,
-	        running: false,
-	        mode: "normal",
-	        active: true,
-	        cwd: workspaceRoot,
+        label: "deepseek-v4-flash",
+        ready: true,
+        running: mockTopicRunsInScenario(_topicID),
+        mode: "normal",
+        collaborationMode: "normal",
+        toolApprovalMode: "ask",
+        tokenMode: "full",
+        active: true,
+        cwd: workspaceRoot,
       };
       mockTabs = [...mockTabs.map((item) => ({ ...item, active: false })), tab];
       return { ...tab };
@@ -1678,18 +2613,48 @@ function makeMockApp(): AppBindings {
         workspaceName: "Global",
         topicId: _topicID,
         topicTitle: topicLabel(_topicID, "Global"),
-	        label: "deepseek-v4-flash",
-	        ready: true,
-	        running: false,
-	        mode: "normal",
-	        active: true,
-	        cwd: "",
+        sessionPath: `/mock/sessions/${_topicID}.jsonl`,
+        label: "deepseek-v4-flash",
+        ready: true,
+        running: false,
+        mode: "normal",
+        collaborationMode: "normal",
+        toolApprovalMode: "ask",
+        tokenMode: "full",
+        active: true,
+        cwd: "",
       };
       mockTabs = [...mockTabs.map((item) => ({ ...item, active: false })), tab];
       return { ...tab };
     },
+    async OpenTopicSession(scope: string, workspaceRoot: string, topicID: string, sessionPath: string) {
+      const tab = scope === "project"
+        ? await this.OpenProjectTab(workspaceRoot, topicID)
+        : await this.OpenGlobalTab(topicID);
+      const active = { ...tab, sessionPath };
+      mockTabs = mockTabs.map((item) => (item.id === tab.id ? active : item));
+      return { ...active };
+    },
+    async EnsureBlankTab(scope: string, workspaceRoot: string) {
+      const targetScope = scope === "project" && workspaceRoot ? "project" : "global";
+      const targetRoot = targetScope === "project" ? workspaceRoot : "";
+      const existing = mockTabs.find((tab) =>
+        tab.scope === targetScope &&
+        (targetScope === "global" || tab.workspaceRoot === targetRoot) &&
+        !tab.running &&
+        mockTopicIsBlank(tab.topicId)
+      );
+      if (existing) {
+        setMockActiveTab(existing.id);
+        return { ...existing, active: true };
+      }
+      const topic = await this.CreateTopic(targetScope, targetRoot, "");
+      return targetScope === "global" ? this.OpenGlobalTab(topic.id) : this.OpenProjectTab(targetRoot, topic.id);
+    },
     async SetActiveTab(_tabID: string) {
       setMockActiveTab(_tabID);
+      const tab = mockTabs.find((item) => item.id === _tabID);
+      if (tab) queueMockTopicRuntime(tab);
     },
     async ReorderTabs(_tabIDs: string[]) {
       const byId = new Map(mockTabs.map((tab) => [tab.id, tab]));
@@ -1723,23 +2688,46 @@ function makeMockApp(): AppBindings {
       mockTabs = mockTabs.map((tab) =>
         (workspaceRoot ? tab.workspaceRoot === workspaceRoot : tab.scope === "global")
           ? { ...tab, projectColor: node.projectColor }
-          : tab,
+        : tab,
       );
+    },
+    async SetProjectPinned(workspaceRoot: string, pinned: boolean) {
+      setMockProjectPinned(workspaceRoot, pinned);
     },
     async ReorderProjects(workspaceRoots: string[]) {
       const projects = mockProjectTree.filter((node) => node.kind === "project");
-      if (workspaceRoots.length !== projects.length) return;
-      const byRoot = new Map(projects.map((node) => [node.root, node]));
-      const ordered = workspaceRoots.map((root) => byRoot.get(root)).filter((node): node is ProjectNode => Boolean(node));
-      if (ordered.length !== projects.length) return;
-      const globals = mockProjectTree.filter((node) => node.kind !== "project");
-      mockProjectTree.splice(0, mockProjectTree.length, ...globals, ...ordered);
+      const globals = mockProjectTree.filter((node) => node.kind === "global_folder");
+      if (!workspaceRoots.includes(GLOBAL_PROJECT_ORDER_KEY)) {
+        if (workspaceRoots.length !== projects.length) return;
+        const byRoot = new Map(projects.map((node) => [node.root, node]));
+        const ordered = workspaceRoots.map((root) => byRoot.get(root)).filter((node): node is ProjectNode => Boolean(node));
+        if (ordered.length !== projects.length) return;
+        mockProjectTree.splice(0, mockProjectTree.length, ...globals, ...ordered);
+        return;
+      }
+      const byKey = new Map<string, ProjectNode>();
+      for (const node of projects) {
+        if (node.root) byKey.set(node.root, node);
+      }
+      for (const node of globals) byKey.set(GLOBAL_PROJECT_ORDER_KEY, node);
+      const seen = new Set<string>();
+      const ordered: ProjectNode[] = [];
+      for (const key of workspaceRoots) {
+        if (seen.has(key)) return;
+        const node = byKey.get(key);
+        if (!node) return;
+        seen.add(key);
+        ordered.push(node);
+      }
+      if (ordered.length !== projects.length + globals.length) return;
+      mockProjectTree.splice(0, mockProjectTree.length, ...ordered);
     },
     async CreateTopic(_scope: string, _workspaceRoot: string, title: string) {
-      const id = "topic_" + Date.now();
+      const now = Date.now();
+      const id = "topic_" + now;
       const topicTitle = title.trim() || t("mock.newSession");
       const parent = _scope === "global"
-        ? mockProjectTree.find((node) => node.kind === "global_folder")
+        ? ensureMockGlobalFolder()
         : mockProjectTree.find((node) => node.root === _workspaceRoot);
       if (parent) {
         const global = parent.kind === "global_folder";
@@ -1750,9 +2738,10 @@ function makeMockApp(): AppBindings {
           root: parent.root,
           topicId: id,
           projectColor: parent.projectColor,
+          createdAt: now,
         }, ...projectChildren(parent)];
       }
-      return { id, title: topicTitle, createdAt: Date.now() };
+      return { id, title: topicTitle, createdAt: now };
     },
     async RenameTopic(topicID: string, title: string) {
       const topic = findMockTopic(topicID);
@@ -1770,6 +2759,9 @@ function makeMockApp(): AppBindings {
     async TrashTopic(topicID: string) {
       deleteMockTopic(topicID);
     },
+    async SetTopicPinned(topicID: string, pinned: boolean) {
+      setMockTopicPinned(topicID, pinned);
+    },
     async SaveWindowState(_state) {
       // no-op in browser dev — no real window geometry to persist
     },
@@ -1780,14 +2772,18 @@ function makeMockApp(): AppBindings {
         windowTokens: 128000,
         promptTokens: 22134,
         completionTokens: 12345,
+        totalTokens: 34479,
         reasoningTokens: 7521,
         cacheHitTokens: 87000,
         cacheMissTokens: 13000,
+        requestCount: 6,
+        elapsedMs: 33 * 60 * 1000,
         sessionCost: 0.018,
         sessionCurrency: "¥",
         sessionCostUsd: 0.018,
+        mock: true,
         readFiles: [
-          { path: "REASONIX.md", turn: 2, time: now - 34 * 60 * 1000 },
+          { path: "MADDOG.md", turn: 2, time: now - 34 * 60 * 1000 },
           { path: "pyproject.toml", turn: 3, time: now - 30 * 60 * 1000 },
           { path: "docs/dev-standard.md", turn: 5, time: now - 13 * 60 * 1000, offset: 0, limit: 180 },
           { path: "scripts/db_migrate.sh", turn: 6, time: now - 4 * 60 * 1000, offset: 120, limit: 80, truncated: true },

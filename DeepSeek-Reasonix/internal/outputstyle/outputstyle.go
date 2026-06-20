@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strings"
 
+	"reasonix/internal/config"
 	"reasonix/internal/frontmatter"
 )
 
@@ -74,9 +75,7 @@ func Dirs() []string {
 	return dirs
 }
 
-// conventionDirs mirrors config.ConventionDirs (kept local to avoid an import
-// cycle; config imports nothing from here, but this package stays dependency-light).
-var conventionDirs = []string{".reasonix", ".agents", ".agent", ".claude"}
+var conventionDirs = config.ConventionDirs
 
 // List returns every available style — built-ins plus the markdown files under
 // dirs — deduped by lowercased name, with custom files overriding built-ins.

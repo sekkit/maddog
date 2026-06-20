@@ -1,6 +1,9 @@
 # Generated code-graph index cache (large, derived artifact)
 .codegraph/
 
+# Maddog local runtime state
+.maddog/
+
 # macOS
 .DS_Store
 

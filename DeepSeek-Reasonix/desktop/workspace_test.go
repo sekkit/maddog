@@ -7,11 +7,13 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
 
 	"golang.org/x/text/encoding/simplifiedchinese"
+	"reasonix/internal/config"
 )
 
 // --- workspaceStatePath ---
@@ -75,13 +77,57 @@ func TestDialogDefaultDirectoryFallsBackFromMissingWorkspace(t *testing.T) {
 
 func TestDialogDefaultDirectoryUsesFileParent(t *testing.T) {
 	dir := t.TempDir()
-	file := filepath.Join(dir, "reasonix.toml")
+	file := filepath.Join(dir, "maddog.toml")
 	if err := os.WriteFile(file, []byte("default_model = \"x\"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
 	if got := dialogDefaultDirectory(file); got != dir {
 		t.Fatalf("dialogDefaultDirectory(file) = %q, want %q", got, dir)
+	}
+}
+
+func TestDesktopSessionDirIsScopedByWorkspace(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("USERPROFILE", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	rootA := filepath.Join(t.TempDir(), "project-a")
+	rootB := filepath.Join(t.TempDir(), "project-b")
+	if err := os.MkdirAll(rootA, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(rootB, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	dirA := desktopSessionDir(rootA)
+	dirB := desktopSessionDir(rootB)
+	if dirA == "" || dirB == "" {
+		t.Fatalf("desktop session dirs should resolve: A=%q B=%q", dirA, dirB)
+	}
+	if dirA == dirB {
+		t.Fatalf("different workspaces must not share a desktop session dir: %q", dirA)
+	}
+	if dirA == config.SessionDir() || dirB == config.SessionDir() {
+		t.Fatalf("desktop workspace sessions should not use the global CLI session dir: A=%q B=%q global=%q", dirA, dirB, config.SessionDir())
+	}
+	wantPrefix := filepath.Join(config.MemoryUserDir(), "projects") + string(filepath.Separator)
+	if !strings.HasPrefix(dirA, wantPrefix) || filepath.Base(dirA) != "sessions" {
+		t.Fatalf("workspace session dir should live under the project state tree, got %q", dirA)
+	}
+}
+
+func BenchmarkDesktopSessionDir(b *testing.B) {
+	root := filepath.Join(b.TempDir(), "project")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		b.Fatal(err)
+	}
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		if desktopSessionDir(root) == "" {
+			b.Fatal("empty session dir")
+		}
 	}
 }
 
@@ -190,7 +236,7 @@ func TestReadFileMediaPreview(t *testing.T) {
 	if image.Body != "" {
 		t.Fatalf("media preview should have empty body, got %q", image.Body)
 	}
-	if !strings.HasPrefix(image.URL, "/__reasonix_workspace_media/") || !strings.HasSuffix(image.URL, "/shot.PNG") {
+	if !strings.HasPrefix(image.URL, "/__maddog_workspace_media/") || !strings.HasSuffix(image.URL, "/shot.PNG") {
 		t.Fatalf("unexpected media URL: %q", image.URL)
 	}
 
@@ -207,7 +253,7 @@ func TestReadFileMediaPreview(t *testing.T) {
 	if pdf.Body != "" {
 		t.Fatalf("media preview should have empty body, got %q", pdf.Body)
 	}
-	if !strings.HasPrefix(pdf.URL, "/__reasonix_workspace_media/") || !strings.HasSuffix(pdf.URL, "/report.pdf") {
+	if !strings.HasPrefix(pdf.URL, "/__maddog_workspace_media/") || !strings.HasSuffix(pdf.URL, "/report.pdf") {
 		t.Fatalf("unexpected media URL: %q", pdf.URL)
 	}
 }
@@ -377,7 +423,7 @@ func TestMediaTokenHandlerBadToken(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	}))
 
-	req := httptest.NewRequest(http.MethodGet, "/__reasonix_workspace_media/deadbeef/fake.png", nil)
+	req := httptest.NewRequest(http.MethodGet, "/__maddog_workspace_media/deadbeef/fake.png", nil)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
@@ -848,6 +894,119 @@ func TestWorkspaceChangesGitBranchDetachedHead(t *testing.T) {
 	}
 	if got.GitBranch != "@"+short {
 		t.Fatalf("git branch = %q, want @%s", got.GitBranch, short)
+	}
+}
+
+func TestWorkspaceGitHistory(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	orig, _ := os.Getwd()
+	defer os.Chdir(orig)
+
+	dir := t.TempDir()
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+
+	runGit(t, "init")
+	runGit(t, "config", "user.email", "test@example.com")
+	runGit(t, "config", "user.name", "Test User")
+
+	if err := os.WriteFile("file1.txt", []byte("v1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, "add", "file1.txt")
+	runGit(t, "commit", "-m", "init file1")
+
+	if err := os.WriteFile("file2.txt", []byte("v1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, "add", "file2.txt")
+	runGit(t, "commit", "-m", "init file2")
+
+	app := &App{}
+	history, err := app.WorkspaceGitHistory("")
+	if err != nil {
+		t.Fatalf("WorkspaceGitHistory err = %v", err)
+	}
+	if len(history) != 2 {
+		t.Fatalf("expected 2 commits, got %d", len(history))
+	}
+	if history[0].Message != "init file2" {
+		t.Errorf("expected latest commit message 'init file2', got %q", history[0].Message)
+	}
+	if history[1].Message != "init file1" {
+		t.Errorf("expected older commit message 'init file1', got %q", history[1].Message)
+	}
+
+	// Test history for specific file
+	history, err = app.WorkspaceGitHistory("file1.txt")
+	if err != nil {
+		t.Fatalf("WorkspaceGitHistory err = %v", err)
+	}
+	if len(history) != 1 {
+		t.Fatalf("expected 1 commit for file1.txt, got %d", len(history))
+	}
+	if history[0].Message != "init file1" {
+		t.Errorf("expected commit message 'init file1', got %q", history[0].Message)
+	}
+}
+
+func TestWorkspaceGitCommitDetail(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	orig, _ := os.Getwd()
+	defer os.Chdir(orig)
+
+	dir := t.TempDir()
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+
+	runGit(t, "init")
+	runGit(t, "config", "user.email", "test@example.com")
+	runGit(t, "config", "user.name", "Test User")
+
+	if err := os.WriteFile("file1.txt", []byte("v1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, "add", "file1.txt")
+	runGit(t, "commit", "-m", "init file1")
+
+	if err := os.WriteFile("file1.txt", []byte("v2\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, "add", "file1.txt")
+	runGit(t, "commit", "-m", "update file1")
+
+	hash := gitOutput(t, "rev-parse", "HEAD")
+
+	app := &App{}
+
+	// Test project level detail
+	detail, err := app.WorkspaceGitCommitDetail(hash, "")
+	if err != nil {
+		t.Fatalf("WorkspaceGitCommitDetail err = %v", err)
+	}
+	if len(detail.Files) != 1 || detail.Files[0] != "file1.txt" {
+		t.Fatalf("expected files [file1.txt], got %v", detail.Files)
+	}
+	if detail.Diff != nil {
+		t.Fatal("expected nil diff for project level")
+	}
+
+	// Test file level detail
+	detail, err = app.WorkspaceGitCommitDetail(hash, "file1.txt")
+	if err != nil {
+		t.Fatalf("WorkspaceGitCommitDetail err = %v", err)
+	}
+	if len(detail.Files) != 0 {
+		t.Fatalf("expected no files for file level, got %v", detail.Files)
+	}
+	if detail.Diff == nil || !strings.Contains(*detail.Diff, "+v2") {
+		t.Fatalf("expected diff to contain '+v2', got %v", detail.Diff)
 	}
 }
 

@@ -8,7 +8,7 @@ var Chinese = Messages{
 	WelcomeTitleFmt: "欢迎使用 %s",
 	NoConfigYet:     "还没有配置 — 现在来设置一下吧。",
 	StartingChatFmt: "正在启动 %s…",
-	SetKeyHint:      "设置好 API key 后运行 `reasonix chat`。",
+	SetKeyHint:      "设置好 API key 后运行 `maddog chat`。",
 	ConfigLabel:     "配置",
 	ModelsLabel:     "模型",
 	ConfigNotFound:  "未找到 — 使用内置默认值",
@@ -16,18 +16,18 @@ var Chinese = Messages{
 	NoKey:           "未设置 key",
 	Ready:           "已就绪",
 	GetStarted:      "开始使用",
-	StepScaffold:    "生成 reasonix.toml",
+	StepScaffold:    "生成 maddog.toml",
 	StepSetKey:      "设置 API key",
 
-	InitHint:       "项目记忆（AGENTS.md）在会话内由模型生成：运行 `reasonix chat`，然后 `/init` —— 模型会分析代码库并写入。配置请用 `reasonix setup`。",
-	StepSetKeyHint: "运行 `reasonix setup`，或 export DEEPSEEK_API_KEY=…",
+	InitHint:       "项目记忆（AGENTS.md）在会话内由模型生成：运行 `maddog chat`，然后 `/init` —— 模型会分析代码库并写入。配置请用 `maddog setup`。",
+	StepSetKeyHint: "运行 `maddog setup`，或 export DEEPSEEK_API_KEY=…",
 	StepChatDesc:   "交互式会话",
 	StepRunDesc:    "执行单次任务",
-	HelpFooter:     "reasonix help · 查看全部命令",
+	HelpFooter:     "maddog help · 查看全部命令",
 
 	ChatTip:           "对话上下文将跨轮保留。输入 'exit' 或按 Ctrl-D 退出。",
 	TurnCancelled:     "已取消 — 回到提示符",
-	NoSessionToResume: "没有可恢复的会话 — 用 `reasonix chat` 开一个新的",
+	NoSessionToResume: "没有可恢复的会话 — 用 `maddog chat` 开一个新的",
 	ResumeRequiresTTY: "--resume 需要交互式终端；用 --continue 直接恢复最近一次",
 	PickSessionLabel:  "恢复哪个会话？",
 
@@ -36,39 +36,50 @@ var Chinese = Messages{
 	ResumeBadIndexFmt:   "请选择 1–%d 的会话（用 /resume 查看列表）",
 	ResumeAlreadyActive: "已在该会话中",
 	ResumedTitle:        "已恢复会话",
-	ResumePickTitle:     "选择要恢复的会话",
-	ResumePickHint:      "↑/↓ 移动 · Enter 恢复 · Esc 取消",
 
-	ChatThinking:           "思考中…",
-	ChatThoughtForFmt:      "思考了 %d 秒",
-	ChatStatusThinkingFmt:  "%s 思考中… (%d 秒 · Esc 取消)",
-	ChatToolWorkingFmt:     "%s 运行中 · %d 秒",
-	ChatStatusRetryingFmt:  "%s 正在重试 (%d/%d)… (Esc 取消)",
-	ChatStatusIdle:         "就绪",
-	ChatStatusYoloIdle:     "已跳过批准",
-	ChatStatusCycleHint:    "shift+tab 循环切换",
-	ChatStatusCacheNowFmt:  "本次命中 %s",
-	ChatStatusCacheAvgFmt:  "平均 %s",
-	ChatStatusPlanApproval: "Enter/y 批准并执行 · n/Esc 继续规划 · PgUp/PgDn 滚动",
-	PlanApprovalPrompt:     "计划已生成（见上方）— Enter/y 批准执行,n/Esc 继续规划",
-	ChatStatusToolApproval: "1 本次允许 · 2 本会话允许 · 3 总是允许（保存） · 4 拒绝 · y/a/p/n 兼容 · Ctrl-C 取消本轮",
-	AskTypeSomething:       "自己输入",
-	AskTypingHint:          "输入后按 Enter 确认",
-	AskChatInstead:         "先不选择，直接回复",
-	ChatStatusQuestion:     "↑/↓ 选 · 数字快选 · 空格多选 · Enter 确认 · ←/→ 切换问题 · Esc 取消",
-	StatusResumePicker:     "↑/↓ 移动 · Enter 恢复 · Esc 取消",
-	AskSubmitTitle:         "提交答案",
-	AskUnanswered:          "(未答)",
-	AskSubmitHint:          "Enter 提交 · ← 返回修改",
-	ToolApprovalPromptFmt:  "需要你的许可\n\n将调用工具 %s%s。\n%s\n1. 本次允许\n2. 本会话允许同类调用\n3. 总是允许（保存到配置）\n4. 拒绝\n选择 [1/2/3/4]（兼容 y/a/p/n）",
-	ToolApprovalSourceFmt:  "来源: %s",
-	ToolApprovalBuiltIn:    "内置工具",
-	ToolApprovalImageUse:   "将读取提供的图片用于图像理解。",
-	DiffFoldedFmt:          "… 还有 %d 行",
+	RenameUsage:     "用法：/rename <新名称>  或  /rename <序号> <新名称>",
+	RenameNoSession: "当前没有活跃会话可重命名",
+	RenameDoneFmt:   "会话已重命名为 %q",
+	ResumePickTitle: "选择要恢复的会话",
+	ResumePickHint:  "↑/↓ 移动 · Enter 恢复 · Esc 取消",
+
+	ChatThinking:                "思考中…",
+	ChatThoughtForFmt:           "思考了 %d 秒",
+	ChatStatusThinkingFmt:       "%s 思考中… (%d 秒 · Esc 取消)",
+	ChatToolWorkingFmt:          "%s 运行中 · %d 秒",
+	ChatStatusRetryingFmt:       "%s 正在重试 (%d/%d)… (Esc 取消)",
+	ChatStatusIdle:              "就绪",
+	ChatStatusYoloIdle:          "已跳过工具批准",
+	ChatStatusCycleHint:         "shift+tab 切换计划 · ctrl+y yolo",
+	ChatStatusCacheNowFmt:       "本次命中 %s",
+	ChatStatusCacheAvgFmt:       "平均 %s",
+	ChatStatusPlanApproval:      "Enter/y 批准并执行 · n/Esc 继续规划 · PgUp/PgDn/Ctrl+Home/End 滚动",
+	PlanApprovalPrompt:          "计划已生成（见上方）— Enter/y 批准执行,n/Esc 继续规划",
+	ChatStatusToolApproval:      "1 本次允许 · 2 本会话允许此范围 · 提供时 3/4 为前缀或保存 · n/Esc 拒绝 · Ctrl-C 取消本轮",
+	AskTypeSomething:            "自己输入",
+	AskTypingHint:               "输入后按 Enter 确认",
+	AskChatInstead:              "先不选择，直接回复",
+	ChatStatusQuestion:          "↑/↓ 选 · 数字快选 · 空格多选 · Enter 确认 · ←/→ 切换问题 · Esc 取消",
+	StatusResumePicker:          "↑/↓ 移动 · Enter 恢复 · Esc 取消",
+	AskSubmitTitle:              "提交答案",
+	AskUnanswered:               "(未答)",
+	AskSubmitHint:               "Enter 提交 · ← 返回修改",
+	ToolApprovalPromptFmt:       "需要你的许可\n\n将调用工具 %s%s。\n%s\n%s",
+	ToolApprovalChoices:         "1. 本次允许\n2. 本会话允许 %s\n3. 总是允许 %s（保存到配置）\n4. 拒绝\n选择 [1/2/3/4]（兼容 y/a/p/n）",
+	BashPrefixChoices:           "1. 本次允许\n2. 本会话允许 %s\n3. 总是允许 %s（保存到配置）\n4. 拒绝\n选择 [1/2/3/4]（兼容 y/a/p/n）",
+	ToolApprovalSourceFmt:       "来源: %s",
+	ToolApprovalBuiltIn:         "内置工具",
+	ToolApprovalImageUse:        "将读取提供的图片用于图像理解。",
+	PermissionSavedFmt:          "授权已保存到 %s：%s",
+	PermissionAlreadyAllowedFmt: "授权已由 %s 中的规则覆盖：%s",
+	PermissionSaveFailedFmt:     "保存授权 %s 失败：%v",
+	DiffFoldedFmt:               "… 还有 %d 行",
+	DiffFoldEnabledFmt:          "diff 已折叠至 %d 行（/diff-fold 展开）",
+	DiffFoldDisabled:            "diff 已展开 — 显示全部行（/diff-fold 折叠）",
 
 	OutputStyleNone:    "没有可用的输出风格",
 	OutputStyleHeader:  "输出风格：",
-	OutputStyleHint:    "在 reasonix.toml 设置 agent.output_style 即可启用（下次会话生效）",
+	OutputStyleHint:    "在 maddog.toml 设置 agent.output_style 即可启用（下次会话生效）",
 	ThemeHeader:        "主题：",
 	ThemeHint:          "使用 /theme <auto|light|dark|style> 切换",
 	ThemeChangedFmt:    "已切换主题为 %s / %s",
@@ -85,12 +96,15 @@ var Chinese = Messages{
 
 	SlashCompactDone:   "已压缩 — 旧的中段换成一段摘要，最近几轮保留原样",
 	SlashCompactFailed: "压缩失败",
-	SlashNewDone:       "已新建会话 — 之前的对话已存档",
+	SlashNewDone:       "已开启新会话 — 之前的对话已存档",
 	SlashNewFailed:     "新建会话失败",
+	SlashClearPrompt:   "清空当前上下文且不保存？",
+	SlashClearDone:     "已清空当前上下文",
+	SlashClearFailed:   "清空当前上下文失败",
 	SlashUnavailable:   "当前构建不支持该命令",
 	SlashUnknown:       "未知命令",
 	SlashTodoCleared:   "已清除任务清单",
-	SlashHelp:          "命令：/compact · /new · /resume · /rewind · /tree · /branch · /switch · /todo · /verbose · /model（切换模型）· /effort · /theme · /language · /mcp · /skills · /hooks · /paste-image · /memory · /remember · /quit · /help · 以及 skills（/init、/explore …）",
+	SlashHelp:          "命令：/compact · /new · /clear · /resume · /rewind · /tree · /branch · /switch · /todo · /verbose · /model（切换模型）· /effort · /theme · /language · /mcp · /skills · /hooks · /paste-image · /memory · /goal · /remember · /quit · /help · 以及 skills（/init、/explore …）",
 
 	SkillPickerTitle:             "Skills",
 	SkillPickerAvailableFmt:      "%d 个可用",
@@ -137,7 +151,7 @@ var Chinese = Messages{
 	SkillPickerStatusNotDir:      "非目录",
 	SkillPickerStatusUnreadable:  "无权限",
 	SlashPromptEmpty:             "该 MCP prompt 没有返回可发送的内容",
-	SlashMCPNone:                 "没有配置 MCP 服务器 — 在 reasonix.toml 加一个 [[plugins]] 条目",
+	SlashMCPNone:                 "没有配置 MCP 服务器 — 在 maddog.toml 加一个 [[plugins]] 条目",
 	CtrlCQuitHint:                "再按一次 Ctrl+C 退出",
 	CompHintSlash:                "↑/↓ 移动 · Tab/Enter 选中 · Esc 关闭",
 	CompHintFile:                 "↑/↓ 移动 · Tab/Enter 进入文件夹或选中文件 · Esc 关闭",
@@ -147,17 +161,20 @@ var Chinese = Messages{
 	ShellExecTimeoutFmt: "Shell 命令超时（>%s）",
 	ShellModeHint:       "Enter 执行 Shell · Esc 取消 · 点击输出展开",
 
-	CmdNew:          "开启新会话",
+	CmdNew:          "开启新会话并保存历史",
+	CmdClear:        "丢弃当前上下文",
 	CmdCompact:      "压缩上下文",
 	CmdRewind:       "回滚到更早的一轮",
 	CmdTree:         "查看对话分支树",
 	CmdBranch:       "创建对话分支",
 	CmdSwitchBranch: "切换对话分支",
 	CmdResume:       "恢复已保存的会话",
+	CmdRename:       "重命名会话",
 	CmdModel:        "切换模型",
 	CmdMemory:       "查看记忆文件",
+	CmdGoal:         "设置或清除当前目标",
 	CmdRemember:     "保存一条记忆",
-	CmdForget:       "删除一条已存记忆",
+	CmdForget:       "归档一条已存记忆",
 	CmdMcp:          "MCP 服务器",
 	CmdHooks:        "管理 hooks",
 	CmdPasteImage:   "粘贴剪贴板图片",
@@ -166,8 +183,11 @@ var Chinese = Messages{
 	CmdLanguage:     "切换 CLI 语言",
 	CmdSkill:        "管理 skills",
 	CmdVerbose:      "切换 thinking 原文显示",
+	CmdDiffFold:     "切换 diff 折叠/展开",
+	CmdSandbox:      "查看沙箱状态",
 	CmdEffort:       "设置推理强度",
 	CmdAutoPlan:     "配置自动计划模式",
+	CmdReasonLang:   "设置可见思考语言",
 	CmdHelp:         "查看命令列表",
 	CmdTodo:         "清除任务清单",
 	CmdQuit:         "退出会话",
@@ -189,30 +209,36 @@ var Chinese = Messages{
 	ArgEffortXHigh:  "超高推理",
 	ArgEffortMax:    "最高推理",
 	ArgThemeCurrent: "当前",
-	ArgLanguageAuto: "从 REASONIX_LANG / 系统 locale 自动检测",
+	ArgLanguageAuto: "从 MADDOG_LANG / 系统 locale 自动检测",
 	ArgLanguageEn:   "English",
 	ArgLanguageZh:   "中文",
 
 	ListModelsHeaderFmt: "模型（当前：%s）",
 	ListModelsHint:      "用底部的模型切换器，或输入 /model <provider/model>",
 	ListMemoryHeader:    "记忆文件",
+	ListMemorySaved:     "保存的记忆",
+	ListMemoryArchived:  "归档的记忆",
 	ListMemoryNone:      "暂无记忆 — 用 “/remember <内容>” 添加，或运行 /init 生成 AGENTS.md",
 	ListSkillsHeaderFmt: "skills（%d 个）",
 	ListSkillsNone:      "暂无 skill — 调用内置的（如 /init），或用 install_skill 创建一个",
 	ListHooksHeaderFmt:  "hooks（生效 %d 个）",
-	ListHooksNone:       "无生效 hooks — 在 .reasonix/settings.json（项目，需信任后）或 ~/.reasonix/settings.json（全局）配置",
+	ListHooksNone:       "无生效 hooks — 在 .maddog/settings.json（项目，需信任后）或 ~/.maddog/settings.json（全局）配置",
 	ListMcpHeader:       "MCP 服务器",
-	ListMcpNone:         "未连接 MCP 服务器 — 在 reasonix.toml（[[plugins]]）或项目 .mcp.json 中添加",
+	ListMcpNone:         "未连接 MCP 服务器 — 在 maddog.toml（[[plugins]]）或项目 .mcp.json 中添加",
 
-	MemoryNone:             "还没有加载任何记忆 — 输入 “/remember 内容” 可快速记录，也可以在项目根目录创建 REASONIX.md",
+	MemoryNone:             "还没有加载任何记忆 — 输入 “/remember 内容” 可快速记录，也可以在项目根目录创建 MADDOG.md",
 	MemoryLoaded:           "当前已加载的记忆：",
-	MemorySavedHeader:      "  已记录的条目（用 “/forget <name>” 删除）：",
+	MemorySavedHeader:      "  已记录的条目（用 “/forget <name>” 归档）：",
 	MemoryStoredUnderFmt:   "  存放于 %s",
 	MemoryEditHint:         "可直接编辑记忆文档，或输入 “/remember 内容” 快速记录；文档改动会在下次会话生效",
 	ForgetUsage:            "用法：/forget <name> — name 是 /memory 中显示的条目标识",
-	ForgetDoneFmt:          "已删除记忆：%s",
+	ForgetDoneFmt:          "已归档记忆：%s",
 	QuickRememberEmpty:     "没有要记录的内容",
 	QuickRememberDoneFmt:   "已记住 → %s",
+	GoalEmpty:              "目标：无 — 用 /goal <目标> 设置",
+	GoalCurrentFmt:         "目标：%s",
+	GoalSetFmt:             "目标已设置 → %s",
+	GoalCleared:            "目标已清除",
 	ModelSwitchUnavailable: "本会话不支持切换模型",
 	ModelSwitchBusy:        "请先完成或取消当前这一轮再切换模型",
 	ModelAlreadyOnFmt:      "已经在使用 %s",
@@ -234,12 +260,12 @@ var Chinese = Messages{
 
 	SelectProvidersLabel:  "选择要启用的 provider",
 	EnterAPIKeysHeader:    "输入 API key（回车跳过、稍后再设）：",
-	MissingKeyIntro:       "reasonix.toml 已配置好 — 只差一个 API key 就可以开始。",
+	MissingKeyIntro:       "maddog.toml 已配置好 — 只差一个 API key 就可以开始。",
 	WroteFileFmt:          "已写入 %s",
 	SetupComplete:         "设置完成。",
 	SetupCancelled:        "设置已取消。",
 	TryHintFmt:            "试试: %s",
-	NextHint:              "下一步：设置 API key（运行 `reasonix setup` 或 export DEEPSEEK_API_KEY=...），然后运行 `reasonix run \"你的任务\"`。",
+	NextHint:              "下一步：设置 API key（运行 `maddog setup` 或 export DEEPSEEK_API_KEY=...），然后运行 `maddog run \"你的任务\"`。",
 	ConfirmReconfigureFmt: "%s 已存在。重新配置并覆盖？",
 	KeepingExisting:       "保留原配置不变。",
 	NotOverwritingFmt:     "%s 已存在，不覆盖",
@@ -254,7 +280,7 @@ var Chinese = Messages{
 	NoModelsAvailableFmt:       "%s: 没有可用模型，跳过",
 	CustomFetchEmpty:           "/models 返回为空，回退到手动输入",
 	AnthropicFetchEmpty:        "/models 返回为空 — Anthropic 兼容服务通常不提供此端点，回退到手动输入",
-	SkipStaleCustomEntryFmt:    "跳过 reasonix.toml 里的旧 %q 条目（指向 %s）— 请手动从 [[providers]] 里删除",
+	SkipStaleCustomEntryFmt:    "跳过 maddog.toml 里的旧 %q 条目（指向 %s）— 请手动从 [[providers]] 里删除",
 	APIKeyAlreadySetFmt:        "复用已设置的 %s",
 	APIKeyResetPromptFmt:       "重新输入 %s？",
 
@@ -287,47 +313,78 @@ var Chinese = Messages{
 	AnthropicSelectModelsLabel:     "选择要启用的 %s 模型",
 
 	UnknownCommandFmt:         "未知命令 %q",
-	UsageRunHint:              "用法：reasonix run [--model NAME] <task>",
+	UsageRunHint:              "用法：maddog run [--model NAME] <task>",
 	ErrorPrefix:               "错误：",
 	ReconfigureOnUnknownModel: "配置的模型已不可用 —— 重新运行引导配置。",
 	WriteConfigErr:            "写入配置失败：",
-	WriteEnvErr:               "写入 .env 失败：",
+	WriteEnvErr:               "写入 credentials 失败：",
 
 	ProviderErrBadRequest:          "请求格式错误 (HTTP 400)：请求体被拒绝，通常是程序缺陷。若持续出现请反馈。",
-	ProviderErrAuth:                "认证失败 (HTTP 401)：API key 缺失、错误或已过期。请检查 .env 中的密钥，或运行 `reasonix setup`。",
+	ProviderErrAuth:                "认证失败 (HTTP 401)：API key 缺失、错误或已过期。请检查 Maddog credentials 或项目 .env 中的密钥，或运行 `maddog setup`。",
 	ProviderErrInsufficientBalance: "余额不足 (HTTP 402)：账户余额不足，请前往充值后重试。",
 	ProviderErrUnprocessable:       "参数错误 (HTTP 422)：某个请求参数被拒绝，通常是程序缺陷。若持续出现请反馈。",
 	ProviderErrRateLimited:         "请求速率达到上限 (HTTP 429)：请求过于频繁 (TPM/RPM)。已退避重试，请放慢速率或稍后再试。",
 	ProviderErrServer:              "服务器故障 (HTTP 500)：服务端内部错误。已退避重试；若持续失败请稍后再试。",
 	ProviderErrServerBusy:          "服务器繁忙 (HTTP 503)：服务端负载过高。已退避重试，请稍后再试。",
 
-	SelectOneHint:  "(↑/↓ · Enter · q 取消)",
-	SelectManyHint: "(↑/↓ · Space · Enter · q)",
+	SelectOneHint:  "(↑/↓ · Enter · q 取消；/ 搜索)",
+	SelectManyHint: "(↑/↓ · Space · Enter · q；/ 搜索)",
 
-	UsageBody: `reasonix — 由配置和插件驱动的 coding agent（多模型）
+	SelectMoreAboveFmt: "  ↑ 上方还有 %d 个",
+	SelectMoreBelowFmt: "  ↓ 下方还有 %d 个",
+	SelectSearchHint:   "/ 搜索 · 输入关键词过滤 · Esc 取消搜索",
+
+	CmdProvider:          "切换供应商",
+	ProviderListHeader:   "供应商（/provider <名称> 切换）",
+	ProviderAlreadyOnFmt: "已经在使用供应商 %s",
+	ProviderUnknownFmt:   "未知供应商 %q",
+	ProviderPickLabel:    "选择 %s 的一个模型",
+	ProviderNoModelsFmt:  "供应商 %s 没有已配置的模型",
+
+	// 自更新
+	UpgradeChecking:            "正在检查更新…",
+	UpgradeDevBuild:            "开发版本无法自更新",
+	UpgradeFetchFailed:         "检查更新失败：%v",
+	UpgradeInvalidVersion:      "远程版本不是有效的 semver",
+	UpgradeAlreadyLatest:       "已是最新版本。",
+	UpgradeForcing:             "强制重新安装当前版本…",
+	UpgradeAvailableFmt:        "当前：%s → 最新：%s",
+	UpgradeNoAssetFmt:          "未找到 %s 的安装包",
+	UpgradeDownloadingFmt:      "正在下载 %s（%s）…",
+	UpgradeDownloadFailed:      "下载失败：%v",
+	UpgradeVerifying:           "正在校验 SHA256…",
+	UpgradeChecksumFailed:      "无法获取校验文件：%v",
+	UpgradeChecksumMismatchFmt: "SHA256 不匹配：得到 %s，期望 %s",
+	UpgradeChecksumNotFoundFmt: "SHA256SUMS 中未找到 %s",
+	UpgradeExtractFailed:       "解压二进制文件失败：%v",
+	UpgradeApplying:            "正在替换二进制文件…",
+	UpgradeApplyFailed:         "应用更新失败：%v",
+	UpgradeSuccessFmt:          "已更新 %s → %s",
+
+	UsageBody: `maddog — 由配置和插件驱动的 coding agent（多模型）
 
 用法：
-  reasonix chat [--model NAME] [-c|--continue] [--resume]   交互式会话（多轮；-c 恢复最近一次，--resume 选择一个）
-  reasonix run  [--model NAME] [--max-steps N] <task>   执行单次任务后退出
-  reasonix serve [--model NAME] [--addr HOST:PORT]      通过 HTTP+SSE 提供会话（浏览器客户端在 /）
-  reasonix acp [--model NAME]                           通过 stdio 提供 Agent Client Protocol（也可用：reasonix --acp）
-  reasonix setup [path]                                 交互式配置向导；生成 reasonix.toml（及 .env）
-  reasonix config auto-plan [off|on]                    配置自动计划模式
-  reasonix mcp <add|remove|list>                        管理 reasonix.toml 里的 MCP 服务器
-  reasonix doctor [--json]                              输出脱敏的本地诊断信息
-  reasonix version
-  reasonix help
+  maddog chat [--model NAME] [-c|--continue] [--resume]   交互式会话（多轮；-c 恢复最近一次，--resume 选择一个）
+  maddog run  [--model NAME] [--max-steps N] <task>   执行单次任务后退出
+  maddog serve [--model NAME] [--addr HOST:PORT]      通过 HTTP+SSE 提供会话（浏览器客户端在 /）
+  maddog acp [--model NAME]                           通过 stdio 提供 Agent Client Protocol（也可用：maddog --acp）
+  maddog setup [path]                                 交互式配置向导；生成 maddog.toml（及 credentials）
+  maddog config auto-plan [off|on]                    配置自动计划模式
+  maddog mcp <add|remove|list>                        管理 maddog.toml 里的 MCP 服务器
+  maddog doctor [--json]                              输出脱敏的本地诊断信息
+  maddog version
+  maddog help
 
 示例：
-  reasonix chat
-  reasonix chat --continue
-  reasonix run "把 main.go 里的 TODO 实现掉"
-  reasonix run --model mimo-pro "给这个函数补单元测试"
-  echo "解释这段代码" | reasonix run
+  maddog chat
+  maddog chat --continue
+  maddog run "把 main.go 里的 TODO 实现掉"
+  maddog run --model mimo-pro "给这个函数补单元测试"
+  echo "解释这段代码" | maddog run
 
 配置：
-  优先级：flag > ./reasonix.toml > ~/.config/reasonix/config.toml > 内置默认值
+  优先级：flag > ./maddog.toml > ~/.config/maddog/config.toml > 内置默认值
   密钥通过 api_key_env 从环境变量注入（如 DEEPSEEK_API_KEY）。
-  运行 'reasonix setup' 生成配置；详见 docs/SPEC.md。
+  运行 'maddog setup' 生成配置；详见 docs/SPEC.md。
 `,
 }

@@ -13,7 +13,7 @@ import (
 // UserDir are retained so the controller can resolve quick-add targets without
 // re-deriving discovery context.
 type Set struct {
-	Docs    []Source // REASONIX.md / AGENTS.md, ascending precedence
+	Docs    []Source // MADDOG.md / AGENTS.md / CLAUDE.md, ascending precedence
 	Store   Store    // auto-memory store (may be a zero/disabled Store)
 	Index   string   // MEMORY.md contents at load time
 	CWD     string   // project working dir used for discovery
@@ -48,8 +48,8 @@ func Load(opts Options) *Set {
 
 // DocPath returns the doc-memory file a given scope writes to. To avoid splitting
 // a project's memory across conventions, it prefers a file that already exists
-// (REASONIX.md / AGENTS.md / CLAUDE.md, in that order); when none exists it
-// creates the universal default (AGENTS.md / AGENTS.local.md). ScopeUser →
+// (MADDOG.md / AGENTS.md / CLAUDE.md, in that order); when none exists it
+// creates the Maddog default (MADDOG.md / MADDOG.local.md). ScopeUser →
 // <userDir>, ScopeLocal → <cwd> with the *.local.md names, anything else → <cwd>.
 // Returns "" for ScopeUser when no user dir is configured.
 func (s *Set) DocPath(scope Scope) string {
@@ -142,7 +142,13 @@ func (s *Set) Block() string {
 			"Read the linked file with read_file when one looks relevant, and before acting on one that names a file, function, or flag, verify it still exists. " +
 			"Save new durable facts with the `remember` tool; delete ones that turn out wrong with `forget`.\n\n")
 		b.WriteString(idx)
-		fmt.Fprintf(&b, "\n\n(stored under %s)\n", s.Store.Dir)
+		var dirs []string
+		for _, d := range s.Store.dirs() {
+			if d != "" {
+				dirs = append(dirs, d)
+			}
+		}
+		fmt.Fprintf(&b, "\n\n(stored under %s)\n", strings.Join(dirs, " and "))
 	}
 	return b.String()
 }

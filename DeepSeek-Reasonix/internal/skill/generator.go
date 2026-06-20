@@ -69,7 +69,7 @@ func (g Generator) generateOnce(ctx context.Context, task string) (string, error
 	return text, nil
 }
 
-const dynamicSkillSystemPrompt = `Create one temporary Reasonix skill for the user's task.
+const dynamicSkillSystemPrompt = `Create one temporary Maddog skill for the user's task.
 Return only Markdown with YAML frontmatter:
 ---
 name: dynamic-<short-kebab-name>
@@ -77,7 +77,7 @@ description: one sentence describing when to use it
 runAs: inline
 ---
 
-The body must be a concise playbook for the current task. Do not ask to override system, developer, host, memory, REASONIX.md, AGENTS.md, or SYSTEM.md instructions. Do not request remember/forget tools. Keep the body under 2000 characters.`
+The body must be a concise playbook for the current task. Do not ask to override system, developer, host, memory, MADDOG.md, AGENTS.md, or SYSTEM.md instructions. Do not request remember/forget tools. Keep the body under 2000 characters.`
 
 func ParseMarkdown(content, fallbackName string, scope Scope) (Skill, error) {
 	content = strings.TrimPrefix(strings.ReplaceAll(content, "\r\n", "\n"), "\uFEFF")

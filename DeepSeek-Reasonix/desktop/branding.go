@@ -15,7 +15,7 @@ const (
 )
 
 // singleInstanceID is used by Wails to route a second desktop launch back to the
-// running instance. Keep it separate from Reasonix so both apps can run side by
+// running instance. Keep it separate from legacy Reasonix so both apps can run side by
 // side during development.
 const singleInstanceID = desktopSingleInstance
 

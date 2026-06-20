@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -16,24 +18,24 @@ import (
 // TestE2ECodegraphMCP drives the whole integration against a real CodeGraph
 // bundle: index a fixture project, connect via the MCP client pinned to that
 // project (Spec.Dir), and actually call codegraph_search. It is gated on
-// REASONIX_CODEGRAPH_E2E so the normal `go test ./...` skips it (no network, no
+// MADDOG_CODEGRAPH_E2E so the normal `go test ./...` skips it (no network, no
 // external binary), yet it still compiles every build so it can't bit-rot.
 //
 // Run it with `make e2e-codegraph` (fetches the matching bundle), or manually:
 //
-//	REASONIX_CODEGRAPH_E2E=1 REASONIX_CODEGRAPH_BIN=/path/to/codegraph \
+//	MADDOG_CODEGRAPH_E2E=1 MADDOG_CODEGRAPH_BIN=/path/to/codegraph \
 //	  go test ./internal/codegraph/ -run E2E -v -count=1
 //
-// With REASONIX_CODEGRAPH_BIN unset it falls back to Resolve("") (bundle / PATH).
+// With MADDOG_CODEGRAPH_BIN unset it falls back to Resolve("") (bundle / PATH).
 func TestE2ECodegraphMCP(t *testing.T) {
-	if os.Getenv("REASONIX_CODEGRAPH_E2E") == "" {
-		t.Skip("set REASONIX_CODEGRAPH_E2E=1 to run the CodeGraph MCP end-to-end test")
+	if firstNonEmptyEnv("MADDOG_CODEGRAPH_E2E") == "" {
+		t.Skip("set MADDOG_CODEGRAPH_E2E=1 to run the CodeGraph MCP end-to-end test")
 	}
-	bin := os.Getenv("REASONIX_CODEGRAPH_BIN")
+	bin := firstNonEmptyEnv("MADDOG_CODEGRAPH_BIN")
 	if bin == "" {
 		var ok bool
 		if bin, ok = Resolve(""); !ok {
-			t.Fatal("REASONIX_CODEGRAPH_E2E is set but no codegraph binary found — set REASONIX_CODEGRAPH_BIN to the launcher path")
+			t.Fatal("MADDOG_CODEGRAPH_E2E is set but no codegraph binary found - set MADDOG_CODEGRAPH_BIN to the launcher path")
 		}
 	}
 	t.Logf("codegraph binary: %s", bin)
@@ -68,7 +70,11 @@ func TestE2ECodegraphMCP(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StartAll: %v", err)
 	}
-	defer host.Close()
+	defer func() {
+		host.Close()
+		// Reap the daemon that escapes process-group kill via setsid.
+		KillDaemon(root)
+	}()
 	if len(tools) == 0 {
 		t.Fatal("codegraph exposed no MCP tools")
 	}
@@ -107,4 +113,13 @@ func TestE2ECodegraphMCP(t *testing.T) {
 		time.Sleep(300 * time.Millisecond)
 	}
 	t.Logf("e2e ok — %d tools (%v); search surfaced Greet", len(tools), names)
+}
+
+func firstNonEmptyEnv(names ...string) string {
+	for _, name := range names {
+		if value := os.Getenv(name); value != "" {
+			return value
+		}
+	}
+	return ""
 }

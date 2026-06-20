@@ -34,6 +34,7 @@ func TestACPBuiltinToolsKeepSessionLevelBuiltins(t *testing.T) {
 		"bash_output",
 		"kill_shell",
 		"wait",
+		"move_file",
 		"notebook_edit",
 	} {
 		if tools[name] == nil {
@@ -63,7 +64,7 @@ func TestACPInitializesWithoutAPIKey(t *testing.T) {
 			t.Fatalf("Run --acp initialize rc = %d, want 0", rc)
 		}
 	})
-	if !strings.Contains(out, `"protocolVersion":1`) || !strings.Contains(out, `"name":"reasonix"`) {
+	if !strings.Contains(out, `"protocolVersion":1`) || !strings.Contains(out, `"name":"maddog"`) {
 		t.Fatalf("initialize output = %s", out)
 	}
 }
@@ -72,7 +73,7 @@ func TestACPFactoryLoadsSessionCwdProjectConfig(t *testing.T) {
 	home := isolateCLIConfigHome(t)
 	t.Setenv("REASONIX_TEST_KEY", "test-key")
 	project := t.TempDir()
-	if err := os.WriteFile(filepath.Join(project, "reasonix.toml"), []byte(`
+	if err := os.WriteFile(filepath.Join(project, "maddog.toml"), []byte(`
 default_model = "local"
 
 [codegraph]
@@ -87,7 +88,7 @@ api_key_env = "REASONIX_TEST_KEY"
 `), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	cmdDir := filepath.Join(project, ".reasonix", "commands")
+	cmdDir := filepath.Join(project, ".maddog", "commands")
 	if err := os.MkdirAll(cmdDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -110,6 +111,64 @@ api_key_env = "REASONIX_TEST_KEY"
 		}
 	}
 	t.Fatalf("ACP session did not load project command from cwd; commands=%v", ctrl.Commands())
+}
+
+func TestACPFactoryClearsEffortOverrideForUnsupportedModel(t *testing.T) {
+	isolateCLIConfigHome(t)
+	t.Setenv("REASONIX_TEST_KEY", "test-key")
+	project := t.TempDir()
+	if err := os.WriteFile(filepath.Join(project, "reasonix.toml"), []byte(`
+default_model = "reasoner/reasoning-model"
+
+[codegraph]
+enabled = false
+
+[[providers]]
+name = "reasoner"
+kind = "acp-test-provider"
+base_url = "http://example.invalid"
+model = "reasoning-model"
+api_key_env = "REASONIX_TEST_KEY"
+supported_efforts = ["low", "high"]
+
+[[providers]]
+name = "plain"
+kind = "acp-test-provider"
+base_url = "http://example.invalid"
+model = "plain-model"
+api_key_env = "REASONIX_TEST_KEY"
+effort = "high"
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	high := "high"
+	state, err := (&acpFactory{}).SessionConfigState(context.Background(), acp.SessionConfigStateParams{
+		Cwd:            project,
+		Model:          "reasoner/reasoning-model",
+		EffortOverride: &high,
+	})
+	if err != nil {
+		t.Fatalf("reasoning SessionConfigState: %v", err)
+	}
+	if state.EffortOverride == nil || *state.EffortOverride != "high" {
+		t.Fatalf("reasoning effort override = %v, want high", state.EffortOverride)
+	}
+
+	state, err = (&acpFactory{}).SessionConfigState(context.Background(), acp.SessionConfigStateParams{
+		Cwd:            project,
+		Model:          "plain/plain-model",
+		EffortOverride: &high,
+	})
+	if err != nil {
+		t.Fatalf("plain SessionConfigState: %v", err)
+	}
+	if _, ok := findACPConfigOption(state.ConfigOptions, "effort"); ok {
+		t.Fatalf("plain model should not advertise effort option: %+v", state.ConfigOptions)
+	}
+	if state.EffortOverride == nil || *state.EffortOverride != "" {
+		t.Fatalf("plain effort override = %v, want explicit empty override", state.EffortOverride)
+	}
 }
 
 func TestACPTaskProfileDefaults(t *testing.T) {
@@ -193,6 +252,15 @@ func TestACPSubagentProviderResolverRejectsInvalidEffort(t *testing.T) {
 	if _, _, _, err := resolve("", "max"); err == nil {
 		t.Fatal("invalid effort should fail before ACP task falls back to the parent profile")
 	}
+}
+
+func findACPConfigOption(options []acp.SessionConfigOption, id string) (acp.SessionConfigOption, bool) {
+	for _, opt := range options {
+		if opt.ID == id {
+			return opt, true
+		}
+	}
+	return acp.SessionConfigOption{}, false
 }
 
 func toolMap(tools []tool.Tool) map[string]tool.Tool {

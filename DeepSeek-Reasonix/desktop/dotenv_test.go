@@ -65,10 +65,10 @@ func TestRemoveEnvFileDeletesKeyAndUnsetsProcessEnv(t *testing.T) {
 	}
 }
 
-// TestPromoteProviderKeysLiftsProjectKeyAndStripsHomeEnv proves a provider key
-// that resolves only from a project .env / ~/.env is copied into the global
-// credentials store, removed from ~/.env, and that unrelated env vars are ignored.
-func TestPromoteProviderKeysLiftsProjectKeyAndStripsHomeEnv(t *testing.T) {
+// TestPromoteProviderKeysCopiesProjectKeyAndPreservesHomeEnv proves a provider key
+// that resolves from the environment is copied into the global
+// credentials store without modifying ~/.env, and that unrelated env vars are ignored.
+func TestPromoteProviderKeysCopiesProjectKeyAndPreservesHomeEnv(t *testing.T) {
 	home := isolateDesktopUserDirs(t)
 	homeEnv := filepath.Join(home, ".env")
 	if err := os.WriteFile(homeEnv, []byte("DEEPSEEK_API_KEY=sk-test\nNPM_TOKEN=secret\n"), 0o600); err != nil {
@@ -91,8 +91,8 @@ func TestPromoteProviderKeysLiftsProjectKeyAndStripsHomeEnv(t *testing.T) {
 	}
 
 	rest, _ := os.ReadFile(homeEnv)
-	if strings.Contains(string(rest), "DEEPSEEK_API_KEY") {
-		t.Errorf("promoted key must be stripped from ~/.env:\n%s", rest)
+	if !strings.Contains(string(rest), "DEEPSEEK_API_KEY=sk-test") {
+		t.Errorf("Maddog must not remove keys from ~/.env used by other clients:\n%s", rest)
 	}
 	if !strings.Contains(string(rest), "NPM_TOKEN=secret") {
 		t.Errorf("unrelated ~/.env line must survive:\n%s", rest)

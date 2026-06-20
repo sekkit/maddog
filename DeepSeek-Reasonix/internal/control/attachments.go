@@ -14,6 +14,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"reasonix/internal/config"
 	"reasonix/internal/proc"
 )
 
@@ -27,7 +28,7 @@ var safeAttachmentExt = regexp.MustCompile(`^\.[a-z0-9]{1,12}$`)
 
 // SaveAttachmentDataURL stores a non-image file (dropped/pasted in the desktop
 // app, where the browser exposes bytes but not a real path) under
-// .reasonix/attachments and returns its repo-relative path for @referencing.
+// .maddog/attachments and returns its repo-relative path for @referencing.
 // origName supplies only the extension; the stored name is generated.
 func SaveAttachmentDataURL(origName, dataURL string) (string, error) {
 	const marker = ";base64,"
@@ -267,49 +268,70 @@ func saveLinuxClipboardImage() (string, error) {
 }
 
 func ImageDataURL(path string) (string, error) {
-	clean, err := cleanAttachmentPath(path)
+	raw, mime, err := readAttachmentImage(path)
 	if err != nil {
 		return "", err
+	}
+	return "data:" + mime + ";base64," + base64.StdEncoding.EncodeToString(raw), nil
+}
+
+// visionImageDataURL reads an attachment and, unlike ImageDataURL (which feeds
+// the desktop preview at full resolution), downscales/recompresses it before
+// base64 so an oversized photo doesn't balloon the request bytes and image
+// tokens. Best-effort: an undecodable format passes through at original size.
+func visionImageDataURL(path string) (string, error) {
+	raw, mime, err := readAttachmentImage(path)
+	if err != nil {
+		return "", err
+	}
+	raw, mime = compressForVision(raw, mime)
+	return "data:" + mime + ";base64," + base64.StdEncoding.EncodeToString(raw), nil
+}
+
+func readAttachmentImage(path string) (raw []byte, mime string, err error) {
+	clean, err := cleanAttachmentPath(path)
+	if err != nil {
+		return nil, "", err
 	}
 	info, err := os.Lstat(clean)
 	if err != nil {
-		return "", err
+		return nil, "", err
 	}
 	if info.Mode()&os.ModeSymlink != 0 {
-		return "", fmt.Errorf("attachment path must not be a symlink")
+		return nil, "", fmt.Errorf("attachment path must not be a symlink")
 	}
 	if info.IsDir() || info.Size() <= 0 || info.Size() > maxImageAttachmentBytes {
-		return "", fmt.Errorf("attachment image must be between 1 byte and 10 MB")
+		return nil, "", fmt.Errorf("attachment image must be between 1 byte and 10 MB")
 	}
 	f, err := os.Open(clean)
 	if err != nil {
-		return "", err
+		return nil, "", err
 	}
 	defer f.Close()
 	opened, err := f.Stat()
 	if err != nil {
-		return "", err
+		return nil, "", err
 	}
 	if !os.SameFile(info, opened) {
-		return "", fmt.Errorf("attachment changed while opening")
+		return nil, "", fmt.Errorf("attachment changed while opening")
 	}
-	raw, err := io.ReadAll(io.LimitReader(f, maxImageAttachmentBytes+1))
+	raw, err = io.ReadAll(io.LimitReader(f, maxImageAttachmentBytes+1))
 	if err != nil {
-		return "", err
+		return nil, "", err
 	}
 	if len(raw) == 0 || len(raw) > maxImageAttachmentBytes {
-		return "", fmt.Errorf("attachment image must be between 1 byte and 10 MB")
+		return nil, "", fmt.Errorf("attachment image must be between 1 byte and 10 MB")
 	}
 	if after, err := f.Stat(); err != nil {
-		return "", err
+		return nil, "", err
 	} else if !os.SameFile(opened, after) || after.Size() != opened.Size() {
-		return "", fmt.Errorf("attachment changed while reading")
+		return nil, "", fmt.Errorf("attachment changed while reading")
 	}
-	mime := detectedImageMime(raw)
+	mime = detectedImageMime(raw)
 	if mime == "" {
-		return "", fmt.Errorf("attachment is not an image")
+		return nil, "", fmt.Errorf("attachment is not an image")
 	}
-	return "data:" + mime + ";base64," + base64.StdEncoding.EncodeToString(raw), nil
+	return raw, mime, nil
 }
 
 func cleanAttachmentPath(path string) (string, error) {
@@ -317,11 +339,15 @@ func cleanAttachmentPath(path string) (string, error) {
 		return "", fmt.Errorf("attachment path must be relative")
 	}
 	clean := filepath.Clean(filepath.FromSlash(path))
-	root := filepath.Join(".reasonix", "attachments")
-	if clean == "." || clean == root || strings.HasPrefix(clean, ".."+string(filepath.Separator)) || !strings.HasPrefix(clean, root+string(filepath.Separator)) {
-		return "", fmt.Errorf("attachment path is outside .reasonix/attachments")
+	root, ok := attachmentRootForPath(clean)
+	if !ok || clean == "." || clean == root || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("attachment path is outside .maddog/attachments")
 	}
-	if err := ensureAttachmentRoot(); err != nil {
+	if root == attachmentRoot() {
+		if err := ensureAttachmentRootAt(root); err != nil {
+			return "", err
+		}
+	} else if err := validateAttachmentRoot(root); err != nil {
 		return "", err
 	}
 	if err := rejectSymlinkComponents(clean, root); err != nil {
@@ -336,7 +362,7 @@ func rejectSymlinkComponents(path, root string) error {
 		return err
 	}
 	if rel == "." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || rel == ".." {
-		return fmt.Errorf("attachment path is outside .reasonix/attachments")
+		return fmt.Errorf("attachment path is outside .maddog/attachments")
 	}
 	cur := root
 	for _, part := range strings.Split(rel, string(filepath.Separator)) {
@@ -356,7 +382,10 @@ func rejectSymlinkComponents(path, root string) error {
 }
 
 func ensureAttachmentRoot() error {
-	root := filepath.Join(".reasonix", "attachments")
+	return ensureAttachmentRootAt(attachmentRoot())
+}
+
+func ensureAttachmentRootAt(root string) error {
 	if info, err := os.Lstat(root); err == nil {
 		if info.Mode()&os.ModeSymlink != 0 {
 			return fmt.Errorf("attachment directory must not be a symlink")
@@ -377,6 +406,20 @@ func ensureAttachmentRoot() error {
 	}
 	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
 		return fmt.Errorf("attachment directory is invalid")
+	}
+	return nil
+}
+
+func validateAttachmentRoot(root string) error {
+	info, err := os.Lstat(root)
+	if err != nil {
+		return err
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("attachment directory must not be a symlink")
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("attachment path exists but is not a directory")
 	}
 	return nil
 }
@@ -439,6 +482,9 @@ end try
 }
 
 func createAttachmentFile(ext string) (string, *os.File, error) {
+	if err := ensureAttachmentRoot(); err != nil {
+		return "", nil, err
+	}
 	for range maxAttachmentCreateAttempts {
 		rel := attachmentPath(ext)
 		f, err := os.OpenFile(rel, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
@@ -456,7 +502,19 @@ func createAttachmentFile(ext string) (string, *os.File, error) {
 func attachmentPath(ext string) string {
 	seq := attachmentPathSeq.Add(1)
 	name := fmt.Sprintf("clipboard-%s-%06d%s", attachmentNow().Format("20060102-150405.000000"), seq, ext)
-	return filepath.Join(".reasonix", "attachments", name)
+	return filepath.Join(attachmentRoot(), name)
+}
+
+func attachmentRoot() string {
+	return filepath.Join(config.ProjectConventionDir, "attachments")
+}
+
+func attachmentRootForPath(path string) (string, bool) {
+	root := attachmentRoot()
+	if path == root || strings.HasPrefix(path, root+string(filepath.Separator)) {
+		return root, true
+	}
+	return "", false
 }
 
 func detectedImageMime(raw []byte) string {

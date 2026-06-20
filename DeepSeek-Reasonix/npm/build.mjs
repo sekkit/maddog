@@ -30,9 +30,9 @@ mkdirSync(STAGE, { recursive: true });
 
 const subPackages = [];
 for (const t of TARGETS) {
-  const name = `@reasonix/cli-${t.node}`;
+  const name = `@maddog/cli-${t.node}`;
   const dir = join(STAGE, `cli-${t.node}`);
-  const exe = t.goos === "windows" ? "reasonix.exe" : "reasonix";
+  const exe = t.goos === "windows" ? "maddog.exe" : "maddog";
   mkdirSync(join(dir, "bin"), { recursive: true });
 
   console.log(`build ${t.goos}/${t.goarch} -> ${name}`);
@@ -60,14 +60,14 @@ for (const t of TARGETS) {
       {
         name,
         version,
-        description: `reasonix prebuilt binary for ${t.node}.`,
+        description: `maddog prebuilt binary for ${t.node}.`,
         os: [t.goos === "windows" ? "win32" : t.goos],
         cpu: [t.goarch === "amd64" ? "x64" : "arm64"],
         files: ["bin/"],
         license: "MIT",
         repository: {
           type: "git",
-          url: "git+https://github.com/esengine/DeepSeek-Reasonix.git",
+          url: "git+https://github.com/sekkit/maddog.git",
         },
       },
       null,
@@ -77,13 +77,13 @@ for (const t of TARGETS) {
   subPackages.push({ name, dir });
 }
 
-const mainDir = join(STAGE, "reasonix");
+const mainDir = join(STAGE, "maddog");
 mkdirSync(mainDir, { recursive: true });
-cpSync(join(HERE, "reasonix", "bin"), join(mainDir, "bin"), { recursive: true });
+cpSync(join(HERE, "maddog", "bin"), join(mainDir, "bin"), { recursive: true });
 cpSync(join(ROOT, "README.md"), join(mainDir, "README.md"));
 
 const mainPkg = JSON.parse(
-  readFileSync(join(HERE, "reasonix", "package.json"), "utf8"),
+  readFileSync(join(HERE, "maddog", "package.json"), "utf8"),
 );
 mainPkg.version = version;
 for (const key of Object.keys(mainPkg.optionalDependencies)) {
@@ -100,9 +100,8 @@ if (!publish) {
 }
 
 // Only the v0.x stable line is the promoted default (`latest`). The v2 (1.x) line
-// and every prerelease ship under `next` so a bare `npm i reasonix` keeps resolving
-// 0.53.x; opt in with `npm i reasonix@next`. (npm rejects `v2` as a tag — it parses
-// as a SemVer range.) Promote v2 with a manual `npm dist-tag add reasonix@<ver> latest`.
+// and every prerelease ship under `next` so a bare `npm i maddog` keeps resolving
+// the promoted stable line. Promote with a manual `npm dist-tag add maddog@<ver> latest`.
 const distTag = version.startsWith("0.") && !version.includes("-") ? "latest" : "next";
 const publishArgs = ["publish", "--access", "public", "--tag", distTag];
 
@@ -110,5 +109,5 @@ for (const sub of subPackages) {
   console.log(`publish ${sub.name}@${version} (${distTag})`);
   execFileSync("npm", publishArgs, { cwd: sub.dir, stdio: "inherit" });
 }
-console.log(`publish reasonix@${version} (${distTag})`);
+console.log(`publish maddog@${version} (${distTag})`);
 execFileSync("npm", publishArgs, { cwd: mainDir, stdio: "inherit" });

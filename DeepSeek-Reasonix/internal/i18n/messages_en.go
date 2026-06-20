@@ -7,7 +7,7 @@ var English = Messages{
 	WelcomeTitleFmt: "Welcome to %s",
 	NoConfigYet:     "No configuration found yet — let's set it up.",
 	StartingChatFmt: "Starting %s…",
-	SetKeyHint:      "Set your API key, then run `reasonix chat`.",
+	SetKeyHint:      "Set your API key, then run `maddog chat`.",
 	ConfigLabel:     "config",
 	ModelsLabel:     "models",
 	ConfigNotFound:  "not found — using built-in defaults",
@@ -15,18 +15,18 @@ var English = Messages{
 	NoKey:           "no key",
 	Ready:           "ready",
 	GetStarted:      "Get started",
-	StepScaffold:    "scaffold reasonix.toml",
+	StepScaffold:    "scaffold maddog.toml",
 	StepSetKey:      "set API key",
 
-	InitHint:       "Project memory (AGENTS.md) is generated in-session: run `reasonix chat`, then `/init` — the model analyzes the codebase and writes it. For configuration, use `reasonix setup`.",
-	StepSetKeyHint: "run `reasonix setup`, or export DEEPSEEK_API_KEY=…",
+	InitHint:       "Project memory (AGENTS.md) is generated in-session: run `maddog chat`, then `/init` — the model analyzes the codebase and writes it. For configuration, use `maddog setup`.",
+	StepSetKeyHint: "run `maddog setup`, or export DEEPSEEK_API_KEY=…",
 	StepChatDesc:   "interactive session",
 	StepRunDesc:    "one-shot task",
-	HelpFooter:     "reasonix help · all commands",
+	HelpFooter:     "maddog help · all commands",
 
 	ChatTip:           "Context is kept across turns. Type 'exit' or Ctrl-D to quit.",
 	TurnCancelled:     "cancelled — back to prompt",
-	NoSessionToResume: "no saved session to resume — start a new one with `reasonix chat`",
+	NoSessionToResume: "no saved session to resume — start a new one with `maddog chat`",
 	ResumeRequiresTTY: "--resume needs an interactive terminal; pass --continue for the most recent session",
 	PickSessionLabel:  "Resume which session?",
 
@@ -35,39 +35,50 @@ var English = Messages{
 	ResumeBadIndexFmt:   "pick a session 1–%d (run /resume to list)",
 	ResumeAlreadyActive: "already in that session",
 	ResumedTitle:        "resumed session",
-	ResumePickTitle:     "Resume a saved session",
-	ResumePickHint:      "↑/↓ move · Enter resume · Esc cancel",
 
-	ChatThinking:           "thinking…",
-	ChatThoughtForFmt:      "thought for %ds",
-	ChatStatusThinkingFmt:  "%s thinking… (%ds · Esc cancels)",
-	ChatToolWorkingFmt:     "%s working · %ds",
-	ChatStatusRetryingFmt:  "%s retrying (%d/%d)… (Esc cancels)",
-	ChatStatusIdle:         "ready",
-	ChatStatusYoloIdle:     "approvals skipped",
-	ChatStatusCycleHint:    "shift+tab to cycle",
-	ChatStatusCacheNowFmt:  "turn hit %s",
-	ChatStatusCacheAvgFmt:  "avg %s",
-	ChatStatusPlanApproval: "Enter/y approves & executes · n/Esc keeps planning · PgUp/PgDn scrolls",
-	PlanApprovalPrompt:     "Plan ready above — Enter/y to approve & execute, n/Esc to keep planning",
-	ChatStatusToolApproval: "1 approve once · 2 allow this session · 3 always allow (save) · 4 deny · y/a/p/n also work · Ctrl-C cancels turn",
-	AskTypeSomething:       "Type something else",
-	AskTypingHint:          "type below, Enter to confirm",
-	AskChatInstead:         "None — just chat",
-	ChatStatusQuestion:     "↑/↓ move · number to pick · space multi · Enter confirm · ←/→ switch · Esc cancel",
-	StatusResumePicker:     "↑/↓ move · Enter resume · Esc cancel",
-	AskSubmitTitle:         "Submit answers",
-	AskUnanswered:          "(unanswered)",
-	AskSubmitHint:          "Enter submits · ← returns to edit",
-	ToolApprovalPromptFmt:  "Permission required\n\nWill call tool %s%s.\n%s\n1. Allow once\n2. Allow similar calls this session\n3. Always allow (save to config)\n4. Deny\nChoose [1/2/3/4] (y/a/p/n also work)",
-	ToolApprovalSourceFmt:  "Source: %s",
-	ToolApprovalBuiltIn:    "built-in tool",
-	ToolApprovalImageUse:   "It will read provided image input for image understanding.",
-	DiffFoldedFmt:          "… +%d more lines",
+	RenameUsage:     "usage: /rename <new title>  or  /rename <n> <new title>",
+	RenameNoSession: "no active session to rename",
+	RenameDoneFmt:   "session renamed to %q",
+	ResumePickTitle: "Resume a saved session",
+	ResumePickHint:  "↑/↓ move · Enter resume · Esc cancel",
+
+	ChatThinking:                "thinking…",
+	ChatThoughtForFmt:           "thought for %ds",
+	ChatStatusThinkingFmt:       "%s thinking… (%ds · Esc cancels)",
+	ChatToolWorkingFmt:          "%s working · %ds",
+	ChatStatusRetryingFmt:       "%s retrying (%d/%d)… (Esc cancels)",
+	ChatStatusIdle:              "ready",
+	ChatStatusYoloIdle:          "tool approvals skipped",
+	ChatStatusCycleHint:         "shift+tab toggles plan · ctrl+y yolo",
+	ChatStatusCacheNowFmt:       "turn hit %s",
+	ChatStatusCacheAvgFmt:       "avg %s",
+	ChatStatusPlanApproval:      "Enter/y approves & executes · n/Esc keeps planning · PgUp/PgDn/Ctrl+Home/End scrolls",
+	PlanApprovalPrompt:          "Plan ready above — Enter/y to approve & execute, n/Esc to keep planning",
+	ChatStatusToolApproval:      "1 approve once · 2 allow scope this session · 3/4 prefix or save when offered · n/Esc deny · Ctrl-C cancels turn",
+	AskTypeSomething:            "Type something else",
+	AskTypingHint:               "type below, Enter to confirm",
+	AskChatInstead:              "None — just chat",
+	ChatStatusQuestion:          "↑/↓ move · number to pick · space multi · Enter confirm · ←/→ switch · Esc cancel",
+	StatusResumePicker:          "↑/↓ move · Enter resume · Esc cancel",
+	AskSubmitTitle:              "Submit answers",
+	AskUnanswered:               "(unanswered)",
+	AskSubmitHint:               "Enter submits · ← returns to edit",
+	ToolApprovalPromptFmt:       "Permission required\n\nWill call tool %s%s.\n%s\n%s",
+	ToolApprovalChoices:         "1. Allow once\n2. Allow %s for this session\n3. Always allow %s (save to config)\n4. Deny\nChoose [1/2/3/4] (y/a/p/n also work)",
+	BashPrefixChoices:           "1. Allow once\n2. Allow %s for this session\n3. Always allow %s (save to config)\n4. Deny\nChoose [1/2/3/4] (y/a/p/n also work)",
+	ToolApprovalSourceFmt:       "Source: %s",
+	ToolApprovalBuiltIn:         "built-in tool",
+	ToolApprovalImageUse:        "It will read provided image input for image understanding.",
+	PermissionSavedFmt:          "permission saved to %s: %s",
+	PermissionAlreadyAllowedFmt: "permission already covered in %s: %s",
+	PermissionSaveFailedFmt:     "permission save failed for %s: %v",
+	DiffFoldedFmt:               "… +%d more lines",
+	DiffFoldEnabledFmt:          "diff folded to %d lines (/diff-fold to expand)",
+	DiffFoldDisabled:            "diff expanded — showing all lines (/diff-fold to fold)",
 
 	OutputStyleNone:    "no output styles available",
 	OutputStyleHeader:  "output styles:",
-	OutputStyleHint:    "set agent.output_style in reasonix.toml to apply one (takes effect next session)",
+	OutputStyleHint:    "set agent.output_style in maddog.toml to apply one (takes effect next session)",
 	ThemeHeader:        "themes:",
 	ThemeHint:          "switch with /theme <auto|light|dark|style>",
 	ThemeChangedFmt:    "theme switched to %s / %s",
@@ -84,12 +95,15 @@ var English = Messages{
 
 	SlashCompactDone:   "session compacted — older middle replaced by a summary, recent turns kept",
 	SlashCompactFailed: "compaction failed",
-	SlashNewDone:       "fresh session started — previous transcript saved",
+	SlashNewDone:       "new session started — previous transcript saved",
 	SlashNewFailed:     "could not start a new session",
+	SlashClearPrompt:   "Clear current context without saving?",
+	SlashClearDone:     "current context cleared",
+	SlashClearFailed:   "could not clear current context",
 	SlashUnavailable:   "command unavailable in this build",
 	SlashUnknown:       "unknown command",
 	SlashTodoCleared:   "task list dismissed",
-	SlashHelp:          "commands: /compact · /new · /resume · /rewind · /tree · /branch · /switch · /todo · /verbose · /model (switch model) · /effort · /theme · /language · /mcp · /skills · /hooks · /paste-image · /memory · /remember · /quit · /help · plus skills (/init, /explore, …)",
+	SlashHelp:          "commands: /compact · /new · /clear · /resume · /rewind · /tree · /branch · /switch · /todo · /verbose · /model (switch model) · /effort · /theme · /language · /mcp · /skills · /hooks · /paste-image · /memory · /goal · /remember · /quit · /help · plus skills (/init, /explore, …)",
 
 	SkillPickerTitle:             "Skills",
 	SkillPickerAvailableFmt:      "%d available",
@@ -136,7 +150,7 @@ var English = Messages{
 	SkillPickerStatusNotDir:      "not-directory",
 	SkillPickerStatusUnreadable:  "unreadable",
 	SlashPromptEmpty:             "the MCP prompt returned no content to send",
-	SlashMCPNone:                 "no MCP servers configured — add a [[plugins]] entry in reasonix.toml",
+	SlashMCPNone:                 "no MCP servers configured — add a [[plugins]] entry in maddog.toml",
 	CtrlCQuitHint:                "press Ctrl+C again to quit",
 	CompHintSlash:                "↑/↓ move · Tab/Enter select · Esc close",
 	CompHintFile:                 "↑/↓ move · Tab/Enter open folder or pick file · Esc close",
@@ -146,17 +160,20 @@ var English = Messages{
 	ShellExecTimeoutFmt: "shell command timed out (> %s)",
 	ShellModeHint:       "Enter runs shell · Esc cancels · click output to expand",
 
-	CmdNew:          "fork a fresh session",
+	CmdNew:          "start new session; save transcript",
+	CmdClear:        "discard current context",
 	CmdCompact:      "compact context",
 	CmdRewind:       "rewind to an earlier turn",
 	CmdTree:         "show conversation branches",
 	CmdBranch:       "create a conversation branch",
 	CmdSwitchBranch: "switch conversation branch",
 	CmdResume:       "resume a saved session",
+	CmdRename:       "rename a session",
 	CmdModel:        "switch model",
 	CmdMemory:       "show memory files",
+	CmdGoal:         "set or clear the active goal",
 	CmdRemember:     "save a memory note",
-	CmdForget:       "delete a saved memory",
+	CmdForget:       "archive a saved memory",
 	CmdMcp:          "MCP servers",
 	CmdHooks:        "manage hooks",
 	CmdPasteImage:   "paste clipboard image",
@@ -165,8 +182,11 @@ var English = Messages{
 	CmdLanguage:     "switch CLI language",
 	CmdSkill:        "manage skills",
 	CmdVerbose:      "toggle thinking text",
+	CmdDiffFold:     "toggle diff fold/expand",
+	CmdSandbox:      "show sandbox status",
 	CmdEffort:       "set reasoning effort",
 	CmdAutoPlan:     "configure automatic plan mode",
+	CmdReasonLang:   "set visible reasoning language",
 	CmdHelp:         "list commands",
 	CmdTodo:         "dismiss the task list",
 	CmdQuit:         "exit the session",
@@ -188,30 +208,36 @@ var English = Messages{
 	ArgEffortXHigh:  "extra deep reasoning",
 	ArgEffortMax:    "maximum reasoning",
 	ArgThemeCurrent: "current",
-	ArgLanguageAuto: "auto-detect from REASONIX_LANG / locale",
+	ArgLanguageAuto: "auto-detect from MADDOG_LANG / locale",
 	ArgLanguageEn:   "English",
 	ArgLanguageZh:   "中文",
 
 	ListModelsHeaderFmt: "models (active: %s)",
 	ListModelsHint:      "switch with the model switcher, or type /model <provider/model>",
 	ListMemoryHeader:    "memory files",
+	ListMemorySaved:     "saved memories",
+	ListMemoryArchived:  "archived memories",
 	ListMemoryNone:      "memory: none — add with “/remember <note>” or run /init to generate AGENTS.md",
 	ListSkillsHeaderFmt: "skills (%d)",
 	ListSkillsNone:      "skills: none defined — invoke a built-in like /init, or author one with install_skill",
 	ListHooksHeaderFmt:  "hooks (%d active)",
-	ListHooksNone:       "hooks: none active — configure in .reasonix/settings.json (project, after trust) or ~/.reasonix/settings.json (global)",
+	ListHooksNone:       "hooks: none active — configure in .maddog/settings.json (project, after trust) or ~/.maddog/settings.json (global)",
 	ListMcpHeader:       "mcp servers",
-	ListMcpNone:         "mcp: no servers connected — add one in reasonix.toml ([[plugins]]) or a project .mcp.json",
+	ListMcpNone:         "mcp: no servers connected — add one in maddog.toml ([[plugins]]) or a project .mcp.json",
 
-	MemoryNone:             "memory: none — add with “/remember <note>” or create REASONIX.md in the project root",
+	MemoryNone:             "memory: none — add with “/remember <note>” or create MADDOG.md in the project root",
 	MemoryLoaded:           "memory loaded:",
-	MemorySavedHeader:      "  saved memories (delete with “/forget <name>”):",
+	MemorySavedHeader:      "  saved memories (archive with “/forget <name>”):",
 	MemoryStoredUnderFmt:   "  stored under %s",
 	MemoryEditHint:         "edit doc files or use “/remember <note>”; doc edits apply next session",
 	ForgetUsage:            "usage: /forget <name> — the slug shown under “saved memories” in /memory",
-	ForgetDoneFmt:          "forgot memory: %s",
+	ForgetDoneFmt:          "forgot and archived memory: %s",
 	QuickRememberEmpty:     "nothing to remember",
 	QuickRememberDoneFmt:   "remembered → %s",
+	GoalEmpty:              "goal: none — set one with /goal <objective>",
+	GoalCurrentFmt:         "goal: %s",
+	GoalSetFmt:             "goal set → %s",
+	GoalCleared:            "goal cleared",
 	ModelSwitchUnavailable: "model switching is unavailable in this session",
 	ModelSwitchBusy:        "finish or cancel the current turn before switching models",
 	ModelAlreadyOnFmt:      "already on %s",
@@ -233,12 +259,12 @@ var English = Messages{
 
 	SelectProvidersLabel:  "Select providers to enable",
 	EnterAPIKeysHeader:    "Enter API keys (Enter to skip and set later):",
-	MissingKeyIntro:       "reasonix.toml is ready — just an API key away.",
+	MissingKeyIntro:       "maddog.toml is ready — just an API key away.",
 	WroteFileFmt:          "Wrote %s",
 	SetupComplete:         "Setup complete.",
 	SetupCancelled:        "setup cancelled.",
 	TryHintFmt:            "Try: %s",
-	NextHint:              "Next: set your API key (run `reasonix setup` or export DEEPSEEK_API_KEY=...), then run `reasonix run \"your task\"`.",
+	NextHint:              "Next: set your API key (run `maddog setup` or export DEEPSEEK_API_KEY=...), then run `maddog run \"your task\"`.",
 	ConfirmReconfigureFmt: "%s already exists. Reconfigure and overwrite?",
 	KeepingExisting:       "Keeping existing config.",
 	NotOverwritingFmt:     "%s already exists; not overwriting",
@@ -253,7 +279,7 @@ var English = Messages{
 	NoModelsAvailableFmt:       "%s: no models available, skipping",
 	CustomFetchEmpty:           "/models returned an empty list — falling back to manual entry",
 	AnthropicFetchEmpty:        "/models returned an empty list — Anthropic-compatible providers usually don't expose one, falling back to manual entry",
-	SkipStaleCustomEntryFmt:    "skipping stale %q entry from reasonix.toml (pointing at %s) — please remove it from [[providers]]",
+	SkipStaleCustomEntryFmt:    "skipping stale %q entry from maddog.toml (pointing at %s) — please remove it from [[providers]]",
 	APIKeyAlreadySetFmt:        "reusing existing value for %s",
 	APIKeyResetPromptFmt:       "Re-enter %s?",
 
@@ -286,47 +312,78 @@ var English = Messages{
 	AnthropicSelectModelsLabel:     "Select models to enable for %s",
 
 	UnknownCommandFmt:         "unknown command %q",
-	UsageRunHint:              "usage: reasonix run [--model NAME] <task>",
+	UsageRunHint:              "usage: maddog run [--model NAME] <task>",
 	ErrorPrefix:               "error:",
 	ReconfigureOnUnknownModel: "Configured model is no longer available — re-running setup.",
 	WriteConfigErr:            "write config:",
-	WriteEnvErr:               "write .env:",
+	WriteEnvErr:               "write credentials:",
 
 	ProviderErrBadRequest:          "Malformed request (HTTP 400): the request body was rejected. This is likely a bug — please report it if it persists.",
-	ProviderErrAuth:                "Authentication failed (HTTP 401): your API key is missing, wrong, or expired. Check the key in .env or run `reasonix setup`.",
+	ProviderErrAuth:                "Authentication failed (HTTP 401): your API key is missing, wrong, or expired. Check the key in Maddog credentials, a project .env, or run `maddog setup`.",
 	ProviderErrInsufficientBalance: "Insufficient balance (HTTP 402): your account is out of credit. Top up your account, then retry.",
 	ProviderErrUnprocessable:       "Invalid parameters (HTTP 422): a request parameter was rejected. This is likely a bug — please report it if it persists.",
 	ProviderErrRateLimited:         "Rate limit reached (HTTP 429): too many requests (TPM/RPM). Retried with backoff — slow down or try again shortly.",
 	ProviderErrServer:              "Server error (HTTP 500): the provider hit an internal fault. Retried with backoff; if it keeps failing, try again later.",
 	ProviderErrServerBusy:          "Server busy (HTTP 503): the provider is overloaded. Retried with backoff; please try again shortly.",
 
-	SelectOneHint:  "(↑/↓ · Enter · q to cancel)",
-	SelectManyHint: "(↑/↓ · Space · Enter · q)",
+	SelectOneHint:  "(↑/↓ · Enter · q to cancel; / to search)",
+	SelectManyHint: "(↑/↓ · Space · Enter · q; / to search)",
 
-	UsageBody: `reasonix — a config- and plugin-driven coding agent (multi-model)
+	SelectMoreAboveFmt: "  ↑ %d more above",
+	SelectMoreBelowFmt: "  ↓ %d more below",
+	SelectSearchHint:   "/ to search · type to filter · Esc cancel search",
+
+	CmdProvider:          "switch provider",
+	ProviderListHeader:   "providers (/provider <name> to switch)",
+	ProviderAlreadyOnFmt: "already using provider %s",
+	ProviderUnknownFmt:   "unknown provider %q",
+	ProviderPickLabel:    "Select a model from %s",
+	ProviderNoModelsFmt:  "provider %s has no configured models",
+
+	// self-update
+	UpgradeChecking:            "Checking for updates…",
+	UpgradeDevBuild:            "dev builds cannot self-update",
+	UpgradeFetchFailed:         "failed to check for updates: %v",
+	UpgradeInvalidVersion:      "remote version is not valid semver",
+	UpgradeAlreadyLatest:       "Already on the latest version.",
+	UpgradeForcing:             "Reinstalling the same version…",
+	UpgradeAvailableFmt:        "Current: %s → Latest: %s",
+	UpgradeNoAssetFmt:          "no binary found for %s",
+	UpgradeDownloadingFmt:      "Downloading %s (%s)…",
+	UpgradeDownloadFailed:      "download failed: %v",
+	UpgradeVerifying:           "Verifying checksum…",
+	UpgradeChecksumFailed:      "could not fetch checksum file: %v",
+	UpgradeChecksumMismatchFmt: "SHA256 mismatch: got %s, want %s",
+	UpgradeChecksumNotFoundFmt: "%s not found in SHA256SUMS",
+	UpgradeExtractFailed:       "failed to extract binary: %v",
+	UpgradeApplying:            "Replacing binary…",
+	UpgradeApplyFailed:         "failed to apply update: %v",
+	UpgradeSuccessFmt:          "Updated %s → %s",
+
+	UsageBody: `maddog — a config- and plugin-driven coding agent (multi-model)
 
 Usage:
-  reasonix chat [--model NAME] [-c|--continue] [--resume]   interactive session (multi-turn; -c resumes the latest, --resume picks one)
-  reasonix run  [--model NAME] [--max-steps N] <task>   run one task and exit
-  reasonix serve [--model NAME] [--addr HOST:PORT]      serve the session over HTTP+SSE (browser client at /)
-  reasonix acp [--model NAME]                           serve Agent Client Protocol over stdio (also: reasonix --acp)
-  reasonix setup [path]                                 interactive config wizard; writes reasonix.toml (+ .env)
-  reasonix config auto-plan [off|on]                    configure automatic plan mode
-  reasonix mcp <add|remove|list>                        manage MCP servers in reasonix.toml
-  reasonix doctor [--json]                              print redacted local diagnostics
-  reasonix version
-  reasonix help
+  maddog chat [--model NAME] [-c|--continue] [--resume]   interactive session (multi-turn; -c resumes the latest, --resume picks one)
+  maddog run  [--model NAME] [--max-steps N] <task>   run one task and exit
+  maddog serve [--model NAME] [--addr HOST:PORT]      serve the session over HTTP+SSE (browser client at /)
+  maddog acp [--model NAME]                           serve Agent Client Protocol over stdio (also: maddog --acp)
+  maddog setup [path]                                 interactive config wizard; writes maddog.toml (+ credentials)
+  maddog config auto-plan [off|on]                    configure automatic plan mode
+  maddog mcp <add|remove|list>                        manage MCP servers in maddog.toml
+  maddog doctor [--json]                              print redacted local diagnostics
+  maddog version
+  maddog help
 
 Examples:
-  reasonix chat
-  reasonix chat --continue
-  reasonix run "implement the TODOs in main.go"
-  reasonix run --model mimo-pro "add unit tests for this function"
-  echo "explain this code" | reasonix run
+  maddog chat
+  maddog chat --continue
+  maddog run "implement the TODOs in main.go"
+  maddog run --model mimo-pro "add unit tests for this function"
+  echo "explain this code" | maddog run
 
 Configuration:
-  Resolution: flag > ./reasonix.toml > ~/.config/reasonix/config.toml > built-in defaults
+  Resolution: flag > ./maddog.toml > ~/.config/maddog/config.toml > built-in defaults
   Secrets come from the environment via api_key_env (e.g. DEEPSEEK_API_KEY).
-  Run 'reasonix setup' to scaffold a config; see docs/SPEC.md.
+  Run 'maddog setup' to scaffold a config; see docs/SPEC.md.
 `,
 }
