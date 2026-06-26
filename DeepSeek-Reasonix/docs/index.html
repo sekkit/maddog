@@ -29,7 +29,7 @@
   nav{position:sticky;top:0;z-index:40;background:rgba(247,246,243,.82);backdrop-filter:blur(10px);border-bottom:1px solid var(--line)}
   .nav{display:flex;align-items:center;justify-content:space-between;height:64px}
   .brand{display:flex;align-items:center;gap:9px;font-weight:600;font-size:17px;letter-spacing:-.02em;color:var(--ink)}
-  .brand .mk{width:22px;height:22px;border-radius:6px;background:var(--ink);color:#fff;display:grid;place-items:center;font-size:13px;font-weight:700}
+  .brand .mk{width:22px;height:22px;border-radius:6px;display:block;object-fit:contain}
   .nav-links{display:flex;gap:30px}
   .nav-links a{color:var(--muted);font-size:15px;transition:color .15s}
   .nav-links a:hover{color:var(--ink)}
@@ -135,7 +135,7 @@
 <body>
 <nav>
   <div class="wrap nav">
-    <a class="brand" href="#top"><span class="mk">R</span>Maddog</a>
+    <a class="brand" href="#top"><img class="mk" src="logo.svg" alt="">Maddog</a>
     <div class="nav-links">
       <a href="#install" data-en>Install</a><a href="#install" data-zh>安装</a>
       <a href="#features" data-en>Features</a><a href="#features" data-zh>特性</a>
