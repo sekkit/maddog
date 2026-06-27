@@ -226,6 +226,15 @@ Invoke-Step `
   }
 
 Invoke-Step `
+  -Name "all-go" `
+  -Command "$GoExe test ./... -count=1" `
+  -Coverage @("all-go-packages", "desktop-go-module", "bot", "builtin-mcp", "checkpoint", "codegraph", "diff", "hooks", "lsp", "memory", "permissions", "plugins", "tools") `
+  -Required $true `
+  -Action {
+    Invoke-Native $GoExe @("test", "./...", "-count=1")
+  }
+
+Invoke-Step `
   -Name "build-maddog-cli" `
   -Command "$GoExe build -o $MaddogBin ./cmd/reasonix" `
   -Coverage @("cli", "external-harness", "e2e") `
