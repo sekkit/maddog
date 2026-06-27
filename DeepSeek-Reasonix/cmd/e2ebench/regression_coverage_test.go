@@ -121,6 +121,21 @@ func TestMaddogBenchmarkCoverageAudit(t *testing.T) {
 			"desktop/branding_test.go:maddog-dev.exe",
 			"desktop/release_branding_test.go:${APPNAME}-windows-${arch}-installer.exe",
 		},
+		"Desktop GUI model/provider/advisor controls": {
+			"desktop/frontend/package.json:maddog-mechanisms-contract.test.ts",
+			"desktop/frontend/package.json:provider-model-refresh.test.ts",
+			"desktop/frontend/src/__tests__/maddog-mechanisms-contract.test.ts:app.SetFrontierRoute(model, enabled, threshold, budget)",
+			"desktop/frontend/src/__tests__/maddog-mechanisms-contract.test.ts:const AUTH_TYPES: readonly string[] = [\"api_key\", \"bearer\", \"workload_identity\"]",
+			"desktop/frontend/src/__tests__/maddog-mechanisms-contract.test.ts:placeholder=\"ANTHROPIC_IDENTITY_TOKEN\"",
+			"desktop/frontend/src/__tests__/maddog-mechanisms-contract.test.ts:event === \"upgrade\"",
+			"desktop/frontend/src/__tests__/provider-model-refresh.test.ts:background refresh preserves manually curated model list",
+		},
+		"External coding benchmark Maddog adapter": {
+			"benchmarks/coding-agent-benchmark/maddog.config.yaml:MADDOG_MODEL",
+			"benchmarks/coding-agent-benchmark/maddog.config.yaml:{workspace}/.maddog-run-metrics.json",
+			"scripts/run-coding-agent-benchmark.ps1:.benchmark\\maddog-home",
+			"scripts/run-coding-agent-benchmark.ps1:SmokeOnly",
+		},
 	}
 	for capability, evidences := range testEvidence {
 		for _, evidence := range evidences {
