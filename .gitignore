@@ -4,6 +4,22 @@
 # Maddog local runtime state
 .maddog/
 
+# Local external clones and generated research payloads
+advisor-middleware/
+research/github-stars-sekkit-2026-06-27/meta/
+research/github-stars-sekkit-2026-06-27/raw/
+research/github-stars-sekkit-2026-06-27/readmes/
+research/github-stars-sekkit-2026-06-27/stars.json
+research/github-stars-sekkit-2026-06-27/repos.compact.json
+research/github-stars-sekkit-2026-06-27/repos.csv
+research/github-stars-sekkit-2026-06-27/readme_manifest.json
+
+# Local dev/runtime logs and task metrics
+*.err.log
+*.out.log
+frontier-metrics.json
+frontier-task-metrics.json
+
 # macOS
 .DS_Store
 
