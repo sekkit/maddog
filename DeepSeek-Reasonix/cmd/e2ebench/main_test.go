@@ -260,6 +260,65 @@ max_tool_errors = 0
 	}
 }
 
+func TestLocalProviderFixtureRunCanTargetFrontierUpgradeTask(t *testing.T) {
+	root := t.TempDir()
+	taskDir := filepath.Join(root, "tasks", "local-frontier-upgrade")
+	if err := os.MkdirAll(filepath.Join(taskDir, "workdir"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(taskDir, "task.toml"), []byte(`
+prompt = "fixture"
+max_steps = 6
+timeout_sec = 30
+tags = ["local-fixture", "frontier", "upgrade", "small-model", "provider", "metrics", "headless-cli"]
+requires = ["local-frontier-fixture", "filesystem"]
+
+[expect]
+min_upgrades = 1
+min_tool_calls = 3
+max_tool_errors = 3
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(taskDir, "verify.sh"), []byte("set -e\npython3 - <<'PY'\nimport json\nfrom pathlib import Path\nmetrics=json.loads(Path('.run-metrics.json').read_text())\nassert metrics['upgrade_events'] >= 1\nPY\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	tasks, err := loadTasks(root)
+	if err != nil {
+		t.Fatalf("loadTasks: %v", err)
+	}
+	suite, err := newLocalFixtureSuite(tasks, "maddog-bin", localFixtureKindFrontierUpgrade)
+	if err != nil {
+		t.Fatalf("newLocalFixtureSuite: %v", err)
+	}
+	defer suite.Close()
+
+	if suite.task.ID != "local-frontier-upgrade" {
+		t.Fatalf("fixture task = %q", suite.task.ID)
+	}
+	if suite.model != "local-small-fixture/local-small-model" {
+		t.Fatalf("fixture model = %q", suite.model)
+	}
+	cfg, err := os.ReadFile(filepath.Join(suite.task.dir, "workdir", "maddog.toml"))
+	if err != nil {
+		t.Fatalf("fixture config missing: %v", err)
+	}
+	for _, want := range []string{
+		`default_model = "local-small-fixture/local-small-model"`,
+		`frontier_model = "local-frontier-fixture/local-frontier-model"`,
+		`upgrade_enabled = true`,
+		`upgrade_threshold = 3`,
+		`name = "local-small-fixture"`,
+		`name = "local-frontier-fixture"`,
+		suite.server.URL,
+	} {
+		if !strings.Contains(string(cfg), want) {
+			t.Fatalf("fixture config missing %q:\n%s", want, cfg)
+		}
+	}
+}
+
 func TestResolveBinPathKeepsPATHLookupAndAbsolutizesRelativePath(t *testing.T) {
 	got := resolveBinPath("maddog")
 	if got != "maddog" {

@@ -145,6 +145,33 @@ func TestMaddogBenchmarkCoverageAudit(t *testing.T) {
 		}
 	}
 
+	frontierFixtureTask := taskByID(t, tasks, "local-frontier-upgrade")
+	for _, tag := range []string{"local-fixture", "frontier", "upgrade", "small-model", "provider", "metrics", "headless-cli"} {
+		if !hasString(frontierFixtureTask.Tags, tag) {
+			t.Fatalf("local-frontier-upgrade missing tag %q: %#v", tag, frontierFixtureTask.Tags)
+		}
+	}
+	if !hasString(frontierFixtureTask.Requires, "local-frontier-fixture") {
+		t.Fatalf("local-frontier-upgrade should require local-frontier-fixture: %#v", frontierFixtureTask.Requires)
+	}
+	if frontierFixtureTask.Expect.MinUpgrades < 1 || frontierFixtureTask.Expect.MinToolErrors < 3 {
+		t.Fatalf("local-frontier-upgrade should require upgrade and tool-error metrics: %+v", frontierFixtureTask.Expect)
+	}
+	if frontierFixtureTask.Expect.MaxToolErrors == nil || *frontierFixtureTask.Expect.MaxToolErrors != 3 {
+		t.Fatalf("local-frontier-upgrade should pin expected tool errors: %+v", frontierFixtureTask.Expect)
+	}
+	frontierFixtureVerify := readRepoFile(t, root, "benchmarks", "e2e", "tasks", "local-frontier-upgrade", "verify.sh")
+	for _, want := range []string{
+		".run-metrics.json",
+		`metrics["upgrade_events"] >= 1`,
+		`metrics["tool_errors"] == 3`,
+		`metrics["steps"] >= 4`,
+	} {
+		if !strings.Contains(frontierFixtureVerify, want) {
+			t.Fatalf("local frontier fixture verifier missing %q", want)
+		}
+	}
+
 	testEvidence := map[string][]string{
 		"OpenAI API-key and official bearer auth": {
 			"internal/provider/openai/openai_test.go:oauth-access-token",
@@ -209,6 +236,13 @@ func TestMaddogBenchmarkCoverageAudit(t *testing.T) {
 			"cmd/e2ebench/local_fixture.go:tool_result",
 			"scripts/run-maddog-regression.ps1:anthropic-native-sse",
 		},
+		"Offline frontier upgrade routing metrics": {
+			"cmd/e2ebench/local_fixture.go:local-frontier-upgrade",
+			"cmd/e2ebench/local_fixture.go:local-small-fixture",
+			"cmd/e2ebench/local_fixture.go:local-frontier-fixture",
+			"benchmarks/e2e/tasks/local-frontier-upgrade/verify.sh:upgrade_events",
+			"scripts/run-maddog-regression.ps1:frontier-upgrade",
+		},
 	}
 	for capability, evidences := range testEvidence {
 		for _, evidence := range evidences {
@@ -242,6 +276,7 @@ func TestMaddogBenchmarkCoverageAudit(t *testing.T) {
 		"DEEPSEEK_API_KEY",
 		"local-provider-e2e",
 		"local-fixture",
+		"frontier-upgrade",
 	} {
 		if !strings.Contains(strings.ToLower(regressionScript), strings.ToLower(want)) {
 			t.Fatalf("run-maddog-regression.ps1 should mention coverage %q", want)

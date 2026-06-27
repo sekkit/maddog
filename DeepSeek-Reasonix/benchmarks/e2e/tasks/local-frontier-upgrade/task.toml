@@ -1,0 +1,11 @@
+prompt = "Recover from repeated small-model tool failures by continuing until the frontier model provides a final answer."
+max_steps = 6
+timeout_sec = 120
+tags = ["local-fixture", "frontier", "upgrade", "small-model", "provider", "metrics", "headless-cli"]
+requires = ["local-frontier-fixture", "filesystem"]
+
+[expect]
+min_upgrades = 1
+min_tool_calls = 3
+min_tool_errors = 3
+max_tool_errors = 3

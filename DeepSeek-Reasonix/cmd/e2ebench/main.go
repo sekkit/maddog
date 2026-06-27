@@ -40,6 +40,7 @@ type taskExpect struct {
 	MinSkillGeneratedEvents int  `toml:"min_skill_generated_events" json:"min_skill_generated_events,omitempty"`
 	MinToolCalls            int  `toml:"min_tool_calls" json:"min_tool_calls,omitempty"`
 	MinToolTruncations      int  `toml:"min_tool_truncations" json:"min_tool_truncations,omitempty"`
+	MinToolErrors           int  `toml:"min_tool_errors" json:"min_tool_errors,omitempty"`
 	MaxToolErrors           *int `toml:"max_tool_errors" json:"max_tool_errors,omitempty"`
 }
 
@@ -796,6 +797,7 @@ func applyExpectations(r *result) {
 	expectAtLeast("skill generated events", r.SkillGeneratedEvents, e.MinSkillGeneratedEvents)
 	expectAtLeast("tool calls", r.ToolCalls, e.MinToolCalls)
 	expectAtLeast("tool truncations", r.ToolTruncations, e.MinToolTruncations)
+	expectAtLeast("tool errors", r.ToolErrors, e.MinToolErrors)
 	if e.MaxToolErrors != nil && r.ToolErrors > *e.MaxToolErrors {
 		misses = append(misses, fmt.Sprintf("tool errors %d > %d", r.ToolErrors, *e.MaxToolErrors))
 	}
@@ -844,6 +846,7 @@ func expectationCell(e taskExpect) string {
 	addMin("dynamic skills", e.MinSkillGeneratedEvents)
 	addMin("tool calls", e.MinToolCalls)
 	addMin("tool truncations", e.MinToolTruncations)
+	addMin("tool errors", e.MinToolErrors)
 	if e.MaxToolErrors != nil {
 		parts = append(parts, fmt.Sprintf("tool errors <= %d", *e.MaxToolErrors))
 	}

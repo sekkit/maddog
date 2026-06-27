@@ -87,6 +87,32 @@
       "has_verify": true
     },
     {
+      "id": "local-frontier-upgrade",
+      "tags": [
+        "local-fixture",
+        "frontier",
+        "upgrade",
+        "small-model",
+        "provider",
+        "metrics",
+        "headless-cli"
+      ],
+      "requires": [
+        "local-frontier-fixture",
+        "filesystem"
+      ],
+      "expect": {
+        "min_upgrades": 1,
+        "min_tool_calls": 3,
+        "min_tool_errors": 3,
+        "max_tool_errors": 3
+      },
+      "max_steps": 6,
+      "timeout_sec": 120,
+      "has_seed_workdir": false,
+      "has_verify": true
+    },
+    {
       "id": "local-provider-tool-loop",
       "tags": [
         "local-fixture",
@@ -256,14 +282,14 @@
     "edit-existing-file": 1,
     "evidence": 1,
     "file-write": 2,
-    "frontier": 3,
-    "headless-cli": 11,
+    "frontier": 4,
+    "headless-cli": 12,
     "host-checks": 1,
-    "local-fixture": 2,
+    "local-fixture": 3,
     "maddog-isolation": 1,
-    "metrics": 2,
+    "metrics": 3,
     "project-skill": 1,
-    "provider": 4,
+    "provider": 5,
     "python": 3,
     "readiness": 1,
     "run-skill": 1,
@@ -271,19 +297,20 @@
     "sequential-read": 1,
     "session-isolation": 1,
     "skill": 1,
-    "small-model": 1,
+    "small-model": 2,
     "subagent": 1,
     "tinyctx": 1,
     "tool-loop": 2,
     "tool-output": 1,
     "tool-policy": 1,
-    "upgrade": 1,
+    "upgrade": 2,
     "verification": 1
   },
   "requires": {
     "bash": 1,
-    "filesystem": 11,
+    "filesystem": 12,
     "local-anthropic-fixture": 1,
+    "local-frontier-fixture": 1,
     "local-openai-fixture": 1,
     "maddog.toml": 2,
     "markdown": 1,
@@ -302,6 +329,7 @@
       "fix-add-bug",
       "fizzbuzz",
       "local-anthropic-tool-loop",
+      "local-frontier-upgrade",
       "local-provider-tool-loop",
       "palindrome",
       "project-config-isolation",
@@ -312,6 +340,9 @@
     ],
     "local-anthropic-fixture": [
       "local-anthropic-tool-loop"
+    ],
+    "local-frontier-fixture": [
+      "local-frontier-upgrade"
     ],
     "local-openai-fixture": [
       "local-provider-tool-loop"

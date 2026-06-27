@@ -13,8 +13,9 @@ import (
 type localFixtureKind string
 
 const (
-	localFixtureKindOpenAI    localFixtureKind = "openai"
-	localFixtureKindAnthropic localFixtureKind = "anthropic"
+	localFixtureKindOpenAI          localFixtureKind = "openai"
+	localFixtureKindAnthropic       localFixtureKind = "anthropic"
+	localFixtureKindFrontierUpgrade localFixtureKind = "frontier-upgrade"
 
 	localOpenAITaskID   = "local-provider-tool-loop"
 	localOpenAIProvider = "local-openai-fixture"
@@ -27,6 +28,15 @@ const (
 	localAnthropicModel    = "claude-local-frontier"
 	localAnthropicModelRef = localAnthropicProvider + "/" + localAnthropicModel
 	localAnthropicKeyEnv   = "MADDOG_LOCAL_ANTHROPIC_FIXTURE_KEY"
+
+	localFrontierUpgradeTaskID = "local-frontier-upgrade"
+	localSmallProvider         = "local-small-fixture"
+	localSmallModel            = "local-small-model"
+	localSmallModelRef         = localSmallProvider + "/" + localSmallModel
+	localFrontierProvider      = "local-frontier-fixture"
+	localFrontierModel         = "local-frontier-model"
+	localFrontierModelRef      = localFrontierProvider + "/" + localFrontierModel
+	localFrontierKeyEnv        = "MADDOG_LOCAL_FRONTIER_FIXTURE_KEY"
 )
 
 type localFixtureSuite struct {
@@ -35,9 +45,13 @@ type localFixtureSuite struct {
 	bin    string
 	model  string
 	task   task
-	envKey string
-	envOld string
-	envHad bool
+	envs   []localFixtureEnv
+}
+
+type localFixtureEnv struct {
+	key string
+	old string
+	had bool
 }
 
 func newLocalFixtureSuite(tasks []task, bin string, kinds ...localFixtureKind) (*localFixtureSuite, error) {
@@ -77,11 +91,16 @@ func newLocalFixtureSuite(tasks []task, bin string, kinds ...localFixtureKind) (
 		return nil, err
 	}
 	selected.dir = taskDir
-	oldKey, hadKey := os.LookupEnv(spec.keyEnv)
-	if err := os.Setenv(spec.keyEnv, "local-fixture-key"); err != nil {
-		server.Close()
-		os.RemoveAll(dir)
-		return nil, err
+	var envs []localFixtureEnv
+	for _, key := range spec.keyEnvs {
+		oldKey, hadKey := os.LookupEnv(key)
+		if err := os.Setenv(key, "local-fixture-key"); err != nil {
+			server.Close()
+			os.RemoveAll(dir)
+			restoreLocalFixtureEnvs(envs)
+			return nil, err
+		}
+		envs = append(envs, localFixtureEnv{key: key, old: oldKey, had: hadKey})
 	}
 	return &localFixtureSuite{
 		server: server,
@@ -89,15 +108,13 @@ func newLocalFixtureSuite(tasks []task, bin string, kinds ...localFixtureKind) (
 		bin:    bin,
 		model:  spec.modelRef,
 		task:   selected,
-		envKey: spec.keyEnv,
-		envOld: oldKey,
-		envHad: hadKey,
+		envs:   envs,
 	}, nil
 }
 
 func newLocalFixtureSuites(tasks []task, bin string) ([]*localFixtureSuite, error) {
 	var suites []*localFixtureSuite
-	for _, kind := range []localFixtureKind{localFixtureKindOpenAI, localFixtureKindAnthropic} {
+	for _, kind := range []localFixtureKind{localFixtureKindOpenAI, localFixtureKindAnthropic, localFixtureKindFrontierUpgrade} {
 		suite, err := newLocalFixtureSuite(tasks, bin, kind)
 		if err != nil {
 			for _, existing := range suites {
@@ -120,23 +137,28 @@ func (s *localFixtureSuite) Close() {
 	if s.dir != "" {
 		_ = os.RemoveAll(s.dir)
 	}
-	if s.envKey != "" {
-		if s.envHad {
-			_ = os.Setenv(s.envKey, s.envOld)
+	restoreLocalFixtureEnvs(s.envs)
+}
+
+func restoreLocalFixtureEnvs(envs []localFixtureEnv) {
+	for i := len(envs) - 1; i >= 0; i-- {
+		if envs[i].had {
+			_ = os.Setenv(envs[i].key, envs[i].old)
 		} else {
-			_ = os.Unsetenv(s.envKey)
+			_ = os.Unsetenv(envs[i].key)
 		}
 	}
 }
 
 type localFixtureSpec struct {
-	taskID    string
-	provider  string
-	model     string
-	modelRef  string
-	keyEnv    string
-	kind      string
-	newServer func() *httptest.Server
+	taskID      string
+	provider    string
+	model       string
+	modelRef    string
+	keyEnvs     []string
+	kind        string
+	newServer   func() *httptest.Server
+	writeConfig func(workDir string, spec localFixtureSpec, baseURL string) error
 }
 
 func localFixtureSpecFor(kind localFixtureKind) (localFixtureSpec, error) {
@@ -147,7 +169,7 @@ func localFixtureSpecFor(kind localFixtureKind) (localFixtureSpec, error) {
 			provider:  localOpenAIProvider,
 			model:     localOpenAIModel,
 			modelRef:  localOpenAIModelRef,
-			keyEnv:    localOpenAIKeyEnv,
+			keyEnvs:   []string{localOpenAIKeyEnv},
 			kind:      "openai",
 			newServer: newLocalOpenAIFixture,
 		}, nil
@@ -157,9 +179,20 @@ func localFixtureSpecFor(kind localFixtureKind) (localFixtureSpec, error) {
 			provider:  localAnthropicProvider,
 			model:     localAnthropicModel,
 			modelRef:  localAnthropicModelRef,
-			keyEnv:    localAnthropicKeyEnv,
+			keyEnvs:   []string{localAnthropicKeyEnv},
 			kind:      "anthropic",
 			newServer: newLocalAnthropicFixture,
+		}, nil
+	case localFixtureKindFrontierUpgrade:
+		return localFixtureSpec{
+			taskID:      localFrontierUpgradeTaskID,
+			provider:    localSmallProvider,
+			model:       localSmallModel,
+			modelRef:    localSmallModelRef,
+			keyEnvs:     []string{localFrontierKeyEnv},
+			kind:        "openai",
+			newServer:   newLocalFrontierUpgradeFixture,
+			writeConfig: writeLocalFrontierUpgradeConfig,
 		}, nil
 	default:
 		return localFixtureSpec{}, fmt.Errorf("unknown local fixture kind %q", kind)
@@ -176,6 +209,9 @@ func findTask(tasks []task, id string) (task, bool) {
 }
 
 func writeLocalFixtureConfig(workDir string, spec localFixtureSpec, baseURL string) error {
+	if spec.writeConfig != nil {
+		return spec.writeConfig(workDir, spec, baseURL)
+	}
 	body := fmt.Sprintf(`default_model = %q
 language = "en"
 
@@ -187,7 +223,40 @@ model = %q
 api_key_env = %q
 reasoning_protocol = "none"
 no_proxy = true
-`, spec.modelRef, spec.provider, spec.kind, baseURL, spec.model, spec.keyEnv)
+`, spec.modelRef, spec.provider, spec.kind, baseURL, spec.model, spec.keyEnvs[0])
+	return os.WriteFile(filepath.Join(workDir, "maddog.toml"), []byte(body), 0o644)
+}
+
+func writeLocalFrontierUpgradeConfig(workDir string, _ localFixtureSpec, baseURL string) error {
+	body := fmt.Sprintf(`default_model = %q
+language = "en"
+
+[agent]
+frontier_model = %q
+upgrade_enabled = true
+upgrade_threshold = 3
+frontier_budget = 100000
+
+[[providers]]
+name = %q
+kind = "openai"
+base_url = %q
+model = %q
+api_key_env = %q
+reasoning_protocol = "none"
+no_proxy = true
+
+[[providers]]
+name = %q
+kind = "openai"
+base_url = %q
+model = %q
+api_key_env = %q
+reasoning_protocol = "none"
+no_proxy = true
+`, localSmallModelRef, localFrontierModelRef,
+		localSmallProvider, baseURL, localSmallModel, localFrontierKeyEnv,
+		localFrontierProvider, baseURL, localFrontierModel, localFrontierKeyEnv)
 	return os.WriteFile(filepath.Join(workDir, "maddog.toml"), []byte(body), 0o644)
 }
 
@@ -197,6 +266,7 @@ type localProviderFixture struct {
 }
 
 type localOpenAIRequest struct {
+	Model    string `json:"model"`
 	Messages []struct {
 		Role       string `json:"role"`
 		Content    any    `json:"content"`
@@ -214,9 +284,23 @@ func newLocalOpenAIFixture() *httptest.Server {
 	return httptest.NewServer(mux)
 }
 
+func newLocalFrontierUpgradeFixture() *httptest.Server {
+	fixture := &localProviderFixture{}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/chat/completions", fixture.frontierUpgradeChatCompletions)
+	mux.HandleFunc("/models", localFrontierUpgradeModels)
+	mux.HandleFunc("/v1/models", localFrontierUpgradeModels)
+	return httptest.NewServer(mux)
+}
+
 func localOpenAIModels(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	_, _ = w.Write([]byte(`{"object":"list","data":[{"id":"local-tool-model","object":"model"}]}`))
+}
+
+func localFrontierUpgradeModels(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	_, _ = w.Write([]byte(`{"object":"list","data":[{"id":"local-small-model","object":"model"},{"id":"local-frontier-model","object":"model"}]}`))
 }
 
 func (f *localProviderFixture) openAIChatCompletions(w http.ResponseWriter, r *http.Request) {
@@ -289,6 +373,80 @@ func (f *localProviderFixture) openAIChatCompletions(w http.ResponseWriter, r *h
 			"total_tokens":             42,
 			"prompt_cache_hit_tokens":  3,
 			"prompt_cache_miss_tokens": 26,
+		},
+	})
+	_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
+}
+
+func (f *localProviderFixture) frontierUpgradeChatCompletions(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req localOpenAIRequest
+	_ = json.NewDecoder(r.Body).Decode(&req)
+	f.mu.Lock()
+	f.requests++
+	n := f.requests
+	f.mu.Unlock()
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.WriteHeader(http.StatusOK)
+	if req.Model == localFrontierModel {
+		writeSSEData(w, map[string]any{
+			"choices": []map[string]any{{
+				"delta": map[string]any{
+					"content": "Local frontier fixture recovered after small-model tool failures.",
+				},
+				"finish_reason": "stop",
+			}},
+		})
+		writeSSEData(w, map[string]any{
+			"choices": []any{},
+			"usage": map[string]any{
+				"prompt_tokens":            53,
+				"completion_tokens":        11,
+				"total_tokens":             64,
+				"prompt_cache_hit_tokens":  7,
+				"prompt_cache_miss_tokens": 46,
+			},
+		})
+		_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
+		return
+	}
+	if req.Model != localSmallModel {
+		writeSSEData(w, map[string]any{
+			"error": map[string]any{"message": "unexpected model for local frontier fixture: " + req.Model},
+		})
+		_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
+		return
+	}
+	args, _ := json.Marshal(map[string]string{})
+	writeSSEData(w, map[string]any{
+		"choices": []map[string]any{{
+			"delta": map[string]any{
+				"tool_calls": []map[string]any{{
+					"index": 0,
+					"id":    fmt.Sprintf("call_local_small_failure_%d", n),
+					"type":  "function",
+					"function": map[string]any{
+						"name":      "write_file",
+						"arguments": string(args),
+					},
+				}},
+			},
+			"finish_reason": "tool_calls",
+		}},
+	})
+	writeSSEData(w, map[string]any{
+		"choices": []any{},
+		"usage": map[string]any{
+			"prompt_tokens":            21 + n,
+			"completion_tokens":        5,
+			"total_tokens":             26 + n,
+			"prompt_cache_hit_tokens":  2,
+			"prompt_cache_miss_tokens": 19 + n,
 		},
 	})
 	_, _ = fmt.Fprint(w, "data: [DONE]\n\n")

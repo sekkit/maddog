@@ -195,8 +195,8 @@ $CoverageMatrix = @(
   },
   [pscustomobject]@{
     capability = "Frontier/small-model routing, budgets, advisor escalation, and cost wrappers"
-    evidence = @("core-go", "e2e optional", "frontier smoke optional")
-    notes = "Frontier real calls are skipped unless -IncludeFrontierSmoke is used and credentials are present."
+    evidence = @("core-go", "local-provider-e2e", "e2e optional", "frontier smoke optional")
+    notes = "The local fixture requires a small-model failure path to upgrade to frontier and record upgrade metrics; live frontier calls are skipped unless -IncludeFrontierSmoke is used and credentials are present."
   },
   [pscustomobject]@{
     capability = "Anthropic native advisor tool and desktop advisor event presentation"
@@ -297,7 +297,7 @@ Invoke-Step `
 Invoke-Step `
   -Name "local-provider-e2e" `
   -Command "$GoExe run ./cmd/e2ebench -mode local-fixture -bin $MaddogBin -out .benchmark/regression/local-provider.md -json .benchmark/regression/local-provider.json" `
-  -Coverage @("local-fixture", "openai-compatible-sse", "anthropic-native-sse", "frontier", "tool-loop", "mechanism-metrics", "headless-cli") `
+  -Coverage @("local-fixture", "openai-compatible-sse", "anthropic-native-sse", "frontier", "frontier-upgrade", "small-model", "tool-loop", "mechanism-metrics", "headless-cli") `
   -Required $true `
   -Action {
     Invoke-Native $GoExe @("run", "./cmd/e2ebench", "-mode", "local-fixture", "-bin", $MaddogBin, "-out", ".benchmark/regression/local-provider.md", "-json", ".benchmark/regression/local-provider.json")
