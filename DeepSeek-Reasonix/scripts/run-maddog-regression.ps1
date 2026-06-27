@@ -295,8 +295,8 @@ if ($SkipFrontend) {
 
 Invoke-Step `
   -Name "desktop-go" `
-  -Command "$GoExe test . -count=1 (in desktop)" `
-  -Coverage @("desktop-app", "desktop-settings", "desktop-events", "maddog-isolation") `
+  -Command "$GoExe test ./... -count=1 (in desktop)" `
+  -Coverage @("desktop-app", "desktop-settings", "desktop-events", "desktop-signing", "desktop-updater", "maddog-isolation") `
   -Required $true `
   -Action {
     $distIndex = Join-Path $RepoRoot "desktop\frontend\dist\index.html"
@@ -305,7 +305,7 @@ Invoke-Step `
     }
     Push-Location (Join-Path $RepoRoot "desktop")
     try {
-      Invoke-Native $GoExe @("test", ".", "-count=1")
+      Invoke-Native $GoExe @("test", "./...", "-count=1")
     } finally {
       Pop-Location
     }

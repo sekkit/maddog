@@ -56,10 +56,13 @@ func TestGenManifest(t *testing.T) {
 		"Maddog-darwin-arm64.zip",
 		"Maddog-darwin-amd64.zip",
 		"Maddog-windows-amd64-installer.exe",
+		"Maddog-windows-arm64-installer.exe",
 		"Maddog-windows-amd64.zip", // portable download, not the updater channel
+		"Maddog-windows-arm64.zip", // portable download, not the updater channel
 		"Maddog-linux-amd64.tar.gz",
+		"Maddog-linux-amd64.deb",            // human download, not the updater channel
 		"Maddog-linux-amd64.tar.gz.minisig", // must be skipped
-		"README.txt",                          // unmatched, must be skipped
+		"README.txt",                        // unmatched, must be skipped
 	}
 	for _, n := range names {
 		if err := os.WriteFile(filepath.Join(dir, n), []byte(n), 0o644); err != nil {
@@ -105,7 +108,7 @@ func TestGenManifest(t *testing.T) {
 	if !ok {
 		t.Fatal("windows-arm64 missing")
 	}
-	if !strings.HasSuffix(arm.URL, "/Reasonix-windows-arm64-installer.exe") {
+	if !strings.HasSuffix(arm.URL, "/Maddog-windows-arm64-installer.exe") {
 		t.Fatalf("windows-arm64 url = %q, want the installer, not the portable zip", arm.URL)
 	}
 	// The Linux updater channel must stay the .tar.gz; the co-located .deb is a
@@ -114,7 +117,7 @@ func TestGenManifest(t *testing.T) {
 	if !ok {
 		t.Fatal("linux-amd64 missing")
 	}
-	if !strings.HasSuffix(lin.URL, "/Reasonix-linux-amd64.tar.gz") {
+	if !strings.HasSuffix(lin.URL, "/Maddog-linux-amd64.tar.gz") {
 		t.Fatalf("linux-amd64 url = %q, want the .tar.gz, not the .deb", lin.URL)
 	}
 }

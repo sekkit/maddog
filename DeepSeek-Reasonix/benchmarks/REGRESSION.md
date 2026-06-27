@@ -6,10 +6,11 @@ This directory contains the repeatable checks used to validate Maddog-specific m
 
 | Layer | Command | What it proves |
 |---|---|---|
-| Unified regression | `powershell -ExecutionPolicy Bypass -File scripts/run-maddog-regression.ps1` | Offline required regression across Maddog mechanism Go tests, the explicit coverage audit, all Go packages, C2 eval/replay/promote, desktop Go tests, frontend checks, CLI build, and e2e manifest generation. Writes `.benchmark/regression/latest.json` and `.benchmark/regression/latest.md`. |
+| Unified regression | `powershell -ExecutionPolicy Bypass -File scripts/run-maddog-regression.ps1` | Offline required regression across Maddog mechanism Go tests, the explicit coverage audit, all Go packages, C2 eval/replay/promote, all desktop Go module tests, frontend checks, CLI build, and e2e manifest generation. Writes `.benchmark/regression/latest.json` and `.benchmark/regression/latest.md`. |
 | Unit tests | `go test ./cmd/e2ebench ./internal/cli ./internal/agent ./internal/boot ./internal/config ./internal/control ./internal/eval ./internal/evidence ./internal/event ./internal/provider ./internal/provider/openai ./internal/provider/anthropic ./internal/provider/costwrap ./internal/skill ./internal/serve -count=1` | Benchmark metadata, provider/auth/frontier routing, advisor events, dynamic skills, readiness evidence, tinyctx/compaction plumbing, C2 replay/scorer/guardrail/promote, and runtime metrics serialization. |
 | Coverage audit | `go test ./cmd/e2ebench -run TestMaddogBenchmarkCoverageAudit -count=1` | Fails if committed benchmark evidence drops coverage for provider/auth/frontier/small model, official OpenAI/Anthropic auth config, iCodeEasy API-key routing, advisor, tinyctx/compaction, C2, desktop parity, Maddog naming isolation, or external benchmark wiring. |
 | All Go packages | `go test ./... -count=1` | Guards every Go package with tests, including bots, built-in MCP, checkpointing, codegraph, hooks, LSP, memory, permissions, plugins, and tools beyond the focused mechanism package list. |
+| Desktop Go module | `go test ./... -count=1` from `desktop/` | Guards the desktop app root plus release signing and updater subpackages in the nested Wails module. |
 | Manifest | `go run ./cmd/e2ebench -mode manifest -out benchmarks/e2e/manifest.md -json benchmarks/e2e/manifest.json` | Every committed e2e task has prompt, tags, verifier, requirements, and mechanism coverage metadata. |
 | Maddog e2e | `go run ./cmd/e2ebench -bin ./bin/maddog.exe -out benchmarks/e2e/latest.md -json benchmarks/e2e/latest.json` | Real-provider validation of Maddog mechanisms: provider config isolation, frontier/auth profile, project skills, readiness gate, compaction, and delegation. |
 | External harness | `powershell -ExecutionPolicy Bypass -File scripts/run-coding-agent-benchmark.ps1` | Compatibility with `usamadar/coding-agent-benchmark` and cross-agent coding task performance. |
@@ -43,7 +44,7 @@ go run ./cmd/e2ebench -bin ./bin/maddog.exe -tasks project-config-isolation,prov
 | Tinyctx/context/compaction behavior | `compaction` | Exercises long sequential reads and compacted context reporting; tagged `tinyctx` so focused coverage filters can select it. |
 | Subagent delegation and session isolation | `subagent-delegation` | Exercises task delegation and output isolation. |
 | C2 offline replay/scoring/promotion | Go package `internal/eval` | Unit tests capture replay bundles, run replays through a subagent session, parse/fallback frontier scores, enforce guardrails, and promote skills with `SkillPromoted` events. |
-| Desktop GUI configuration and event display | Desktop Go + frontend checks in `run-maddog-regression.ps1` | Validates desktop settings/event wiring and TypeScript/CSS/frontend tests/build for provider/frontier/advisor display paths. |
+| Desktop GUI configuration, event display, signing, and updater | Desktop Go + frontend checks in `run-maddog-regression.ps1` | Validates desktop settings/event wiring, release signing manifest generation, updater helpers, and TypeScript/CSS/frontend tests/build for provider/frontier/advisor display paths. |
 
 ## External Benchmark Notes
 
