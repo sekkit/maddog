@@ -2229,6 +2229,9 @@ func (e *ProviderEntry) AuthEnvName() string {
 // fallback; workload identity reads a pre-minted access token when present.
 func (e *ProviderEntry) AuthToken() string {
 	env := e.AuthEnvName()
+	if e.NormalizedAuthType() == provider.AuthTypeWorkloadIdentity {
+		env = strings.TrimSpace(e.AuthTokenEnv)
+	}
 	if env == "" {
 		return ""
 	}

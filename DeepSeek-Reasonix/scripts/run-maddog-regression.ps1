@@ -190,8 +190,8 @@ $LiveReadiness = [ordered]@{
 $CoverageMatrix = @(
   [pscustomobject]@{
     capability = "Provider API-key routing, official auth config, and OpenAI/Anthropic/iCodeEasy compatibility"
-    evidence = @("core-go", "manifest", "provider-auth-frontier-profile")
-    notes = "Covers API-key and official auth config shapes, including bearer/workload_identity token envs; real official OAuth/auth browser flows still require manual/provider credential validation."
+    evidence = @("core-go", "manifest", "local-provider-e2e", "provider-auth-frontier-profile")
+    notes = "Covers API-key and official auth config shapes plus local OpenAI bearer and Anthropic workload-identity exchange paths; real official OAuth/browser flows still require manual/provider credential validation."
   },
   [pscustomobject]@{
     capability = "Frontier/small-model routing, budgets, advisor escalation, and cost wrappers"
@@ -297,7 +297,7 @@ Invoke-Step `
 Invoke-Step `
   -Name "local-provider-e2e" `
   -Command "$GoExe run ./cmd/e2ebench -mode local-fixture -bin $MaddogBin -out .benchmark/regression/local-provider.md -json .benchmark/regression/local-provider.json" `
-  -Coverage @("local-fixture", "openai-compatible-sse", "anthropic-native-sse", "frontier", "frontier-upgrade", "small-model", "tool-loop", "mechanism-metrics", "headless-cli") `
+  -Coverage @("local-fixture", "openai-compatible-sse", "anthropic-native-sse", "official-auth", "frontier", "frontier-upgrade", "small-model", "tool-loop", "mechanism-metrics", "headless-cli") `
   -Required $true `
   -Action {
     Invoke-Native $GoExe @("run", "./cmd/e2ebench", "-mode", "local-fixture", "-bin", $MaddogBin, "-out", ".benchmark/regression/local-provider.md", "-json", ".benchmark/regression/local-provider.json")

@@ -319,6 +319,66 @@ max_tool_errors = 3
 	}
 }
 
+func TestLocalProviderFixtureRunCanTargetOfficialAuthTask(t *testing.T) {
+	root := t.TempDir()
+	taskDir := filepath.Join(root, "tasks", "local-official-auth")
+	if err := os.MkdirAll(filepath.Join(taskDir, "workdir"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(taskDir, "task.toml"), []byte(`
+prompt = "fixture"
+max_steps = 1
+timeout_sec = 30
+tags = ["local-fixture", "official-auth", "auth", "openai", "anthropic", "provider", "metrics", "headless-cli"]
+requires = ["local-official-auth-fixture", "filesystem"]
+
+[expect]
+min_tool_calls = 0
+max_tool_errors = 0
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(taskDir, "verify.sh"), []byte("set -e\ntest -f auth-fixture-observations.json\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	tasks, err := loadTasks(root)
+	if err != nil {
+		t.Fatalf("loadTasks: %v", err)
+	}
+	suite, err := newLocalFixtureSuite(tasks, "maddog-bin", localFixtureKindOfficialAuth)
+	if err != nil {
+		t.Fatalf("newLocalFixtureSuite: %v", err)
+	}
+	defer suite.Close()
+
+	if suite.task.ID != "local-official-auth" {
+		t.Fatalf("fixture task = %q", suite.task.ID)
+	}
+	if suite.model != "local-openai-official/local-openai-official-model" {
+		t.Fatalf("fixture model = %q", suite.model)
+	}
+	cfg, err := os.ReadFile(filepath.Join(suite.task.dir, "workdir", "maddog.toml"))
+	if err != nil {
+		t.Fatalf("fixture config missing: %v", err)
+	}
+	for _, want := range []string{
+		`default_model = "local-openai-official/local-openai-official-model"`,
+		`auth_type = "bearer"`,
+		`auth_token_env = "MADDOG_LOCAL_OPENAI_OFFICIAL_TOKEN"`,
+		`auth_type = "workload_identity"`,
+		`identity_env = "MADDOG_LOCAL_ANTHROPIC_IDENTITY_TOKEN"`,
+		`federation_rule_id = "fdrl_local"`,
+		`organization_id = "org_local"`,
+		`service_account_id = "svac_local"`,
+		suite.server.URL,
+	} {
+		if !strings.Contains(string(cfg), want) {
+			t.Fatalf("fixture config missing %q:\n%s", want, cfg)
+		}
+	}
+}
+
 func TestResolveBinPathKeepsPATHLookupAndAbsolutizesRelativePath(t *testing.T) {
 	got := resolveBinPath("maddog")
 	if got != "maddog" {

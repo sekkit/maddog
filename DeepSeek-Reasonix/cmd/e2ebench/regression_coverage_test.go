@@ -172,6 +172,31 @@ func TestMaddogBenchmarkCoverageAudit(t *testing.T) {
 		}
 	}
 
+	officialAuthTask := taskByID(t, tasks, "local-official-auth")
+	for _, tag := range []string{"local-fixture", "official-auth", "auth", "openai", "anthropic", "frontier", "provider", "metrics", "headless-cli"} {
+		if !hasString(officialAuthTask.Tags, tag) {
+			t.Fatalf("local-official-auth missing tag %q: %#v", tag, officialAuthTask.Tags)
+		}
+	}
+	if !hasString(officialAuthTask.Requires, "local-official-auth-fixture") {
+		t.Fatalf("local-official-auth should require local-official-auth-fixture: %#v", officialAuthTask.Requires)
+	}
+	if officialAuthTask.Expect.MinUpgrades < 1 || officialAuthTask.Expect.MinToolErrors < 1 {
+		t.Fatalf("local-official-auth should require upgrade and tool-error metrics: %+v", officialAuthTask.Expect)
+	}
+	officialAuthVerify := readRepoFile(t, root, "benchmarks", "e2e", "tasks", "local-official-auth", "verify.sh")
+	for _, want := range []string{
+		"auth-fixture-observations.json",
+		`obs["openai_authorization"] == "Bearer openai-official-access-token"`,
+		`exchange["assertion"] == "anthropic-local-identity-jwt"`,
+		`obs["anthropic_authorization"] == "Bearer anthropic-minted-local-token"`,
+		`metrics["upgrade_events"] >= 1`,
+	} {
+		if !strings.Contains(officialAuthVerify, want) {
+			t.Fatalf("local official auth verifier missing %q", want)
+		}
+	}
+
 	testEvidence := map[string][]string{
 		"OpenAI API-key and official bearer auth": {
 			"internal/provider/openai/openai_test.go:oauth-access-token",
@@ -243,6 +268,14 @@ func TestMaddogBenchmarkCoverageAudit(t *testing.T) {
 			"benchmarks/e2e/tasks/local-frontier-upgrade/verify.sh:upgrade_events",
 			"scripts/run-maddog-regression.ps1:frontier-upgrade",
 		},
+		"Offline official auth provider paths": {
+			"cmd/e2ebench/local_fixture.go:local-official-auth",
+			"cmd/e2ebench/local_fixture.go:openai-official-access-token",
+			"cmd/e2ebench/local_fixture.go:/v1/oauth/token",
+			"cmd/e2ebench/local_fixture.go:anthropic-minted-local-token",
+			"internal/config/config.go:workload identity reads a pre-minted access token when present",
+			"benchmarks/e2e/tasks/local-official-auth/verify.sh:auth-fixture-observations.json",
+		},
 	}
 	for capability, evidences := range testEvidence {
 		for _, evidence := range evidences {
@@ -277,6 +310,7 @@ func TestMaddogBenchmarkCoverageAudit(t *testing.T) {
 		"local-provider-e2e",
 		"local-fixture",
 		"frontier-upgrade",
+		"official-auth",
 	} {
 		if !strings.Contains(strings.ToLower(regressionScript), strings.ToLower(want)) {
 			t.Fatalf("run-maddog-regression.ps1 should mention coverage %q", want)

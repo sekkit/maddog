@@ -51,4 +51,15 @@ func TestProviderAuthMaterial(t *testing.T) {
 	if got := bearer.AuthEnvName(); got != "REASONIX_TEST_TOKEN" {
 		t.Fatalf("bearer AuthEnvName = %q", got)
 	}
+
+	wifAssertion := ProviderEntry{AuthType: "workload_identity", IdentityEnv: "REASONIX_TEST_TOKEN"}
+	if got := wifAssertion.AuthToken(); got != "" {
+		t.Fatalf("workload identity assertion-only AuthToken = %q, want empty so provider performs token exchange", got)
+	}
+	if got := wifAssertion.IdentityToken(); got != "token" {
+		t.Fatalf("workload identity assertion = %q, want token", got)
+	}
+	if !wifAssertion.Configured() {
+		t.Fatal("workload identity assertion-only provider should be configured")
+	}
 }

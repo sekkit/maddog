@@ -1,0 +1,11 @@
+prompt = "Exercise official auth paths and continue until the frontier model gives the final answer."
+max_steps = 4
+timeout_sec = 120
+tags = ["local-fixture", "official-auth", "auth", "openai", "anthropic", "frontier", "provider", "metrics", "headless-cli"]
+requires = ["local-official-auth-fixture", "filesystem"]
+
+[expect]
+min_upgrades = 1
+min_tool_calls = 2
+min_tool_errors = 1
+max_tool_errors = 1

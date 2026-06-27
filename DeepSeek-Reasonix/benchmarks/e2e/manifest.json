@@ -113,6 +113,34 @@
       "has_verify": true
     },
     {
+      "id": "local-official-auth",
+      "tags": [
+        "local-fixture",
+        "official-auth",
+        "auth",
+        "openai",
+        "anthropic",
+        "frontier",
+        "provider",
+        "metrics",
+        "headless-cli"
+      ],
+      "requires": [
+        "local-official-auth-fixture",
+        "filesystem"
+      ],
+      "expect": {
+        "min_upgrades": 1,
+        "min_tool_calls": 2,
+        "min_tool_errors": 1,
+        "max_tool_errors": 1
+      },
+      "max_steps": 4,
+      "timeout_sec": 120,
+      "has_seed_workdir": false,
+      "has_verify": true
+    },
+    {
       "id": "local-provider-tool-loop",
       "tags": [
         "local-fixture",
@@ -270,8 +298,8 @@
   ],
   "tags": {
     "advisor": 1,
-    "anthropic": 1,
-    "auth": 1,
+    "anthropic": 2,
+    "auth": 2,
     "bugfix": 1,
     "compaction": 1,
     "config": 1,
@@ -282,14 +310,16 @@
     "edit-existing-file": 1,
     "evidence": 1,
     "file-write": 2,
-    "frontier": 4,
-    "headless-cli": 12,
+    "frontier": 5,
+    "headless-cli": 13,
     "host-checks": 1,
-    "local-fixture": 3,
+    "local-fixture": 4,
     "maddog-isolation": 1,
-    "metrics": 3,
+    "metrics": 4,
+    "official-auth": 1,
+    "openai": 1,
     "project-skill": 1,
-    "provider": 5,
+    "provider": 6,
     "python": 3,
     "readiness": 1,
     "run-skill": 1,
@@ -308,9 +338,10 @@
   },
   "requires": {
     "bash": 1,
-    "filesystem": 12,
+    "filesystem": 13,
     "local-anthropic-fixture": 1,
     "local-frontier-fixture": 1,
+    "local-official-auth-fixture": 1,
     "local-openai-fixture": 1,
     "maddog.toml": 2,
     "markdown": 1,
@@ -330,6 +361,7 @@
       "fizzbuzz",
       "local-anthropic-tool-loop",
       "local-frontier-upgrade",
+      "local-official-auth",
       "local-provider-tool-loop",
       "palindrome",
       "project-config-isolation",
@@ -343,6 +375,9 @@
     ],
     "local-frontier-fixture": [
       "local-frontier-upgrade"
+    ],
+    "local-official-auth-fixture": [
+      "local-official-auth"
     ],
     "local-openai-fixture": [
       "local-provider-tool-loop"

@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -16,6 +17,7 @@ const (
 	localFixtureKindOpenAI          localFixtureKind = "openai"
 	localFixtureKindAnthropic       localFixtureKind = "anthropic"
 	localFixtureKindFrontierUpgrade localFixtureKind = "frontier-upgrade"
+	localFixtureKindOfficialAuth    localFixtureKind = "official-auth"
 
 	localOpenAITaskID   = "local-provider-tool-loop"
 	localOpenAIProvider = "local-openai-fixture"
@@ -37,6 +39,16 @@ const (
 	localFrontierModel         = "local-frontier-model"
 	localFrontierModelRef      = localFrontierProvider + "/" + localFrontierModel
 	localFrontierKeyEnv        = "MADDOG_LOCAL_FRONTIER_FIXTURE_KEY"
+
+	localOfficialAuthTaskID        = "local-official-auth"
+	localOfficialOpenAIProvider    = "local-openai-official"
+	localOfficialOpenAIModel       = "local-openai-official-model"
+	localOfficialOpenAIModelRef    = localOfficialOpenAIProvider + "/" + localOfficialOpenAIModel
+	localOfficialAnthropicProvider = "local-anthropic-official"
+	localOfficialAnthropicModel    = "claude-local-official"
+	localOfficialAnthropicModelRef = localOfficialAnthropicProvider + "/" + localOfficialAnthropicModel
+	localOfficialOpenAITokenEnv    = "MADDOG_LOCAL_OPENAI_OFFICIAL_TOKEN"
+	localOfficialIdentityEnv       = "MADDOG_LOCAL_ANTHROPIC_IDENTITY_TOKEN"
 )
 
 type localFixtureSuite struct {
@@ -67,24 +79,21 @@ func newLocalFixtureSuite(tasks []task, bin string, kinds ...localFixtureKind) (
 	if !ok {
 		return nil, fmt.Errorf("task %q is required for local fixture mode", spec.taskID)
 	}
-	server := spec.newServer()
 	dir, err := os.MkdirTemp("", "maddog-local-fixture-suite-")
 	if err != nil {
-		server.Close()
 		return nil, err
 	}
 	taskDir := filepath.Join(dir, "tasks", selected.ID)
 	if err := copyDir(selected.dir, taskDir); err != nil {
-		server.Close()
 		os.RemoveAll(dir)
 		return nil, fmt.Errorf("copy local fixture task: %w", err)
 	}
 	workDir := filepath.Join(taskDir, "workdir")
 	if err := os.MkdirAll(workDir, 0o755); err != nil {
-		server.Close()
 		os.RemoveAll(dir)
 		return nil, err
 	}
+	server := spec.newServer(workDir)
 	if err := writeLocalFixtureConfig(workDir, spec, server.URL); err != nil {
 		server.Close()
 		os.RemoveAll(dir)
@@ -92,15 +101,19 @@ func newLocalFixtureSuite(tasks []task, bin string, kinds ...localFixtureKind) (
 	}
 	selected.dir = taskDir
 	var envs []localFixtureEnv
-	for _, key := range spec.keyEnvs {
-		oldKey, hadKey := os.LookupEnv(key)
-		if err := os.Setenv(key, "local-fixture-key"); err != nil {
+	for _, env := range spec.envs {
+		oldKey, hadKey := os.LookupEnv(env.key)
+		value := env.value
+		if value == "" {
+			value = "local-fixture-key"
+		}
+		if err := os.Setenv(env.key, value); err != nil {
 			server.Close()
 			os.RemoveAll(dir)
 			restoreLocalFixtureEnvs(envs)
 			return nil, err
 		}
-		envs = append(envs, localFixtureEnv{key: key, old: oldKey, had: hadKey})
+		envs = append(envs, localFixtureEnv{key: env.key, old: oldKey, had: hadKey})
 	}
 	return &localFixtureSuite{
 		server: server,
@@ -114,7 +127,7 @@ func newLocalFixtureSuite(tasks []task, bin string, kinds ...localFixtureKind) (
 
 func newLocalFixtureSuites(tasks []task, bin string) ([]*localFixtureSuite, error) {
 	var suites []*localFixtureSuite
-	for _, kind := range []localFixtureKind{localFixtureKindOpenAI, localFixtureKindAnthropic, localFixtureKindFrontierUpgrade} {
+	for _, kind := range []localFixtureKind{localFixtureKindOpenAI, localFixtureKindAnthropic, localFixtureKindFrontierUpgrade, localFixtureKindOfficialAuth} {
 		suite, err := newLocalFixtureSuite(tasks, bin, kind)
 		if err != nil {
 			for _, existing := range suites {
@@ -155,10 +168,15 @@ type localFixtureSpec struct {
 	provider    string
 	model       string
 	modelRef    string
-	keyEnvs     []string
+	envs        []localFixtureEnvValue
 	kind        string
-	newServer   func() *httptest.Server
+	newServer   func(workDir string) *httptest.Server
 	writeConfig func(workDir string, spec localFixtureSpec, baseURL string) error
+}
+
+type localFixtureEnvValue struct {
+	key   string
+	value string
 }
 
 func localFixtureSpecFor(kind localFixtureKind) (localFixtureSpec, error) {
@@ -169,7 +187,7 @@ func localFixtureSpecFor(kind localFixtureKind) (localFixtureSpec, error) {
 			provider:  localOpenAIProvider,
 			model:     localOpenAIModel,
 			modelRef:  localOpenAIModelRef,
-			keyEnvs:   []string{localOpenAIKeyEnv},
+			envs:      []localFixtureEnvValue{{key: localOpenAIKeyEnv}},
 			kind:      "openai",
 			newServer: newLocalOpenAIFixture,
 		}, nil
@@ -179,7 +197,7 @@ func localFixtureSpecFor(kind localFixtureKind) (localFixtureSpec, error) {
 			provider:  localAnthropicProvider,
 			model:     localAnthropicModel,
 			modelRef:  localAnthropicModelRef,
-			keyEnvs:   []string{localAnthropicKeyEnv},
+			envs:      []localFixtureEnvValue{{key: localAnthropicKeyEnv}},
 			kind:      "anthropic",
 			newServer: newLocalAnthropicFixture,
 		}, nil
@@ -189,10 +207,24 @@ func localFixtureSpecFor(kind localFixtureKind) (localFixtureSpec, error) {
 			provider:    localSmallProvider,
 			model:       localSmallModel,
 			modelRef:    localSmallModelRef,
-			keyEnvs:     []string{localFrontierKeyEnv},
+			envs:        []localFixtureEnvValue{{key: localFrontierKeyEnv}},
 			kind:        "openai",
 			newServer:   newLocalFrontierUpgradeFixture,
 			writeConfig: writeLocalFrontierUpgradeConfig,
+		}, nil
+	case localFixtureKindOfficialAuth:
+		return localFixtureSpec{
+			taskID:   localOfficialAuthTaskID,
+			provider: localOfficialOpenAIProvider,
+			model:    localOfficialOpenAIModel,
+			modelRef: localOfficialOpenAIModelRef,
+			envs: []localFixtureEnvValue{
+				{key: localOfficialOpenAITokenEnv, value: "openai-official-access-token"},
+				{key: localOfficialIdentityEnv, value: "anthropic-local-identity-jwt"},
+			},
+			kind:        "openai",
+			newServer:   newLocalOfficialAuthFixture,
+			writeConfig: writeLocalOfficialAuthConfig,
 		}, nil
 	default:
 		return localFixtureSpec{}, fmt.Errorf("unknown local fixture kind %q", kind)
@@ -223,7 +255,7 @@ model = %q
 api_key_env = %q
 reasoning_protocol = "none"
 no_proxy = true
-`, spec.modelRef, spec.provider, spec.kind, baseURL, spec.model, spec.keyEnvs[0])
+`, spec.modelRef, spec.provider, spec.kind, baseURL, spec.model, spec.envs[0].key)
 	return os.WriteFile(filepath.Join(workDir, "maddog.toml"), []byte(body), 0o644)
 }
 
@@ -260,9 +292,54 @@ no_proxy = true
 	return os.WriteFile(filepath.Join(workDir, "maddog.toml"), []byte(body), 0o644)
 }
 
+func writeLocalOfficialAuthConfig(workDir string, _ localFixtureSpec, baseURL string) error {
+	body := fmt.Sprintf(`default_model = %q
+language = "en"
+
+[agent]
+frontier_model = %q
+upgrade_enabled = true
+upgrade_threshold = 1
+frontier_budget = 100000
+
+[[providers]]
+name = %q
+kind = "openai"
+base_url = %q
+model = %q
+auth_type = "bearer"
+auth_token_env = %q
+no_proxy = true
+
+[[providers]]
+name = %q
+kind = "anthropic"
+base_url = %q
+model = %q
+auth_type = "workload_identity"
+identity_env = %q
+federation_rule_id = "fdrl_local"
+organization_id = "org_local"
+service_account_id = "svac_local"
+no_proxy = true
+`, localOfficialOpenAIModelRef, localOfficialAnthropicModelRef,
+		localOfficialOpenAIProvider, baseURL, localOfficialOpenAIModel, localOfficialOpenAITokenEnv,
+		localOfficialAnthropicProvider, baseURL, localOfficialAnthropicModel, localOfficialIdentityEnv)
+	return os.WriteFile(filepath.Join(workDir, "maddog.toml"), []byte(body), 0o644)
+}
+
 type localProviderFixture struct {
 	mu       sync.Mutex
 	requests int
+}
+
+type localOfficialAuthFixture struct {
+	mu                sync.Mutex
+	openAIAuth        string
+	exchangeSeen      bool
+	exchangeBody      map[string]string
+	anthropicAuth     string
+	anthropicRequests int
 }
 
 type localOpenAIRequest struct {
@@ -275,7 +352,7 @@ type localOpenAIRequest struct {
 	} `json:"messages"`
 }
 
-func newLocalOpenAIFixture() *httptest.Server {
+func newLocalOpenAIFixture(_ string) *httptest.Server {
 	fixture := &localProviderFixture{}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/chat/completions", fixture.openAIChatCompletions)
@@ -284,7 +361,7 @@ func newLocalOpenAIFixture() *httptest.Server {
 	return httptest.NewServer(mux)
 }
 
-func newLocalFrontierUpgradeFixture() *httptest.Server {
+func newLocalFrontierUpgradeFixture(_ string) *httptest.Server {
 	fixture := &localProviderFixture{}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/chat/completions", fixture.frontierUpgradeChatCompletions)
@@ -301,6 +378,22 @@ func localOpenAIModels(w http.ResponseWriter, r *http.Request) {
 func localFrontierUpgradeModels(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	_, _ = w.Write([]byte(`{"object":"list","data":[{"id":"local-small-model","object":"model"},{"id":"local-frontier-model","object":"model"}]}`))
+}
+
+func newLocalOfficialAuthFixture(_ string) *httptest.Server {
+	fixture := &localOfficialAuthFixture{}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/chat/completions", fixture.openAIChatCompletions)
+	mux.HandleFunc("/v1/messages", fixture.anthropicMessages)
+	mux.HandleFunc("/v1/oauth/token", fixture.anthropicTokenExchange)
+	mux.HandleFunc("/models", localOfficialAuthModels)
+	mux.HandleFunc("/v1/models", localOfficialAuthModels)
+	return httptest.NewServer(mux)
+}
+
+func localOfficialAuthModels(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	_, _ = w.Write([]byte(`{"object":"list","data":[{"id":"local-openai-official-model","object":"model"},{"id":"claude-local-official","object":"model"}]}`))
 }
 
 func (f *localProviderFixture) openAIChatCompletions(w http.ResponseWriter, r *http.Request) {
@@ -452,6 +545,146 @@ func (f *localProviderFixture) frontierUpgradeChatCompletions(w http.ResponseWri
 	_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
 }
 
+func (f *localOfficialAuthFixture) openAIChatCompletions(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	f.mu.Lock()
+	f.openAIAuth = r.Header.Get("Authorization")
+	f.mu.Unlock()
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.WriteHeader(http.StatusOK)
+	args, _ := json.Marshal(map[string]string{})
+	writeSSEData(w, map[string]any{
+		"choices": []map[string]any{{
+			"delta": map[string]any{
+				"tool_calls": []map[string]any{{
+					"index": 0,
+					"id":    "call_official_auth_failure",
+					"type":  "function",
+					"function": map[string]any{
+						"name":      "write_file",
+						"arguments": string(args),
+					},
+				}},
+			},
+			"finish_reason": "tool_calls",
+		}},
+	})
+	writeSSEData(w, map[string]any{
+		"choices": []any{},
+		"usage": map[string]any{
+			"prompt_tokens":     23,
+			"completion_tokens": 5,
+			"total_tokens":      28,
+		},
+	})
+	_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
+}
+
+func (f *localOfficialAuthFixture) anthropicTokenExchange(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	body := map[string]string{}
+	_ = json.NewDecoder(r.Body).Decode(&body)
+	f.mu.Lock()
+	f.exchangeSeen = true
+	f.exchangeBody = body
+	f.mu.Unlock()
+	w.Header().Set("Content-Type", "application/json")
+	_, _ = io.WriteString(w, `{"access_token":"anthropic-minted-local-token","token_type":"bearer","expires_in":3600}`)
+}
+
+func (f *localOfficialAuthFixture) anthropicMessages(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req localAnthropicRequest
+	_ = json.NewDecoder(r.Body).Decode(&req)
+	f.mu.Lock()
+	f.anthropicAuth = r.Header.Get("Authorization")
+	f.anthropicRequests++
+	n := f.anthropicRequests
+	f.mu.Unlock()
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.WriteHeader(http.StatusOK)
+	if n > 1 {
+		if !hasAnthropicToolResult(req) {
+			http.Error(w, "second official auth request did not include an Anthropic tool_result block", http.StatusBadRequest)
+			return
+		}
+		writeAnthropicTextFinal(w, 47, 6, 9, "Official auth fixture completed.")
+		return
+	}
+	observations := f.observationsJSON()
+	writeAnthropicSSE(w, "message_start", map[string]any{
+		"type": "message_start",
+		"message": map[string]any{
+			"usage": map[string]any{
+				"input_tokens":                47,
+				"cache_creation_input_tokens": 0,
+				"cache_read_input_tokens":     6,
+				"output_tokens":               1,
+			},
+		},
+	})
+	writeAnthropicSSE(w, "content_block_start", map[string]any{
+		"type":  "content_block_start",
+		"index": 0,
+		"content_block": map[string]any{
+			"type": "tool_use",
+			"id":   "toolu_official_auth_observations",
+			"name": "write_file",
+		},
+	})
+	writeAnthropicSSE(w, "content_block_delta", map[string]any{
+		"type":  "content_block_delta",
+		"index": 0,
+		"delta": map[string]any{
+			"type":         "input_json_delta",
+			"partial_json": string(mustJSON(map[string]string{"path": "auth-fixture-observations.json", "content": observations + "\n"})),
+		},
+	})
+	writeAnthropicSSE(w, "content_block_stop", map[string]any{
+		"type":  "content_block_stop",
+		"index": 0,
+	})
+	writeAnthropicSSE(w, "message_delta", map[string]any{
+		"type": "message_delta",
+		"delta": map[string]any{
+			"stop_reason": "tool_use",
+		},
+		"usage": map[string]any{
+			"output_tokens": 16,
+		},
+	})
+	writeAnthropicSSE(w, "message_stop", map[string]any{
+		"type": "message_stop",
+	})
+}
+
+func (f *localOfficialAuthFixture) observationsJSON() string {
+	f.mu.Lock()
+	data := map[string]any{
+		"openai_authorization":    f.openAIAuth,
+		"anthropic_authorization": f.anthropicAuth,
+		"exchange_seen":           f.exchangeSeen,
+		"exchange_body":           f.exchangeBody,
+	}
+	f.mu.Unlock()
+	b, err := json.MarshalIndent(data, "", "  ")
+	if err != nil {
+		return "{}"
+	}
+	return string(b)
+}
+
 func hasOpenAIToolResult(req localOpenAIRequest) bool {
 	for _, msg := range req.Messages {
 		if msg.Role == "tool" && msg.ToolCallID != "" {
@@ -471,7 +704,7 @@ type localAnthropicRequest struct {
 	} `json:"messages"`
 }
 
-func newLocalAnthropicFixture() *httptest.Server {
+func newLocalAnthropicFixture(_ string) *httptest.Server {
 	fixture := &localProviderFixture{}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/messages", fixture.anthropicMessages)
@@ -622,6 +855,59 @@ func hasAnthropicToolResult(req localAnthropicRequest) bool {
 func writeAnthropicSSE(w http.ResponseWriter, event string, payload any) {
 	_, _ = fmt.Fprintf(w, "event: %s\n", event)
 	writeSSEData(w, payload)
+}
+
+func writeAnthropicTextFinal(w http.ResponseWriter, inputTokens, cacheReadTokens, outputTokens int, text string) {
+	writeAnthropicSSE(w, "message_start", map[string]any{
+		"type": "message_start",
+		"message": map[string]any{
+			"usage": map[string]any{
+				"input_tokens":                inputTokens,
+				"cache_creation_input_tokens": 0,
+				"cache_read_input_tokens":     cacheReadTokens,
+				"output_tokens":               1,
+			},
+		},
+	})
+	writeAnthropicSSE(w, "content_block_start", map[string]any{
+		"type":  "content_block_start",
+		"index": 0,
+		"content_block": map[string]any{
+			"type": "text",
+		},
+	})
+	writeAnthropicSSE(w, "content_block_delta", map[string]any{
+		"type":  "content_block_delta",
+		"index": 0,
+		"delta": map[string]any{
+			"type": "text_delta",
+			"text": text,
+		},
+	})
+	writeAnthropicSSE(w, "content_block_stop", map[string]any{
+		"type":  "content_block_stop",
+		"index": 0,
+	})
+	writeAnthropicSSE(w, "message_delta", map[string]any{
+		"type": "message_delta",
+		"delta": map[string]any{
+			"stop_reason": "end_turn",
+		},
+		"usage": map[string]any{
+			"output_tokens": outputTokens,
+		},
+	})
+	writeAnthropicSSE(w, "message_stop", map[string]any{
+		"type": "message_stop",
+	})
+}
+
+func mustJSON(v any) []byte {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return []byte("{}")
+	}
+	return b
 }
 
 func writeSSEData(w http.ResponseWriter, payload any) {

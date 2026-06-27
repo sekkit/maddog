@@ -1,6 +1,6 @@
 ## Maddog e2e benchmark manifest
 
-**Status:** valid · **Tasks:** 12 · **Tags:** 36 · **Requirements:** 12
+**Status:** valid · **Tasks:** 13 · **Tags:** 38 · **Requirements:** 13
 
 | Task | Tags | Requires | Expectations | Max steps | Timeout | Seed | Verify | Issues |
 |---|---|---|---|---:|---:|---|---|---|
@@ -9,6 +9,7 @@
 | `fizzbuzz` | `core`, `python`, `scratch`, `file-write`, `headless-cli` | `provider`, `filesystem`, `python3` | — | 12 | 180 | no | yes | — |
 | `local-anthropic-tool-loop` | `local-fixture`, `anthropic`, `frontier`, `provider`, `tool-loop`, `metrics`, `headless-cli` | `local-anthropic-fixture`, `filesystem` | tool calls >= 1; tool errors <= 0 | 4 | 90 | no | yes | — |
 | `local-frontier-upgrade` | `local-fixture`, `frontier`, `upgrade`, `small-model`, `provider`, `metrics`, `headless-cli` | `local-frontier-fixture`, `filesystem` | upgrades >= 1; tool calls >= 3; tool errors >= 3; tool errors <= 3 | 6 | 120 | no | yes | — |
+| `local-official-auth` | `local-fixture`, `official-auth`, `auth`, `openai`, `anthropic`, `frontier`, `provider`, `metrics`, `headless-cli` | `local-official-auth-fixture`, `filesystem` | upgrades >= 1; tool calls >= 2; tool errors >= 1; tool errors <= 1 | 4 | 120 | no | yes | — |
 | `local-provider-tool-loop` | `local-fixture`, `provider`, `tool-loop`, `metrics`, `headless-cli` | `local-openai-fixture`, `filesystem` | tool calls >= 1; tool errors <= 0 | 4 | 90 | no | yes | — |
 | `palindrome` | `core`, `python`, `scratch`, `file-write`, `headless-cli` | `provider`, `filesystem`, `python3` | — | 12 | 180 | no | yes | — |
 | `project-config-isolation` | `config`, `maddog-isolation`, `provider`, `frontier`, `headless-cli` | `provider`, `filesystem`, `maddog.toml` | tool calls >= 2 | 18 | 240 | yes | yes | — |
@@ -20,8 +21,8 @@
 ### Tag Coverage
 
 - `advisor`: 1 task(s)
-- `anthropic`: 1 task(s)
-- `auth`: 1 task(s)
+- `anthropic`: 2 task(s)
+- `auth`: 2 task(s)
 - `bugfix`: 1 task(s)
 - `compaction`: 1 task(s)
 - `config`: 1 task(s)
@@ -32,14 +33,16 @@
 - `edit-existing-file`: 1 task(s)
 - `evidence`: 1 task(s)
 - `file-write`: 2 task(s)
-- `frontier`: 4 task(s)
-- `headless-cli`: 12 task(s)
+- `frontier`: 5 task(s)
+- `headless-cli`: 13 task(s)
 - `host-checks`: 1 task(s)
-- `local-fixture`: 3 task(s)
+- `local-fixture`: 4 task(s)
 - `maddog-isolation`: 1 task(s)
-- `metrics`: 3 task(s)
+- `metrics`: 4 task(s)
+- `official-auth`: 1 task(s)
+- `openai`: 1 task(s)
 - `project-skill`: 1 task(s)
-- `provider`: 5 task(s)
+- `provider`: 6 task(s)
 - `python`: 3 task(s)
 - `readiness`: 1 task(s)
 - `run-skill`: 1 task(s)
@@ -59,9 +62,10 @@
 ### Requirement Coverage
 
 - `bash`: `readiness-evidence-gate`
-- `filesystem`: `compaction`, `fix-add-bug`, `fizzbuzz`, `local-anthropic-tool-loop`, `local-frontier-upgrade`, `local-provider-tool-loop`, `palindrome`, `project-config-isolation`, `project-skill-invocation`, `provider-auth-frontier-profile`, `readiness-evidence-gate`, `subagent-delegation`
+- `filesystem`: `compaction`, `fix-add-bug`, `fizzbuzz`, `local-anthropic-tool-loop`, `local-frontier-upgrade`, `local-official-auth`, `local-provider-tool-loop`, `palindrome`, `project-config-isolation`, `project-skill-invocation`, `provider-auth-frontier-profile`, `readiness-evidence-gate`, `subagent-delegation`
 - `local-anthropic-fixture`: `local-anthropic-tool-loop`
 - `local-frontier-fixture`: `local-frontier-upgrade`
+- `local-official-auth-fixture`: `local-official-auth`
 - `local-openai-fixture`: `local-provider-tool-loop`
 - `maddog.toml`: `project-config-isolation`, `provider-auth-frontier-profile`
 - `markdown`: `compaction`
