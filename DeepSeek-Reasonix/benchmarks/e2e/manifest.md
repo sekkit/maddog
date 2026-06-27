@@ -1,10 +1,10 @@
 ## Maddog e2e benchmark manifest
 
-**Status:** valid · **Tasks:** 9 · **Tags:** 29 · **Requirements:** 9
+**Status:** valid · **Tasks:** 9 · **Tags:** 30 · **Requirements:** 9
 
 | Task | Tags | Requires | Expectations | Max steps | Timeout | Seed | Verify | Issues |
 |---|---|---|---|---:|---:|---|---|---|
-| `compaction` | `context`, `sequential-read`, `tool-output`, `compaction`, `headless-cli` | `provider`, `filesystem`, `markdown` | — | 40 | 900 | yes | yes | — |
+| `compaction` | `context`, `sequential-read`, `tool-output`, `compaction`, `tinyctx`, `headless-cli` | `provider`, `filesystem`, `markdown` | — | 40 | 900 | yes | yes | — |
 | `fix-add-bug` | `core`, `python`, `bugfix`, `edit-existing-file`, `headless-cli` | `provider`, `filesystem`, `python3` | — | 12 | 180 | yes | yes | — |
 | `fizzbuzz` | `core`, `python`, `scratch`, `file-write`, `headless-cli` | `provider`, `filesystem`, `python3` | — | 12 | 180 | no | yes | — |
 | `palindrome` | `core`, `python`, `scratch`, `file-write`, `headless-cli` | `provider`, `filesystem`, `python3` | — | 12 | 180 | no | yes | — |
@@ -42,6 +42,7 @@
 - `skill`: 1 task(s)
 - `small-model`: 1 task(s)
 - `subagent`: 1 task(s)
+- `tinyctx`: 1 task(s)
 - `tool-output`: 1 task(s)
 - `tool-policy`: 1 task(s)
 - `verification`: 1 task(s)

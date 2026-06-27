@@ -8,6 +8,7 @@
         "sequential-read",
         "tool-output",
         "compaction",
+        "tinyctx",
         "headless-cli"
       ],
       "requires": [
@@ -220,6 +221,7 @@
     "skill": 1,
     "small-model": 1,
     "subagent": 1,
+    "tinyctx": 1,
     "tool-output": 1,
     "tool-policy": 1,
     "verification": 1

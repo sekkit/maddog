@@ -150,7 +150,7 @@ $CoverageMatrix = @(
   [pscustomobject]@{
     capability = "Provider API-key routing, official auth config, and OpenAI/Anthropic/iCodeEasy compatibility"
     evidence = @("core-go", "manifest", "provider-auth-frontier-profile")
-    notes = "Real official OAuth/auth browser flows still require manual/provider credential validation."
+    notes = "Covers API-key and official auth config shapes, including bearer/workload_identity token envs; real official OAuth/auth browser flows still require manual/provider credential validation."
   },
   [pscustomobject]@{
     capability = "Frontier/small-model routing, budgets, advisor escalation, and cost wrappers"
@@ -210,7 +210,7 @@ $CoreGoPackages = @(
 Invoke-Step `
   -Name "core-go" `
   -Command "$GoExe test $($CoreGoPackages -join ' ') -count=1" `
-  -Coverage @("provider", "frontier", "auth", "advisor", "skill", "subagent", "evidence", "compaction", "eval", "desktop-wire") `
+  -Coverage @("provider", "frontier", "auth", "official auth", "openai", "anthropic", "icodeeasy", "advisor", "skill", "subagent", "evidence", "tinyctx", "compaction", "eval", "desktop-wire", "desktop-parity") `
   -Required $true `
   -Action {
     Invoke-Native $GoExe (@("test") + $CoreGoPackages + @("-count=1"))
