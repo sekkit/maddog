@@ -7,6 +7,15 @@ data = json.loads(Path("auth-frontier-profile.json").read_text(encoding="utf-8")
 assert data["default_model"] == "small", data
 assert data["small_model"] == "small", data
 assert data["frontier_model"] == "frontier", data
+assert data["upgrade_enabled"] is True, data
+assert data["upgrade_threshold"] == 2, data
+assert data["frontier_budget"] == 50000, data
+assert data["advisor"]["max_uses_per_turn"] == 1, data
+assert data["advisor"]["max_uses_per_session"] == 3, data
+assert data["advisor"]["max_context_messages"] == 6, data
+assert data["advisor"]["max_context_chars"] == 2048, data
+assert data["advisor"]["native_enabled"] is True, data
+assert data["advisor"]["native_max_tokens"] == 512, data
 providers = {p["name"]: p for p in data["providers"]}
 assert providers["small"]["kind"] == "openai"
 assert providers["small"]["auth_type"] == "api_key"

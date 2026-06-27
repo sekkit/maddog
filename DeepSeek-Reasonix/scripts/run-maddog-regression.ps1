@@ -217,6 +217,15 @@ Invoke-Step `
   }
 
 Invoke-Step `
+  -Name "coverage-audit" `
+  -Command "$GoExe test ./cmd/e2ebench -run TestMaddogBenchmarkCoverageAudit -count=1" `
+  -Coverage @("coverage-audit", "provider", "frontier", "auth", "official auth", "openai", "anthropic", "icodeeasy", "advisor", "upgrade", "skill", "subagent", "evidence", "tinyctx", "compaction", "eval", "desktop-parity", "external-harness") `
+  -Required $true `
+  -Action {
+    Invoke-Native $GoExe @("test", "./cmd/e2ebench", "-run", "TestMaddogBenchmarkCoverageAudit", "-count=1")
+  }
+
+Invoke-Step `
   -Name "build-maddog-cli" `
   -Command "$GoExe build -o $MaddogBin ./cmd/reasonix" `
   -Coverage @("cli", "external-harness", "e2e") `

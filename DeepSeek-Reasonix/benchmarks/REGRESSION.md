@@ -6,7 +6,7 @@ This directory contains the repeatable checks used to validate Maddog-specific m
 
 | Layer | Command | What it proves |
 |---|---|---|
-| Unified regression | `powershell -ExecutionPolicy Bypass -File scripts/run-maddog-regression.ps1` | Offline required regression across Maddog mechanism Go tests, C2 eval/replay/promote, desktop Go tests, frontend checks, CLI build, and e2e manifest generation. Writes `.benchmark/regression/latest.json` and `.benchmark/regression/latest.md`. |
+| Unified regression | `powershell -ExecutionPolicy Bypass -File scripts/run-maddog-regression.ps1` | Offline required regression across Maddog mechanism Go tests, the explicit coverage audit, C2 eval/replay/promote, desktop Go tests, frontend checks, CLI build, and e2e manifest generation. Writes `.benchmark/regression/latest.json` and `.benchmark/regression/latest.md`. |
 | Unit tests | `go test ./cmd/e2ebench ./internal/cli ./internal/agent ./internal/boot ./internal/config ./internal/control ./internal/eval ./internal/evidence ./internal/event ./internal/provider ./internal/provider/openai ./internal/provider/anthropic ./internal/provider/costwrap ./internal/skill ./internal/serve -count=1` | Benchmark metadata, provider/auth/frontier routing, advisor events, dynamic skills, readiness evidence, tinyctx/compaction plumbing, C2 replay/scorer/guardrail/promote, and runtime metrics serialization. |
 | Coverage audit | `go test ./cmd/e2ebench -run TestMaddogBenchmarkCoverageAudit -count=1` | Fails if committed benchmark evidence drops coverage for provider/auth/frontier/small model, official OpenAI/Anthropic auth config, iCodeEasy API-key routing, advisor, tinyctx/compaction, C2, desktop parity, Maddog naming isolation, or external benchmark wiring. |
 | Manifest | `go run ./cmd/e2ebench -mode manifest -out benchmarks/e2e/manifest.md -json benchmarks/e2e/manifest.json` | Every committed e2e task has prompt, tags, verifier, requirements, and mechanism coverage metadata. |
@@ -35,7 +35,7 @@ go run ./cmd/e2ebench -bin ./bin/maddog.exe -tasks project-config-isolation,prov
 | Maddog capability | Primary e2e task | Evidence |
 |---|---|---|
 | OpenAI-compatible provider, iCodeEasy API-key routing, and official auth config | `provider-auth-frontier-profile` | Writes and verifies `auth-frontier-profile.json` from `maddog.toml`, including API-key, bearer, workload identity, official OpenAI, official Anthropic, and desktop provider access metadata without leaking token values. |
-| Frontier/small-model profile visibility | `provider-auth-frontier-profile` | Tags `frontier`, `small-model`, `desktop-parity`; expects tool-call metrics. |
+| Frontier/small-model profile visibility plus upgrade/advisor config | `provider-auth-frontier-profile` | Tags `frontier`, `small-model`, `upgrade`, `advisor`, `desktop-parity`; verifier checks upgrade budget/threshold and advisor guardrail settings. |
 | Maddog config isolation from Reasonix names | `project-config-isolation` | Verifier checks Maddog config wins over legacy `reasonix.toml`. |
 | Runtime project skill invocation | `project-skill-invocation` | Uses `.maddog/skills/bench-summarizer/SKILL.md`; verifier checks generated output. |
 | Readiness evidence gate | `readiness-evidence-gate` | Requires readiness metrics and project host checks. |

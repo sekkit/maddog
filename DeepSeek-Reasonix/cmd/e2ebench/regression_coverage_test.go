@@ -22,6 +22,7 @@ func TestMaddogBenchmarkCoverageAudit(t *testing.T) {
 	}
 
 	requiredTags := []string{
+		"advisor",
 		"auth",
 		"compaction",
 		"desktop-parity",
@@ -34,6 +35,7 @@ func TestMaddogBenchmarkCoverageAudit(t *testing.T) {
 		"small-model",
 		"subagent",
 		"tinyctx",
+		"upgrade",
 	}
 	for _, tag := range requiredTags {
 		if report.Tags[tag] == 0 {
@@ -42,13 +44,13 @@ func TestMaddogBenchmarkCoverageAudit(t *testing.T) {
 	}
 
 	providerTask := taskByID(t, tasks, "provider-auth-frontier-profile")
-	for _, tag := range []string{"provider", "auth", "frontier", "small-model", "desktop-parity"} {
+	for _, tag := range []string{"provider", "auth", "frontier", "small-model", "advisor", "upgrade", "desktop-parity"} {
 		if !hasString(providerTask.Tags, tag) {
 			t.Fatalf("provider-auth-frontier-profile missing tag %q: %#v", tag, providerTask.Tags)
 		}
 	}
 	providerPrompt := providerTask.Prompt
-	for _, want := range []string{"official-openai", "official-anthropic", "token_env"} {
+	for _, want := range []string{"official-openai", "official-anthropic", "token_env", "advisor", "upgrade"} {
 		if !strings.Contains(providerPrompt, want) {
 			t.Fatalf("provider-auth-frontier-profile prompt should require %q:\n%s", want, providerPrompt)
 		}
@@ -62,6 +64,8 @@ func TestMaddogBenchmarkCoverageAudit(t *testing.T) {
 		`auth_type = "workload_identity"`,
 		`auth_token_env = "OPENAI_OFFICIAL_TOKEN"`,
 		`identity_env = "ANTHROPIC_IDENTITY_TOKEN"`,
+		`advisor_max_uses_per_turn = 1`,
+		`advisor_max_context_messages = 6`,
 	} {
 		if !strings.Contains(providerConfig, want) {
 			t.Fatalf("provider auth fixture missing %q", want)
@@ -73,6 +77,8 @@ func TestMaddogBenchmarkCoverageAudit(t *testing.T) {
 		`providers["frontier"]["kind"] == "anthropic"`,
 		`providers["official-openai"]["auth_type"] == "bearer"`,
 		`providers["official-anthropic"]["auth_type"] == "workload_identity"`,
+		`data["upgrade_enabled"] is True`,
+		`data["advisor"]["max_uses_per_turn"] == 1`,
 		`desktop_provider_access`,
 	} {
 		if !strings.Contains(providerVerify, want) {
@@ -130,6 +136,8 @@ func TestMaddogBenchmarkCoverageAudit(t *testing.T) {
 
 	regressionScript := readRepoFile(t, root, "scripts", "run-maddog-regression.ps1")
 	for _, want := range []string{
+		`-Name "coverage-audit"`,
+		`TestMaddogBenchmarkCoverageAudit`,
 		"official auth",
 		"desktop-parity",
 		"icodeeasy",

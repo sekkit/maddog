@@ -132,6 +132,8 @@
         "auth",
         "frontier",
         "small-model",
+        "advisor",
+        "upgrade",
         "desktop-parity",
         "headless-cli"
       ],
@@ -195,6 +197,7 @@
     }
   ],
   "tags": {
+    "advisor": 1,
     "auth": 1,
     "bugfix": 1,
     "compaction": 1,
@@ -224,6 +227,7 @@
     "tinyctx": 1,
     "tool-output": 1,
     "tool-policy": 1,
+    "upgrade": 1,
     "verification": 1
   },
   "requires": {

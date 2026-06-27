@@ -1,6 +1,6 @@
 ## Maddog e2e benchmark manifest
 
-**Status:** valid · **Tasks:** 9 · **Tags:** 30 · **Requirements:** 9
+**Status:** valid · **Tasks:** 9 · **Tags:** 32 · **Requirements:** 9
 
 | Task | Tags | Requires | Expectations | Max steps | Timeout | Seed | Verify | Issues |
 |---|---|---|---|---:|---:|---|---|---|
@@ -10,12 +10,13 @@
 | `palindrome` | `core`, `python`, `scratch`, `file-write`, `headless-cli` | `provider`, `filesystem`, `python3` | — | 12 | 180 | no | yes | — |
 | `project-config-isolation` | `config`, `maddog-isolation`, `provider`, `frontier`, `headless-cli` | `provider`, `filesystem`, `maddog.toml` | tool calls >= 2 | 18 | 240 | yes | yes | — |
 | `project-skill-invocation` | `skill`, `project-skill`, `run-skill`, `headless-cli` | `provider`, `filesystem`, `skills` | tool calls >= 2 | 24 | 300 | yes | yes | — |
-| `provider-auth-frontier-profile` | `provider`, `auth`, `frontier`, `small-model`, `desktop-parity`, `headless-cli` | `provider`, `filesystem`, `maddog.toml` | tool calls >= 2 | 24 | 300 | yes | yes | — |
+| `provider-auth-frontier-profile` | `provider`, `auth`, `frontier`, `small-model`, `advisor`, `upgrade`, `desktop-parity`, `headless-cli` | `provider`, `filesystem`, `maddog.toml` | tool calls >= 2 | 24 | 300 | yes | yes | — |
 | `readiness-evidence-gate` | `evidence`, `readiness`, `host-checks`, `verification`, `headless-cli` | `provider`, `filesystem`, `bash`, `project-memory` | readiness checks >= 1; tool calls >= 2; tool errors <= 0 | 24 | 300 | yes | yes | — |
 | `subagent-delegation` | `subagent`, `delegation`, `tool-policy`, `session-isolation`, `headless-cli` | `provider`, `filesystem`, `task-tool` | — | 15 | 300 | yes | yes | — |
 
 ### Tag Coverage
 
+- `advisor`: 1 task(s)
 - `auth`: 1 task(s)
 - `bugfix`: 1 task(s)
 - `compaction`: 1 task(s)
@@ -45,6 +46,7 @@
 - `tinyctx`: 1 task(s)
 - `tool-output`: 1 task(s)
 - `tool-policy`: 1 task(s)
+- `upgrade`: 1 task(s)
 - `verification`: 1 task(s)
 
 ### Requirement Coverage

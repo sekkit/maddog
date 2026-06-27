@@ -9,6 +9,12 @@ subagent_model = "small"
 upgrade_enabled = true
 upgrade_threshold = 2
 frontier_budget = 50000
+advisor_max_uses_per_turn = 1
+advisor_max_uses_per_session = 3
+advisor_max_context_messages = 6
+advisor_max_context_chars = 2048
+advisor_native_enabled = true
+advisor_native_max_tokens = 512
 
 [[providers]]
 name = "small"
