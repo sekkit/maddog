@@ -163,6 +163,10 @@ func TestMaddogBenchmarkCoverageAudit(t *testing.T) {
 		"advisor",
 		"internal/eval",
 		"coding-agent-benchmark",
+		"live_readiness",
+		"Provider e2e ready",
+		"Frontier smoke ready",
+		"DEEPSEEK_API_KEY",
 	} {
 		if !strings.Contains(strings.ToLower(regressionScript), strings.ToLower(want)) {
 			t.Fatalf("run-maddog-regression.ps1 should mention coverage %q", want)

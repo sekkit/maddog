@@ -146,6 +146,47 @@ function Invoke-Step {
   }
 }
 
+function Test-LiveCredential {
+  param([string]$Name)
+  return -not [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($Name))
+}
+
+$LiveCredentialNames = @(
+  "DEEPSEEK_API_KEY",
+  "ICODEEASY_API_KEY",
+  "OPENAI_API_KEY",
+  "ANTHROPIC_API_KEY",
+  "OPENAI_OFFICIAL_TOKEN",
+  "ANTHROPIC_IDENTITY_TOKEN"
+)
+$LiveCredentials = @(
+  foreach ($name in $LiveCredentialNames) {
+    [pscustomobject]@{
+      name = $name
+      set = [bool](Test-LiveCredential $name)
+    }
+  }
+)
+$AnyProviderCredential = [bool](($LiveCredentials | Where-Object { $_.set -and $_.name -in @("DEEPSEEK_API_KEY", "ICODEEASY_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY") } | Select-Object -First 1))
+$AnyFrontierCredential = [bool](($LiveCredentials | Where-Object { $_.set -and $_.name -in @("ICODEEASY_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY") } | Select-Object -First 1))
+$LiveReadiness = [ordered]@{
+  provider_e2e_ready = $AnyProviderCredential
+  frontier_smoke_ready = $AnyFrontierCredential
+  credentials = @(
+    foreach ($c in $LiveCredentials) {
+      [ordered]@{
+        name = [string]$c.name
+        set = [bool]$c.set
+      }
+    }
+  )
+  commands = @(
+    "powershell -ExecutionPolicy Bypass -File scripts/run-maddog-regression.ps1 -IncludeE2E",
+    "powershell -ExecutionPolicy Bypass -File scripts/run-maddog-regression.ps1 -IncludeFrontierSmoke",
+    "powershell -ExecutionPolicy Bypass -File scripts/run-maddog-regression.ps1 -IncludeE2E -IncludeFrontierSmoke -IncludeExternal"
+  )
+}
+
 $CoverageMatrix = @(
   [pscustomobject]@{
     capability = "Provider API-key routing, official auth config, and OpenAI/Anthropic/iCodeEasy compatibility"
@@ -335,7 +376,7 @@ if ($IncludeE2E) {
 }
 
 if ($IncludeFrontierSmoke) {
-  if ($env:ICODEEASY_API_KEY -eq "" -and $env:OPENAI_API_KEY -eq "" -and $env:ANTHROPIC_API_KEY -eq "") {
+  if (!$AnyFrontierCredential) {
     Add-SkipStep -Name "frontier-smoke" -Reason "No ICODEEASY_API_KEY, OPENAI_API_KEY, or ANTHROPIC_API_KEY is set." -Coverage @("frontier-real-call")
   } else {
     Invoke-Step `
@@ -425,6 +466,7 @@ $Summary = [ordered]@{
   git_dirty = [string[]]@($dirty)
   failed = [bool]$HadFailure
   go = [string]$GoExe
+  live_readiness = $LiveReadiness
   report_markdown = [string]$SummaryMd
   steps = $StepSummaries
   coverage_matrix = $CoverageSummaries
@@ -443,6 +485,21 @@ $md.Add("- Generated: $GeneratedAt") | Out-Null
 $md.Add("- Branch: $branch") | Out-Null
 $md.Add("- Head: $head") | Out-Null
 $md.Add("- Failed: $HadFailure") | Out-Null
+$md.Add("") | Out-Null
+$md.Add("## Live Readiness") | Out-Null
+$md.Add("") | Out-Null
+$md.Add("- Provider e2e ready: $($LiveReadiness.provider_e2e_ready)") | Out-Null
+$md.Add("- Frontier smoke ready: $($LiveReadiness.frontier_smoke_ready)") | Out-Null
+$missingLiveCredentials = @($LiveReadiness.credentials | Where-Object { -not $_.set } | ForEach-Object { $_.name })
+if ($missingLiveCredentials.Count -gt 0) {
+  $md.Add("- Missing credentials: $($missingLiveCredentials -join ', ')") | Out-Null
+} else {
+  $md.Add("- Missing credentials: none") | Out-Null
+}
+$md.Add("- Live commands:") | Out-Null
+foreach ($cmd in $LiveReadiness.commands) {
+  $md.Add("  - ``$cmd``") | Out-Null
+}
 $md.Add("") | Out-Null
 $md.Add("## Steps") | Out-Null
 $md.Add("") | Out-Null

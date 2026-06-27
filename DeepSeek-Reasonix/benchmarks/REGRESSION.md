@@ -16,7 +16,7 @@ This directory contains the repeatable checks used to validate Maddog-specific m
 | Maddog e2e | `go run ./cmd/e2ebench -bin ./bin/maddog.exe -out benchmarks/e2e/latest.md -json benchmarks/e2e/latest.json` | Real-provider validation of Maddog mechanisms: provider config isolation, frontier/auth profile, project skills, readiness gate, compaction, and delegation. |
 | External harness | `powershell -ExecutionPolicy Bypass -File scripts/run-coding-agent-benchmark.ps1` | Compatibility with `usamadar/coding-agent-benchmark` and cross-agent coding task performance. |
 
-The unified script defaults to deterministic local checks. Use `-IncludeE2E` for real-provider Maddog e2e, `-IncludeFrontierSmoke` for live frontier validation when provider credentials are present, and `-IncludeExternal` for `usamadar/coding-agent-benchmark`. Use `-UseProxy` to route downloads through `http://127.0.0.1:10809`.
+The unified script defaults to deterministic local checks. It writes a Live Readiness section to `.benchmark/regression/latest.md` and `live_readiness` to `.benchmark/regression/latest.json`, showing whether provider e2e and frontier smoke can run with the credentials currently set. Use `-IncludeE2E` for real-provider Maddog e2e, `-IncludeFrontierSmoke` for live frontier validation when provider credentials are present, and `-IncludeExternal` for `usamadar/coding-agent-benchmark`. Use `-UseProxy` to route downloads through `http://127.0.0.1:10809`.
 
 On Windows, the external harness adapter sets `PYTHONUTF8=1`, isolates Maddog's OS config directory under `.benchmark/maddog-home`, uses relative Python/Jest test paths, and builds `bin/maddog.exe` before invoking the harness. The C/C++ tasks still require a GNU-like toolchain (`make`, `gcc`, `g++`) on `PATH`.
 
