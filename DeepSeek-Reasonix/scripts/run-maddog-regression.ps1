@@ -170,8 +170,13 @@ $LiveCredentials = @(
 $AnyProviderCredential = [bool](($LiveCredentials | Where-Object { $_.set -and $_.name -in @("DEEPSEEK_API_KEY", "ICODEEASY_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY") } | Select-Object -First 1))
 $AnyFrontierCredential = [bool](($LiveCredentials | Where-Object { $_.set -and $_.name -in @("ICODEEASY_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY") } | Select-Object -First 1))
 $AnthropicLiveReady = [bool](($LiveCredentials | Where-Object { $_.name -eq "ANTHROPIC_API_KEY" -and $_.set } | Select-Object -First 1))
+$OpenAIOfficialReady = [bool](($LiveCredentials | Where-Object { $_.name -eq "OPENAI_OFFICIAL_TOKEN" -and $_.set } | Select-Object -First 1))
+$AnthropicOfficialReady = [bool](($LiveCredentials | Where-Object { $_.name -eq "ANTHROPIC_IDENTITY_TOKEN" -and $_.set } | Select-Object -First 1))
+$OfficialAuthReady = [bool]($OpenAIOfficialReady -and $AnthropicOfficialReady)
 $LiveReadiness = [ordered]@{
-  provider_e2e_ready = $AnyProviderCredential
+  provider_e2e_ready = [bool]($AnyProviderCredential -and $OfficialAuthReady)
+  provider_api_key_e2e_ready = $AnyProviderCredential
+  official_auth_e2e_ready = $OfficialAuthReady
   frontier_smoke_ready = $AnyFrontierCredential
   credentials = @(
     foreach ($c in $LiveCredentials) {
@@ -184,7 +189,8 @@ $LiveReadiness = [ordered]@{
   commands = @(
     "powershell -ExecutionPolicy Bypass -File scripts/run-maddog-regression.ps1 -IncludeE2E",
     "powershell -ExecutionPolicy Bypass -File scripts/run-maddog-regression.ps1 -IncludeFrontierSmoke",
-    "powershell -ExecutionPolicy Bypass -File scripts/run-maddog-regression.ps1 -IncludeE2E -IncludeFrontierSmoke -IncludeExternal"
+    "powershell -ExecutionPolicy Bypass -File scripts/run-maddog-regression.ps1 -IncludeE2E -IncludeFrontierSmoke -IncludeExternal",
+    "Set OPENAI_OFFICIAL_TOKEN and ANTHROPIC_IDENTITY_TOKEN before claiming official auth live coverage"
   )
 }
 
@@ -194,7 +200,10 @@ $CoverageMatrix = @(
     evidence = @("core-go", "manifest", "local-provider-e2e", "provider-auth-frontier-profile")
     notes = "Covers API-key and official auth config shapes plus local OpenAI bearer and Anthropic workload-identity exchange paths; real official OAuth/browser flows still require manual/provider credential validation."
     status = if ($LiveReadiness.provider_e2e_ready) { "verified" } else { "partial-live-pending" }
-    remaining = if ($LiveReadiness.provider_e2e_ready) { @() } else { @("Run real-provider Maddog e2e with provider credentials.") }
+    remaining = @(
+      if (-not $LiveReadiness.provider_api_key_e2e_ready) { "Run real-provider Maddog e2e with at least one API-key provider credential." }
+      if (-not $LiveReadiness.official_auth_e2e_ready) { "Run official OpenAI bearer and Anthropic workload-identity live auth checks with OPENAI_OFFICIAL_TOKEN and ANTHROPIC_IDENTITY_TOKEN." }
+    )
     optional_remaining = @()
   },
   [pscustomobject]@{
@@ -542,6 +551,8 @@ $md.Add("") | Out-Null
 $md.Add("## Live Readiness") | Out-Null
 $md.Add("") | Out-Null
 $md.Add("- Provider e2e ready: $($LiveReadiness.provider_e2e_ready)") | Out-Null
+$md.Add("- Provider API-key e2e ready: $($LiveReadiness.provider_api_key_e2e_ready)") | Out-Null
+$md.Add("- Official auth e2e ready: $($LiveReadiness.official_auth_e2e_ready)") | Out-Null
 $md.Add("- Frontier smoke ready: $($LiveReadiness.frontier_smoke_ready)") | Out-Null
 $missingLiveCredentials = @($LiveReadiness.credentials | Where-Object { -not $_.set } | ForEach-Object { $_.name })
 if ($missingLiveCredentials.Count -gt 0) {
