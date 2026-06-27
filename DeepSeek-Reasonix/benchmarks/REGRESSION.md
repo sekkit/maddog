@@ -6,10 +6,13 @@ This directory contains the repeatable checks used to validate Maddog-specific m
 
 | Layer | Command | What it proves |
 |---|---|---|
-| Unit tests | `go test ./cmd/e2ebench ./internal/cli -count=1` | Benchmark metadata, manifest validation, expectation gates, and runtime metrics serialization. |
+| Unified regression | `powershell -ExecutionPolicy Bypass -File scripts/run-maddog-regression.ps1` | Offline required regression across Maddog mechanism Go tests, C2 eval/replay/promote, desktop Go tests, frontend checks, CLI build, and e2e manifest generation. Writes `.benchmark/regression/latest.json` and `.benchmark/regression/latest.md`. |
+| Unit tests | `go test ./cmd/e2ebench ./internal/cli ./internal/agent ./internal/boot ./internal/config ./internal/control ./internal/eval ./internal/evidence ./internal/event ./internal/provider ./internal/provider/openai ./internal/provider/anthropic ./internal/provider/costwrap ./internal/skill ./internal/serve -count=1` | Benchmark metadata, provider/auth/frontier routing, advisor events, dynamic skills, readiness evidence, tinyctx/compaction plumbing, C2 replay/scorer/guardrail/promote, and runtime metrics serialization. |
 | Manifest | `go run ./cmd/e2ebench -mode manifest -out benchmarks/e2e/manifest.md -json benchmarks/e2e/manifest.json` | Every committed e2e task has prompt, tags, verifier, requirements, and mechanism coverage metadata. |
 | Maddog e2e | `go run ./cmd/e2ebench -bin ./bin/maddog.exe -out benchmarks/e2e/latest.md -json benchmarks/e2e/latest.json` | Real-provider validation of Maddog mechanisms: provider config isolation, frontier/auth profile, project skills, readiness gate, compaction, and delegation. |
 | External harness | `powershell -ExecutionPolicy Bypass -File scripts/run-coding-agent-benchmark.ps1` | Compatibility with `usamadar/coding-agent-benchmark` and cross-agent coding task performance. |
+
+The unified script defaults to deterministic local checks. Use `-IncludeE2E` for real-provider Maddog e2e, `-IncludeFrontierSmoke` for live frontier validation when provider credentials are present, and `-IncludeExternal` for `usamadar/coding-agent-benchmark`. Use `-UseProxy` to route downloads through `http://127.0.0.1:10809`.
 
 On Windows, the external harness adapter sets `PYTHONUTF8=1`, isolates Maddog's OS config directory under `.benchmark/maddog-home`, uses relative Python/Jest test paths, and builds `bin/maddog.exe` before invoking the harness. The C/C++ tasks still require a GNU-like toolchain (`make`, `gcc`, `g++`) on `PATH`.
 
@@ -37,6 +40,8 @@ go run ./cmd/e2ebench -bin ./bin/maddog.exe -tasks project-config-isolation,prov
 | Readiness evidence gate | `readiness-evidence-gate` | Requires readiness metrics and project host checks. |
 | Context/compaction behavior | `compaction` | Exercises long sequential reads and compacted context reporting. |
 | Subagent delegation and session isolation | `subagent-delegation` | Exercises task delegation and output isolation. |
+| C2 offline replay/scoring/promotion | Go package `internal/eval` | Unit tests capture replay bundles, run replays through a subagent session, parse/fallback frontier scores, enforce guardrails, and promote skills with `SkillPromoted` events. |
+| Desktop GUI configuration and event display | Desktop Go + frontend checks in `run-maddog-regression.ps1` | Validates desktop settings/event wiring and TypeScript/CSS/frontend tests/build for provider/frontier/advisor display paths. |
 
 ## External Benchmark Notes
 

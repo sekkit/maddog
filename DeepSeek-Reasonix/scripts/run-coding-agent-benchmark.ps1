@@ -4,6 +4,7 @@ param(
   [string]$Model = "",
   [string]$TasksDir = "",
   [switch]$DryRun,
+  [switch]$SmokeOnly,
   [switch]$UseProxy
 )
 
@@ -14,6 +15,7 @@ $MaddogBin = Join-Path $RepoRoot "bin\maddog.exe"
 $ConfigTemplate = Join-Path $RepoRoot "benchmarks\coding-agent-benchmark\maddog.config.yaml"
 $ConfigOut = Join-Path $RepoRoot ".benchmark\coding-agent-benchmark\maddog.config.yaml"
 $MaddogHome = Join-Path $RepoRoot ".benchmark\maddog-home"
+$SmokeTasksDir = Join-Path $RepoRoot ".benchmark\coding-agent-benchmark\tasks-smoke"
 $DefaultModel = "icodeeasy/gpt-4.1"
 
 if ($UseProxy) {
@@ -50,6 +52,21 @@ if ($Model -ne "") {
   $config = $config.Replace("__MADDOG_MODEL__", $DefaultModel)
 }
 [System.IO.File]::WriteAllText($ConfigOut, $config, [System.Text.UTF8Encoding]::new($false))
+
+if ($SmokeOnly -and $TasksDir -eq "") {
+  if (Test-Path $SmokeTasksDir) {
+    Remove-Item -Recurse -Force $SmokeTasksDir
+  }
+  New-Item -ItemType Directory -Force -Path $SmokeTasksDir | Out-Null
+  foreach ($taskName in @("00-smoke-test", "03-typescript-feature-table-filter")) {
+    $src = Join-Path (Join-Path $BenchmarkDir "tasks") $taskName
+    if (!(Test-Path $src)) {
+      throw "Smoke benchmark task not found: $src"
+    }
+    Copy-Item -Recurse -Force $src (Join-Path $SmokeTasksDir $taskName)
+  }
+  $TasksDir = $SmokeTasksDir
+}
 
 $args = @("-m", "harness.run", "--config", $ConfigOut)
 if ($TasksDir -ne "") {

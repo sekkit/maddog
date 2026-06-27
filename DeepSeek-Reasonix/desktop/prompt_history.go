@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"crypto/sha1"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -141,7 +142,7 @@ func (a *App) scanPromptHistoryFromDir(dir string) ([]PromptHistoryEntry, error)
 
 func newPromptHistoryTape(dir, currentPath string) (*promptHistoryTape, error) {
 	tape := &promptHistoryTape{
-		nonce:       fmt.Sprintf("%d", time.Now().UnixNano()),
+		nonce:       promptHistoryNonce(dir, currentPath),
 		dir:         dir,
 		currentPath: currentPath,
 		displays:    loadSessionDisplays(dir),
@@ -170,6 +171,12 @@ func newPromptHistoryTape(dir, currentPath string) (*promptHistoryTape, error) {
 	}
 	tape.sessions = sessions
 	return tape, nil
+}
+
+func promptHistoryNonce(dir, currentPath string) string {
+	key := filepath.Clean(dir) + "\x00" + filepath.Clean(currentPath) + "\x00" + fmt.Sprintf("%d", time.Now().UnixNano())
+	sum := sha1.Sum([]byte(key))
+	return base64.RawURLEncoding.EncodeToString(sum[:])
 }
 
 func (t *promptHistoryTape) readOlder(cursor string, limit int) PromptHistoryResult {
