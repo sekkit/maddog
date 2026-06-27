@@ -225,8 +225,8 @@ $CoverageMatrix = @(
   },
   [pscustomobject]@{
     capability = "General coding-agent task performance"
-    evidence = @("external coding-agent-benchmark optional")
-    notes = "Use -IncludeExternal for usamadar/coding-agent-benchmark compatibility/performance runs."
+    evidence = @("external coding-agent-benchmark optional", "local external benchmark smoke")
+    notes = "-IncludeExternal defaults to the offline -LocalSmoke path so the external harness invokes Maddog without live credentials; run scripts/run-coding-agent-benchmark.ps1 without -LocalSmoke for full live performance comparisons."
   }
 )
 
@@ -417,8 +417,8 @@ if ($IncludeExternal) {
   } else {
     Invoke-Step `
       -Name "coding-agent-benchmark" `
-      -Command "powershell -ExecutionPolicy Bypass -File scripts/run-coding-agent-benchmark.ps1 -BenchmarkDir $BenchmarkDir" `
-      -Coverage @("external-coding-benchmark", "agent-command-adapter") `
+      -Command "powershell -ExecutionPolicy Bypass -File scripts/run-coding-agent-benchmark.ps1 -BenchmarkDir $BenchmarkDir -LocalSmoke" `
+      -Coverage @("external-coding-benchmark", "agent-command-adapter", "local-provider-fixture") `
       -Required $true `
       -Action {
         $args = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", (Join-Path $RepoRoot "scripts\run-coding-agent-benchmark.ps1"), "-BenchmarkDir", $BenchmarkDir, "-GoExe", $GoExe)
@@ -427,6 +427,8 @@ if ($IncludeExternal) {
         }
         if ($DryRunExternal) {
           $args += @("-DryRun", "-SmokeOnly")
+        } else {
+          $args += "-LocalSmoke"
         }
         if ($UseProxy) {
           $args += "-UseProxy"

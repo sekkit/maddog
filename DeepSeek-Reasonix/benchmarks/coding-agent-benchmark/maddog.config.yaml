@@ -6,6 +6,7 @@ agents:
       USERPROFILE: "__MADDOG_HOME__"
       XDG_CONFIG_HOME: "__MADDOG_HOME__/.config"
       AppData: "__MADDOG_HOME__/AppData/Roaming"
+      MADDOG_BENCHMARK_LOCAL_KEY: "__MADDOG_BENCHMARK_LOCAL_KEY__"
     args:
       - "run"
       - "--dir"

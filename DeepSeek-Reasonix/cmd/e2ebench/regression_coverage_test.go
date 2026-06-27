@@ -243,9 +243,13 @@ func TestMaddogBenchmarkCoverageAudit(t *testing.T) {
 		},
 		"External coding benchmark Maddog adapter": {
 			"benchmarks/coding-agent-benchmark/maddog.config.yaml:MADDOG_MODEL",
+			"benchmarks/coding-agent-benchmark/maddog.config.yaml:MADDOG_BENCHMARK_LOCAL_KEY",
 			"benchmarks/coding-agent-benchmark/maddog.config.yaml:{workspace}/.maddog-run-metrics.json",
 			"scripts/run-coding-agent-benchmark.ps1:.benchmark\\maddog-home",
 			"scripts/run-coding-agent-benchmark.ps1:SmokeOnly",
+			"scripts/run-coding-agent-benchmark.ps1:LocalSmoke",
+			"cmd/coding-agent-benchmark-fixture/main.go:Benchmark smoke fixture completed.",
+			"cmd/coding-agent-benchmark-fixture/main.go:math_utils.py",
 		},
 		"Offline OpenAI-compatible fixture, tool loop, and metrics": {
 			"cmd/e2ebench/main.go:suite | manifest | diff | local-fixture",
@@ -303,6 +307,7 @@ func TestMaddogBenchmarkCoverageAudit(t *testing.T) {
 		"advisor",
 		"internal/eval",
 		"coding-agent-benchmark",
+		"LocalSmoke",
 		"live_readiness",
 		"Provider e2e ready",
 		"Frontier smoke ready",
