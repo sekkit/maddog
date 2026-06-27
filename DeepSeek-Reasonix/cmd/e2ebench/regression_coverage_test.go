@@ -119,6 +119,7 @@ func TestMaddogBenchmarkCoverageAudit(t *testing.T) {
 			"desktop/app_test.go:workload_identity",
 			"desktop/settings_app_test.go:openai",
 			"desktop/branding_test.go:maddog-dev.exe",
+			"desktop/release_branding_test.go:${APPNAME}-windows-${arch}-installer.exe",
 		},
 	}
 	for capability, evidences := range testEvidence {
