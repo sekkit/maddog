@@ -1,0 +1,11 @@
+default_model = "reasonix-legacy"
+
+[agent]
+frontier_model = "reasonix-frontier"
+
+[[providers]]
+name = "reasonix-legacy"
+kind = "openai"
+base_url = "https://reasonix.example.invalid/v1"
+model = "reasonix-legacy-model"
+api_key_env = "REASONIX_SHOULD_NOT_BE_USED"

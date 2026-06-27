@@ -1,0 +1,40 @@
+agents:
+  maddog:
+    command: "__MADDOG_BIN__"
+    env:
+      HOME: "__MADDOG_HOME__"
+      USERPROFILE: "__MADDOG_HOME__"
+      XDG_CONFIG_HOME: "__MADDOG_HOME__/.config"
+      AppData: "__MADDOG_HOME__/AppData/Roaming"
+    args:
+      - "run"
+      - "--dir"
+      - "{workspace}"
+      - "--metrics"
+      - "{workspace}/.maddog-run-metrics.json"
+      - "--max-steps"
+      - "80"
+      - "--model"
+      - "{model}"
+      - "{prompt}"
+    model: "__MADDOG_MODEL__"
+    timeout_seconds: 600
+
+test_runners:
+  python:
+    command: "python -m pytest tests -v --tb=short"
+    pattern: "tests/"
+  typescript:
+    command: "cd {workspace} && npm install --quiet && npx jest tests --verbose"
+    pattern: "tests/"
+  angular:
+    command: "cd {workspace} && npm install --quiet && npx ng test --watch=false --browsers=ChromeHeadless"
+    pattern: "tests/"
+  c:
+    command: "cd {workspace} && make test"
+    pattern: "tests/"
+  cpp:
+    command: "cd {workspace} && make test"
+    pattern: "tests/"
+
+results_dir: "results"

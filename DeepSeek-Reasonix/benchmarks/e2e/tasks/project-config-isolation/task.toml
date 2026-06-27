@@ -1,0 +1,8 @@
+prompt = "This workspace contains both maddog.sample.toml and reasonix.toml. Treat the Maddog sample config as the source of truth and ignore Reasonix-owned files. Read maddog.sample.toml, then write provider-summary.txt with exactly three lines: default=<default_model>, frontier=<agent.frontier_model>, storage=.maddog. Do not copy any value from reasonix.toml."
+max_steps = 18
+timeout_sec = 240
+tags = ["config", "maddog-isolation", "provider", "frontier", "headless-cli"]
+requires = ["provider", "filesystem", "maddog.toml"]
+
+[expect]
+min_tool_calls = 2

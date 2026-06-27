@@ -27,6 +27,13 @@ type RunMetrics struct {
 	ReadinessMissingProjectChecks int     `json:"readiness_missing_project_checks"`
 	ReadinessIncompleteTodos      int     `json:"readiness_incomplete_todos"`
 	ReadinessCommandMismatches    int     `json:"readiness_command_mismatches"`
+	UpgradeEvents                 int     `json:"upgrade_events"`
+	AdvisorEvents                 int     `json:"advisor_events"`
+	SkillGeneratedEvents          int     `json:"skill_generated_events"`
+	BudgetExceededEvents          int     `json:"budget_exceeded_events"`
+	ToolCalls                     int     `json:"tool_calls"`
+	ToolErrors                    int     `json:"tool_errors"`
+	ToolTruncations               int     `json:"tool_truncations"`
 }
 
 // metricsSink forwards every event to the real sink and accumulates the per-call
@@ -54,6 +61,24 @@ func (s *metricsSink) Emit(e event.Event) {
 	}
 	if e.Kind == event.CompactionStarted {
 		s.m.Compactions++
+	}
+	switch e.Kind {
+	case event.Upgrade:
+		s.m.UpgradeEvents++
+	case event.Advisor:
+		s.m.AdvisorEvents++
+	case event.SkillGenerated:
+		s.m.SkillGeneratedEvents++
+	case event.BudgetExceeded:
+		s.m.BudgetExceededEvents++
+	case event.ToolResult:
+		s.m.ToolCalls++
+		if e.Tool.Err != "" {
+			s.m.ToolErrors++
+		}
+		if e.Tool.Truncated {
+			s.m.ToolTruncations++
+		}
 	}
 	s.inner.Emit(e)
 }

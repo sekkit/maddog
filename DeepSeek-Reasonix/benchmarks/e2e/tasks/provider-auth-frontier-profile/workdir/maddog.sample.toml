@@ -1,0 +1,46 @@
+default_model = "small"
+
+[desktop]
+provider_access = ["official-openai", "official-anthropic"]
+
+[agent]
+frontier_model = "frontier"
+subagent_model = "small"
+upgrade_enabled = true
+upgrade_threshold = 2
+frontier_budget = 50000
+
+[[providers]]
+name = "small"
+kind = "openai"
+base_url = "https://icodeeasy.example.invalid/v1"
+models = ["gpt-small-a", "gpt-small-b"]
+default = "gpt-small-a"
+api_key_env = "ICODEEASY_API_KEY"
+auth_type = "api_key"
+price = { cache_hit = 0.01, input = 0.2, output = 0.8, currency = "$" }
+
+[[providers]]
+name = "frontier"
+kind = "anthropic"
+base_url = "https://api.anthropic.com"
+model = "claude-frontier"
+auth_type = "bearer"
+auth_token_env = "ANTHROPIC_AUTH_TOKEN"
+price = { cache_hit = 0.5, input = 5, output = 25, currency = "$" }
+
+[[providers]]
+name = "official-openai"
+kind = "openai"
+base_url = "https://api.openai.com/v1"
+model = "gpt-official"
+auth_type = "bearer"
+auth_token_env = "OPENAI_OFFICIAL_TOKEN"
+
+[[providers]]
+name = "official-anthropic"
+kind = "anthropic"
+base_url = "https://api.anthropic.com"
+model = "claude-official"
+auth_type = "workload_identity"
+identity_env = "ANTHROPIC_IDENTITY_TOKEN"

@@ -1,0 +1,8 @@
+prompt = "Inspect maddog.sample.toml and write auth-frontier-profile.json. It must summarize configured provider profiles without exposing secrets: include default_model, small_model, frontier_model, each provider's kind, auth_type, token_env, model list, and whether desktop.provider_access lists official-openai and official-anthropic. Do not include token values."
+max_steps = 24
+timeout_sec = 300
+tags = ["provider", "auth", "frontier", "small-model", "desktop-parity", "headless-cli"]
+requires = ["provider", "filesystem", "maddog.toml"]
+
+[expect]
+min_tool_calls = 2

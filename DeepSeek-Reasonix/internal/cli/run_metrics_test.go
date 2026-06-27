@@ -96,3 +96,30 @@ func TestWriteMetricsIncludesReadinessFields(t *testing.T) {
 		}
 	}
 }
+
+func TestMetricsSinkAccumulatesMechanismEvents(t *testing.T) {
+	s := &metricsSink{inner: event.Discard}
+
+	s.Emit(event.Event{Kind: event.Upgrade})
+	s.Emit(event.Event{Kind: event.Advisor})
+	s.Emit(event.Event{Kind: event.SkillGenerated})
+	s.Emit(event.Event{Kind: event.BudgetExceeded})
+	s.Emit(event.Event{Kind: event.ToolResult})
+	s.Emit(event.Event{Kind: event.ToolResult, Tool: event.Tool{Err: "boom", Truncated: true}})
+
+	if s.m.UpgradeEvents != 1 {
+		t.Fatalf("upgrade events = %d, want 1", s.m.UpgradeEvents)
+	}
+	if s.m.AdvisorEvents != 1 {
+		t.Fatalf("advisor events = %d, want 1", s.m.AdvisorEvents)
+	}
+	if s.m.SkillGeneratedEvents != 1 {
+		t.Fatalf("skill generated events = %d, want 1", s.m.SkillGeneratedEvents)
+	}
+	if s.m.BudgetExceededEvents != 1 {
+		t.Fatalf("budget events = %d, want 1", s.m.BudgetExceededEvents)
+	}
+	if s.m.ToolCalls != 2 || s.m.ToolErrors != 1 || s.m.ToolTruncations != 1 {
+		t.Fatalf("tool metrics = calls:%d errors:%d trunc:%d", s.m.ToolCalls, s.m.ToolErrors, s.m.ToolTruncations)
+	}
+}

@@ -1,0 +1,287 @@
+{
+  "valid": true,
+  "tasks": [
+    {
+      "id": "compaction",
+      "tags": [
+        "context",
+        "sequential-read",
+        "tool-output",
+        "compaction",
+        "headless-cli"
+      ],
+      "requires": [
+        "provider",
+        "filesystem",
+        "markdown"
+      ],
+      "expect": {},
+      "max_steps": 40,
+      "timeout_sec": 900,
+      "has_seed_workdir": true,
+      "has_verify": true
+    },
+    {
+      "id": "fix-add-bug",
+      "tags": [
+        "core",
+        "python",
+        "bugfix",
+        "edit-existing-file",
+        "headless-cli"
+      ],
+      "requires": [
+        "provider",
+        "filesystem",
+        "python3"
+      ],
+      "expect": {},
+      "max_steps": 12,
+      "timeout_sec": 180,
+      "has_seed_workdir": true,
+      "has_verify": true
+    },
+    {
+      "id": "fizzbuzz",
+      "tags": [
+        "core",
+        "python",
+        "scratch",
+        "file-write",
+        "headless-cli"
+      ],
+      "requires": [
+        "provider",
+        "filesystem",
+        "python3"
+      ],
+      "expect": {},
+      "max_steps": 12,
+      "timeout_sec": 180,
+      "has_seed_workdir": false,
+      "has_verify": true
+    },
+    {
+      "id": "palindrome",
+      "tags": [
+        "core",
+        "python",
+        "scratch",
+        "file-write",
+        "headless-cli"
+      ],
+      "requires": [
+        "provider",
+        "filesystem",
+        "python3"
+      ],
+      "expect": {},
+      "max_steps": 12,
+      "timeout_sec": 180,
+      "has_seed_workdir": false,
+      "has_verify": true
+    },
+    {
+      "id": "project-config-isolation",
+      "tags": [
+        "config",
+        "maddog-isolation",
+        "provider",
+        "frontier",
+        "headless-cli"
+      ],
+      "requires": [
+        "provider",
+        "filesystem",
+        "maddog.toml"
+      ],
+      "expect": {
+        "min_tool_calls": 2
+      },
+      "max_steps": 18,
+      "timeout_sec": 240,
+      "has_seed_workdir": true,
+      "has_verify": true
+    },
+    {
+      "id": "project-skill-invocation",
+      "tags": [
+        "skill",
+        "project-skill",
+        "run-skill",
+        "headless-cli"
+      ],
+      "requires": [
+        "provider",
+        "filesystem",
+        "skills"
+      ],
+      "expect": {
+        "min_tool_calls": 2
+      },
+      "max_steps": 24,
+      "timeout_sec": 300,
+      "has_seed_workdir": true,
+      "has_verify": true
+    },
+    {
+      "id": "provider-auth-frontier-profile",
+      "tags": [
+        "provider",
+        "auth",
+        "frontier",
+        "small-model",
+        "desktop-parity",
+        "headless-cli"
+      ],
+      "requires": [
+        "provider",
+        "filesystem",
+        "maddog.toml"
+      ],
+      "expect": {
+        "min_tool_calls": 2
+      },
+      "max_steps": 24,
+      "timeout_sec": 300,
+      "has_seed_workdir": true,
+      "has_verify": true
+    },
+    {
+      "id": "readiness-evidence-gate",
+      "tags": [
+        "evidence",
+        "readiness",
+        "host-checks",
+        "verification",
+        "headless-cli"
+      ],
+      "requires": [
+        "provider",
+        "filesystem",
+        "bash",
+        "project-memory"
+      ],
+      "expect": {
+        "min_readiness_checks": 1,
+        "min_tool_calls": 2,
+        "max_tool_errors": 0
+      },
+      "max_steps": 24,
+      "timeout_sec": 300,
+      "has_seed_workdir": true,
+      "has_verify": true
+    },
+    {
+      "id": "subagent-delegation",
+      "tags": [
+        "subagent",
+        "delegation",
+        "tool-policy",
+        "session-isolation",
+        "headless-cli"
+      ],
+      "requires": [
+        "provider",
+        "filesystem",
+        "task-tool"
+      ],
+      "expect": {},
+      "max_steps": 15,
+      "timeout_sec": 300,
+      "has_seed_workdir": true,
+      "has_verify": true
+    }
+  ],
+  "tags": {
+    "auth": 1,
+    "bugfix": 1,
+    "compaction": 1,
+    "config": 1,
+    "context": 1,
+    "core": 3,
+    "delegation": 1,
+    "desktop-parity": 1,
+    "edit-existing-file": 1,
+    "evidence": 1,
+    "file-write": 2,
+    "frontier": 2,
+    "headless-cli": 9,
+    "host-checks": 1,
+    "maddog-isolation": 1,
+    "project-skill": 1,
+    "provider": 2,
+    "python": 3,
+    "readiness": 1,
+    "run-skill": 1,
+    "scratch": 2,
+    "sequential-read": 1,
+    "session-isolation": 1,
+    "skill": 1,
+    "small-model": 1,
+    "subagent": 1,
+    "tool-output": 1,
+    "tool-policy": 1,
+    "verification": 1
+  },
+  "requires": {
+    "bash": 1,
+    "filesystem": 9,
+    "maddog.toml": 2,
+    "markdown": 1,
+    "project-memory": 1,
+    "provider": 9,
+    "python3": 3,
+    "skills": 1,
+    "task-tool": 1
+  },
+  "requirement_coverage": {
+    "bash": [
+      "readiness-evidence-gate"
+    ],
+    "filesystem": [
+      "compaction",
+      "fix-add-bug",
+      "fizzbuzz",
+      "palindrome",
+      "project-config-isolation",
+      "project-skill-invocation",
+      "provider-auth-frontier-profile",
+      "readiness-evidence-gate",
+      "subagent-delegation"
+    ],
+    "maddog.toml": [
+      "project-config-isolation",
+      "provider-auth-frontier-profile"
+    ],
+    "markdown": [
+      "compaction"
+    ],
+    "project-memory": [
+      "readiness-evidence-gate"
+    ],
+    "provider": [
+      "compaction",
+      "fix-add-bug",
+      "fizzbuzz",
+      "palindrome",
+      "project-config-isolation",
+      "project-skill-invocation",
+      "provider-auth-frontier-profile",
+      "readiness-evidence-gate",
+      "subagent-delegation"
+    ],
+    "python3": [
+      "fix-add-bug",
+      "fizzbuzz",
+      "palindrome"
+    ],
+    "skills": [
+      "project-skill-invocation"
+    ],
+    "task-tool": [
+      "subagent-delegation"
+    ]
+  },
+  "issues": null
+}

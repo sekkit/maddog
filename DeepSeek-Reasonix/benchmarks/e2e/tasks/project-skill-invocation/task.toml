@@ -1,0 +1,8 @@
+prompt = "Use the project skill named bench-summarizer via the Maddog skill system. Apply it to notes/source.txt, then write skill-result.txt containing only the exact summary string that the skill instructs you to produce."
+max_steps = 24
+timeout_sec = 300
+tags = ["skill", "project-skill", "run-skill", "headless-cli"]
+requires = ["provider", "filesystem", "skills"]
+
+[expect]
+min_tool_calls = 2

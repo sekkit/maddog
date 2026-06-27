@@ -1,0 +1,10 @@
+prompt = "Follow the project rules in MADDOG.md. Update app_state.txt so release_status becomes ready. Then run the exact required verification command from MADDOG.md after the edit. Finish only after the verification succeeds."
+max_steps = 24
+timeout_sec = 300
+tags = ["evidence", "readiness", "host-checks", "verification", "headless-cli"]
+requires = ["provider", "filesystem", "bash", "project-memory"]
+
+[expect]
+min_readiness_checks = 1
+min_tool_calls = 2
+max_tool_errors = 0

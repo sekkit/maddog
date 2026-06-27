@@ -1,0 +1,21 @@
+default_model = "maddog-small"
+
+[agent]
+frontier_model = "maddog-frontier"
+upgrade_enabled = true
+upgrade_threshold = 3
+frontier_budget = 100000
+
+[[providers]]
+name = "maddog-small"
+kind = "openai"
+base_url = "https://maddog.example.invalid/v1"
+model = "maddog-small-model"
+api_key_env = "MADDOG_BENCH_KEY"
+
+[[providers]]
+name = "maddog-frontier"
+kind = "anthropic"
+base_url = "https://maddog-frontier.example.invalid"
+model = "claude-maddog-frontier"
+api_key_env = "MADDOG_BENCH_ANTHROPIC_KEY"

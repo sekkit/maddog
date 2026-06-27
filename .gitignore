@@ -3,6 +3,8 @@
 
 # Maddog local runtime state
 .maddog/
+!DeepSeek-Reasonix/benchmarks/e2e/tasks/**/workdir/.maddog/
+!DeepSeek-Reasonix/benchmarks/e2e/tasks/**/workdir/.maddog/**
 
 # Local external clones and generated research payloads
 advisor-middleware/

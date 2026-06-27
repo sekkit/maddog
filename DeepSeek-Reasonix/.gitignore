@@ -18,6 +18,7 @@
 coverage.out
 cpu.prof
 mem.prof
+/.benchmark/
 
 # Wails desktop artifacts
 /desktop/build/*
