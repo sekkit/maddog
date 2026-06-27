@@ -173,7 +173,7 @@ max_tool_errors = 0
 	if err != nil {
 		t.Fatalf("loadTasks: %v", err)
 	}
-	suite, err := newLocalFixtureSuite(tasks, "maddog-bin", "external/model")
+	suite, err := newLocalFixtureSuite(tasks, "maddog-bin")
 	if err != nil {
 		t.Fatalf("newLocalFixtureSuite: %v", err)
 	}
@@ -195,6 +195,63 @@ max_tool_errors = 0
 		`kind = "openai"`,
 		`model = "local-tool-model"`,
 		`api_key_env = "MADDOG_LOCAL_FIXTURE_KEY"`,
+		suite.server.URL,
+	} {
+		if !strings.Contains(string(cfg), want) {
+			t.Fatalf("fixture config missing %q:\n%s", want, cfg)
+		}
+	}
+}
+
+func TestLocalProviderFixtureRunCanTargetAnthropicNativeTask(t *testing.T) {
+	root := t.TempDir()
+	taskDir := filepath.Join(root, "tasks", "local-anthropic-tool-loop")
+	if err := os.MkdirAll(filepath.Join(taskDir, "workdir"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(taskDir, "task.toml"), []byte(`
+prompt = "fixture"
+max_steps = 4
+timeout_sec = 30
+tags = ["local-fixture", "anthropic", "frontier", "provider", "tool-loop", "metrics", "headless-cli"]
+requires = ["local-anthropic-fixture", "filesystem"]
+
+[expect]
+min_tool_calls = 1
+max_tool_errors = 0
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(taskDir, "verify.sh"), []byte("set -e\ntest -f anthropic-fixture-output.txt\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	tasks, err := loadTasks(root)
+	if err != nil {
+		t.Fatalf("loadTasks: %v", err)
+	}
+	suite, err := newLocalFixtureSuite(tasks, "maddog-bin", localFixtureKindAnthropic)
+	if err != nil {
+		t.Fatalf("newLocalFixtureSuite: %v", err)
+	}
+	defer suite.Close()
+
+	if suite.task.ID != "local-anthropic-tool-loop" {
+		t.Fatalf("fixture task = %q", suite.task.ID)
+	}
+	if suite.model != "local-anthropic-fixture/claude-local-frontier" {
+		t.Fatalf("fixture model = %q", suite.model)
+	}
+	cfg, err := os.ReadFile(filepath.Join(suite.task.dir, "workdir", "maddog.toml"))
+	if err != nil {
+		t.Fatalf("fixture config missing: %v", err)
+	}
+	for _, want := range []string{
+		`default_model = "local-anthropic-fixture/claude-local-frontier"`,
+		`name = "local-anthropic-fixture"`,
+		`kind = "anthropic"`,
+		`model = "claude-local-frontier"`,
+		`api_key_env = "MADDOG_LOCAL_ANTHROPIC_FIXTURE_KEY"`,
 		suite.server.URL,
 	} {
 		if !strings.Contains(string(cfg), want) {

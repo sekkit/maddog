@@ -63,6 +63,30 @@
       "has_verify": true
     },
     {
+      "id": "local-anthropic-tool-loop",
+      "tags": [
+        "local-fixture",
+        "anthropic",
+        "frontier",
+        "provider",
+        "tool-loop",
+        "metrics",
+        "headless-cli"
+      ],
+      "requires": [
+        "local-anthropic-fixture",
+        "filesystem"
+      ],
+      "expect": {
+        "min_tool_calls": 1,
+        "max_tool_errors": 0
+      },
+      "max_steps": 4,
+      "timeout_sec": 90,
+      "has_seed_workdir": false,
+      "has_verify": true
+    },
+    {
       "id": "local-provider-tool-loop",
       "tags": [
         "local-fixture",
@@ -220,6 +244,7 @@
   ],
   "tags": {
     "advisor": 1,
+    "anthropic": 1,
     "auth": 1,
     "bugfix": 1,
     "compaction": 1,
@@ -231,14 +256,14 @@
     "edit-existing-file": 1,
     "evidence": 1,
     "file-write": 2,
-    "frontier": 2,
-    "headless-cli": 10,
+    "frontier": 3,
+    "headless-cli": 11,
     "host-checks": 1,
-    "local-fixture": 1,
+    "local-fixture": 2,
     "maddog-isolation": 1,
-    "metrics": 1,
+    "metrics": 2,
     "project-skill": 1,
-    "provider": 3,
+    "provider": 4,
     "python": 3,
     "readiness": 1,
     "run-skill": 1,
@@ -249,7 +274,7 @@
     "small-model": 1,
     "subagent": 1,
     "tinyctx": 1,
-    "tool-loop": 1,
+    "tool-loop": 2,
     "tool-output": 1,
     "tool-policy": 1,
     "upgrade": 1,
@@ -257,7 +282,8 @@
   },
   "requires": {
     "bash": 1,
-    "filesystem": 10,
+    "filesystem": 11,
+    "local-anthropic-fixture": 1,
     "local-openai-fixture": 1,
     "maddog.toml": 2,
     "markdown": 1,
@@ -275,6 +301,7 @@
       "compaction",
       "fix-add-bug",
       "fizzbuzz",
+      "local-anthropic-tool-loop",
       "local-provider-tool-loop",
       "palindrome",
       "project-config-isolation",
@@ -282,6 +309,9 @@
       "provider-auth-frontier-profile",
       "readiness-evidence-gate",
       "subagent-delegation"
+    ],
+    "local-anthropic-fixture": [
+      "local-anthropic-tool-loop"
     ],
     "local-openai-fixture": [
       "local-provider-tool-loop"

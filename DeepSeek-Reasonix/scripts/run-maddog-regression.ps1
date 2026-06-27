@@ -216,7 +216,7 @@ $CoverageMatrix = @(
   [pscustomobject]@{
     capability = "Readiness evidence gate, tool metrics, tinyctx/compaction, and run metrics"
     evidence = @("core-go", "manifest", "local-provider-e2e", "e2e optional")
-    notes = "The local OpenAI-compatible fixture is required and records provider/tool-loop metrics without live credentials; real provider e2e remains optional."
+    notes = "The local OpenAI-compatible and Anthropic-native fixtures are required and record provider/tool-loop metrics without live credentials; real provider e2e remains optional."
   },
   [pscustomobject]@{
     capability = "Maddog naming, config/storage isolation, desktop GUI settings, and app build"
@@ -297,7 +297,7 @@ Invoke-Step `
 Invoke-Step `
   -Name "local-provider-e2e" `
   -Command "$GoExe run ./cmd/e2ebench -mode local-fixture -bin $MaddogBin -out .benchmark/regression/local-provider.md -json .benchmark/regression/local-provider.json" `
-  -Coverage @("local-fixture", "openai-compatible-sse", "tool-loop", "mechanism-metrics", "headless-cli") `
+  -Coverage @("local-fixture", "openai-compatible-sse", "anthropic-native-sse", "frontier", "tool-loop", "mechanism-metrics", "headless-cli") `
   -Required $true `
   -Action {
     Invoke-Native $GoExe @("run", "./cmd/e2ebench", "-mode", "local-fixture", "-bin", $MaddogBin, "-out", ".benchmark/regression/local-provider.md", "-json", ".benchmark/regression/local-provider.json")

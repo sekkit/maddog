@@ -1,0 +1,9 @@
+prompt = "Use the available tools to create anthropic-fixture-output.txt with exactly MADDOG_LOCAL_ANTHROPIC_TOOL_LOOP_OK on one line, then finish briefly."
+max_steps = 4
+timeout_sec = 90
+tags = ["local-fixture", "anthropic", "frontier", "provider", "tool-loop", "metrics", "headless-cli"]
+requires = ["local-anthropic-fixture", "filesystem"]
+
+[expect]
+min_tool_calls = 1
+max_tool_errors = 0

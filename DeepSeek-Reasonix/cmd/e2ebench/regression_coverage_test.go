@@ -117,6 +117,34 @@ func TestMaddogBenchmarkCoverageAudit(t *testing.T) {
 		}
 	}
 
+	anthropicFixtureTask := taskByID(t, tasks, "local-anthropic-tool-loop")
+	for _, tag := range []string{"local-fixture", "anthropic", "frontier", "provider", "tool-loop", "metrics", "headless-cli"} {
+		if !hasString(anthropicFixtureTask.Tags, tag) {
+			t.Fatalf("local-anthropic-tool-loop missing tag %q: %#v", tag, anthropicFixtureTask.Tags)
+		}
+	}
+	if !hasString(anthropicFixtureTask.Requires, "local-anthropic-fixture") {
+		t.Fatalf("local-anthropic-tool-loop should require local-anthropic-fixture: %#v", anthropicFixtureTask.Requires)
+	}
+	if anthropicFixtureTask.Expect.MinToolCalls < 1 {
+		t.Fatalf("local-anthropic-tool-loop should require at least one tool call: %+v", anthropicFixtureTask.Expect)
+	}
+	if anthropicFixtureTask.Expect.MaxToolErrors == nil || *anthropicFixtureTask.Expect.MaxToolErrors != 0 {
+		t.Fatalf("local-anthropic-tool-loop should reject tool errors: %+v", anthropicFixtureTask.Expect)
+	}
+	anthropicFixtureVerify := readRepoFile(t, root, "benchmarks", "e2e", "tasks", "local-anthropic-tool-loop", "verify.sh")
+	for _, want := range []string{
+		"anthropic-fixture-output.txt",
+		".run-metrics.json",
+		`metrics["tool_calls"] >= 1`,
+		`metrics["tool_errors"] == 0`,
+		`metrics["steps"] >= 2`,
+	} {
+		if !strings.Contains(anthropicFixtureVerify, want) {
+			t.Fatalf("local Anthropic fixture verifier missing %q", want)
+		}
+	}
+
 	testEvidence := map[string][]string{
 		"OpenAI API-key and official bearer auth": {
 			"internal/provider/openai/openai_test.go:oauth-access-token",
@@ -173,6 +201,13 @@ func TestMaddogBenchmarkCoverageAudit(t *testing.T) {
 			"cmd/e2ebench/local_fixture.go:/chat/completions",
 			"cmd/e2ebench/local_fixture.go:tool_calls",
 			"scripts/run-maddog-regression.ps1:local-provider-e2e",
+		},
+		"Offline Anthropic frontier fixture, tool loop, and metrics": {
+			"cmd/e2ebench/local_fixture.go:local-anthropic-tool-loop",
+			"cmd/e2ebench/local_fixture.go:/v1/messages",
+			"cmd/e2ebench/local_fixture.go:tool_use",
+			"cmd/e2ebench/local_fixture.go:tool_result",
+			"scripts/run-maddog-regression.ps1:anthropic-native-sse",
 		},
 	}
 	for capability, evidences := range testEvidence {

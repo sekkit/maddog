@@ -156,15 +156,22 @@ func main() {
 		return
 	}
 	if *mode == "local-fixture" {
-		fixture, err := newLocalFixtureSuite(tasks, *bin, *model)
+		fixtures, err := newLocalFixtureSuites(tasks, *bin)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "local fixture:", err)
 			os.Exit(1)
 		}
-		defer fixture.Close()
-		r := runTask(fixture.bin, fixture.model, fixture.task)
-		applyExpectations(&r)
-		results := []result{r}
+		defer func() {
+			for _, fixture := range fixtures {
+				fixture.Close()
+			}
+		}()
+		var results []result
+		for _, fixture := range fixtures {
+			r := runTask(fixture.bin, fixture.model, fixture.task)
+			applyExpectations(&r)
+			results = append(results, r)
+		}
 		report := render(results)
 		if *outMD != "" {
 			if err := os.WriteFile(*outMD, []byte(report), 0o644); err != nil {
@@ -185,8 +192,10 @@ func main() {
 				os.Exit(1)
 			}
 		}
-		if !r.Passed {
-			os.Exit(1)
+		for _, r := range results {
+			if !r.Passed {
+				os.Exit(1)
+			}
 		}
 		return
 	}
