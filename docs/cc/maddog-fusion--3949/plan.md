@@ -1053,3 +1053,16 @@ flowchart TB
 - **Matcher 阈值**：v1 关键词匹配阈值——≥2 个共同关键词匹配 skill description vs task，或匹配度 ≥ 50%？实施时由实现者选择更合适的。
 - **Outcome 定义**（C2）：ReplayBundle.Success 判定规则为「Agent.Run 返回 nil + ≥1 个 tool call 执行 + finalReadiness 通过」——C2 实施时可根据实际数据精调。
 - **Frontier budget 作用域**：500000 tokens 是 output-only。input 消耗不在 budget 内，需在实施时评估是否需要 input+output 的成本模式。
+
+---
+
+## 外部四组方案增强计划
+
+2026-06-27 基于 sekkit starred repos 调研补充了一份后续增强计划，覆盖四组可落地方案：
+
+- Provider/auth/成本组合
+- Context 压缩组合
+- Code intelligence/MCP 组合
+- Skill 自进化组合
+
+详细实施单元见：`docs/cc/maddog-fusion--3949/plan-external-schemes.md`
