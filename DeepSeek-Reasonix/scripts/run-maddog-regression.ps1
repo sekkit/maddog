@@ -506,8 +506,23 @@ $CoverageSummaries = @(
     }
   }
 )
+$FailedRequiredSteps = @(
+  foreach ($s in $StepSummaries) {
+    if ($s.required -and $s.status -ne "pass") {
+      [ordered]@{
+        name = [string]$s.name
+        status = [string]$s.status
+        reason = [string]$s.reason
+      }
+    }
+  }
+)
 $CompletionAudit = [ordered]@{
-  complete = [bool](-not ($CoverageSummaries | Where-Object { $_.status -eq "partial-live-pending" } | Select-Object -First 1))
+  complete = [bool](
+    -not ($CoverageSummaries | Where-Object { $_.status -eq "partial-live-pending" } | Select-Object -First 1) -and
+    -not ($FailedRequiredSteps | Select-Object -First 1)
+  )
+  failed_required_steps = $FailedRequiredSteps
   pending = @(
     foreach ($c in $CoverageSummaries) {
       if ($c.status -eq "partial-live-pending") {
@@ -594,6 +609,13 @@ $md.Add("") | Out-Null
 $md.Add("## Completion Audit") | Out-Null
 $md.Add("") | Out-Null
 $md.Add("- Complete: $($CompletionAudit.complete)") | Out-Null
+if ($CompletionAudit.failed_required_steps.Count -gt 0) {
+  foreach ($s in $CompletionAudit.failed_required_steps) {
+    $md.Add("- Failed required step: $($s.name) ($($s.status)) $($s.reason)") | Out-Null
+  }
+} else {
+  $md.Add("- Failed required steps: none") | Out-Null
+}
 if ($CompletionAudit.pending.Count -gt 0) {
   foreach ($p in $CompletionAudit.pending) {
     $md.Add("- Pending: $($p.capability) - $($p.remaining -join '; ')") | Out-Null

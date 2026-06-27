@@ -310,6 +310,7 @@ func TestMaddogBenchmarkCoverageAudit(t *testing.T) {
 		"LocalSmoke",
 		"live_readiness",
 		"completion_audit",
+		"failed_required_steps",
 		"partial-live-pending",
 		"verified-offline",
 		"official_auth_e2e_ready",
