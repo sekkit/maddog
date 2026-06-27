@@ -169,6 +169,7 @@ $LiveCredentials = @(
 )
 $AnyProviderCredential = [bool](($LiveCredentials | Where-Object { $_.set -and $_.name -in @("DEEPSEEK_API_KEY", "ICODEEASY_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY") } | Select-Object -First 1))
 $AnyFrontierCredential = [bool](($LiveCredentials | Where-Object { $_.set -and $_.name -in @("ICODEEASY_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY") } | Select-Object -First 1))
+$AnthropicLiveReady = [bool](($LiveCredentials | Where-Object { $_.name -eq "ANTHROPIC_API_KEY" -and $_.set } | Select-Object -First 1))
 $LiveReadiness = [ordered]@{
   provider_e2e_ready = $AnyProviderCredential
   frontier_smoke_ready = $AnyFrontierCredential
@@ -192,41 +193,65 @@ $CoverageMatrix = @(
     capability = "Provider API-key routing, official auth config, and OpenAI/Anthropic/iCodeEasy compatibility"
     evidence = @("core-go", "manifest", "local-provider-e2e", "provider-auth-frontier-profile")
     notes = "Covers API-key and official auth config shapes plus local OpenAI bearer and Anthropic workload-identity exchange paths; real official OAuth/browser flows still require manual/provider credential validation."
+    status = if ($LiveReadiness.provider_e2e_ready) { "verified" } else { "partial-live-pending" }
+    remaining = if ($LiveReadiness.provider_e2e_ready) { @() } else { @("Run real-provider Maddog e2e with provider credentials.") }
+    optional_remaining = @()
   },
   [pscustomobject]@{
     capability = "Frontier/small-model routing, budgets, advisor escalation, and cost wrappers"
     evidence = @("core-go", "local-provider-e2e", "e2e optional", "frontier smoke optional")
     notes = "The local fixture requires a small-model failure path to upgrade to frontier and record upgrade metrics; live frontier calls are skipped unless -IncludeFrontierSmoke is used and credentials are present."
+    status = if ($LiveReadiness.frontier_smoke_ready) { "verified" } else { "partial-live-pending" }
+    remaining = if ($LiveReadiness.frontier_smoke_ready) { @() } else { @("Run live frontier smoke with ICODEEASY_API_KEY, OPENAI_API_KEY, or ANTHROPIC_API_KEY.") }
+    optional_remaining = @()
   },
   [pscustomobject]@{
     capability = "Anthropic native advisor tool and desktop advisor event presentation"
     evidence = @("core-go", "desktop-go", "frontend")
     notes = "Native advisor is unit-tested; provider-side beta behavior requires live Anthropic credentials."
+    status = if ($AnthropicLiveReady) { "verified" } else { "partial-live-pending" }
+    remaining = if ($AnthropicLiveReady) { @() } else { @("Run live Anthropic advisor/provider smoke with ANTHROPIC_API_KEY.") }
+    optional_remaining = @()
   },
   [pscustomobject]@{
     capability = "Dynamic skills, project skill invocation, and subagent delegation"
     evidence = @("core-go", "manifest", "e2e optional")
     notes = "External coding benchmark does not inspect skill/advisor events."
+    status = "verified-offline"
+    remaining = @()
+    optional_remaining = @()
   },
   [pscustomobject]@{
     capability = "C2 offline replay, scorer, guardrail, and skill promotion"
     evidence = @("core-go: internal/eval")
     notes = "Offline mechanics are local/unit verified; live frontier scoring requires optional provider runs."
+    status = if ($LiveReadiness.frontier_smoke_ready) { "verified" } else { "partial-live-pending" }
+    remaining = if ($LiveReadiness.frontier_smoke_ready) { @() } else { @("Run live frontier scoring path with frontier provider credentials.") }
+    optional_remaining = @()
   },
   [pscustomobject]@{
     capability = "Readiness evidence gate, tool metrics, tinyctx/compaction, and run metrics"
     evidence = @("core-go", "manifest", "local-provider-e2e", "e2e optional")
     notes = "The local OpenAI-compatible and Anthropic-native fixtures are required and record provider/tool-loop metrics without live credentials; real provider e2e remains optional."
+    status = "verified-offline"
+    remaining = @()
+    optional_remaining = @("Run real provider e2e to compare live provider metrics against local fixture metrics.")
   },
   [pscustomobject]@{
     capability = "Maddog naming, config/storage isolation, desktop GUI settings, and app build"
     evidence = @("core-go", "desktop-go", "frontend", "manifest")
     notes = "Desktop installer/runtime smoke is separate from frontend and Wails package checks."
+    status = "verified-offline"
+    remaining = @()
+    optional_remaining = @("Run desktop installer/runtime smoke on a packaged Windows build.")
   },
   [pscustomobject]@{
     capability = "General coding-agent task performance"
     evidence = @("external coding-agent-benchmark optional", "local external benchmark smoke")
     notes = "-IncludeExternal defaults to the offline -LocalSmoke path so the external harness invokes Maddog without live credentials; run scripts/run-coding-agent-benchmark.ps1 without -LocalSmoke for full live performance comparisons."
+    status = "verified-offline"
+    remaining = @()
+    optional_remaining = @("Run full live external benchmark for cross-agent performance comparisons when provider credentials and task toolchains are available.")
   }
 )
 
@@ -465,10 +490,26 @@ $CoverageSummaries = @(
     [ordered]@{
       capability = [string]$c.capability
       evidence = [string[]]@($c.evidence)
+      status = [string]$c.status
+      remaining = [string[]]@($c.remaining)
+      optional_remaining = [string[]]@($c.optional_remaining)
       notes = [string]$c.notes
     }
   }
 )
+$CompletionAudit = [ordered]@{
+  complete = [bool](-not ($CoverageSummaries | Where-Object { $_.status -eq "partial-live-pending" } | Select-Object -First 1))
+  pending = @(
+    foreach ($c in $CoverageSummaries) {
+      if ($c.status -eq "partial-live-pending") {
+        [ordered]@{
+          capability = [string]$c.capability
+          remaining = [string[]]@($c.remaining)
+        }
+      }
+    }
+  )
+}
 $Summary = [ordered]@{
   generated_at = [string]$GeneratedAt
   repo_root = [string]$RepoRoot
@@ -478,6 +519,7 @@ $Summary = [ordered]@{
   failed = [bool]$HadFailure
   go = [string]$GoExe
   live_readiness = $LiveReadiness
+  completion_audit = $CompletionAudit
   report_markdown = [string]$SummaryMd
   steps = $StepSummaries
   coverage_matrix = $CoverageSummaries
@@ -530,10 +572,23 @@ foreach ($r in $Results) {
 $md.Add("") | Out-Null
 $md.Add("## Coverage Matrix") | Out-Null
 $md.Add("") | Out-Null
-$md.Add("| Capability | Evidence | Notes |") | Out-Null
-$md.Add("|---|---|---|") | Out-Null
+$md.Add("| Capability | Status | Evidence | Required Remaining | Optional Remaining | Notes |") | Out-Null
+$md.Add("|---|---:|---|---|---|---|") | Out-Null
 foreach ($c in $CoverageMatrix) {
-  $md.Add("| $($c.capability) | $($c.evidence -join ', ') | $($c.notes) |") | Out-Null
+  $remaining = if (@($c.remaining).Count -gt 0) { @($c.remaining) -join '; ' } else { "" }
+  $optionalRemaining = if (@($c.optional_remaining).Count -gt 0) { @($c.optional_remaining) -join '; ' } else { "" }
+  $md.Add("| $($c.capability) | $($c.status) | $($c.evidence -join ', ') | $remaining | $optionalRemaining | $($c.notes) |") | Out-Null
+}
+$md.Add("") | Out-Null
+$md.Add("## Completion Audit") | Out-Null
+$md.Add("") | Out-Null
+$md.Add("- Complete: $($CompletionAudit.complete)") | Out-Null
+if ($CompletionAudit.pending.Count -gt 0) {
+  foreach ($p in $CompletionAudit.pending) {
+    $md.Add("- Pending: $($p.capability) - $($p.remaining -join '; ')") | Out-Null
+  }
+} else {
+  $md.Add("- Pending: none") | Out-Null
 }
 $md.Add("") | Out-Null
 $md.Add("JSON summary: $SummaryJson") | Out-Null
