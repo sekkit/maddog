@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"reasonix/internal/boot"
+	"reasonix/internal/config"
 )
 
 const (
@@ -31,7 +32,25 @@ func desktopConfigDir() string {
 	return ""
 }
 
-func desktopSessionDir() string {
+func desktopSessionDir(workspaceRoot ...string) string {
+	if len(workspaceRoot) > 0 {
+		root := strings.TrimSpace(workspaceRoot[0])
+		if root != "" && !sameDesktopDir(root, globalWorkspaceRoot()) {
+			if dir := config.ProjectSessionDir(root); dir != "" {
+				return dir
+			}
+		}
+	}
+	return desktopStatePath("sessions")
+}
+
+func desktopProjectSessionDir(workspaceRoot string) string {
+	root := strings.TrimSpace(workspaceRoot)
+	if root != "" && !sameDesktopDir(root, globalWorkspaceRoot()) {
+		if dir := config.ProjectSessionDir(root); dir != "" {
+			return dir
+		}
+	}
 	return desktopStatePath("sessions")
 }
 
@@ -53,7 +72,9 @@ func desktopStatePath(elem ...string) string {
 }
 
 func desktopBootOptions(opts boot.Options) boot.Options {
-	opts.SessionDir = desktopSessionDir()
+	if strings.TrimSpace(opts.SessionDir) == "" {
+		opts.SessionDir = desktopSessionDir(opts.WorkspaceRoot)
+	}
 	opts.ArchiveDir = desktopArchiveDir()
 	opts.MemoryUserDir = desktopMemoryUserDir()
 	return opts

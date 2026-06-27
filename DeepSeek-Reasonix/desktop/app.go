@@ -18,7 +18,6 @@ import (
 	"path/filepath"
 	goruntime "runtime"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -1228,6 +1227,9 @@ func tabSessionDir(tab *WorkspaceTab) string {
 				return dir
 			}
 		}
+		if tab.Scope == "global" {
+			return desktopSessionDir("")
+		}
 		if tab.WorkspaceRoot != "" {
 			return desktopSessionDir(tab.WorkspaceRoot)
 		}
@@ -1247,7 +1249,7 @@ func (a *App) activeSessionDir() string {
 // marking the one the current conversation is writing to and attaching any
 // user-chosen titles.
 func (a *App) ListSessions() []SessionMeta {
-	dir := desktopSessionDir()
+	dir := a.activeSessionDir()
 	infos, err := agent.ListSessions(dir)
 	if err != nil {
 		return []SessionMeta{}
@@ -1266,16 +1268,10 @@ func (a *App) ListSessions() []SessionMeta {
 // ListTrashedSessions returns sessions that were moved to the local trash,
 // newest-deleted first. These can be previewed, restored, or permanently purged.
 func (a *App) ListTrashedSessions() []SessionMeta {
-	dir := desktopSessionDir()
-	paths, err := listTrashedSessionFiles(dir)
-	if err != nil {
-		return []SessionMeta{}
-	}
-	titles := loadSessionTitles(dir)
-	out := make([]SessionMeta, 0, len(paths))
-	for _, path := range paths {
-		infos, err := agent.ListSessions(filepath.Dir(path))
-		if err != nil || len(infos) == 0 {
+	out := []SessionMeta{}
+	for _, dir := range a.knownSessionDirs() {
+		paths, err := listTrashedSessionFiles(dir)
+		if err != nil {
 			continue
 		}
 		titles := loadSessionTitles(dir)
@@ -1307,11 +1303,20 @@ func (a *App) trashedSessionDir(path string) (string, error) {
 }
 
 func (a *App) sessionDirForPath(path string) (string, string, error) {
+	var fallbackDir, fallbackPath string
 	for _, dir := range a.knownSessionDirs() {
 		sessionPath, _, err := validateSessionPath(dir, path)
 		if err == nil {
-			return dir, sessionPath, nil
+			if _, statErr := os.Stat(sessionPath); statErr == nil {
+				return dir, sessionPath, nil
+			}
+			if fallbackPath == "" {
+				fallbackDir, fallbackPath = dir, sessionPath
+			}
 		}
+	}
+	if fallbackPath != "" {
+		return fallbackDir, fallbackPath, nil
 	}
 	return "", "", fmt.Errorf("session path outside known session dirs: %s", path)
 }
@@ -1339,11 +1344,11 @@ func sessionMetaFromInfo(s agent.SessionInfo, title string, current, open bool, 
 // has an in-process runtime, the runtime is cancelled and removed first so
 // autosave cannot recreate or append to the deleted file later.
 func (a *App) DeleteSession(path string) error {
-	dir := desktopSessionDir()
-	sessionPath, key, err := validateSessionPath(dir, path)
+	dir, sessionPath, err := a.sessionDirForPath(path)
 	if err != nil {
 		return err
 	}
+	key := filepath.Base(sessionPath)
 	if err := validateSessionTrashTarget(dir, sessionPath, key); err != nil {
 		return err
 	}
@@ -1635,7 +1640,10 @@ func (a *App) activeSessionPath(dir string) string {
 
 // RestoreSession moves a trashed session back into the saved-session list.
 func (a *App) RestoreSession(path string) error {
-	dir := desktopSessionDir()
+	dir, err := a.trashedSessionDir(path)
+	if err != nil {
+		return err
+	}
 	_, key, _, err := validateTrashedSessionPath(dir, path)
 	if err != nil {
 		return err
@@ -1672,13 +1680,21 @@ func (a *App) sessionDestroying(dir, sessionPath string) bool {
 // PurgeTrashedSession permanently removes a trashed session and its title/display
 // sidecars.
 func (a *App) PurgeTrashedSession(path string) error {
-	return purgeTrashedSessionFile(desktopSessionDir(), path)
+	dir, err := a.trashedSessionDir(path)
+	if err != nil {
+		return err
+	}
+	return purgeTrashedSessionFile(dir, path)
 }
 
 // RenameSession sets a custom display name for a session (empty clears it back to
 // the preview). It only affects the history panel; the file on disk is unchanged.
 func (a *App) RenameSession(path, title string) error {
-	return setSessionTitle(desktopSessionDir(), path, title)
+	dir, sessionPath, err := a.sessionDirForPath(path)
+	if err != nil {
+		return err
+	}
+	return setSessionTitle(dir, sessionPath, title)
 }
 
 // ResumeSession snapshots the current conversation, then loads the session at
@@ -1782,7 +1798,11 @@ func (a *App) rebindTabToSessionPath(tab *WorkspaceTab, sessionPath string) erro
 // PreviewSession reads a saved session for display only. It does not snapshot or
 // swap the active controller, so the history drawer can call it while a turn runs.
 func (a *App) PreviewSession(path string) ([]HistoryMessage, error) {
-	return previewSessionMessages(desktopSessionDir(), path)
+	sessionDir, sessionPath, err := a.sessionDirForPath(path)
+	if err != nil {
+		return nil, err
+	}
+	return previewSessionMessages(sessionDir, sessionPath)
 }
 
 // PickWorkspace opens a folder chooser and, on a pick, opens a new project tab

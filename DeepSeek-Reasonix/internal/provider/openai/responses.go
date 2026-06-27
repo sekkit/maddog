@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+	"sync/atomic"
 
 	"reasonix/internal/provider"
 )
@@ -39,9 +40,19 @@ type responsesClient struct {
 	model   string
 	effort  string
 	http    *http.Client
+	authed  atomic.Bool
 }
 
 func (c *responsesClient) Name() string { return c.name }
+
+func (c *responsesClient) sendOpts() provider.SendOptions {
+	return provider.SendOptions{
+		Provider:   c.name,
+		KeyEnv:     c.keyEnv,
+		KeyPresent: c.auth.Token != "",
+		RetryAuth:  c.authed.Load(),
+	}
+}
 
 func (c *responsesClient) Stream(ctx context.Context, req provider.Request) (<-chan provider.Chunk, error) {
 	buf := bufPool.Get().(*bytes.Buffer)
@@ -64,10 +75,11 @@ func (c *responsesClient) Stream(ctx context.Context, req provider.Request) (<-c
 		c.auth.Header(httpReq, "Authorization")
 		return httpReq, nil
 	}
-	resp, err := provider.SendWithRetry(ctx, c.http, c.name, c.keyEnv, newReq)
+	resp, err := provider.SendWithRetry(ctx, c.http, c.sendOpts(), newReq)
 	if err != nil {
 		return nil, err
 	}
+	c.authed.Store(true)
 	out := make(chan provider.Chunk)
 	go c.readStream(ctx, resp, out)
 	return out, nil

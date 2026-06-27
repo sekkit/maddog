@@ -40,7 +40,7 @@ func RenderTOMLForScope(c *Config, scope RenderScope) string {
 	var b strings.Builder
 
 	b.WriteString("# Maddog configuration.\n")
-	b.WriteString("# Resolution order: flag > ./maddog.toml > ~/.config/maddog/config.toml > built-in defaults.\n")
+	fmt.Fprintf(&b, "# Resolution order: flag > ./maddog.toml > %s > built-in defaults.\n", userConfigDisplayPath())
 	b.WriteString("# Secrets come from the environment via api_key_env; never put keys here.\n\n")
 
 	fmt.Fprintf(&b, "config_version = %d   # schema marker for diagnostics; old versions may ignore it\n", configVersion(c))
@@ -369,6 +369,12 @@ func RenderTOMLForScope(c *Config, scope RenderScope) string {
 		fmt.Fprintf(&b, "max_depth = %d   # nested scan depth; default 3, set 1 for legacy root-only discovery\n", c.SkillMaxDepth())
 	} else {
 		b.WriteString("# max_depth = 3   # nested scan depth; set 1 for legacy root-only discovery\n")
+	}
+	fmt.Fprintf(&b, "runtime_orchestration = %v   # match existing skills and add turn-local hints\n", c.Skills.RuntimeOrchestration)
+	if c.Skills.DynamicSkills {
+		b.WriteString("dynamic_skills = true   # opt-in: generate temporary skills with the active model when no match exists\n")
+	} else {
+		b.WriteString("# dynamic_skills = true   # opt-in: may add an extra model call before each unmatched turn\n")
 	}
 	if disabled := c.DisabledSkillNames(); len(disabled) > 0 {
 		fmt.Fprintf(&b, "disabled_skills = %s   # hidden from the prompt, slash invocation, and skill tools\n\n", renderStringArray(disabled))

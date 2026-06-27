@@ -931,7 +931,7 @@ func (a *App) openTopicTab(scope, workspaceRoot, topicID, sessionPath string) (T
 }
 
 // OpenGlobalTab opens a new global-scope tab (no project root). The global
-	// workspace root is the Maddog user config directory.
+// workspace root is the Maddog user config directory.
 func (a *App) OpenGlobalTab(topicID string) (TabMeta, error) {
 	globalRoot := globalWorkspaceRoot()
 	if err := os.MkdirAll(globalRoot, 0o755); err != nil {
@@ -1721,7 +1721,7 @@ func (a *App) saveTabsLocked() {
 func (a *App) saveTabsCollectLocked() (string, []desktopTabEntry, string, uint64) {
 	dir := desktopConfigDir()
 	if dir == "" {
-		return
+		return "", nil, "", 0
 	}
 	os.MkdirAll(dir, 0o755)
 	var entries []desktopTabEntry
@@ -2590,10 +2590,10 @@ func migrateLegacySessionsIntoGlobalTopics(dir string) []string {
 	scope := "global"
 	workspaceRoot := ""
 	topicTitleRoot := "" // workspace root for topic-title persistence
-	if dir != config.SessionDir() {
+	if !sameDesktopDir(dir, config.SessionDir()) && !sameDesktopDir(dir, desktopSessionDir()) {
 		f := loadProjectsFile()
 		for _, p := range f.Projects {
-			if config.ProjectSessionDir(p.Root) == dir {
+			if sameDesktopDir(config.ProjectSessionDir(p.Root), dir) || sameDesktopDir(desktopSessionDir(p.Root), dir) {
 				scope = "project"
 				workspaceRoot = p.Root
 				topicTitleRoot = p.Root
@@ -3078,13 +3078,18 @@ func (a *App) updateTopicSessionTitles(topicID, title string) {
 	if strings.TrimSpace(topicID) == "" || strings.TrimSpace(title) == "" {
 		return
 	}
-	infos, err := agent.ListSessions(desktopSessionDir())
-	if err != nil {
-		return
-	}
-	for _, info := range infos {
-		if info.TopicID != topicID {
+	for _, dir := range a.knownSessionDirs() {
+		infos, err := agent.ListSessionOrder(dir)
+		if err != nil {
 			continue
+		}
+		for _, info := range infos {
+			meta, ok, err := agent.LoadBranchMeta(info.Path)
+			if err != nil || !ok || meta.TopicID != topicID {
+				continue
+			}
+			meta.TopicTitle = title
+			_ = agent.SaveBranchMetaPreserveUpdated(info.Path, meta)
 		}
 	}
 }
@@ -3217,7 +3222,6 @@ func (a *App) TrashTopic(topicID string) error {
 	if strings.TrimSpace(topicID) == "" {
 		return fmt.Errorf("topicID is required")
 	}
-	dir := desktopSessionDir()
 
 	targets, err := a.topicTrashTargets(topicID)
 	if err != nil {
@@ -3344,7 +3348,14 @@ func (a *App) ListProjectTree() []ProjectNode {
 		status         string
 	}
 	topicSummaries := map[string]topicSummary{}
-	if infos, err := agent.ListSessions(sessionDir); err == nil {
+	sessionInfos := map[string]agent.SessionInfo{}
+	sessionTitles := map[string]string{}
+	for _, dir := range a.knownSessionDirs() {
+		infos, err := agent.ListSessions(dir)
+		if err != nil {
+			continue
+		}
+		titles := loadSessionTitles(dir)
 		for _, info := range infos {
 			sessionKey := sessionRuntimeKey(info.Path)
 			if sessionKey != "" {

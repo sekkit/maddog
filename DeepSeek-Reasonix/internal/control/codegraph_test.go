@@ -20,7 +20,7 @@ func TestConnectConfiguredCodegraphSetsShortDaemonIdleTimeout(t *testing.T) {
 	launcher := writeControlCodegraphHelper(t, dir)
 	envOut := filepath.Join(dir, "codegraph-idle-env")
 	t.Setenv("REASONIX_CODEGRAPH_HELPER_ENV_OUT", envOut)
-	writeControlFile(t, dir, "reasonix.toml", `
+	writeControlFile(t, dir, "maddog.toml", `
 [codegraph]
 enabled = true
 path = "`+escapeTOMLPath(launcher)+`"

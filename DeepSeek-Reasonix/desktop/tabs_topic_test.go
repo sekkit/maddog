@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"reasonix/internal/agent"
+	"reasonix/internal/config"
+	"reasonix/internal/control"
 )
 
 func waitForTabReady(t *testing.T, app *App, tabID string) *WorkspaceTab {

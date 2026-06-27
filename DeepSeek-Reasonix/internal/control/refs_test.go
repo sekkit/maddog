@@ -501,7 +501,7 @@ func TestWorkspaceImageRefsOnlyTreatAttachmentsAsImages(t *testing.T) {
 	if err := os.WriteFile(diagram, []byte("\x89PNG\r\n\x1a\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	attachment := filepath.Join(workspace, ".reasonix", "attachments", "shot.png")
+	attachment := filepath.Join(workspace, ".maddog", "attachments", "shot.png")
 	if err := os.MkdirAll(filepath.Dir(attachment), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -517,7 +517,7 @@ func TestWorkspaceImageRefsOnlyTreatAttachmentsAsImages(t *testing.T) {
 	if refs[0].kind != refFile || refs[0].path != "docs/diagram.png" {
 		t.Fatalf("workspace png ref = %+v, want file ref", refs[0])
 	}
-	if refs[1].kind != refImage || refs[1].path != ".reasonix/attachments/shot.png" {
+	if refs[1].kind != refImage || refs[1].path != ".maddog/attachments/shot.png" {
 		t.Fatalf("attachment png ref = %+v, want image attachment ref", refs[1])
 	}
 

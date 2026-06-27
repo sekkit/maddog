@@ -142,6 +142,7 @@ var kindNames = map[event.Kind]string{
 	event.ToolProgress:      "tool_progress",
 	event.MCPSurfaceReady:   "mcp_surface_ready",
 	event.Retrying:          "retrying",
+	event.Steer:             "steer",
 	event.Upgrade:           "upgrade",
 	event.SkillGenerated:    "skill_generated",
 	event.BudgetExceeded:    "budget_exceeded",

@@ -146,26 +146,35 @@ type BotSettingsView struct {
 
 // SettingsView is the whole Settings panel payload.
 type SettingsView struct {
-	DefaultModel      string          `json:"defaultModel"`
-	PlannerModel      string          `json:"plannerModel"`
-	SubagentModel     string          `json:"subagentModel"`
-	SubagentEffort    string          `json:"subagentEffort"`
-	FrontierModel     string          `json:"frontierModel"`
-	UpgradeEnabled    bool            `json:"upgradeEnabled"`
-	UpgradeThreshold  int             `json:"upgradeThreshold"`
-	FrontierBudget    int64           `json:"frontierBudget"`
-	AutoPlan          string          `json:"autoPlan"`
-	Providers         []ProviderView  `json:"providers"`
-	OfficialProviders []ProviderView  `json:"officialProviders"`
-	Permissions       PermissionsView `json:"permissions"`
-	Sandbox           SandboxView     `json:"sandbox"`
-	Network           NetworkView     `json:"network"`
-	Agent             AgentView       `json:"agent"`
-	DesktopLanguage   string          `json:"desktopLanguage"`
-	DesktopTheme      string          `json:"desktopTheme"`
-	DesktopThemeStyle string          `json:"desktopThemeStyle"`
-	CloseBehavior     string          `json:"closeBehavior"`
-	ConfigPath        string          `json:"configPath"`
+	DefaultModel       string          `json:"defaultModel"`
+	PlannerModel       string          `json:"plannerModel"`
+	SubagentModel      string          `json:"subagentModel"`
+	SubagentEffort     string          `json:"subagentEffort"`
+	FrontierModel      string          `json:"frontierModel"`
+	UpgradeEnabled     bool            `json:"upgradeEnabled"`
+	UpgradeThreshold   int             `json:"upgradeThreshold"`
+	FrontierBudget     int64           `json:"frontierBudget"`
+	AutoPlan           string          `json:"autoPlan"`
+	Providers          []ProviderView  `json:"providers"`
+	OfficialProviders  []ProviderView  `json:"officialProviders"`
+	Permissions        PermissionsView `json:"permissions"`
+	Sandbox            SandboxView     `json:"sandbox"`
+	Network            NetworkView     `json:"network"`
+	Agent              AgentView       `json:"agent"`
+	Bot                BotSettingsView `json:"bot"`
+	DesktopLanguage    string          `json:"desktopLanguage"`
+	DesktopLayoutStyle string          `json:"desktopLayoutStyle"`
+	DesktopTheme       string          `json:"desktopTheme"`
+	DesktopThemeStyle  string          `json:"desktopThemeStyle"`
+	CloseBehavior      string          `json:"closeBehavior"`
+	DisplayMode        string          `json:"displayMode"`
+	StatusBarStyle     string          `json:"statusBarStyle"`
+	StatusBarItems     []string        `json:"statusBarItems"`
+	CheckUpdates       bool            `json:"checkUpdates"`
+	Telemetry          bool            `json:"telemetry"`
+	Metrics            bool            `json:"metrics"`
+	ExpandThinking     bool            `json:"expandThinking"`
+	ConfigPath         string          `json:"configPath"`
 	// ProviderKinds lists the provider implementations the kernel actually
 	// registered (provider.Kinds()), so the editor's "kind" picker offers only
 	// kinds that resolve — selecting an unregistered one would fail the rebuild.

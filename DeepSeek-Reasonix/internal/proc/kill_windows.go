@@ -31,6 +31,21 @@ func KillTree(cmd *exec.Cmd) {
 	_ = cmd.Process.Kill()
 }
 
+// StartTracked starts cmd inside a new Job Object whose KILL_ON_JOB_CLOSE flag
+// fells the whole tree. The child is created suspended and assigned to the job
+// before it runs, then always resumed before this returns.
+func StartTracked(cmd *exec.Cmd) (uintptr, error) {
+	if cmd.SysProcAttr == nil {
+		cmd.SysProcAttr = &syscall.SysProcAttr{}
+	}
+	cmd.SysProcAttr.CreationFlags |= windows.CREATE_SUSPENDED
+	if err := cmd.Start(); err != nil {
+		return 0, err
+	}
+	defer resumeProcess(uint32(cmd.Process.Pid))
+	return TrackTree(cmd), nil
+}
+
 // TrackTree assigns cmd to a new Job Object set to terminate every process in
 // it when the job handle is closed. A launcher's detached grandchild (e.g. the
 // CodeGraph node daemon, which re-parents itself away from the launcher) stays

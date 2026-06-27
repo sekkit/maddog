@@ -112,7 +112,7 @@ func TestMetadataCommandsDoNotProbeTerminalTheme(t *testing.T) {
 	if !strings.Contains(out, "Usage:") && !strings.Contains(out, "用法：") {
 		t.Fatalf("help output missing usage:\n%s", out)
 	}
-	if !strings.Contains(out, "reasonix run  [--model NAME] [--max-steps N] [-c|--continue] [--resume PATH] <task>") {
+	if !strings.Contains(out, "maddog run  [--model NAME] [--max-steps N] <task>") {
 		t.Fatalf("help output missing run resume flags:\n%s", out)
 	}
 }
@@ -276,7 +276,7 @@ func TestConfigReasoningLanguageLocalCreatesMinimalProjectOverride(t *testing.T)
 		t.Fatalf("config reasoning-language --local output = %q", out)
 	}
 
-	body, err := os.ReadFile("reasonix.toml")
+	body, err := os.ReadFile("maddog.toml")
 	if err != nil {
 		t.Fatalf("read project config: %v", err)
 	}

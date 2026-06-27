@@ -23,7 +23,6 @@ import (
 
 	"reasonix/internal/agent"
 	"reasonix/internal/boot"
-	"reasonix/internal/builtinmcp"
 	"reasonix/internal/config"
 	"reasonix/internal/control"
 	"reasonix/internal/event"

@@ -139,7 +139,7 @@ func (p *mcpManager) renderDetail(width int) string {
 	} else {
 		loc := fallbackText(p.snapshot.configPath, "not saved")
 		if loc != "not saved" {
-			loc = viewCompactPath(loc, viewBudget(width, 18))
+			loc = viewCompactPath(loc, min(viewBudget(width, 18), 46))
 		}
 		writeMCPDetailField(&b, "Config location", loc)
 	}

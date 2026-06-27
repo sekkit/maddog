@@ -145,6 +145,11 @@ func defaultTransport() *http.Transport {
 	return &http.Transport{Proxy: http.ProxyFromEnvironment}
 }
 
+// ProxyFunc returns the per-request proxy resolver for spec.
+func ProxyFunc(spec ProxySpec) (func(*http.Request) (*url.URL, error), error) {
+	return proxyFunc(spec)
+}
+
 func proxyFunc(spec ProxySpec) (func(*http.Request) (*url.URL, error), error) {
 	base, err := baseProxyFunc(spec)
 	if err != nil {

@@ -26,8 +26,8 @@ func TestUserConfigDisplayPathCollapsesHome(t *testing.T) {
 	if !strings.HasPrefix(got, "~/") {
 		t.Fatalf("display path = %q, want ~/ prefix", got)
 	}
-	if !strings.HasSuffix(got, "reasonix/config.toml") {
-		t.Fatalf("display path = %q, want reasonix/config.toml suffix", got)
+	if !strings.HasSuffix(got, "maddog/config.toml") {
+		t.Fatalf("display path = %q, want maddog/config.toml suffix", got)
 	}
 	if strings.Contains(got, home) {
 		t.Fatalf("display path %q must not embed the absolute home", got)

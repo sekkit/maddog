@@ -94,7 +94,7 @@ func TestBuildRegistersUsableHistoryAndMemoryRetrievalTools(t *testing.T) {
 	dir := robustTempDir(t)
 	t.Chdir(dir)
 
-	writeFile(t, dir, "reasonix.toml", `
+	writeFile(t, dir, "maddog.toml", `
 default_model = "test-model"
 
 [codegraph]
@@ -328,7 +328,7 @@ func TestBuildSubagentSkillFailedContinuationPersistsTranscript(t *testing.T) {
 	registerBootSubagentTestProvider()
 	prov := &bootSubagentTestProvider{}
 	setBootSubagentTestProvider(t, prov)
-	writeFile(t, dir, "reasonix.toml", `
+	writeFile(t, dir, "maddog.toml", `
 default_model = "test-model"
 
 [codegraph]
@@ -389,7 +389,7 @@ func TestBuildSubagentStoreHonorsSessionDirOverride(t *testing.T) {
 	registerBootSubagentTestProvider()
 	prov := &bootSubagentTestProvider{}
 	setBootSubagentTestProvider(t, prov)
-	writeFile(t, dir, "reasonix.toml", `
+	writeFile(t, dir, "maddog.toml", `
 default_model = "test-model"
 
 [codegraph]
@@ -439,7 +439,7 @@ func TestBuildSubagentSkillUsesLiveReasoningLanguage(t *testing.T) {
 	registerBootSubagentTestProvider()
 	prov := &bootSubagentTestProvider{}
 	setBootSubagentTestProvider(t, prov)
-	writeFile(t, dir, "reasonix.toml", `
+	writeFile(t, dir, "maddog.toml", `
 default_model = "test-model"
 
 [codegraph]
@@ -595,7 +595,7 @@ func subagentRefFromHistory(t *testing.T, msgs []provider.Message) string {
 }
 
 // TestBuildHeadlessRunRunsTaskSubagentWithoutSessionPath reproduces headless
-// `reasonix run`: a controller built via Build with NO SetSessionPath (exactly
+// `maddog run`: a controller built via Build with NO SetSessionPath (exactly
 // what internal/cli.runAgent does) must still be able to run a `task` sub-agent.
 // Before the ephemeral fallback this failed with "parent session is required".
 func TestBuildHeadlessRunRunsTaskSubagentWithoutSessionPath(t *testing.T) {
@@ -606,7 +606,7 @@ func TestBuildHeadlessRunRunsTaskSubagentWithoutSessionPath(t *testing.T) {
 	registerHeadlessTaskTestProvider()
 	prov := &headlessTaskTestProvider{}
 	setHeadlessTaskTestProvider(t, prov)
-	writeFile(t, dir, "reasonix.toml", `
+	writeFile(t, dir, "maddog.toml", `
 default_model = "test-model"
 
 [codegraph]
@@ -803,7 +803,7 @@ func TestBuildHonorsSessionDirOverride(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
 	t.Setenv("AppData", filepath.Join(home, "AppData"))
 	t.Chdir(dir)
-	writeFile(t, dir, "reasonix.toml", `
+	writeFile(t, dir, "maddog.toml", `
 default_model = "test-model"
 
 [codegraph]
@@ -889,7 +889,7 @@ func TestBuildTokenFullMatchesDefaultRequestPrefix(t *testing.T) {
 	dir := robustTempDir(t)
 	t.Chdir(dir)
 
-	writeFile(t, dir, "reasonix.toml", `
+	writeFile(t, dir, "maddog.toml", `
 default_model = "test-model"
 
 [codegraph]
@@ -903,7 +903,7 @@ name = "test-model"
 kind = "boot-token-profile-test"
 model = "x"
 `)
-	writeFile(t, dir, ".reasonix/skills/projskill.md", "---\ndescription: a project skill\n---\nplaybook")
+	writeFile(t, dir, ".maddog/skills/projskill.md", "---\ndescription: a project skill\n---\nplaybook")
 
 	defaultReq := firstTokenProfileRequest(t, "")
 	fullReq := firstTokenProfileRequest(t, TokenModeFull)
@@ -936,7 +936,7 @@ func TestBuildTokenEconomyStartsWithLeanToolSurface(t *testing.T) {
 	registerBootTokenProfileTestProvider()
 	prov := testutil.NewMock("token-economy", testutil.Turn{Text: "done"})
 	setBootTokenProfileTestProvider(t, prov)
-	writeFile(t, dir, "reasonix.toml", `
+	writeFile(t, dir, "maddog.toml", `
 default_model = "test-model"
 
 [codegraph]
@@ -954,7 +954,7 @@ model = "x"
 name = "mockmcp"
 command = "reasonix-missing-mockmcp"
 `)
-	writeFile(t, dir, ".reasonix/skills/projskill.md", "---\ndescription: a project skill\n---\nplaybook")
+	writeFile(t, dir, ".maddog/skills/projskill.md", "---\ndescription: a project skill\n---\nplaybook")
 
 	ctrl, err := Build(context.Background(), Options{Sink: event.Discard, TokenMode: TokenModeEconomy})
 	if err != nil {
@@ -1034,7 +1034,7 @@ func TestBuildTokenEconomyConnectsWebFetchOnDemand(t *testing.T) {
 		testutil.Turn{Text: "done"},
 	)
 	setBootTokenProfileTestProvider(t, prov)
-	writeFile(t, dir, "reasonix.toml", `
+	writeFile(t, dir, "maddog.toml", `
 default_model = "test-model"
 
 [codegraph]
@@ -1085,7 +1085,7 @@ func TestBuildTokenEconomyCodegraphSetsShortDaemonIdleTimeout(t *testing.T) {
 		testutil.Turn{Text: "done"},
 	)
 	setBootTokenProfileTestProvider(t, prov)
-	writeFile(t, dir, "reasonix.toml", fmt.Sprintf(`
+	writeFile(t, dir, "maddog.toml", fmt.Sprintf(`
 default_model = "test-model"
 
 [codegraph]
@@ -1141,7 +1141,7 @@ func TestBuildTokenEconomyPlanModeCanConnectWebFetch(t *testing.T) {
 		testutil.Turn{Text: "done"},
 	)
 	setBootTokenProfileTestProvider(t, prov)
-	writeFile(t, dir, "reasonix.toml", `
+	writeFile(t, dir, "maddog.toml", `
 default_model = "test-model"
 
 [codegraph]
@@ -1192,7 +1192,7 @@ func TestBuildTokenEconomyWebFetchConnectorHonorsDisabledBuiltin(t *testing.T) {
 		testutil.Turn{Text: "done"},
 	)
 	setBootTokenProfileTestProvider(t, prov)
-	writeFile(t, dir, "reasonix.toml", `
+	writeFile(t, dir, "maddog.toml", `
 default_model = "test-model"
 
 [tools]
@@ -1249,7 +1249,7 @@ func TestBuildTokenEconomyConnectsSkillsOnDemand(t *testing.T) {
 		testutil.Turn{Text: "done"},
 	)
 	setBootTokenProfileTestProvider(t, prov)
-	writeFile(t, dir, "reasonix.toml", `
+	writeFile(t, dir, "maddog.toml", `
 default_model = "test-model"
 
 [codegraph]
@@ -1263,7 +1263,7 @@ name = "test-model"
 kind = "boot-token-profile-test"
 model = "x"
 `)
-	writeFile(t, dir, ".reasonix/skills/projskill.md", "---\ndescription: a project skill\n---\nplaybook")
+	writeFile(t, dir, ".maddog/skills/projskill.md", "---\ndescription: a project skill\n---\nplaybook")
 
 	ctrl, err := Build(context.Background(), Options{Sink: event.Discard, TokenMode: TokenModeEconomy})
 	if err != nil {
@@ -1574,7 +1574,7 @@ allow = ["Bash(user)"]
 
 	const rule = "Edit(src/app.go)"
 	res := rememberPermissionRule(workspace, rule)
-	if !res.Saved || res.Path != filepath.Join(workspace, "reasonix.toml") {
+	if !res.Saved || res.Path != filepath.Join(workspace, "maddog.toml") {
 		t.Fatalf("remember result = %+v, want saved to workspace config", res)
 	}
 
@@ -1582,7 +1582,7 @@ allow = ["Bash(user)"]
 	if hasPermissionRule(userCfg.Permissions.Allow, rule) {
 		t.Fatalf("workspace rule was written to user config: %v", userCfg.Permissions.Allow)
 	}
-	workspaceCfg := config.LoadForEdit(filepath.Join(workspace, "reasonix.toml"))
+	workspaceCfg := config.LoadForEdit(filepath.Join(workspace, "maddog.toml"))
 	if !hasPermissionRule(workspaceCfg.Permissions.Allow, rule) {
 		t.Fatalf("workspace rule missing from project config: %v", workspaceCfg.Permissions.Allow)
 	}
@@ -1620,7 +1620,7 @@ allow = ["Bash(user*)"]
 
 func TestRememberPermissionRuleSkipsRuleCoveredByExistingAllow(t *testing.T) {
 	workspace := robustTempDir(t)
-	writeFile(t, workspace, "reasonix.toml", `
+	writeFile(t, workspace, "maddog.toml", `
 [permissions]
 allow = ["Bash(go test:*)"]
 `)
@@ -1629,7 +1629,7 @@ allow = ["Bash(go test:*)"]
 	if res.Saved || res.CoveredBy != "Bash(go test:*)" {
 		t.Fatalf("remember result = %+v, want already covered", res)
 	}
-	cfg := config.LoadForEdit(filepath.Join(workspace, "reasonix.toml"))
+	cfg := config.LoadForEdit(filepath.Join(workspace, "maddog.toml"))
 	if len(cfg.Permissions.Allow) != 1 || cfg.Permissions.Allow[0] != "Bash(go test:*)" {
 		t.Fatalf("allow rules = %v, want only existing prefix", cfg.Permissions.Allow)
 	}
@@ -1637,7 +1637,7 @@ allow = ["Bash(go test:*)"]
 
 func TestRememberPermissionRulePrunesNarrowRulesWhenSavingBroaderRule(t *testing.T) {
 	workspace := robustTempDir(t)
-	writeFile(t, workspace, "reasonix.toml", `
+	writeFile(t, workspace, "maddog.toml", `
 [permissions]
 allow = ["Bash(go test ./...)", "Bash(go build ./...)"]
 `)
@@ -1646,7 +1646,7 @@ allow = ["Bash(go test ./...)", "Bash(go build ./...)"]
 	if !res.Saved || res.CoveredBy != "" {
 		t.Fatalf("remember result = %+v, want saved broader rule", res)
 	}
-	cfg := config.LoadForEdit(filepath.Join(workspace, "reasonix.toml"))
+	cfg := config.LoadForEdit(filepath.Join(workspace, "maddog.toml"))
 	if hasPermissionRule(cfg.Permissions.Allow, "Bash(go test ./...)") {
 		t.Fatalf("narrow go test rule should be pruned: %v", cfg.Permissions.Allow)
 	}
@@ -2006,7 +2006,7 @@ func TestBuildCodegraphSetsShortDaemonIdleTimeout(t *testing.T) {
 	envOut := filepath.Join(dir, "codegraph-idle-env")
 	t.Setenv("REASONIX_CODEGRAPH_HELPER_ENV_OUT", envOut)
 
-	writeFile(t, dir, "reasonix.toml", fmt.Sprintf(`
+	writeFile(t, dir, "maddog.toml", fmt.Sprintf(`
 default_model = "test-model"
 
 [codegraph]
@@ -2062,7 +2062,7 @@ func TestBuildWarmCodegraphIgnoresLegacyEagerTier(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	writeFile(t, dir, "reasonix.toml", fmt.Sprintf(`
+	writeFile(t, dir, "maddog.toml", fmt.Sprintf(`
 default_model = "test-model"
 
 [codegraph]
@@ -2100,7 +2100,7 @@ func TestBuildDefaultsToNearestGitRoot(t *testing.T) {
 	if err := os.MkdirAll(subdir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	writeFile(t, root, "reasonix.toml", `
+	writeFile(t, root, "maddog.toml", `
 default_model = "root-model"
 
 [codegraph]

@@ -17,6 +17,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 
 	"reasonix/internal/config"
 	"reasonix/internal/frontmatter"
@@ -94,6 +95,8 @@ type Store struct {
 	maxDepth        int
 	disableBuiltins bool
 	stderr          io.Writer
+	mu              sync.RWMutex
+	injected        map[string]Skill
 }
 
 // New builds a Store. Relative custom paths and a relative project root are made
@@ -135,6 +138,7 @@ func New(opts Options) *Store {
 		maxDepth:        normalizeMaxDepth(opts.MaxDepth),
 		disableBuiltins: opts.DisableBuiltins,
 		stderr:          stderr,
+		injected:        map[string]Skill{},
 	}
 }
 
@@ -250,6 +254,12 @@ func pathStatus(dir string) PathStatus {
 // stays stable and cacheable.
 func (s *Store) List() []Skill {
 	byName := map[string]Skill{}
+	for _, sk := range s.injectedSnapshot() {
+		if s.disabledName(sk.Name) {
+			continue
+		}
+		byName[sk.Name] = sk
+	}
 	for _, r := range s.roots() {
 		if r.Status != StatusOK {
 			continue
@@ -290,12 +300,76 @@ func (s *Store) Read(name string) (Skill, bool) {
 	if s.disabledName(name) {
 		return Skill{}, false
 	}
+	if sk, ok := s.readInjected(name); ok {
+		return sk, true
+	}
 	for _, sk := range s.List() {
 		if sk.Name == name {
 			return sk, true
 		}
 	}
 	return Skill{}, false
+}
+
+// Inject adds a session-local skill to the in-memory index. It never writes to
+// disk and takes precedence over file and built-in skills until Remove is called.
+func (s *Store) Inject(sk Skill) error {
+	if s == nil {
+		return fmt.Errorf("skill store is nil")
+	}
+	sk.Name = strings.TrimSpace(sk.Name)
+	sk.Description = strings.TrimSpace(sk.Description)
+	sk.Body = strings.TrimSpace(sk.Body)
+	if !IsValidName(sk.Name) {
+		return fmt.Errorf("invalid skill name %q -- use letters, digits, '_', '-', '.'", sk.Name)
+	}
+	if sk.RunAs == "" {
+		sk.RunAs = RunInline
+	}
+	sk.Scope = ScopeCustom
+	sk.Path = "(dynamic)"
+	sk.AllowedTools = append([]string(nil), sk.AllowedTools...)
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.injected == nil {
+		s.injected = map[string]Skill{}
+	}
+	s.injected[sk.Name] = sk
+	return nil
+}
+
+// Remove deletes a session-local skill injected by Inject. File-backed skills
+// with the same name become visible again on the next List/Read.
+func (s *Store) Remove(name string) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.injected, strings.TrimSpace(name))
+}
+
+func (s *Store) readInjected(name string) (Skill, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	sk, ok := s.injected[name]
+	if !ok {
+		return Skill{}, false
+	}
+	sk.AllowedTools = append([]string(nil), sk.AllowedTools...)
+	return sk, true
+}
+
+func (s *Store) injectedSnapshot() []Skill {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]Skill, 0, len(s.injected))
+	for _, sk := range s.injected {
+		sk.AllowedTools = append([]string(nil), sk.AllowedTools...)
+		out = append(out, sk)
+	}
+	return out
 }
 
 func (s *Store) discoverRoot(r Root) []Skill {

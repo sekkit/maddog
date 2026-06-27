@@ -14,6 +14,16 @@ func TestDefaultReasoningLanguageAuto(t *testing.T) {
 	}
 }
 
+func TestDefaultDynamicSkillsOptIn(t *testing.T) {
+	cfg := Default()
+	if !cfg.Skills.RuntimeOrchestration {
+		t.Fatal("runtime skill orchestration should be enabled by default")
+	}
+	if cfg.Skills.DynamicSkills {
+		t.Fatal("dynamic skill generation must be opt-in to avoid extra model calls on unmatched turns")
+	}
+}
+
 func TestDefaultAdvisorGuardrails(t *testing.T) {
 	cfg := Default()
 	if cfg.Agent.AdvisorMaxUsesPerTurn != 1 {

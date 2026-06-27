@@ -158,8 +158,13 @@ type Agent struct {
 	session     *Session
 	sessMu      sync.Mutex // guards the session pointer for external Session()/SetSession
 	maxSteps    int
-	temperature float64
-	pricing     *provider.Pricing
+	maxStepsKey string
+	// executorHandoffGuard is enabled by Coordinator for the executor agent. The
+	// per-turn marker check in Run keeps ordinary single-model turns unaffected.
+	executorHandoffGuard bool
+	temperature          float64
+	pricing              *provider.Pricing
+	reasoningLanguage    atomic.Value // string: auto|zh|en
 
 	upgradePolicy         UpgradePolicy
 	frontierProv          provider.Provider
@@ -312,6 +317,15 @@ type Agent struct {
 // running it. The cache-friendly bits — system prompt, tools schema, message
 // history — are left untouched, so the toggle costs nothing in cache hits.
 func (a *Agent) SetPlanMode(v bool) { a.planMode.Store(v) }
+
+// SetReasoningLanguage updates the visible reasoning language preference for
+// subsequent user-role messages emitted by this agent.
+func (a *Agent) SetReasoningLanguage(lang string) {
+	if a == nil {
+		return
+	}
+	a.reasoningLanguage.Store(NormalizeReasoningLanguage(lang))
+}
 
 // SetGate installs the per-call permission gate. Used by `maddog chat` to swap the
 // headless gate built in setup for an interactive one that prompts the user;
@@ -497,6 +511,10 @@ type Options struct {
 	// ProjectChecks are host-observable structured checks extracted during boot.
 	ProjectChecks []instruction.VerifyCheck
 
+	// ReasoningLanguage controls visible reasoning language preference as transient
+	// user-turn context. Empty/auto injects nothing.
+	ReasoningLanguage string
+
 	// Frontier upgrade routing. When UpgradePolicy selects an upgrade, the
 	// current turn continues on FrontierProvider while preserving session state.
 	UpgradePolicy         UpgradePolicy
@@ -537,11 +555,16 @@ func New(prov provider.Provider, tools *tool.Registry, session *Session, opts Op
 	if nilutil.IsNil(hooks) {
 		hooks = nil
 	}
-	return &Agent{
+	maxStepsKey := opts.MaxStepsKey
+	if strings.TrimSpace(maxStepsKey) == "" {
+		maxStepsKey = "agent.max_steps"
+	}
+	a := &Agent{
 		prov:                  prov,
 		tools:                 tools,
 		session:               session,
 		maxSteps:              opts.MaxSteps,
+		maxStepsKey:           maxStepsKey,
 		temperature:           opts.Temperature,
 		pricing:               opts.Pricing,
 		upgradePolicy:         opts.UpgradePolicy,
@@ -564,27 +587,6 @@ func New(prov provider.Provider, tools *tool.Registry, session *Session, opts Op
 		compactForceRatio:     opts.CompactForceRatio,
 		recentKeep:            opts.RecentKeep,
 		archiveDir:            opts.ArchiveDir,
-	}
-	a := &Agent{
-		prov:              prov,
-		tools:             tools,
-		session:           session,
-		maxSteps:          opts.MaxSteps,
-		maxStepsKey:       maxStepsKey,
-		temperature:       opts.Temperature,
-		pricing:           opts.Pricing,
-		sink:              sink,
-		gate:              gate,
-		hooks:             hooks,
-		jobs:              opts.Jobs,
-		evidence:          evidence.NewLedger(),
-		projectChecks:     append([]instruction.VerifyCheck(nil), opts.ProjectChecks...),
-		contextWindow:     opts.ContextWindow,
-		softCompactRatio:  opts.SoftCompactRatio,
-		compactRatio:      opts.CompactRatio,
-		compactForceRatio: opts.CompactForceRatio,
-		recentKeep:        opts.RecentKeep,
-		archiveDir:        opts.ArchiveDir,
 	}
 	a.SetReasoningLanguage(opts.ReasoningLanguage)
 	return a
@@ -633,6 +635,14 @@ func (a *Agent) Run(ctx context.Context, input string) error {
 
 		text, reasoning, signature, nativeBlocks, calls, usage, interrupted, partialToolStarted, err := a.stream(ctx, step+1)
 		if err != nil {
+			if a.onFrontier {
+				a.downgradeFromFrontier()
+				a.sink.Emit(event.Event{Kind: event.Upgrade, Level: event.LevelWarn, Text: "frontier request failed, switched back to default: " + err.Error()})
+				if !interrupted {
+					step-- // retry the same round on the default provider
+					continue
+				}
+			}
 			if interrupted && streamRecoveries < maxStreamRecoveries {
 				streamRecoveries++
 				if hasVisibleFinalAnswer(text) {
@@ -659,7 +669,17 @@ func (a *Agent) Run(ctx context.Context, input string) error {
 		a.lastPrefixShape = prefixShape
 		a.haveLastPrefixShape = true
 		if usage != nil && usage.TotalTokens > 0 {
-			a.sink.Emit(event.Event{Kind: event.Usage, Usage: usage, Pricing: a.pricing,
+			pricing := a.pricing
+			if a.onFrontier {
+				pricing = a.frontierPricing
+				if _, ok := a.frontierProv.(frontierBudgetTracker); !ok {
+					a.frontierTokens.Add(int64(usage.CompletionTokens))
+				}
+				if a.emitFrontierBudgetIfExceeded() {
+					a.downgradeFromFrontier()
+				}
+			}
+			a.sink.Emit(event.Event{Kind: event.Usage, Usage: usage, Pricing: pricing,
 				CacheDiagnostics: &cacheDiagnostics,
 				SessionHit:       int(a.sessCacheHit.Load()), SessionMiss: int(a.sessCacheMiss.Load())})
 		}
@@ -746,7 +766,11 @@ func (a *Agent) Run(ctx context.Context, input string) error {
 	// Only reached when a positive maxSteps guard is configured. The work so far
 	// is already in the session, so the user can just send another message to pick
 	// up where it left off.
-	return fmt.Errorf("paused after %d tool-call rounds (agent.max_steps) — the work so far is saved; send another message to continue, or set max_steps higher or to 0 for no limit", a.maxSteps)
+	key := strings.TrimSpace(a.maxStepsKey)
+	if key == "" {
+		key = "agent.max_steps"
+	}
+	return fmt.Errorf("paused after %d tool-call rounds (%s) — the work so far is saved; send another message to continue, or set max_steps higher or to 0 for no limit", a.maxSteps, key)
 }
 
 func (a *Agent) resetRoutingForTurn() {

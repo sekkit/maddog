@@ -73,6 +73,7 @@ type Controller struct {
 	allSkills         []skill.Skill
 	skillStore        *skill.Store
 	allSkillStore     *skill.Store
+	skillOrch         *skill.Orchestrator
 	hooks             *hook.Runner // session hook runner; nil-safe (no hooks configured)
 	mem               *memory.Set
 	cleanup           func()
@@ -226,23 +227,24 @@ type RememberResult struct {
 // lets the controller mint and rotate session files; Host/Commands are surfaced
 // to frontends that resolve MCP prompts and slash commands.
 type Options struct {
-	Runner        agent.Runner
-	Executor      *agent.Agent
-	Sink          event.Sink
-	Policy        permission.Policy
-	Label         string
-	SystemPrompt  string
-	SessionDir    string
-	SessionPath   string
-	Host          *plugin.Host
-	Commands      []command.Command
-	Skills        []skill.Skill
-	AllSkills     []skill.Skill
-	SkillStore    *skill.Store
-	AllSkillStore *skill.Store
-	Hooks         *hook.Runner
-	Memory        *memory.Set
-	Cleanup       func()
+	Runner            agent.Runner
+	Executor          *agent.Agent
+	Sink              event.Sink
+	Policy            permission.Policy
+	Label             string
+	SystemPrompt      string
+	SessionDir        string
+	SessionPath       string
+	Host              *plugin.Host
+	Commands          []command.Command
+	Skills            []skill.Skill
+	AllSkills         []skill.Skill
+	SkillStore        *skill.Store
+	AllSkillStore     *skill.Store
+	SkillOrchestrator *skill.Orchestrator
+	Hooks             *hook.Runner
+	Memory            *memory.Set
+	Cleanup           func()
 	// BalanceURL/BalanceKey wire the active provider's optional wallet-balance
 	// endpoint and bearer key; empty when the provider declares no balance_url.
 	BalanceURL    string
@@ -305,6 +307,7 @@ func New(opts Options) *Controller {
 		allSkills:              opts.AllSkills,
 		skillStore:             opts.SkillStore,
 		allSkillStore:          opts.AllSkillStore,
+		skillOrch:              opts.SkillOrchestrator,
 		hooks:                  opts.Hooks,
 		mem:                    opts.Memory,
 		cleanup:                opts.Cleanup,
@@ -546,6 +549,7 @@ func (c *Controller) runTurnWithRawDisplay(ctx context.Context, input, raw, disp
 	ctx = jobs.WithSession(ctx, parentSession)
 	ctx = agent.WithUserImages(ctx, c.inputImages(input))
 	input = c.Compose(input)
+	input = c.orchestrateSkills(ctx, input)
 	startMessages := c.messageCount()
 	defer c.snapshotActivityIfChanged(startMessages)
 	defer c.recordDisplayForNewUser(startMessages, display)
@@ -1125,6 +1129,25 @@ func (c *Controller) notice(text string) {
 	c.sink.Emit(event.Event{Kind: event.Notice, Level: event.LevelInfo, Text: text})
 }
 
+func (c *Controller) orchestrateSkills(ctx context.Context, input string) string {
+	if c == nil || c.skillOrch == nil {
+		return input
+	}
+	res, err := c.skillOrch.Orchestrate(ctx, input)
+	if err != nil {
+		c.sink.Emit(event.Event{Kind: event.Notice, Level: event.LevelWarn, Text: "runtime skill orchestration skipped: " + err.Error()})
+		return input
+	}
+	if strings.TrimSpace(res.Prompt) == "" {
+		if strings.TrimSpace(res.Reason) != "" && !res.Matched && !res.Generated {
+			c.sink.Emit(event.Event{Kind: event.Notice, Level: event.LevelInfo, Text: res.Reason})
+		}
+		return input
+	}
+	c.sink.Emit(res.Event())
+	return input + "\n\n" + res.Prompt
+}
+
 // Run executes a turn synchronously, returning the agent's error. Used by the
 // headless `maddog run` path, where the Sink renders to stdout and the caller
 // just needs the exit status — no TurnDone event, no cancel bookkeeping.
@@ -1135,6 +1158,7 @@ func (c *Controller) Run(ctx context.Context, input string) error {
 	ctx = jobs.WithSession(ctx, parentSession)
 	ctx = agent.WithUserImages(ctx, c.inputImages(input))
 	input = c.Compose(input)
+	input = c.orchestrateSkills(ctx, input)
 	startMessages := c.messageCount()
 	defer c.snapshotActivityIfChanged(startMessages)
 	if c.hooks.Enabled() {

@@ -28,8 +28,9 @@ const (
 
 // Message is a single conversation message.
 type Message struct {
-	Role    Role   `json:"role"`
-	Content string `json:"content,omitempty"`
+	Role    Role     `json:"role"`
+	Content string   `json:"content,omitempty"`
+	Images  []string `json:"images,omitempty"` // user: data URLs for vision-capable providers
 	// NativeBlocks preserves provider-specific assistant content blocks that
 	// must be round-tripped verbatim (for example Anthropic advisor_tool_result
 	// blocks). Providers that do not understand the blocks ignore them.

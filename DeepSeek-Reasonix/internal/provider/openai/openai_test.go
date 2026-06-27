@@ -13,6 +13,10 @@ import (
 	"reasonix/internal/provider"
 )
 
+func testProviderConfig(name, baseURL, model, apiKey string, extra map[string]any) provider.Config {
+	return provider.Config{Name: name, BaseURL: baseURL, Model: model, APIKey: apiKey, Extra: extra}
+}
+
 // TestStreamRetriesThenSucceeds drives the real retry path end-to-end: the
 // server returns 503 twice, then a valid SSE stream. The provider must back off,
 // fire the retry-notify callback for each attempt, and ultimately stream the answer.

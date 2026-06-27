@@ -46,6 +46,15 @@ type Receipt struct {
 	Todos    []TodoItem      `json:"todos,omitempty"`
 }
 
+// FailureSignal summarizes same-turn tool failures for routing decisions.
+// It is derived from receipts on demand, so it adds no prompt or session state.
+type FailureSignal struct {
+	ConsecutiveErrors int
+	ErrorStreak       int
+	LastErrorTool     string
+	HealthScore       float64
+}
+
 // Ledger stores the receipts available to complete_step for the current turn.
 type Ledger struct {
 	mu       sync.Mutex
@@ -88,6 +97,73 @@ func (l *Ledger) Record(r Receipt) {
 		}
 	}
 	l.receipts = append(l.receipts, r)
+}
+
+// Count returns the number of receipts currently recorded for this turn.
+func (l *Ledger) Count() int {
+	if l == nil {
+		return 0
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return len(l.receipts)
+}
+
+// FailureSignal computes current-turn failure health across all recorded tool
+// receipts. HealthScore uses a short recent window so routing reacts to local
+// trouble without being dominated by older successes.
+func (l *Ledger) FailureSignal() FailureSignal {
+	return l.FailureSignalSince(0)
+}
+
+// FailureSignalSince is like FailureSignal, but ignores receipts before index.
+// Callers use it to measure frontier-only health after a model upgrade.
+func (l *Ledger) FailureSignalSince(index int) FailureSignal {
+	if l == nil {
+		return FailureSignal{}
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	if index < 0 {
+		index = 0
+	}
+	if index >= len(l.receipts) {
+		return FailureSignal{}
+	}
+	receipts := l.receipts[index:]
+	var sig FailureSignal
+	for i := len(receipts) - 1; i >= 0; i-- {
+		if receipts[i].Success {
+			break
+		}
+		sig.ConsecutiveErrors++
+		if sig.LastErrorTool == "" {
+			sig.LastErrorTool = receipts[i].ToolName
+		}
+	}
+	for _, r := range receipts {
+		if !r.Success {
+			sig.ErrorStreak++
+			sig.LastErrorTool = r.ToolName
+		}
+	}
+	const window = 10
+	start := len(receipts) - window
+	if start < 0 {
+		start = 0
+	}
+	recent := receipts[start:]
+	if len(recent) > 0 {
+		successes := 0
+		for _, r := range recent {
+			if r.Success {
+				successes++
+			}
+		}
+		sig.HealthScore = float64(successes) / float64(len(recent))
+	}
+	return sig
 }
 
 func (l *Ledger) HasSuccessfulCommand(command string) bool {

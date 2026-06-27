@@ -86,7 +86,7 @@ func TestRunSkillSubagentResolvesProfile(t *testing.T) {
 func TestRunSkillSubagentRequiresArgs(t *testing.T) {
 	home := t.TempDir()
 	writeSkill(t, home, ".maddog/skills/dig.md", "---\ndescription: dig\nrunAs: subagent\n---\nbody")
-	runner := func(_ context.Context, _ Skill, _ string) (string, error) { return "x", nil }
+	runner := func(_ context.Context, _ Skill, _ string, _ SubagentRunOptions) (string, error) { return "x", nil }
 	tl := NewRunSkillTool(New(Options{HomeDir: home, DisableBuiltins: true}), runner)
 	if _, err := tl.Execute(context.Background(), json.RawMessage(`{"name":"dig"}`)); err == nil {
 		t.Error("subagent skill should require arguments")
@@ -240,7 +240,7 @@ func TestInstallSkill(t *testing.T) {
 
 func TestReadSkillLoadsInlineAndIsReadOnly(t *testing.T) {
 	home := t.TempDir()
-	writeSkill(t, home, ".reasonix/skills/note.md", "---\ndescription: take a note\n---\nDo the thing.")
+	writeSkill(t, home, ".maddog/skills/note.md", "---\ndescription: take a note\n---\nDo the thing.")
 	tl := NewReadSkillTool(New(Options{HomeDir: home, DisableBuiltins: true}))
 
 	if !tl.ReadOnly() {
@@ -257,7 +257,7 @@ func TestReadSkillLoadsInlineAndIsReadOnly(t *testing.T) {
 
 func TestReadSkillRejectsSubagent(t *testing.T) {
 	home := t.TempDir()
-	writeSkill(t, home, ".reasonix/skills/dig.md", "---\ndescription: dig\nrunAs: subagent\n---\nbody")
+	writeSkill(t, home, ".maddog/skills/dig.md", "---\ndescription: dig\nrunAs: subagent\n---\nbody")
 	tl := NewReadSkillTool(New(Options{HomeDir: home, DisableBuiltins: true}))
 
 	if _, err := tl.Execute(context.Background(), json.RawMessage(`{"name":"dig"}`)); err == nil || !strings.Contains(err.Error(), "run_skill") {

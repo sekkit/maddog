@@ -83,6 +83,9 @@ const (
 	// event — or TurnDone — clears. Appended last to keep the Kind values before
 	// it wire-stable.
 	Retrying
+	// Steer fires when a mid-turn steer message is consumed from the queue and
+	// injected as a user message. Text carries the raw steer content.
+	Steer
 	// === MADDOG-FUSION: appended, do not insert before this line ===
 	// Upgrade reports automatic routing changes between default and frontier
 	// providers. Text carries the user-visible reason.

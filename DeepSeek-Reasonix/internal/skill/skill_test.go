@@ -1,6 +1,7 @@
 package skill
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -8,6 +9,7 @@ import (
 	"testing"
 
 	"reasonix/internal/config"
+	"reasonix/internal/provider"
 )
 
 func writeSkill(t *testing.T, base, rel, content string) string {

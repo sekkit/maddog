@@ -117,7 +117,7 @@ func TestACPFactoryClearsEffortOverrideForUnsupportedModel(t *testing.T) {
 	isolateCLIConfigHome(t)
 	t.Setenv("REASONIX_TEST_KEY", "test-key")
 	project := t.TempDir()
-	if err := os.WriteFile(filepath.Join(project, "reasonix.toml"), []byte(`
+	if err := os.WriteFile(filepath.Join(project, "maddog.toml"), []byte(`
 default_model = "reasoner/reasoning-model"
 
 [codegraph]
@@ -128,6 +128,7 @@ name = "reasoner"
 kind = "acp-test-provider"
 base_url = "http://example.invalid"
 model = "reasoning-model"
+model_list = ["reasoning-model"]
 api_key_env = "REASONIX_TEST_KEY"
 supported_efforts = ["low", "high"]
 
@@ -136,6 +137,7 @@ name = "plain"
 kind = "acp-test-provider"
 base_url = "http://example.invalid"
 model = "plain-model"
+model_list = ["plain-model"]
 api_key_env = "REASONIX_TEST_KEY"
 effort = "high"
 `), 0o644); err != nil {

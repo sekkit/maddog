@@ -47,23 +47,26 @@ func SkillNameKey(name string) string {
 
 // Config is Maddog's runtime configuration.
 type Config struct {
-	ConfigVersion int                 `toml:"config_version"`
-	DefaultModel  string              `toml:"default_model"`
-	Language      string              `toml:"language"` // ui/model language tag (e.g. "zh"); empty = auto-detect from $LANG / $MADDOG_LANG
-	UI            UIConfig            `toml:"ui"`
-	Desktop       DesktopConfig       `toml:"desktop"`
-	Notifications NotificationsConfig `toml:"notifications"`
-	Agent         AgentConfig         `toml:"agent"`
-	Providers     []ProviderEntry     `toml:"providers"`
-	Tools         ToolsConfig         `toml:"tools"`
-	Permissions   PermissionsConfig   `toml:"permissions"`
-	Sandbox       SandboxConfig       `toml:"sandbox"`
-	Network       NetworkConfig       `toml:"network"`
-	Plugins       []PluginEntry       `toml:"plugins"`
-	Skills        SkillsConfig        `toml:"skills"`
-	Codegraph     CodegraphConfig     `toml:"codegraph"`
-	Statusline    StatuslineConfig    `toml:"statusline"`
-	LSP           LSPConfig           `toml:"lsp"`
+	ConfigVersion     int                     `toml:"config_version"`
+	DefaultModel      string                  `toml:"default_model"`
+	Language          string                  `toml:"language"` // ui/model language tag (e.g. "zh"); empty = auto-detect from $LANG / $MADDOG_LANG
+	UI                UIConfig                `toml:"ui"`
+	Desktop           DesktopConfig           `toml:"desktop"`
+	Notifications     NotificationsConfig     `toml:"notifications"`
+	Agent             AgentConfig             `toml:"agent"`
+	Providers         []ProviderEntry         `toml:"providers"`
+	Tools             ToolsConfig             `toml:"tools"`
+	Permissions       PermissionsConfig       `toml:"permissions"`
+	Sandbox           SandboxConfig           `toml:"sandbox"`
+	Network           NetworkConfig           `toml:"network"`
+	Plugins           []PluginEntry           `toml:"plugins"`
+	Skills            SkillsConfig            `toml:"skills"`
+	Codegraph         CodegraphConfig         `toml:"codegraph"`
+	BuiltInMCP        BuiltInMCPConfig        `toml:"builtin_mcp"`
+	BuiltInMCPUpdates BuiltInMCPUpdatesConfig `toml:"builtin_mcp_updates"`
+	Statusline        StatuslineConfig        `toml:"statusline"`
+	LSP               LSPConfig               `toml:"lsp"`
+	Bot               BotConfig               `toml:"bot"`
 }
 
 // UIConfig controls CLI presentation-only settings. Desktop appearance is kept in
@@ -692,10 +695,12 @@ func (c *Config) NetworkProxyMode() string {
 // hides named skills from the agent prompt, slash invocation, and skill tools
 // while keeping them manageable.
 type SkillsConfig struct {
-	Paths          []string `toml:"paths"`
-	ExcludedPaths  []string `toml:"excluded_paths"`
-	DisabledSkills []string `toml:"disabled_skills"`
-	MaxDepth       int      `toml:"max_depth"`
+	Paths                []string `toml:"paths"`
+	ExcludedPaths        []string `toml:"excluded_paths"`
+	DisabledSkills       []string `toml:"disabled_skills"`
+	MaxDepth             int      `toml:"max_depth"`
+	RuntimeOrchestration bool     `toml:"runtime_orchestration"`
+	DynamicSkills        bool     `toml:"dynamic_skills"`
 }
 
 // SkillCustomPaths returns the configured custom skill roots with ${VAR}
@@ -845,7 +850,8 @@ func (c *Config) BashMode() string {
 type AgentConfig struct {
 	SystemPrompt              string            `toml:"system_prompt"`
 	SystemPromptFile          string            `toml:"system_prompt_file"`
-	MaxSteps                  int               `toml:"max_steps"` // tool-call rounds per turn; 0 = unlimited
+	MaxSteps                  int               `toml:"max_steps"`         // tool-call rounds per turn; 0 = unlimited
+	PlannerMaxSteps           int               `toml:"planner_max_steps"` // planner read-only tool-call rounds; 0 = unlimited
 	Temperature               float64           `toml:"temperature"`
 	PlannerModel              string            `toml:"planner_model"`
 	SubagentModel             string            `toml:"subagent_model"`
@@ -1231,7 +1237,7 @@ func Default() *Config {
 		},
 		Skills: SkillsConfig{
 			RuntimeOrchestration: true,
-			DynamicSkills:        true,
+			DynamicSkills:        false,
 		},
 		// Mode "ask" with no rules keeps `maddog run` autonomous (no TTY → ask
 		// resolves to allow) while `maddog chat` prompts before writers. Users add
@@ -1913,6 +1919,21 @@ func userConfigPath() string {
 		return ""
 	}
 	return filepath.Join(dir, AppName, "config.toml")
+}
+
+// userConfigDisplayPath is userConfigPath collapsed to a ~-relative form for
+// comments rendered into config.toml, so users see the real platform location.
+func userConfigDisplayPath() string {
+	p := userConfigPath()
+	if p == "" {
+		return "<os-config-dir>/" + AppName + "/config.toml"
+	}
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		if rel, err := filepath.Rel(home, p); err == nil && !strings.HasPrefix(rel, "..") {
+			return "~/" + filepath.ToSlash(rel)
+		}
+	}
+	return p
 }
 
 // UserConfigPath is the user-global config file (~/.config/maddog/config.toml),

@@ -36,10 +36,9 @@ import (
 // fallback. The build channel picks the rolling pointer so a canary build polls
 // the canary line and a stable build polls latest; the two never cross.
 const (
-	manifestPrimary     = "https://pub-147fb53b9c1e4bbf891a257968619ea7.r2.dev/latest/latest.json"
-	manifestFallback    = "https://github.com/sekkit/maddog/releases/latest/download/latest.json"
-	defaultDownloadPage = "https://github.com/sekkit/maddog/releases/latest"
-	httpTimeout         = 15 * time.Second
+	r2Base         = "https://pub-147fb53b9c1e4bbf891a257968619ea7.r2.dev"
+	ghReleasesBase = "https://github.com/sekkit/maddog/releases"
+	httpTimeout    = 15 * time.Second
 )
 
 // manifestEndpoints returns the primary (R2) then fallback (GitHub) manifest URLs

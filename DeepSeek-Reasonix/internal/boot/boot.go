@@ -15,7 +15,9 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"reasonix/internal/agent"
@@ -37,6 +39,7 @@ import (
 	"reasonix/internal/permission"
 	"reasonix/internal/plugin"
 	"reasonix/internal/provider"
+	"reasonix/internal/provider/costwrap"
 	"reasonix/internal/sandbox"
 	"reasonix/internal/skill"
 	"reasonix/internal/tool"
@@ -88,9 +91,6 @@ type Options struct {
 	// the core coding tools visible and moves skills, MCP, CodeGraph, LSP, web_fetch,
 	// install_source, and task behind connect_tool_source.
 	TokenMode string
-	// SessionDir overrides where persisted chat transcripts are written. When
-	// empty, the shared CLI/global session directory is used.
-	SessionDir string
 }
 
 // Build loads config, resolves the model(s), and returns a Controller wrapping a
@@ -102,12 +102,7 @@ func Build(ctx context.Context, opts Options) (*control.Controller, error) {
 	if stderr == nil {
 		stderr = os.Stderr
 	}
-	root := opts.WorkspaceRoot
-	if root == "" {
-		if wd, err := os.Getwd(); err == nil {
-			root = wd
-		}
-	}
+	root := resolveWorkspaceRoot(opts.WorkspaceRoot)
 	sessionDir := firstNonEmpty(opts.SessionDir, config.SessionDir())
 	archiveDir := firstNonEmpty(opts.ArchiveDir, config.ArchiveDir())
 	memoryUserDir := firstNonEmpty(opts.MemoryUserDir, config.MemoryUserDir())
@@ -142,6 +137,9 @@ func Build(ctx context.Context, opts Options) (*control.Controller, error) {
 	// shares this synchronized sink. The job manager is session-scoped — its jobs
 	// outlive a turn and are cancelled by Controller.Close.
 	sink := event.Sync(opts.Sink)
+	if strings.TrimSpace(opts.SessionDir) == "" {
+		migrateLegacySessionSources(sink, sessionDir)
+	}
 
 	// A resolvable model whose API key env is unset would otherwise build fine
 	// (RequireKey is false so the UI stays reachable) and then fail silently on the
@@ -150,10 +148,6 @@ func Build(ctx context.Context, opts Options) (*control.Controller, error) {
 		sink.Emit(event.Event{Kind: event.Notice, Text: fmt.Sprintf("model %q is selected but its auth env %s is not set — requests will fail until you set it", modelName, entry.AuthEnvName())})
 	}
 	jm := jobs.NewManager(sink)
-	sessionDir := opts.SessionDir
-	if sessionDir == "" {
-		sessionDir = config.SessionDir()
-	}
 
 	proxySpec := cfg.NetworkProxySpec()
 	if err := netclient.Validate(proxySpec); err != nil {
@@ -244,6 +238,11 @@ func Build(ctx context.Context, opts Options) (*control.Controller, error) {
 	allSkills := allSkillStore.List()
 	if !tokenEconomy {
 		sysPrompt = skill.ApplyIndex(sysPrompt, skills)
+	}
+	var skillOrchestrator *skill.Orchestrator
+	if cfg.Skills.RuntimeOrchestration {
+		skillOrchestrator = skill.NewOrchestrator(skillStore, skill.NewGenerator(execProv))
+		skillOrchestrator.DynamicSkills = cfg.Skills.DynamicSkills
 	}
 
 	reg := tool.NewRegistry()
@@ -531,10 +530,24 @@ func Build(ctx context.Context, opts Options) (*control.Controller, error) {
 	}
 	taskModel := firstNonEmpty(cfg.Agent.SubagentModels["task"], cfg.Agent.SubagentModel)
 	taskEffort := firstNonEmpty(cfg.Agent.SubagentEfforts["task"], cfg.Agent.SubagentEffort)
-	reg.Add(agent.NewTaskTool(execProv, entry.Price, reg, maxSteps,
-		entry.ContextWindow, cfg.Agent.SoftCompactRatio, cfg.Agent.CompactRatio, cfg.Agent.CompactForceRatio,
-		cfg.Agent.Temperature, archiveDir, "", headlessGate,
-		taskModel, taskEffort, resolveSubagentProvider))
+	taskToolAdded := false
+	addTaskTool := func() string {
+		if taskToolAdded {
+			return "task is already enabled."
+		}
+		taskToolAdded = true
+		taskTool := agent.NewTaskTool(execProv, entry.Price, reg, maxSteps,
+			entry.ContextWindow, cfg.Agent.SoftCompactRatio, cfg.Agent.CompactRatio, cfg.Agent.CompactForceRatio,
+			cfg.Agent.Temperature, archiveDir, "", headlessGate,
+			taskModel, taskEffort, resolveSubagentProvider).
+			WithTranscripts(subagentStore, root, modelName, entry.Effort).
+			WithTranscriptIdentityResolver(subagentIdentity)
+		reg.Add(taskTool)
+		return "enabled task."
+	}
+	if !tokenEconomy {
+		addTaskTool()
+	}
 
 	// The `memory` tool searches/reads saved facts on demand; `remember` persists
 	// durable facts to the project's auto-memory store; `forget` prunes ones that
@@ -617,13 +630,17 @@ func Build(ctx context.Context, opts Options) (*control.Controller, error) {
 				steps = 5
 			}
 		}
-		return agent.RunSubAgent(sctx, prov, subReg, sk.Body, task, agent.Options{
-			MaxSteps:      steps,
-			Temperature:   cfg.Agent.Temperature,
-			Pricing:       price,
-			Gate:          headlessGate,
-			ContextWindow: ctxWin,
-			ArchiveDir:    archiveDir,
+		answer, err := agent.RunSubAgentWithSession(sctx, prov, subReg, run.Session, task, agent.Options{
+			MaxSteps:          steps,
+			Temperature:       cfg.Agent.Temperature,
+			Pricing:           price,
+			Gate:              headlessGate,
+			ContextWindow:     ctxWin,
+			SoftCompactRatio:  cfg.Agent.SoftCompactRatio,
+			CompactRatio:      cfg.Agent.CompactRatio,
+			CompactForceRatio: cfg.Agent.CompactForceRatio,
+			ArchiveDir:        archiveDir,
+			ReasoningLanguage: agent.ReasoningLanguageFromContext(sctx),
 		}, agent.NestedSink(sctx, event.Discard))
 		if err != nil {
 			return "", errors.Join(err, subagentStore.SaveFailed(run))
@@ -647,7 +664,7 @@ func Build(ctx context.Context, opts Options) (*control.Controller, error) {
 			if !ok {
 				return "", fmt.Errorf("advisor skill is not available")
 			}
-			return skillRunner(sctx, sk, agent.FormatAdvisorTask(req))
+			return skillRunner(sctx, sk, agent.FormatAdvisorTask(req), skill.SubagentRunOptions{})
 		}
 	}
 	var nativeAdvisor *provider.NativeAdvisorConfig
@@ -658,21 +675,20 @@ func Build(ctx context.Context, opts Options) (*control.Controller, error) {
 			MaxTokens: cfg.Agent.AdvisorNativeMaxTokens,
 		}
 	}
-	reg.Add(skill.NewRunSkillTool(skillStore, skillRunner, skillProfile))
-	reg.Add(skill.NewInstallSkillTool(skillStore, nil))
-	reg.Add(installsource.NewTool(installsource.Options{
-		ProjectRoot: root,
-		HTTPClient:  balanceClient,
-		ConnectMCP: func(e config.PluginEntry) (installsource.MCPConnectResult, error) {
-			exp := e.ExpandedPlugin()
-			spec := plugin.Spec{
-				Name:    exp.Name,
-				Type:    exp.Type,
-				Command: exp.Command,
-				Args:    exp.Args,
-				Env:     exp.Env,
-				URL:     exp.URL,
-				Headers: exp.Headers,
+
+	// Custom slash commands (.maddog/commands + shared/user dirs). Best-effort:
+	// a malformed file is skipped, and a load error never blocks the session.
+	cmds, _ := command.Load(config.CommandDirsForRoot(root)...)
+	addSlashCommandTool := func(includeSkills bool) {
+		var slashEntries []command.SlashEntry
+		if includeSkills {
+			for _, sk := range skills {
+				sk := sk
+				slashEntries = append(slashEntries, command.SlashEntry{
+					Name:        sk.Name,
+					Description: sk.Description,
+					Render:      func(args []string) string { return skill.Render(sk, strings.Join(args, " ")) },
+				})
 			}
 		}
 		for _, cmd := range cmds {
@@ -686,6 +702,7 @@ func Build(ctx context.Context, opts Options) (*control.Controller, error) {
 		}
 		reg.Add(command.NewSlashCommandTool(slashEntries))
 	}
+
 	installSourceAdded := false
 	addInstallSourceTool := func() string {
 		if installSourceAdded {
@@ -876,34 +893,6 @@ func Build(ctx context.Context, opts Options) (*control.Controller, error) {
 		ArchiveDir:        archiveDir,
 	}, sink)
 
-	// Custom slash commands (.maddog/commands + shared/user dirs). Best-effort: a malformed
-	// file is skipped, and a load error never blocks the session.
-	cmds, _ := command.Load(config.CommandDirsForRoot(root)...)
-
-	// Expose the loaded slash commands (skills + custom commands) to the model via
-	// the slash_command tool, so it can invoke a project playbook by name the way a
-	// user types "/name". Skills are added first, then commands, so a command wins
-	// a name clash — matching the prompt's command-over-skill precedence.
-	var slashEntries []command.SlashEntry
-	for _, sk := range skills {
-		sk := sk
-		slashEntries = append(slashEntries, command.SlashEntry{
-			Name:        sk.Name,
-			Description: sk.Description,
-			Render:      func(args []string) string { return skill.Render(sk, strings.Join(args, " ")) },
-		})
-	}
-	for _, cmd := range cmds {
-		cmd := cmd
-		slashEntries = append(slashEntries, command.SlashEntry{
-			Name:        cmd.Name,
-			Description: cmd.Description,
-			ArgHint:     cmd.ArgHint,
-			Render:      func(args []string) string { return cmd.Render(args) },
-		})
-	}
-	reg.Add(command.NewSlashCommandTool(slashEntries))
-
 	var runner agent.Runner = executor
 	label := entry.Model
 	var classifier *control.ProviderAutoPlanClassifier
@@ -976,8 +965,8 @@ func Build(ctx context.Context, opts Options) (*control.Controller, error) {
 		PluginCtx:         ctx,
 		WorkspaceRoot:     root,
 		AutoPlan:          cfg.Agent.AutoPlan,
-		OnRemember: func(rule string) {
-			rememberPermissionRule(opts.WorkspaceRoot, rule)
+		OnRemember: func(rule string) control.RememberResult {
+			return rememberPermissionRule(root, rule)
 		},
 	}
 	if classifier != nil {
@@ -986,7 +975,7 @@ func Build(ctx context.Context, opts Options) (*control.Controller, error) {
 	return control.New(ctrlOpts), nil
 }
 
-func rememberPermissionRule(workspaceRoot, rule string) {
+func rememberPermissionRule(workspaceRoot, rule string) control.RememberResult {
 	path := rememberPermissionConfigPath(workspaceRoot)
 	edit := config.LoadForEdit(path)
 	result := control.RememberResult{Rule: strings.TrimSpace(rule), Path: path}
@@ -1007,6 +996,21 @@ func rememberPermissionRule(workspaceRoot, rule string) {
 	}
 	result.Saved = true
 	return result
+}
+
+func migrateLegacySessionSources(sink event.Sink, sessionDir string) {
+	sessionDir = strings.TrimSpace(sessionDir)
+	if sessionDir == "" {
+		return
+	}
+	n, err := agent.MigrateLegacySessionsFromConfigDir(sessionDir, sessionDir, config.ProjectSessionDir)
+	if err != nil {
+		sink.Emit(event.Event{Kind: event.Notice, Level: event.LevelWarn, Text: "session migration skipped: " + err.Error()})
+		return
+	}
+	if n > 0 {
+		sink.Emit(event.Event{Kind: event.Notice, Level: event.LevelInfo, Text: fmt.Sprintf("imported %d past session(s) from %s — resume them with --resume or the history panel", n, sessionDir)})
+	}
 }
 
 func rememberPermissionConfigPath(workspaceRoot string) string {

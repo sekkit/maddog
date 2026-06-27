@@ -50,6 +50,18 @@ type UpdateResult struct {
 // beside the old one. MADDOG_CACHE_DIR overrides the base. Empty when no
 // cache/config dir resolves.
 func CacheDir() string {
+	return CacheDirForVersion(Version)
+}
+
+func CacheDirForVersion(version string) string {
+	base := cacheRoot()
+	if base == "" {
+		return ""
+	}
+	return filepath.Join(base, "codegraph", version)
+}
+
+func cacheRoot() string {
 	base := os.Getenv("MADDOG_CACHE_DIR")
 	if base == "" {
 		var err error

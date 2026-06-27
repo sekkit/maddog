@@ -181,5 +181,5 @@ func builtInMCPUpdateStampPath() (string, error) {
 	if base == "" {
 		return "", fmt.Errorf("user cache dir is empty")
 	}
-	return filepath.Join(base, "reasonix", "builtin-mcp-updates", "last-check"), nil
+	return filepath.Join(base, config.AppName, "builtin-mcp-updates", "last-check"), nil
 }

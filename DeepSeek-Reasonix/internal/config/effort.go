@@ -203,6 +203,14 @@ func normalizeProviderEffortFields(e *ProviderEntry) {
 	e.SupportedEfforts = normalizedSupportedEfforts(e)
 }
 
+func normalizeStoredEffort(raw string) string {
+	level := normalizeEffortLevel(raw)
+	if level == "auto" || level == "off" {
+		return ""
+	}
+	return level
+}
+
 func normalizeWireAPI(raw string) string {
 	switch strings.ToLower(strings.TrimSpace(raw)) {
 	case "", "chat", "chat_completions", "chat-completions":
