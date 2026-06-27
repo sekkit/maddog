@@ -1,0 +1,9 @@
+prompt = "Use the available tools to create fixture-output.txt with exactly MADDOG_LOCAL_FIXTURE_TOOL_LOOP_OK on one line, then finish briefly."
+max_steps = 4
+timeout_sec = 90
+tags = ["local-fixture", "provider", "tool-loop", "metrics", "headless-cli"]
+requires = ["local-openai-fixture", "filesystem"]
+
+[expect]
+min_tool_calls = 1
+max_tool_errors = 0

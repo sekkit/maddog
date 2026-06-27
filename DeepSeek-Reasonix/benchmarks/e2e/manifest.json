@@ -63,6 +63,28 @@
       "has_verify": true
     },
     {
+      "id": "local-provider-tool-loop",
+      "tags": [
+        "local-fixture",
+        "provider",
+        "tool-loop",
+        "metrics",
+        "headless-cli"
+      ],
+      "requires": [
+        "local-openai-fixture",
+        "filesystem"
+      ],
+      "expect": {
+        "min_tool_calls": 1,
+        "max_tool_errors": 0
+      },
+      "max_steps": 4,
+      "timeout_sec": 90,
+      "has_seed_workdir": false,
+      "has_verify": true
+    },
+    {
       "id": "palindrome",
       "tags": [
         "core",
@@ -210,11 +232,13 @@
     "evidence": 1,
     "file-write": 2,
     "frontier": 2,
-    "headless-cli": 9,
+    "headless-cli": 10,
     "host-checks": 1,
+    "local-fixture": 1,
     "maddog-isolation": 1,
+    "metrics": 1,
     "project-skill": 1,
-    "provider": 2,
+    "provider": 3,
     "python": 3,
     "readiness": 1,
     "run-skill": 1,
@@ -225,6 +249,7 @@
     "small-model": 1,
     "subagent": 1,
     "tinyctx": 1,
+    "tool-loop": 1,
     "tool-output": 1,
     "tool-policy": 1,
     "upgrade": 1,
@@ -232,7 +257,8 @@
   },
   "requires": {
     "bash": 1,
-    "filesystem": 9,
+    "filesystem": 10,
+    "local-openai-fixture": 1,
     "maddog.toml": 2,
     "markdown": 1,
     "project-memory": 1,
@@ -249,12 +275,16 @@
       "compaction",
       "fix-add-bug",
       "fizzbuzz",
+      "local-provider-tool-loop",
       "palindrome",
       "project-config-isolation",
       "project-skill-invocation",
       "provider-auth-frontier-profile",
       "readiness-evidence-gate",
       "subagent-delegation"
+    ],
+    "local-openai-fixture": [
+      "local-provider-tool-loop"
     ],
     "maddog.toml": [
       "project-config-isolation",

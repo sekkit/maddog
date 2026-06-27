@@ -28,13 +28,16 @@ func TestMaddogBenchmarkCoverageAudit(t *testing.T) {
 		"desktop-parity",
 		"frontier",
 		"headless-cli",
+		"local-fixture",
 		"maddog-isolation",
+		"metrics",
 		"provider",
 		"readiness",
 		"skill",
 		"small-model",
 		"subagent",
 		"tinyctx",
+		"tool-loop",
 		"upgrade",
 	}
 	for _, tag := range requiredTags {
@@ -83,6 +86,34 @@ func TestMaddogBenchmarkCoverageAudit(t *testing.T) {
 	} {
 		if !strings.Contains(providerVerify, want) {
 			t.Fatalf("provider auth verifier missing %q", want)
+		}
+	}
+
+	localFixtureTask := taskByID(t, tasks, "local-provider-tool-loop")
+	for _, tag := range []string{"local-fixture", "provider", "tool-loop", "metrics", "headless-cli"} {
+		if !hasString(localFixtureTask.Tags, tag) {
+			t.Fatalf("local-provider-tool-loop missing tag %q: %#v", tag, localFixtureTask.Tags)
+		}
+	}
+	if !hasString(localFixtureTask.Requires, "local-openai-fixture") {
+		t.Fatalf("local-provider-tool-loop should require local-openai-fixture: %#v", localFixtureTask.Requires)
+	}
+	if localFixtureTask.Expect.MinToolCalls < 1 {
+		t.Fatalf("local-provider-tool-loop should require at least one tool call: %+v", localFixtureTask.Expect)
+	}
+	if localFixtureTask.Expect.MaxToolErrors == nil || *localFixtureTask.Expect.MaxToolErrors != 0 {
+		t.Fatalf("local-provider-tool-loop should reject tool errors: %+v", localFixtureTask.Expect)
+	}
+	localFixtureVerify := readRepoFile(t, root, "benchmarks", "e2e", "tasks", "local-provider-tool-loop", "verify.sh")
+	for _, want := range []string{
+		"fixture-output.txt",
+		".run-metrics.json",
+		`metrics["tool_calls"] >= 1`,
+		`metrics["tool_errors"] == 0`,
+		`metrics["steps"] >= 2`,
+	} {
+		if !strings.Contains(localFixtureVerify, want) {
+			t.Fatalf("local provider fixture verifier missing %q", want)
 		}
 	}
 
@@ -136,6 +167,13 @@ func TestMaddogBenchmarkCoverageAudit(t *testing.T) {
 			"scripts/run-coding-agent-benchmark.ps1:.benchmark\\maddog-home",
 			"scripts/run-coding-agent-benchmark.ps1:SmokeOnly",
 		},
+		"Offline OpenAI-compatible fixture, tool loop, and metrics": {
+			"cmd/e2ebench/main.go:suite | manifest | diff | local-fixture",
+			"cmd/e2ebench/local_fixture.go:local-provider-tool-loop",
+			"cmd/e2ebench/local_fixture.go:/chat/completions",
+			"cmd/e2ebench/local_fixture.go:tool_calls",
+			"scripts/run-maddog-regression.ps1:local-provider-e2e",
+		},
 	}
 	for capability, evidences := range testEvidence {
 		for _, evidence := range evidences {
@@ -167,6 +205,8 @@ func TestMaddogBenchmarkCoverageAudit(t *testing.T) {
 		"Provider e2e ready",
 		"Frontier smoke ready",
 		"DEEPSEEK_API_KEY",
+		"local-provider-e2e",
+		"local-fixture",
 	} {
 		if !strings.Contains(strings.ToLower(regressionScript), strings.ToLower(want)) {
 			t.Fatalf("run-maddog-regression.ps1 should mention coverage %q", want)

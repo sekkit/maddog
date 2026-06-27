@@ -89,7 +89,7 @@ func main() {
 		fmt.Fprintf(flag.CommandLine.Output(), "  %[1]s -mode diff -base origin/main -repo . -attempts 3 -timeout 1800\n", strings.Replace(flag.CommandLine.Name(), "e2ebench", "go run ./cmd/e2ebench", 1))
 	}
 
-	mode := flag.String("mode", "suite", "suite | manifest | diff (diff = generate tests for the PR diff and grade with the repo's tests)")
+	mode := flag.String("mode", "suite", "suite | manifest | diff | local-fixture (diff = generate tests for the PR diff and grade with the repo's tests)")
 	suite := flag.String("suite", "benchmarks/e2e", "suite root (contains tasks/<id>/)")
 	bin := flag.String("bin", "maddog", "path to the maddog binary")
 	model := flag.String("model", "", "provider/model name (default: config default)")
@@ -151,6 +151,41 @@ func main() {
 			}
 		}
 		if !report.Valid {
+			os.Exit(1)
+		}
+		return
+	}
+	if *mode == "local-fixture" {
+		fixture, err := newLocalFixtureSuite(tasks, *bin, *model)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "local fixture:", err)
+			os.Exit(1)
+		}
+		defer fixture.Close()
+		r := runTask(fixture.bin, fixture.model, fixture.task)
+		applyExpectations(&r)
+		results := []result{r}
+		report := render(results)
+		if *outMD != "" {
+			if err := os.WriteFile(*outMD, []byte(report), 0o644); err != nil {
+				fmt.Fprintln(os.Stderr, "write report:", err)
+				os.Exit(1)
+			}
+		} else {
+			fmt.Print(report)
+		}
+		if *outJSON != "" {
+			b, err := json.MarshalIndent(results, "", "  ")
+			if err != nil {
+				fmt.Fprintln(os.Stderr, "marshal json:", err)
+				os.Exit(1)
+			}
+			if err := os.WriteFile(*outJSON, b, 0o644); err != nil {
+				fmt.Fprintln(os.Stderr, "write json:", err)
+				os.Exit(1)
+			}
+		}
+		if !r.Passed {
 			os.Exit(1)
 		}
 		return

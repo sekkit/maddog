@@ -146,6 +146,63 @@ func TestFilterTasksRejectsUnknownID(t *testing.T) {
 	}
 }
 
+func TestLocalProviderFixtureRunUsesDedicatedTaskAndModel(t *testing.T) {
+	root := t.TempDir()
+	taskDir := filepath.Join(root, "tasks", "local-provider-tool-loop")
+	if err := os.MkdirAll(filepath.Join(taskDir, "workdir"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(taskDir, "task.toml"), []byte(`
+prompt = "fixture"
+max_steps = 4
+timeout_sec = 30
+tags = ["local-fixture", "provider", "tool-loop", "metrics", "headless-cli"]
+requires = ["local-openai-fixture", "filesystem"]
+
+[expect]
+min_tool_calls = 1
+max_tool_errors = 0
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(taskDir, "verify.sh"), []byte("set -e\ntest -f fixture-output.txt\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	tasks, err := loadTasks(root)
+	if err != nil {
+		t.Fatalf("loadTasks: %v", err)
+	}
+	suite, err := newLocalFixtureSuite(tasks, "maddog-bin", "external/model")
+	if err != nil {
+		t.Fatalf("newLocalFixtureSuite: %v", err)
+	}
+	defer suite.Close()
+
+	if suite.task.ID != "local-provider-tool-loop" {
+		t.Fatalf("fixture task = %q", suite.task.ID)
+	}
+	if suite.model != "local-openai-fixture/local-tool-model" {
+		t.Fatalf("fixture model = %q", suite.model)
+	}
+	cfg, err := os.ReadFile(filepath.Join(suite.task.dir, "workdir", "maddog.toml"))
+	if err != nil {
+		t.Fatalf("fixture config missing: %v", err)
+	}
+	for _, want := range []string{
+		`default_model = "local-openai-fixture/local-tool-model"`,
+		`name = "local-openai-fixture"`,
+		`kind = "openai"`,
+		`model = "local-tool-model"`,
+		`api_key_env = "MADDOG_LOCAL_FIXTURE_KEY"`,
+		suite.server.URL,
+	} {
+		if !strings.Contains(string(cfg), want) {
+			t.Fatalf("fixture config missing %q:\n%s", want, cfg)
+		}
+	}
+}
+
 func TestResolveBinPathKeepsPATHLookupAndAbsolutizesRelativePath(t *testing.T) {
 	got := resolveBinPath("maddog")
 	if got != "maddog" {

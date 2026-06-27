@@ -13,6 +13,7 @@ This directory contains the repeatable checks used to validate Maddog-specific m
 | Desktop Go module | `go test ./... -count=1` from `desktop/` | Guards the desktop app root plus release signing and updater subpackages in the nested Wails module. |
 | Desktop frontend contracts | `npm run test:all` from `desktop/frontend/` | Type-checks frontend tests and runs GUI contracts for Maddog naming isolation, provider model refresh, small/background model controls, frontier route controls, provider auth controls, and advisor/runtime event presentation. |
 | Manifest | `go run ./cmd/e2ebench -mode manifest -out benchmarks/e2e/manifest.md -json benchmarks/e2e/manifest.json` | Every committed e2e task has prompt, tags, verifier, requirements, and mechanism coverage metadata. |
+| Local provider e2e | `go run ./cmd/e2ebench -mode local-fixture -bin ./bin/maddog.exe -out .benchmark/regression/local-provider.md -json .benchmark/regression/local-provider.json` | Required offline proof that Maddog's headless CLI can load project config, call an OpenAI-compatible SSE provider, receive a streamed `tool_calls` delta, execute the real `write_file` tool, send the tool result back on the next provider request, and persist run metrics. |
 | Maddog e2e | `go run ./cmd/e2ebench -bin ./bin/maddog.exe -out benchmarks/e2e/latest.md -json benchmarks/e2e/latest.json` | Real-provider validation of Maddog mechanisms: provider config isolation, frontier/auth profile, project skills, readiness gate, compaction, and delegation. |
 | External harness | `powershell -ExecutionPolicy Bypass -File scripts/run-coding-agent-benchmark.ps1` | Compatibility with `usamadar/coding-agent-benchmark` and cross-agent coding task performance. |
 
@@ -41,6 +42,7 @@ go run ./cmd/e2ebench -bin ./bin/maddog.exe -tasks project-config-isolation,prov
 | Frontier/small-model profile visibility plus upgrade/advisor config | `provider-auth-frontier-profile` | Tags `frontier`, `small-model`, `upgrade`, `advisor`, `desktop-parity`; verifier checks upgrade budget/threshold and advisor guardrail settings. |
 | Maddog config isolation from Reasonix names | `project-config-isolation` | Verifier checks Maddog config wins over legacy `reasonix.toml`. |
 | Runtime project skill invocation | `project-skill-invocation` | Uses `.maddog/skills/bench-summarizer/SKILL.md`; verifier checks generated output. |
+| Offline OpenAI-compatible provider/tool loop and metrics | `local-provider-tool-loop` via `-mode local-fixture` | Starts an in-process SSE fixture, writes project `maddog.toml` to point Maddog at it, verifies `fixture-output.txt`, `.run-metrics.json`, `tool_calls`, zero `tool_errors`, and at least two provider steps. |
 | Readiness evidence gate | `readiness-evidence-gate` | Requires readiness metrics and project host checks. |
 | Tinyctx/context/compaction behavior | `compaction` | Exercises long sequential reads and compacted context reporting; tagged `tinyctx` so focused coverage filters can select it. |
 | Subagent delegation and session isolation | `subagent-delegation` | Exercises task delegation and output isolation. |
