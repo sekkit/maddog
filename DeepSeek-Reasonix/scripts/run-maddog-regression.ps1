@@ -12,6 +12,8 @@ param(
   [string]$OfficialOpenAIModel = "gpt-4.1-mini",
   [string]$OfficialAnthropicModel = "claude-sonnet-4-6",
   [switch]$IncludeExternal,
+  [switch]$IncludeDesktopBuildSmoke,
+  [string]$WailsExe = "",
   [switch]$DryRunExternal,
   [string]$BenchmarkDir = "C:\Dev2\research\coding-agent-benchmark",
   [switch]$UseProxy,
@@ -96,6 +98,25 @@ function Resolve-Native {
     return ""
   }
   return $cmd.Source
+}
+
+function Resolve-WailsExe {
+  param([string]$Requested)
+  if ($Requested -ne "") {
+    if (!(Test-Path $Requested)) {
+      throw "Wails executable not found: $Requested"
+    }
+    return (Resolve-Path $Requested).Path
+  }
+  $cmd = Get-Command wails -ErrorAction SilentlyContinue
+  if ($cmd) {
+    return $cmd.Source
+  }
+  $userWails = Join-Path $env:USERPROFILE "go\bin\wails.exe"
+  if (Test-Path $userWails) {
+    return $userWails
+  }
+  return ""
 }
 
 function Invoke-Native {
@@ -235,7 +256,8 @@ $LiveReadiness = [ordered]@{
     "powershell -ExecutionPolicy Bypass -File scripts/run-maddog-regression.ps1 -IncludeE2E",
     "powershell -ExecutionPolicy Bypass -File scripts/run-maddog-regression.ps1 -IncludeOfficialAuthSmoke",
     "powershell -ExecutionPolicy Bypass -File scripts/run-maddog-regression.ps1 -IncludeFrontierSmoke",
-    "powershell -ExecutionPolicy Bypass -File scripts/run-maddog-regression.ps1 -IncludeE2E -IncludeOfficialAuthSmoke -IncludeFrontierSmoke -IncludeExternal",
+    "powershell -ExecutionPolicy Bypass -File scripts/run-maddog-regression.ps1 -IncludeDesktopBuildSmoke",
+    "powershell -ExecutionPolicy Bypass -File scripts/run-maddog-regression.ps1 -IncludeE2E -IncludeOfficialAuthSmoke -IncludeFrontierSmoke -IncludeExternal -IncludeDesktopBuildSmoke",
     "Set OPENAI_OFFICIAL_TOKEN and ANTHROPIC_IDENTITY_TOKEN before claiming official auth live coverage"
   )
 }
@@ -295,11 +317,11 @@ $CoverageMatrix = @(
   },
   [pscustomobject]@{
     capability = "Maddog naming, config/storage isolation, desktop GUI settings, and app build"
-    evidence = @("core-go", "desktop-go", "frontend", "manifest")
-    notes = "Desktop Go tests pin maddog-dev native binary naming, Maddog storage roots, release packaging names, settings wiring, signing, and updater helpers; packaged installer runtime smoke remains a native Windows release check."
+    evidence = @("core-go", "desktop-go", "frontend", "manifest", "desktop build smoke optional")
+    notes = "Desktop Go tests pin maddog-dev native binary naming, Maddog storage roots, release packaging names, settings wiring, signing, and updater helpers; -IncludeDesktopBuildSmoke runs Wails and asserts desktop/build/bin/maddog-dev.exe on Windows."
     status = "verified-offline"
     remaining = @()
-    optional_remaining = @("Run packaged Windows installer/runtime smoke on a signed release build.")
+    optional_remaining = @("Run -IncludeDesktopBuildSmoke before release to build the Windows desktop executable; run packaged installer/runtime smoke on a signed release build.")
   },
   [pscustomobject]@{
     capability = "General coding-agent task performance"
@@ -441,6 +463,42 @@ Invoke-Step `
       Pop-Location
     }
   }
+
+if ($IncludeDesktopBuildSmoke) {
+  $resolvedWails = Resolve-WailsExe $WailsExe
+  if ($resolvedWails -eq "") {
+    Invoke-Step `
+      -Name "desktop-build-smoke" `
+      -Command "wails build -skipbindings" `
+      -Coverage @("desktop-app", "desktop-build", "maddog-dev.exe") `
+      -Required $true `
+      -Action { throw "wails is not available on PATH and was not found under `$env:USERPROFILE\go\bin\wails.exe; pass -WailsExe C:\path\to\wails.exe" }
+  } else {
+    Invoke-Step `
+      -Name "desktop-build-smoke" `
+      -Command "$resolvedWails build -skipbindings; assert desktop/build/bin/maddog-dev.exe" `
+      -Coverage @("desktop-app", "desktop-build", "maddog-dev.exe") `
+      -Required $true `
+      -Action {
+        $goDir = Split-Path $GoExe
+        $oldPath = $env:PATH
+        $env:PATH = "$goDir;$oldPath"
+        Push-Location (Join-Path $RepoRoot "desktop")
+        try {
+          Invoke-Native $resolvedWails @("build", "-skipbindings")
+        } finally {
+          Pop-Location
+          $env:PATH = $oldPath
+        }
+        $desktopExe = Join-Path $RepoRoot "desktop\build\bin\maddog-dev.exe"
+        if (!(Test-Path $desktopExe)) {
+          throw "desktop build did not produce $desktopExe"
+        }
+      }
+  }
+} else {
+  Add-SkipStep -Name "desktop-build-smoke" -Reason "Skipped by default. Use -IncludeDesktopBuildSmoke to run a Wails Windows build and assert desktop/build/bin/maddog-dev.exe." -Coverage @("desktop-build", "maddog-dev.exe")
+}
 
 if ($IncludeE2E) {
   $e2eArgs = @("run", "./cmd/e2ebench", "-bin", $MaddogBin, "-budget", "$E2EBudget", "-exclude-tags", "local-fixture", "-out", ".benchmark/regression/e2e.md", "-json", ".benchmark/regression/e2e.json")

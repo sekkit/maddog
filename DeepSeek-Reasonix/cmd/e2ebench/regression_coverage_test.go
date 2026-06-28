@@ -233,6 +233,8 @@ func TestMaddogBenchmarkCoverageAudit(t *testing.T) {
 			"desktop/branding_test.go:maddog-dev.exe",
 			"scripts/desktop-build.sh:BINNAME=\"maddog-dev\"",
 			"scripts/desktop-build.sh:build/bin/${BINNAME}.app",
+			"scripts/run-maddog-regression.ps1:IncludeDesktopBuildSmoke",
+			"scripts/run-maddog-regression.ps1:desktop/build/bin/maddog-dev.exe",
 			"desktop/release_branding_test.go:${APPNAME}-windows-${arch}-installer.exe",
 		},
 		"Desktop GUI model/provider/advisor controls": {
@@ -334,6 +336,9 @@ func TestMaddogBenchmarkCoverageAudit(t *testing.T) {
 		"RequireComplete",
 		"AuditOnly",
 		"IncludeOfficialAuthSmoke",
+		"IncludeDesktopBuildSmoke",
+		"desktop-build-smoke",
+		"maddog-dev.exe",
 		"official-auth-smoke",
 		"frontier-smoke",
 		"frontier-scorer-live",
