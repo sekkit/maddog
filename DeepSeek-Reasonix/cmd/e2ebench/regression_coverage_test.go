@@ -280,6 +280,14 @@ func TestMaddogBenchmarkCoverageAudit(t *testing.T) {
 			"internal/config/config.go:workload identity reads a pre-minted access token when present",
 			"benchmarks/e2e/tasks/local-official-auth/verify.sh:auth-fixture-observations.json",
 		},
+		"Live official auth smoke gate": {
+			"cmd/e2ebench/official_auth_smoke.go:official-auth-smoke",
+			"cmd/e2ebench/official_auth_smoke.go:OPENAI_OFFICIAL_TOKEN",
+			"cmd/e2ebench/official_auth_smoke.go:ANTHROPIC_IDENTITY_TOKEN",
+			"cmd/e2ebench/official_auth_smoke.go:ANTHROPIC_FEDERATION_RULE_ID",
+			"cmd/e2ebench/official_auth_smoke.go:workload_identity",
+			"cmd/e2ebench/live_official_auth_test.go:TestRunOfficialAuthSmokeUsesBearerAndWorkloadIdentity",
+		},
 	}
 	for capability, evidences := range testEvidence {
 		for _, evidence := range evidences {
@@ -313,6 +321,8 @@ func TestMaddogBenchmarkCoverageAudit(t *testing.T) {
 		"failed_required_steps",
 		"RequireComplete",
 		"AuditOnly",
+		"IncludeOfficialAuthSmoke",
+		"official-auth-smoke",
 		"partial-live-pending",
 		"verified-offline",
 		"official_auth_e2e_ready",

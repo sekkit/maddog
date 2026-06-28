@@ -90,10 +90,15 @@ func main() {
 		fmt.Fprintf(flag.CommandLine.Output(), "  %[1]s -mode diff -base origin/main -repo . -attempts 3 -timeout 1800\n", strings.Replace(flag.CommandLine.Name(), "e2ebench", "go run ./cmd/e2ebench", 1))
 	}
 
-	mode := flag.String("mode", "suite", "suite | manifest | diff | local-fixture (diff = generate tests for the PR diff and grade with the repo's tests)")
+	mode := flag.String("mode", "suite", "suite | manifest | diff | local-fixture | "+officialAuthSmokeMode+" (diff = generate tests for the PR diff and grade with the repo's tests)")
 	suite := flag.String("suite", "benchmarks/e2e", "suite root (contains tasks/<id>/)")
 	bin := flag.String("bin", "maddog", "path to the maddog binary")
 	model := flag.String("model", "", "provider/model name (default: config default)")
+	openAIModel := flag.String("openai-model", "gpt-4.1-mini", "official auth smoke OpenAI model")
+	openAIBaseURL := flag.String("openai-base-url", "https://api.openai.com/v1", "official auth smoke OpenAI-compatible base URL")
+	anthropicModel := flag.String("anthropic-model", "claude-sonnet-4-6", "official auth smoke Anthropic model")
+	anthropicBaseURL := flag.String("anthropic-base-url", "https://api.anthropic.com", "official auth smoke Anthropic base URL")
+	officialAuthTimeoutSec := flag.Int("official-auth-timeout", 60, "official auth smoke timeout in seconds")
 	taskFilter := flag.String("tasks", "", "comma-separated task IDs to run or include in the manifest")
 	tagFilter := flag.String("tags", "", "comma-separated tags to run or include in the manifest")
 	outMD := flag.String("out", "", "write the markdown report here (default: stdout)")
@@ -114,6 +119,32 @@ func main() {
 			testCmd: *testCmd, maxSteps: *maxSteps, timeoutSec: *timeoutSec, attempts: *attempts,
 		})
 		emit(report, *outMD, "")
+		return
+	}
+	if *mode == officialAuthSmokeMode {
+		r := runOfficialAuthSmoke(officialAuthSmokeConfig{
+			OpenAIBaseURL:    *openAIBaseURL,
+			OpenAIModel:      *openAIModel,
+			AnthropicBaseURL: *anthropicBaseURL,
+			AnthropicModel:   *anthropicModel,
+			TimeoutSec:       *officialAuthTimeoutSec,
+		})
+		report := renderOfficialAuthSmoke(r)
+		emit(report, *outMD, "")
+		if *outJSON != "" {
+			b, err := json.MarshalIndent(r, "", "  ")
+			if err != nil {
+				fmt.Fprintln(os.Stderr, "marshal official auth smoke json:", err)
+				os.Exit(1)
+			}
+			if err := os.WriteFile(*outJSON, b, 0o644); err != nil {
+				fmt.Fprintln(os.Stderr, "write official auth smoke json:", err)
+				os.Exit(1)
+			}
+		}
+		if !r.Passed {
+			os.Exit(1)
+		}
 		return
 	}
 

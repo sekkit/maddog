@@ -6,6 +6,9 @@ param(
   [string]$E2ETags = "",
   [int]$E2EBudget = 400000,
   [switch]$IncludeFrontierSmoke,
+  [switch]$IncludeOfficialAuthSmoke,
+  [string]$OfficialOpenAIModel = "gpt-4.1-mini",
+  [string]$OfficialAnthropicModel = "claude-sonnet-4-6",
   [switch]$IncludeExternal,
   [switch]$DryRunExternal,
   [string]$BenchmarkDir = "C:\Dev2\research\coding-agent-benchmark",
@@ -185,6 +188,11 @@ function Test-LiveCredential {
   return -not [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($Name))
 }
 
+function Test-StepPassed {
+  param([string]$Name)
+  return [bool](($Results | Where-Object { $_.name -eq $Name -and $_.status -eq "pass" } | Select-Object -First 1))
+}
+
 $LiveCredentialNames = @(
   "DEEPSEEK_API_KEY",
   "ICODEEASY_API_KEY",
@@ -222,8 +230,9 @@ $LiveReadiness = [ordered]@{
   )
   commands = @(
     "powershell -ExecutionPolicy Bypass -File scripts/run-maddog-regression.ps1 -IncludeE2E",
+    "powershell -ExecutionPolicy Bypass -File scripts/run-maddog-regression.ps1 -IncludeOfficialAuthSmoke",
     "powershell -ExecutionPolicy Bypass -File scripts/run-maddog-regression.ps1 -IncludeFrontierSmoke",
-    "powershell -ExecutionPolicy Bypass -File scripts/run-maddog-regression.ps1 -IncludeE2E -IncludeFrontierSmoke -IncludeExternal",
+    "powershell -ExecutionPolicy Bypass -File scripts/run-maddog-regression.ps1 -IncludeE2E -IncludeOfficialAuthSmoke -IncludeFrontierSmoke -IncludeExternal",
     "Set OPENAI_OFFICIAL_TOKEN and ANTHROPIC_IDENTITY_TOKEN before claiming official auth live coverage"
   )
 }
@@ -233,10 +242,11 @@ $CoverageMatrix = @(
     capability = "Provider API-key routing, official auth config, and OpenAI/Anthropic/iCodeEasy compatibility"
     evidence = @("core-go", "manifest", "local-provider-e2e", "provider-auth-frontier-profile")
     notes = "Covers API-key and official auth config shapes plus local OpenAI bearer and Anthropic workload-identity exchange paths; real official OAuth/browser flows still require manual/provider credential validation."
-    status = if ($LiveReadiness.provider_e2e_ready) { "verified" } else { "partial-live-pending" }
+    status = "partial-live-pending"
     remaining = @(
       if (-not $LiveReadiness.provider_api_key_e2e_ready) { "Run real-provider Maddog e2e with at least one API-key provider credential." }
-      if (-not $LiveReadiness.official_auth_e2e_ready) { "Run official OpenAI bearer and Anthropic workload-identity live auth checks with OPENAI_OFFICIAL_TOKEN and ANTHROPIC_IDENTITY_TOKEN." }
+      if (-not $LiveReadiness.official_auth_e2e_ready) { "Set OPENAI_OFFICIAL_TOKEN and ANTHROPIC_IDENTITY_TOKEN, then run -IncludeOfficialAuthSmoke." }
+      elseif (-not $IncludeOfficialAuthSmoke) { "Run official OpenAI bearer and Anthropic workload-identity live auth checks with -IncludeOfficialAuthSmoke." }
     )
     optional_remaining = @()
   },
@@ -473,6 +483,30 @@ if ($IncludeFrontierSmoke) {
   Add-SkipStep -Name "frontier-smoke" -Reason "Skipped by default. Use -IncludeFrontierSmoke with provider credentials for live frontier validation." -Coverage @("frontier-real-call")
 }
 
+if ($IncludeOfficialAuthSmoke) {
+  if (!$OfficialAuthReady) {
+    Add-SkipStep -Name "official-auth-smoke" -Reason "OPENAI_OFFICIAL_TOKEN and ANTHROPIC_IDENTITY_TOKEN must both be set." -Coverage @("official-auth-live", "openai-bearer", "anthropic-workload-identity")
+  } else {
+    Invoke-Step `
+      -Name "official-auth-smoke" `
+      -Command "$GoExe run ./cmd/e2ebench -mode official-auth-smoke -openai-model $OfficialOpenAIModel -anthropic-model $OfficialAnthropicModel -out .benchmark/regression/official-auth.md -json .benchmark/regression/official-auth.json" `
+      -Coverage @("official-auth-live", "openai-bearer", "anthropic-workload-identity") `
+      -Required $true `
+      -Action {
+        Invoke-Native $GoExe @(
+          "run", "./cmd/e2ebench",
+          "-mode", "official-auth-smoke",
+          "-openai-model", $OfficialOpenAIModel,
+          "-anthropic-model", $OfficialAnthropicModel,
+          "-out", ".benchmark/regression/official-auth.md",
+          "-json", ".benchmark/regression/official-auth.json"
+        )
+      }
+  }
+} else {
+  Add-SkipStep -Name "official-auth-smoke" -Reason "Skipped by default. Use -IncludeOfficialAuthSmoke with OPENAI_OFFICIAL_TOKEN and ANTHROPIC_IDENTITY_TOKEN for live official auth validation." -Coverage @("official-auth-live")
+}
+
 if ($IncludeExternal) {
   $ps = Resolve-Native "powershell"
   if ($ps -eq "") {
@@ -528,6 +562,41 @@ $StepSummaries = @(
     }
   }
 )
+
+$ProviderAPIKeyE2EVerified = [bool](Test-StepPassed "maddog-e2e")
+$OfficialAuthLiveVerified = [bool](Test-StepPassed "official-auth-smoke")
+$FrontierSmokeVerified = [bool](Test-StepPassed "frontier-smoke")
+$AnthropicAdvisorVerified = [bool]($FrontierSmokeVerified -and $AnthropicLiveReady)
+$CoverageMatrix[0].status = if ($ProviderAPIKeyE2EVerified -and $OfficialAuthLiveVerified) { "verified" } else { "partial-live-pending" }
+$CoverageMatrix[0].remaining = @(
+  if (-not $ProviderAPIKeyE2EVerified) {
+    if ($LiveReadiness.provider_api_key_e2e_ready) {
+      "Run real-provider Maddog e2e with -IncludeE2E and at least one API-key provider credential."
+    } else {
+      "Set DEEPSEEK_API_KEY, ICODEEASY_API_KEY, OPENAI_API_KEY, or ANTHROPIC_API_KEY, then run -IncludeE2E."
+    }
+  }
+  if (-not $OfficialAuthLiveVerified) {
+    if ($LiveReadiness.official_auth_e2e_ready) {
+      "Run official OpenAI bearer and Anthropic workload-identity live auth checks with -IncludeOfficialAuthSmoke."
+    } else {
+      "Set OPENAI_OFFICIAL_TOKEN and ANTHROPIC_IDENTITY_TOKEN, then run -IncludeOfficialAuthSmoke."
+    }
+  }
+)
+$CoverageMatrix[1].status = if ($FrontierSmokeVerified) { "verified" } else { "partial-live-pending" }
+$CoverageMatrix[1].remaining = if ($FrontierSmokeVerified) { @() } else {
+  if ($LiveReadiness.frontier_smoke_ready) { @("Run live frontier smoke with -IncludeFrontierSmoke.") } else { @("Set ICODEEASY_API_KEY, OPENAI_API_KEY, or ANTHROPIC_API_KEY, then run -IncludeFrontierSmoke.") }
+}
+$CoverageMatrix[2].status = if ($AnthropicAdvisorVerified) { "verified" } else { "partial-live-pending" }
+$CoverageMatrix[2].remaining = if ($AnthropicAdvisorVerified) { @() } else {
+  if ($AnthropicLiveReady) { @("Run live Anthropic advisor/provider smoke with -IncludeFrontierSmoke.") } else { @("Set ANTHROPIC_API_KEY, then run live Anthropic advisor/provider smoke.") }
+}
+$CoverageMatrix[4].status = if ($FrontierSmokeVerified) { "verified" } else { "partial-live-pending" }
+$CoverageMatrix[4].remaining = if ($FrontierSmokeVerified) { @() } else {
+  if ($LiveReadiness.frontier_smoke_ready) { @("Run live frontier scoring path with -IncludeFrontierSmoke.") } else { @("Set frontier provider credentials, then run live frontier scoring path.") }
+}
+
 $CoverageSummaries = @(
   foreach ($c in $CoverageMatrix) {
     [ordered]@{
