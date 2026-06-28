@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { Activity, CircleDollarSign, CircleGauge, Database, Layers, Percent, RefreshCw, Wallet, Zap } from "lucide-react";
+import { Activity, CircleDollarSign, CircleGauge, Cpu, Database, FileClock, Layers, Percent, RefreshCw, ShieldAlert, ShieldCheck, Wallet, Zap } from "lucide-react";
 import { Tooltip } from "./Tooltip";
 import { useI18n, type Translator } from "../lib/i18n";
 import { formatMoney } from "../lib/money";
 import { normalizeStatusBarItems, type StatusBarItemId } from "../lib/statusBarItems";
-import { type BalanceInfo, type CollaborationMode, type ContextInfo, type JobView, type ToolApprovalMode, type WireUsage } from "../lib/types";
+import { type BalanceInfo, type CollaborationMode, type ContextInfo, type JobView, type ProviderStatusView, type ReadinessResultView, type RunReportView, type ToolApprovalMode, type WireUsage } from "../lib/types";
 
 type StatusBarLabelStyle = "icon" | "text";
 
@@ -97,6 +97,44 @@ function formatTurnCount(turns: number | undefined, t: Translator): string {
   return t(turns === 1 ? "history.turnOne" : "history.turnOther", { n: turns });
 }
 
+function readinessStatusLabel(readiness: ReadinessResultView | undefined, t: Translator): string {
+  switch (readiness?.status) {
+    case "ready":
+      return t("status.readinessReady");
+    case "warning":
+      return t("status.readinessWarning");
+    case "blocked":
+      return t("status.readinessBlocked");
+    case "needs_approval":
+      return t("status.readinessNeedsApproval");
+    default:
+      return "-";
+  }
+}
+
+function providerStatusLabel(status: ProviderStatusView | undefined): string {
+  if (!status) return "-";
+  const role = status.role || "provider";
+  const limit = status.budgetLimitTokens ?? 0;
+  if (role === "frontier" && limit > 0) {
+    const remaining = status.budgetRemainingTokens ?? 0;
+    return `${role} ${remaining}/${limit}`;
+  }
+  const tokens = status.totalTokens ?? 0;
+  if (tokens > 0) return `${role} ${formatTokenCount(tokens)}`;
+  return role;
+}
+
+function runReportLabel(report: RunReportView | undefined): string {
+  if (!report) return "-";
+  const status = report.finalStatus || report.status || "ready";
+  const template = report.templateId || report.loopId || report.runId || "run";
+  const remaining = report.budget?.remainingTokens;
+  if (typeof remaining === "number") return `${template} ${status} ${remaining.toLocaleString()} left`;
+  const events = typeof report.events === "number" ? report.events.toLocaleString() : "0";
+  return `${template} ${status} ${events}`;
+}
+
 function MetricLabel({ style, icon, label }: { style: StatusBarLabelStyle; icon: ReactNode; label: string }) {
   return (
     <span className={`stat__label stat__label--${style}`} aria-hidden={style === "icon" ? "true" : undefined}>
@@ -120,6 +158,9 @@ export function StatusBar({
   cost,
   currency,
   modelLabel,
+  readiness,
+  providerStatus,
+  runReport,
   labelStyle = "text",
   items,
 }: {
@@ -137,6 +178,9 @@ export function StatusBar({
   cost?: number;
   currency?: string;
   modelLabel?: string;
+  readiness?: ReadinessResultView;
+  providerStatus?: ProviderStatusView;
+  runReport?: RunReportView;
   labelStyle?: StatusBarLabelStyle;
   items?: readonly string[];
 }) {
@@ -154,6 +198,12 @@ export function StatusBar({
   const tokenLabel = formatTokenCount(sessionTokens);
   const turnTokenLabel = formatTokenCount(turnTokens);
   const balanceLabel = balance?.available && balance.display ? balance.display : "-";
+  const readinessLabel = readinessStatusLabel(readiness, t);
+  const providerLabel = providerStatusLabel(providerStatus);
+  const runReportStatus = runReportLabel(runReport);
+  const providerAttention = providerStatus?.status === "budget_exceeded" || Boolean(providerStatus?.warning);
+  const readinessReady = readiness?.status === "ready";
+  const readinessAttention = readiness?.status === "blocked" || readiness?.status === "needs_approval";
   const planMode = collaborationMode === "plan";
   const goalMode = collaborationMode === "goal";
   const metricLabelStyle = labelStyle === "text" ? "text" : "icon";
@@ -212,6 +262,34 @@ export function StatusBar({
         <span className="stat statusbar__turns">
           <MetricLabel style={metricLabelStyle} icon={<RefreshCw size={12} />} label={t("status.sessionTurnsLabel")} />
           <b className={turnLabel === "-" ? "stat__value--empty" : undefined}>{turnLabel}</b>
+        </span>
+      </Tooltip>
+    ),
+    readiness: (
+      <Tooltip label={t("status.readinessTitle")} className="statusbar__metric statusbar__metric--readiness">
+        <span className="stat statusbar__readiness">
+          <MetricLabel style={metricLabelStyle} icon={readinessReady ? <ShieldCheck size={12} /> : <ShieldAlert size={12} />} label={t("status.readinessLabel")} />
+          <b className={[readinessLabel === "-" ? "stat__value--empty" : undefined, readinessReady ? "statusbar__readiness-value--good" : readinessAttention ? "statusbar__readiness-value--critical" : "statusbar__readiness-value--warn"].filter(Boolean).join(" ") || undefined}>
+            {readinessLabel}{readiness ? ` ${readiness.score}%` : ""}
+          </b>
+        </span>
+      </Tooltip>
+    ),
+    provider_status: (
+      <Tooltip label={t("status.providerTitle")} className="statusbar__metric statusbar__metric--provider-status">
+        <span className="stat statusbar__provider-status">
+          <MetricLabel style={metricLabelStyle} icon={<Cpu size={12} />} label={t("status.providerLabel")} />
+          <b className={[providerLabel === "-" ? "stat__value--empty" : undefined, providerAttention ? "statusbar__readiness-value--critical" : undefined].filter(Boolean).join(" ") || undefined}>
+            {providerLabel}
+          </b>
+        </span>
+      </Tooltip>
+    ),
+    run_report: (
+      <Tooltip label={t("status.runReportTitle")} className="statusbar__metric statusbar__metric--run-report">
+        <span className="stat statusbar__run-report">
+          <MetricLabel style={metricLabelStyle} icon={<FileClock size={12} />} label={t("status.runReportLabel")} />
+          <b className={runReportStatus === "-" ? "stat__value--empty" : undefined}>{runReportStatus}</b>
         </span>
       </Tooltip>
     ),

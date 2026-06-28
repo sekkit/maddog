@@ -31,10 +31,6 @@ func desktopConfigDir() string {
 	return ""
 }
 
-func desktopSessionDir() string {
-	return desktopStatePath("sessions")
-}
-
 func desktopArchiveDir() string {
 	return desktopStatePath("archive")
 }

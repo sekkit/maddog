@@ -1,6 +1,6 @@
 # Releasing
 
-How Reasonix ships, who can ship what, and the canary-before-stable flow.
+How Maddog ships, who can ship what, and the canary-before-stable flow.
 
 ## Branch model: trunk + tags
 
@@ -17,7 +17,7 @@ provides the pre-release buffer instead of a long-lived branch.
 
 | Surface | Stable | Pre-release buffer |
 |---|---|---|
-| npm | `latest` (0.x), `next` (1.x) | `canary` (`npm i reasonix@canary`) |
+| npm | `latest` (0.x), `next` (1.x) | `canary` (`npm i maddog@canary`) |
 | Desktop | R2 `latest/` pointer | R2 `canary/` pointer (R2-only — never on the GitHub releases page) |
 
 A canary build is isolated: it **never** moves `latest` / `next` / desktop `latest/`.
@@ -29,15 +29,15 @@ ending in `-canary.N` publish under the `canary` dist-tag.)
 | Action | Who | Mechanism |
 |---|---|---|
 | **Cut a canary** | any maintainer (write access) | `workflow_dispatch`, runs free (open `canary` environment) |
-| **Ship `next` / stable** | **esengine only** | stable publish jobs gate on the `release` environment — esengine must approve before anything goes public |
+| **Ship `next` / stable** | **sekkit only** | stable publish jobs gate on the `release` environment — sekkit must approve before anything goes public |
 
 So a maintainer can dispatch a canary anytime, but a stable release — even one a
-maintainer starts by pushing a tag — pauses in the Actions UI until **esengine approves**
+maintainer starts by pushing a tag — pauses in the Actions UI until **sekkit approves**
 the `release` environment deployment.
 
-> Repo settings backing this: Environments → `release` has esengine as a required
+> Repo settings backing this: Environments → `release` has sekkit as a required
 > reviewer; `canary` has none. (Optional hardening: a tag ruleset restricting
-> `v*`/`npm-v*`/`desktop-v*` creation to esengine, so maintainers can't even start a
+> `v*`/`npm-v*`/`desktop-v*` creation to sekkit, so maintainers can't even start a
 > stable release.)
 
 ## The release loop
@@ -47,7 +47,7 @@ the `release` environment deployment.
    - Desktop: Actions → **Release desktop** → `channel: canary`, `base_version: 1.4.0`
    - CLI: Actions → **Release npm** → `base_version: 1.4.0`
    - Publishes `1.4.0-canary.N` to the desktop R2 `canary/` pointer (no GitHub release) and npm `@canary`.
-3. **Test** — testers install `reasonix@canary` (CLI) or grab the desktop canary
+3. **Test** — testers install `maddog@canary` (CLI) or grab the desktop canary
    build from its R2 link, and report bugs.
 4. **Fix** on `main-v2` via PRs; re-cut the canary as needed (`canary.N` bumps).
 5. **Ship stable** when the canary is clean — push the three tags:
@@ -56,10 +56,10 @@ the `release` environment deployment.
    git tag npm-v1.4.0     && git push origin npm-v1.4.0      # npm -> next
    git tag desktop-v1.4.0 && git push origin desktop-v1.4.0  # desktop -> R2 latest/
    ```
-   Each stable run **waits for esengine to approve the `release` environment** before publishing.
+   Each stable run **waits for sekkit to approve the `release` environment** before publishing.
 6. **Promote to default install** (optional, when 1.x should become the bare `npm i` target):
    ```sh
-   npm dist-tag add reasonix@1.4.0 latest
+   npm dist-tag add maddog@1.4.0 latest
    ```
 7. **Next cycle** — the canary rolls on toward `1.5.0`.
 

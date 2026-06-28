@@ -9,6 +9,7 @@ const (
 	AuthTypeAPIKey           = "api_key"
 	AuthTypeBearer           = "bearer"
 	AuthTypeWorkloadIdentity = "workload_identity"
+	AuthTypeOfficial         = "official_auth"
 )
 
 // AuthConfig describes request authentication after config/env resolution.
@@ -20,6 +21,7 @@ type AuthConfig struct {
 	HeaderScheme  string
 	IdentityToken string
 	IdentityEnv   string
+	ProfileID     string
 	Extra         map[string]string
 }
 
@@ -58,6 +60,9 @@ func AuthConfigFromExtra(extra map[string]any, fallbackToken, fallbackEnv string
 	if auth.IdentityEnv == "" {
 		auth.IdentityEnv = read("identity_env")
 	}
+	if auth.ProfileID == "" {
+		auth.ProfileID = read("official_auth_profile_id")
+	}
 	if auth.Extra == nil {
 		auth.Extra = map[string]string{}
 	}
@@ -85,6 +90,8 @@ func (a AuthConfig) NormalizedType() string {
 		return AuthTypeBearer
 	case AuthTypeWorkloadIdentity, "wif", "workload-identity":
 		return AuthTypeWorkloadIdentity
+	case AuthTypeOfficial, "official", "official-auth", "official_auth_profile":
+		return AuthTypeOfficial
 	default:
 		return strings.ToLower(strings.TrimSpace(a.Type))
 	}
@@ -98,6 +105,8 @@ func (a AuthConfig) EnvName() string {
 			return strings.TrimSpace(a.TokenEnv)
 		}
 		return strings.TrimSpace(a.IdentityEnv)
+	case AuthTypeBearer, AuthTypeOfficial:
+		return strings.TrimSpace(a.TokenEnv)
 	default:
 		return strings.TrimSpace(a.TokenEnv)
 	}
@@ -115,7 +124,7 @@ func (a AuthConfig) Header(req *http.Request, defaultAPIKeyHeader string) {
 		return
 	}
 	switch a.NormalizedType() {
-	case AuthTypeBearer, AuthTypeWorkloadIdentity:
+	case AuthTypeBearer, AuthTypeWorkloadIdentity, AuthTypeOfficial:
 		header := strings.TrimSpace(a.HeaderName)
 		if header == "" {
 			header = "Authorization"

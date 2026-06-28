@@ -91,6 +91,7 @@ type Store struct {
 	customPaths     []string
 	excludedPaths   map[string]bool
 	disabled        map[string]bool
+	injected        map[string]Skill
 	maxDepth        int
 	disableBuiltins bool
 	stderr          io.Writer
@@ -132,6 +133,7 @@ func New(opts Options) *Store {
 		customPaths:     custom,
 		excludedPaths:   excluded,
 		disabled:        disabledNameSet(opts.DisabledNames),
+		injected:        map[string]Skill{},
 		maxDepth:        normalizeMaxDepth(opts.MaxDepth),
 		disableBuiltins: opts.DisableBuiltins,
 		stderr:          stderr,
@@ -140,6 +142,15 @@ func New(opts Options) *Store {
 
 // HasProjectScope reports whether the store was configured with a project root.
 func (s *Store) HasProjectScope() bool { return s.projectRoot != "" }
+
+// ProjectRoot returns the absolute project root used for project-scoped skill
+// discovery. It is empty when the store is global-only.
+func (s *Store) ProjectRoot() string {
+	if s == nil {
+		return ""
+	}
+	return s.projectRoot
+}
 
 // PathStatus describes a root directory's readability, surfaced by `/skill paths`.
 type PathStatus string
@@ -250,6 +261,11 @@ func pathStatus(dir string) PathStatus {
 // stays stable and cacheable.
 func (s *Store) List() []Skill {
 	byName := map[string]Skill{}
+	for name, sk := range s.injected {
+		if !s.disabledName(name) {
+			byName[name] = sk
+		}
+	}
 	for _, r := range s.roots() {
 		if r.Status != StatusOK {
 			continue
@@ -279,6 +295,44 @@ func (s *Store) List() []Skill {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out
+}
+
+// Inject adds or replaces an in-memory dynamic skill. It never writes the
+// canonical skill file, so removing it reveals any file-backed skill again.
+func (s *Store) Inject(sk Skill) error {
+	if s == nil {
+		return fmt.Errorf("skill store is nil")
+	}
+	if !IsValidName(sk.Name) {
+		return fmt.Errorf("invalid skill name %q", sk.Name)
+	}
+	if strings.TrimSpace(sk.Description) == "" {
+		return fmt.Errorf("missing skill description")
+	}
+	if strings.TrimSpace(sk.Body) == "" {
+		return fmt.Errorf("missing skill body")
+	}
+	if sk.Path == "" {
+		sk.Path = "(dynamic)"
+	}
+	if sk.Scope == "" {
+		sk.Scope = ScopeCustom
+	}
+	if sk.RunAs == "" {
+		sk.RunAs = RunInline
+	}
+	if s.injected == nil {
+		s.injected = map[string]Skill{}
+	}
+	s.injected[sk.Name] = sk
+	return nil
+}
+
+func (s *Store) Remove(name string) {
+	if s == nil || s.injected == nil {
+		return
+	}
+	delete(s.injected, name)
 }
 
 // Read resolves one skill by name, scanning the roots in priority order then the

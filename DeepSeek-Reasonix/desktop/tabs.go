@@ -931,7 +931,7 @@ func (a *App) openTopicTab(scope, workspaceRoot, topicID, sessionPath string) (T
 }
 
 // OpenGlobalTab opens a new global-scope tab (no project root). The global
-	// workspace root is the Maddog user config directory.
+// workspace root is the Maddog user config directory.
 func (a *App) OpenGlobalTab(topicID string) (TabMeta, error) {
 	globalRoot := globalWorkspaceRoot()
 	if err := os.MkdirAll(globalRoot, 0o755); err != nil {
@@ -1174,7 +1174,7 @@ func (a *App) indexedBlankTopicIDLocked(scope, workspaceRoot string) string {
 		}
 		openTopics[tab.TopicID] = true
 	}
-	sessionIndex, _ := topicSessionIndexForDir(config.SessionDir())
+	sessionIndex, _ := topicSessionIndexForDir(desktopSessionDir(workspaceRoot))
 	for _, topicID := range topicIDs {
 		if openTopics[topicID] {
 			continue
@@ -1356,10 +1356,9 @@ func (a *App) buildTabController(tab *WorkspaceTab) {
 	sessionDir := desktopSessionDir(root)
 	topicID := strings.TrimSpace(tab.TopicID)
 
-	// Assign Global topics to legacy sessions in the global session dir so
-	// imported history appears in the project tree regardless of which tab
-	// triggered the build (the migration now sends everything to global).
-	migratedGlobalTopics := migrateLegacySessionsIntoGlobalTopics(config.SessionDir())
+	// Assign topics to legacy sessions in this tab's desktop session dir so
+	// imported history appears in the project tree.
+	migratedGlobalTopics := migrateLegacySessionsIntoGlobalTopics(sessionDir)
 	if len(migratedGlobalTopics) > 0 {
 		a.emitProjectTreeChanged()
 	}
@@ -1721,7 +1720,7 @@ func (a *App) saveTabsLocked() {
 func (a *App) saveTabsCollectLocked() (string, []desktopTabEntry, string, uint64) {
 	dir := desktopConfigDir()
 	if dir == "" {
-		return
+		return "", nil, "", 0
 	}
 	os.MkdirAll(dir, 0o755)
 	var entries []desktopTabEntry
@@ -2584,16 +2583,18 @@ func migrateLegacySessionsIntoGlobalTopics(dir string) []string {
 	if strings.TrimSpace(dir) == "" {
 		return nil
 	}
-	// Determine scope from the directory. The global session dir gets Global
-	// topics; a project session dir gets project-scoped topics under the
-	// matching workspace.
+	// Determine scope from the directory. The legacy CLI session dir and the
+	// desktop global session dir get Global topics; desktop project session dirs
+	// get project-scoped topics under the matching workspace.
 	scope := "global"
 	workspaceRoot := ""
 	topicTitleRoot := "" // workspace root for topic-title persistence
-	if dir != config.SessionDir() {
+	dirKey := topicSessionDirKey(dir)
+	isGlobalDir := dirKey == topicSessionDirKey(config.SessionDir()) || dirKey == topicSessionDirKey(desktopSessionDir())
+	if !isGlobalDir {
 		f := loadProjectsFile()
 		for _, p := range f.Projects {
-			if config.ProjectSessionDir(p.Root) == dir {
+			if dirKey == topicSessionDirKey(desktopSessionDir(p.Root)) || dirKey == topicSessionDirKey(config.ProjectSessionDir(p.Root)) {
 				scope = "project"
 				workspaceRoot = p.Root
 				topicTitleRoot = p.Root
@@ -3041,22 +3042,24 @@ func (a *App) findTopicLocation(topicID string) (string, string, bool) {
 	}
 	a.mu.RUnlock()
 
-	infos, err := agent.ListSessions(desktopSessionDir())
-	if err != nil {
-		return "", "", false
-	}
-	for _, info := range infos {
-		if strings.TrimSpace(info.TopicID) != topicID {
+	for _, dir := range a.knownSessionDirs() {
+		infos, err := agent.ListSessions(dir)
+		if err != nil {
 			continue
 		}
-		scope := strings.TrimSpace(info.Scope)
-		if scope == "" {
-			scope = "global"
+		for _, info := range infos {
+			if strings.TrimSpace(info.TopicID) != topicID {
+				continue
+			}
+			scope := strings.TrimSpace(info.Scope)
+			if scope == "" {
+				scope = "global"
+			}
+			if scope == "global" {
+				return "global", "", true
+			}
+			return "project", normalizeProjectRoot(info.WorkspaceRoot), true
 		}
-		if scope == "global" {
-			return "global", "", true
-		}
-		return "project", normalizeProjectRoot(info.WorkspaceRoot), true
 	}
 	return "", "", false
 }
@@ -3078,13 +3081,16 @@ func (a *App) updateTopicSessionTitles(topicID, title string) {
 	if strings.TrimSpace(topicID) == "" || strings.TrimSpace(title) == "" {
 		return
 	}
-	infos, err := agent.ListSessions(desktopSessionDir())
-	if err != nil {
-		return
-	}
-	for _, info := range infos {
-		if info.TopicID != topicID {
-			continue
+	for _, dir := range a.knownSessionDirs() {
+		for _, match := range topicSessionMatches(dir, topicID) {
+			meta, ok, err := agent.LoadBranchMeta(match.path)
+			if err != nil || !ok {
+				continue
+			}
+			meta.TopicTitle = title
+			if err := agent.SaveBranchMetaPreserveUpdated(match.path, meta); err == nil {
+				invalidateTopicSessionIndexForPath(match.path)
+			}
 		}
 	}
 }
@@ -3217,7 +3223,6 @@ func (a *App) TrashTopic(topicID string) error {
 	if strings.TrimSpace(topicID) == "" {
 		return fmt.Errorf("topicID is required")
 	}
-	dir := desktopSessionDir()
 
 	targets, err := a.topicTrashTargets(topicID)
 	if err != nil {
@@ -3329,6 +3334,9 @@ func (a *App) ListProjectTree() []ProjectNode {
 	migrateLegacySessionsIntoGlobalTopics(sessionDir)
 	f := loadProjectsFile()
 	out := []ProjectNode{}
+	sessionInfos := map[string]agent.SessionInfo{}
+	sessionTitles := map[string]string{}
+	titles := loadSessionTitles(sessionDir)
 	type topicSummary struct {
 		turns          int
 		lastActivityAt int64
@@ -3973,6 +3981,7 @@ func (a *App) knownSessionDirs() []string {
 		out = append(out, dir)
 	}
 	add(config.SessionDir()) // legacy/global sessions from earlier desktop builds
+	add(desktopSessionDir())
 	add(desktopSessionDir(globalWorkspaceRoot()))
 	for _, project := range loadProjectsFile().Projects {
 		add(desktopSessionDir(project.Root))

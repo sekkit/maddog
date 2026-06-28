@@ -3,6 +3,7 @@ package control
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,9 +13,11 @@ import (
 
 	"reasonix/internal/agent"
 	"reasonix/internal/checkpoint"
+	ctxcompress "reasonix/internal/context"
 	"reasonix/internal/event"
 	"reasonix/internal/hook"
 	"reasonix/internal/jobs"
+	"reasonix/internal/loop"
 	"reasonix/internal/permission"
 	"reasonix/internal/plugin"
 	"reasonix/internal/provider"
@@ -27,6 +30,44 @@ func (*typedNilControllerSink) Emit(event.Event) {}
 
 type appendingRunner struct {
 	session *agent.Session
+}
+
+func TestToolResultReadsExternalizedRawOutput(t *testing.T) {
+	raw := "raw tool output with full log"
+	store := ctxcompress.NewFileRawStore(t.TempDir())
+	rec, err := store.Put(ctxcompress.ToolOutput{Tool: "bash", CallID: "call-raw", Output: raw})
+	if err != nil {
+		t.Fatalf("store.Put: %v", err)
+	}
+	sess := agent.NewSession("sys")
+	sess.Add(provider.Message{Role: provider.RoleAssistant, ToolCalls: []provider.ToolCall{{ID: "call-raw", Name: "bash", Arguments: `{"command":"go test ./..."}`}}})
+	sess.Add(provider.Message{Role: provider.RoleTool, ToolCallID: "call-raw", Name: "bash", Content: "[shell output summary]\nraw_ref: " + rec.Ref + "\n"})
+	exec := agent.New(nil, tool.NewRegistry(), sess, agent.Options{}, event.Discard)
+	c := New(Options{Executor: exec, RawToolStore: store})
+
+	got := c.ToolResult("call-raw")
+
+	if got == nil || got.Output != raw || !got.RawAvailable || got.RawRef != rec.Ref {
+		t.Fatalf("ToolResult = %+v, want raw output from store", got)
+	}
+}
+
+func TestToolResultReportsMissingExternalizedRawOutput(t *testing.T) {
+	store := ctxcompress.NewFileRawStore(t.TempDir())
+	sess := agent.NewSession("sys")
+	sess.Add(provider.Message{Role: provider.RoleAssistant, ToolCalls: []provider.ToolCall{{ID: "call-missing", Name: "bash", Arguments: `{}`}}})
+	sess.Add(provider.Message{Role: provider.RoleTool, ToolCallID: "call-missing", Name: "bash", Content: "[shell output summary]\nraw_ref: raw://tool-output/missing.txt\n"})
+	exec := agent.New(nil, tool.NewRegistry(), sess, agent.Options{}, event.Discard)
+	c := New(Options{Executor: exec, RawToolStore: store})
+
+	got := c.ToolResult("call-missing")
+
+	if got == nil || got.Output == "" || got.RawAvailable || got.RawError == "" {
+		t.Fatalf("ToolResult missing raw = %+v", got)
+	}
+	if !strings.Contains(got.Output, "[shell output summary]") {
+		t.Fatalf("missing raw should fall back to compressed summary, got %q", got.Output)
+	}
 }
 
 func (r appendingRunner) Run(_ context.Context, input string) error {
@@ -51,6 +92,15 @@ type sessionContextRunner struct {
 func (r *sessionContextRunner) Run(ctx context.Context, input string) error {
 	r.parentSession = agent.ParentSession(ctx)
 	r.jobSession = jobs.SessionFromContext(ctx)
+	return nil
+}
+
+type countingControlRunner struct {
+	calls atomic.Int32
+}
+
+func (r *countingControlRunner) Run(context.Context, string) error {
+	r.calls.Add(1)
 	return nil
 }
 
@@ -119,6 +169,68 @@ func TestRunInjectsParentSessionForJobs(t *testing.T) {
 	}
 	if runner.jobSession != want {
 		t.Fatalf("jobs session = %q, want %q", runner.jobSession, want)
+	}
+}
+
+func TestRunBlocksWhenReadinessIsBlocked(t *testing.T) {
+	runner := &countingControlRunner{}
+	var events []event.Event
+	c := New(Options{
+		Runner: runner,
+		Sink: event.FuncSink(func(e event.Event) {
+			events = append(events, e)
+		}),
+		ReadinessEvaluator: func(context.Context) loop.ReadinessResult {
+			return loop.ReadinessResult{
+				Status:     loop.ReadinessBlocked,
+				TemplateID: "coding-task",
+				Blockers:   []string{"credential unavailable"},
+				Checks: []loop.ReadinessCheck{{
+					ID:            "credential_available",
+					Status:        loop.CheckBlocked,
+					CredentialEnv: "OPENAI_API_KEY",
+				}},
+			}
+		},
+	})
+
+	err := c.Run(context.Background(), "hello")
+	if !errors.Is(err, ErrReadinessBlocked) {
+		t.Fatalf("Run error = %v, want ErrReadinessBlocked", err)
+	}
+	if runner.calls.Load() != 0 {
+		t.Fatalf("runner calls = %d, want 0 for blocked readiness", runner.calls.Load())
+	}
+	if len(events) == 0 || events[0].Kind != event.Readiness || events[0].Readiness == nil || events[0].Readiness.Status != loop.ReadinessBlocked {
+		t.Fatalf("readiness event missing or malformed: %+v", events)
+	}
+}
+
+func TestRunContinuesWhenReadinessWarns(t *testing.T) {
+	runner := &countingControlRunner{}
+	var events []event.Event
+	c := New(Options{
+		Runner: runner,
+		Sink: event.FuncSink(func(e event.Event) {
+			events = append(events, e)
+		}),
+		ReadinessEvaluator: func(context.Context) loop.ReadinessResult {
+			return loop.ReadinessResult{
+				Status:     loop.ReadinessWarning,
+				TemplateID: "coding-task",
+				Warnings:   []string{"using built-in code backend fallback"},
+			}
+		},
+	})
+
+	if err := c.Run(context.Background(), "hello"); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if runner.calls.Load() != 1 {
+		t.Fatalf("runner calls = %d, want 1", runner.calls.Load())
+	}
+	if len(events) == 0 || events[0].Kind != event.Readiness || events[0].Readiness.Status != loop.ReadinessWarning {
+		t.Fatalf("readiness warning event missing: %+v", events)
 	}
 }
 

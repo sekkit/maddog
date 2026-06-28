@@ -104,7 +104,7 @@ Usage:
   maddog codegraph status    show config, cache dir, and resolved launcher
 
 CodeGraph is fetched automatically on first use (unless [codegraph].auto_install
-is false); install uses Reasonix's pinned runtime. Update is explicit because a
+is false); install uses Maddog's pinned runtime. Update is explicit because a
 new CodeGraph release can change MCP tool schemas and prompt-cache shape.
 `)
 }

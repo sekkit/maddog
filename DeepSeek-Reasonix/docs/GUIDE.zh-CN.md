@@ -166,7 +166,7 @@ headers = { Authorization = "Bearer ${STRIPE_KEY}" }
 启用的 MCP 服务器会在会话开始后于后台自动连接，因此工具上线期间聊天仍可正常使用。
 用 `/mcp` 或桌面端 MCP 面板可刷新状态、重连服务器、查看失败原因，或在当前会话内禁用某个服务器。
 
-**已有 Claude Code 的 `.mcp.json`？** 直接放到项目根目录，Reasonix 会原样读取——其
+**已有 Claude Code 的 `.mcp.json`？** 直接放到项目根目录，Maddog 会原样读取——其
 `mcpServers` 规范（`command`/`args`/`env`、`type`/`url`/`headers`、`${VAR}` 展开）
 与 `[[plugins]]` 字段一一对应。两处来源会合并加载；同名时以 `maddog.toml` 为准。
 

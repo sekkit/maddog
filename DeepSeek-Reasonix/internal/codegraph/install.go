@@ -24,7 +24,7 @@ const (
 	Version = "v0.9.7"
 	cgRepo  = "colbymchenry/codegraph"
 
-	officialMirrorBase         = "https://dl.reasonix.io/codegraph"
+	officialMirrorBase         = "https://dl.maddog.dev/codegraph"
 	officialMainlandMirrorBase = ""
 	perSourceDownloadTimeout   = 10 * time.Minute
 	activeVersionFile          = "active-version"
@@ -45,11 +45,7 @@ type UpdateResult struct {
 	Path    string
 }
 
-// CacheDir is where the CodeGraph bundle is unpacked on first use:
-// <user cache>/maddog/codegraph/<Version>. Versioned so a bump installs cleanly
-// beside the old one. MADDOG_CACHE_DIR overrides the base. Empty when no
-// cache/config dir resolves.
-func CacheDir() string {
+func cacheRoot() string {
 	base := os.Getenv("MADDOG_CACHE_DIR")
 	if base == "" {
 		var err error
@@ -61,6 +57,25 @@ func CacheDir() string {
 		base = filepath.Join(base, "maddog")
 	}
 	return base
+}
+
+// CacheDir is where the current CodeGraph bundle is unpacked on first use:
+// <user cache>/maddog/codegraph/<Version>. Versioned so a bump installs cleanly
+// beside the old one. MADDOG_CACHE_DIR overrides the base. Empty when no
+// cache/config dir resolves.
+func CacheDir() string {
+	return CacheDirForVersion(Version)
+}
+
+func CacheDirForVersion(version string) string {
+	if !validVersion(version) {
+		return ""
+	}
+	base := cacheRoot()
+	if base == "" {
+		return ""
+	}
+	return filepath.Join(base, "codegraph", version)
 }
 
 func activeVersion() string {
@@ -204,7 +219,7 @@ func assetName() string {
 }
 
 // Install downloads and unpacks the CodeGraph bundle into CacheDir on first use,
-// verifying it against the checksum baked into the reasonix binary, then returns
+// verifying it against the checksum baked into the maddog binary, then returns
 // the launcher path.
 // It is idempotent: a present cache is returned untouched. log, if non-nil,
 // receives a couple of progress lines. The extraction is staged in a temp dir and

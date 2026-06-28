@@ -7,7 +7,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -112,7 +111,7 @@ func TestDesktopSessionDirIsScopedByWorkspace(t *testing.T) {
 	if dirA == config.SessionDir() || dirB == config.SessionDir() {
 		t.Fatalf("desktop workspace sessions should not use the global CLI session dir: A=%q B=%q global=%q", dirA, dirB, config.SessionDir())
 	}
-	wantPrefix := filepath.Join(config.MemoryUserDir(), "projects") + string(filepath.Separator)
+	wantPrefix := filepath.Join(desktopConfigDir(), "projects") + string(filepath.Separator)
 	if !strings.HasPrefix(dirA, wantPrefix) || filepath.Base(dirA) != "sessions" {
 		t.Fatalf("workspace session dir should live under the project state tree, got %q", dirA)
 	}

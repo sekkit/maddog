@@ -114,15 +114,19 @@ func New(cfg provider.Config) (provider.Provider, error) {
 		return nil, fmt.Errorf("openai: network: %w", err)
 	}
 	return &client{
-		name:     name,
-		apiKey:   cfg.APIKey,
-		keyEnv:   keyEnv,
-		auth:     auth,
-		baseURL:  strings.TrimRight(cfg.BaseURL, "/"),
-		model:    cfg.Model,
-		deepseek: deepseek,
-		effort:   effort,
-		http:     httpClient,
+		name:         name,
+		apiKey:       cfg.APIKey,
+		keyEnv:       keyEnv,
+		auth:         auth,
+		baseURL:      strings.TrimRight(cfg.BaseURL, "/"),
+		model:        cfg.Model,
+		deepseek:     deepseek,
+		minimax:      minimax,
+		vision:       vision,
+		visionDetail: visionDetail,
+		effort:       effort,
+		http:         httpClient,
+		idleTimeout:  defaultStreamIdleTimeout,
 	}, nil
 }
 
@@ -137,15 +141,20 @@ func newHTTPClient(cfg provider.Config) (*http.Client, error) {
 }
 
 type client struct {
-	name     string
-	apiKey   string
-	keyEnv   string // api_key_env name, surfaced in auth errors
-	auth     provider.AuthConfig
-	baseURL  string
-	model    string
-	http     *http.Client
-	deepseek bool
-	effort   string // reasoning_effort forwarded to thinking-capable models; "" = omit
+	name         string
+	apiKey       string
+	keyEnv       string // api_key_env name, surfaced in auth errors
+	auth         provider.AuthConfig
+	baseURL      string
+	model        string
+	http         *http.Client
+	deepseek     bool
+	minimax      bool
+	vision       bool
+	visionDetail string
+	effort       string // reasoning_effort forwarded to thinking-capable models; "" = omit
+	idleTimeout  time.Duration
+	authed       atomic.Bool
 }
 
 func (c *client) Name() string { return c.name }

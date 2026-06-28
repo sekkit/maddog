@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { asArray } from "../lib/array";
 import { app, onBuiltInMCPUpdate, openExternal } from "../lib/bridge";
 import { useT } from "../lib/i18n";
-import type { BuiltInMCPUpdateStatus, CapabilitiesView, MCPServerInput, ServerView, SkillRootSkillView, SkillRootView, SkillView } from "../lib/types";
+import type { BuiltInMCPUpdateStatus, CapabilitiesView, CodeBackendView, MCPServerInput, ServerView, SkillCandidateView, SkillRootSkillView, SkillRootView, SkillView } from "../lib/types";
 import { InlineConfirmButton } from "./InlineConfirmButton";
 import { ResizableDrawer } from "./ResizableDrawer";
 import { Tooltip } from "./Tooltip";
@@ -34,9 +34,10 @@ export function CapabilitiesPanel({
   const [expandedServers, setExpandedServers] = useState<Set<string>>(() => new Set());
   const [expandedServerTools, setExpandedServerTools] = useState<Set<string>>(() => new Set());
   const [updateStatuses, setUpdateStatuses] = useState<Record<string, BuiltInMCPUpdateStatus>>({});
+  const [benchingBackend, setBenchingBackend] = useState<string | null>(null);
 
   const reload = useCallback(async () => {
-    setView(normalizeCapabilitiesView(await app.Capabilities().catch(() => ({ servers: [], skills: [], skillRoots: [] }))));
+    setView(normalizeCapabilitiesView(await app.Capabilities().catch(() => ({ servers: [], codeBackends: [], skills: [], skillCandidates: [], skillRoots: [] }))));
   }, []);
   const reloadUpdateStatuses = useCallback(async () => {
     setUpdateStatuses(normalizeBuiltInMCPUpdateStatuses(await app.BuiltInMCPUpdateStatuses().catch(() => [])));
@@ -87,6 +88,30 @@ export function CapabilitiesPanel({
     const ok = await mutate(() => app.UpdateBuiltInMCPServer(name));
     await reloadUpdateStatuses();
     return ok;
+  };
+  const toggleCodeBackend = async (backend: CodeBackendView, enabled: boolean) => {
+    if (enabled && needsCodeBackendRiskConfirm(backend) && typeof window !== "undefined" && !window.confirm(t("caps.codeBackendRiskConfirm", { risks: backend.risks.join(", ") }))) {
+      return false;
+    }
+    return mutate(() => app.SetCodeBackendEnabled(backend.id, enabled));
+  };
+  const retryCodeBackend = async (backend: CodeBackendView) => mutate(() => app.RetryCodeBackendHealth(backend.id));
+  const runCodeBackendBenchmark = async (backend: CodeBackendView) => {
+    setBusy(true);
+    setErr(null);
+    setBenchingBackend(backend.id);
+    try {
+      await app.RunCodeBackendBenchmark(backend.id);
+      await reload();
+      return true;
+    } catch (e) {
+      setErr(String((e as Error)?.message ?? e));
+      await reload();
+      return false;
+    } finally {
+      setBenchingBackend(null);
+      setBusy(false);
+    }
   };
 
   const summary = useMemo(() => {
@@ -218,6 +243,16 @@ export function CapabilitiesPanel({
                     </button>
                   )}
                 </div>
+                {view.codeBackends.length > 0 && (
+                  <CodeBackendSection
+                    backends={view.codeBackends}
+                    busy={busy}
+                    benching={benchingBackend}
+                    onToggle={(backend, enabled) => void toggleCodeBackend(backend, enabled)}
+                    onRetry={(backend) => void retryCodeBackend(backend)}
+                    onBenchmark={(backend) => void runCodeBackendBenchmark(backend)}
+                  />
+                )}
                 {serverGroups.failed.length > 0 && (
                   <FailedServersNotice
                     servers={serverGroups.failed}
@@ -291,6 +326,18 @@ export function CapabilitiesPanel({
                   onRefresh={() => mutate(() => app.RefreshSkills())}
                   onRemove={(path) => mutate(() => app.RemoveSkillPath(path))}
                 />
+                {view.skillCandidates.length > 0 && (
+                  <SkillCandidates
+                    candidates={view.skillCandidates}
+                    busy={busy}
+                    onPromote={(candidate) => void mutate(() => app.PromoteSkillCandidate(skillCandidateID(candidate)))}
+                    onReject={(candidate) => {
+                      const reason = typeof window === "undefined" ? "rejected" : window.prompt(t("caps.skillCandidateRejectPrompt"), "");
+                      if (reason != null) void mutate(() => app.RejectSkillCandidate(skillCandidateID(candidate), reason));
+                    }}
+                    onRollback={(candidate) => void mutate(() => app.RollbackPromotedSkill(skillCandidateID(candidate)))}
+                  />
+                )}
                 <div className="cap-skills-head">
                   <div className="cap-skills-head__copy">
                     <div className="cap-skills-head__title">{t("caps.skills")}</div>
@@ -333,13 +380,126 @@ function normalizeCapabilitiesView(view: CapabilitiesView | null | undefined): C
         toolList: asArray(server.toolList),
       })),
     ),
+    codeBackends: asArray(view?.codeBackends).map((backend) => ({
+      ...backend,
+      capabilities: asArray(backend.capabilities),
+      risks: asArray(backend.risks),
+      toolMapping: backend.toolMapping ?? {},
+      benchmark: backend.benchmark,
+    })),
     skills: asArray(view?.skills),
+    skillCandidates: asArray(view?.skillCandidates).map((candidate) => ({
+      ...candidate,
+      bundleIds: asArray(candidate.bundleIds),
+    })),
     skillRoots: asArray(view?.skillRoots).map((root) => ({
       ...root,
       removable: Boolean(root.removable),
       skillItems: asArray(root.skillItems),
     })),
   };
+}
+
+function CodeBackendSection({
+  backends,
+  busy,
+  benching,
+  onToggle,
+  onRetry,
+  onBenchmark,
+}: {
+  backends: CodeBackendView[];
+  busy: boolean;
+  benching: string | null;
+  onToggle: (backend: CodeBackendView, enabled: boolean) => void;
+  onRetry: (backend: CodeBackendView) => void;
+  onBenchmark: (backend: CodeBackendView) => void;
+}) {
+  const t = useT();
+  return (
+    <div className="cap-code">
+      <div className="cap-server-section__title">{t("caps.codeBackends")}</div>
+      <div className="cap-code__list">
+        {backends.map((backend) => (
+          <div className={`cap-code-card cap-code-card--${backend.health}`} key={backend.id}>
+            <div className="cap-code-card__top">
+              <div className="cap-code-card__identity">
+                <span className="cap-code-card__name">{backend.name || backend.id}</span>
+                <span className={`cap-code-card__health cap-code-card__health--${backend.health}`}>{codeBackendHealthLabel(backend.health, t)}</span>
+                {backend.default && <span className="cap-skill-badge">{t("caps.codeBackendDefault")}</span>}
+              </div>
+              <div className="cap-code-card__actions">
+                <Tooltip label={backend.enabled ? t("caps.codeBackendDisable") : t("caps.codeBackendEnable")}>
+                  <label className="cap-switch">
+                    <input type="checkbox" checked={backend.enabled} disabled={busy || backend.builtIn && backend.health === "invalid"} onChange={(e) => onToggle(backend, e.target.checked)} />
+                    <span className="cap-switch__track" />
+                  </label>
+                </Tooltip>
+                <button className="btn btn--small" disabled={busy || !backend.enabled} type="button" onClick={() => onRetry(backend)}>
+                  {t("caps.codeBackendRetry")}
+                </button>
+                <button className="btn btn--small" disabled={busy || benching === backend.id} type="button" onClick={() => onBenchmark(backend)}>
+                  {benching === backend.id ? t("caps.codeBackendBenchmarking") : t("caps.codeBackendBenchmark")}
+                </button>
+              </div>
+            </div>
+            <div className="cap-code-card__meta">
+              <span>{backend.kind}</span>
+              <span>{t("caps.codeBackendTools", { tools: backend.toolCount })}</span>
+              <span>{t("caps.codeBackendIndex", { freshness: backend.indexFreshness || "unknown" })}</span>
+            </div>
+            <TagList label={t("caps.codeBackendCapabilities")} items={backend.capabilities} />
+            <TagList label={t("caps.codeBackendRisks")} items={backend.risks} />
+            {Object.keys(backend.toolMapping ?? {}).length > 0 && (
+              <div className="cap-code-card__mapping">{t("caps.codeBackendMapping", { count: Object.keys(backend.toolMapping).length })}</div>
+            )}
+            {backend.benchmark && (
+              <div className="cap-code-card__benchmark">
+                {t("caps.codeBackendBenchmarkSummary", {
+                  relevance: `${Math.round((backend.benchmark.topKRelevance || 0) * 100)}%`,
+                  citation: `${Math.round((backend.benchmark.citationPrecision || 0) * 100)}%`,
+                  chars: backend.benchmark.tokenCharsReturned,
+                  failures: backend.benchmark.toolFailures,
+                })}
+              </div>
+            )}
+            {backend.lastError && <div className="cap-code-card__error">{backend.lastError}</div>}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function TagList({ label, items }: { label: string; items: string[] }) {
+  if (items.length === 0) return null;
+  return (
+    <div className="cap-code-card__tags">
+      <span className="cap-code-card__tag-label">{label}</span>
+      {items.map((item) => (
+        <span className="cap-code-tag" key={item}>{item}</span>
+      ))}
+    </div>
+  );
+}
+
+function needsCodeBackendRiskConfirm(backend: CodeBackendView): boolean {
+  return backend.risks.some((risk) => risk === "credential" || risk === "process");
+}
+
+function codeBackendHealthLabel(health: string, t: ReturnType<typeof useT>): string {
+  switch (health) {
+    case "available":
+      return t("caps.codeBackendAvailable");
+    case "degraded":
+      return t("caps.codeBackendDegraded");
+    case "disabled":
+      return t("caps.codeBackendDisabled");
+    case "invalid":
+      return t("caps.codeBackendInvalid");
+    default:
+      return health;
+  }
 }
 
 function normalizeBuiltInMCPUpdateStatuses(
@@ -644,6 +804,69 @@ function SkillSources({
 }
 
 const skillRootPreviewLimit = 5;
+
+function SkillCandidates({
+  candidates,
+  busy,
+  onPromote,
+  onReject,
+  onRollback,
+}: {
+  candidates: SkillCandidateView[];
+  busy: boolean;
+  onPromote: (candidate: SkillCandidateView) => void;
+  onReject: (candidate: SkillCandidateView) => void;
+  onRollback: (candidate: SkillCandidateView) => void;
+}) {
+  const t = useT();
+  return (
+    <div className="cap-candidates">
+      <div className="cap-server-section__title">{t("caps.skillCandidates")}</div>
+      <div className="cap-candidates__list">
+        {candidates.map((candidate) => {
+          const id = skillCandidateID(candidate);
+          const status = candidate.status || "pending";
+          const promotable = status === "pending" && candidate.decision === "promotable";
+          const promoted = status === "promoted";
+          return (
+            <div className={`cap-candidate cap-candidate--${status}`} key={id}>
+              <div className="cap-candidate__top">
+                <div className="cap-candidate__identity">
+                  <span className="cap-candidate__name">{candidate.skillName || id}</span>
+                  <span className="cap-skill-badge">{status}</span>
+                  {candidate.decision && <span className="cap-skill-badge">{candidate.decision}</span>}
+                </div>
+                <div className="cap-candidate__actions">
+                  <button className="btn btn--small" type="button" disabled={busy || !promotable} onClick={() => onPromote(candidate)}>
+                    {t("caps.skillCandidatePromote")}
+                  </button>
+                  <button className="btn btn--small" type="button" disabled={busy || status === "rejected"} onClick={() => onReject(candidate)}>
+                    {t("caps.skillCandidateReject")}
+                  </button>
+                  <button className="btn btn--small" type="button" disabled={busy || !promoted} onClick={() => onRollback(candidate)}>
+                    {t("caps.skillCandidateRollback")}
+                  </button>
+                </div>
+              </div>
+              {candidate.description && <div className="cap-candidate__desc">{candidate.description}</div>}
+              <div className="cap-candidate__meta">
+                <span>{t("caps.skillCandidateBundles", { count: candidate.bundleIds?.length || (candidate.bundleId ? 1 : 0) })}</span>
+                {candidate.heldOutCases != null && <span>{t("caps.skillCandidateHeldOut", { count: candidate.heldOutCases })}</span>}
+                {candidate.candidatePassRate != null && <span>{t("caps.skillCandidatePassRate", { rate: `${Math.round(candidate.candidatePassRate * 100)}%` })}</span>}
+              </div>
+              {candidate.reason && <div className="cap-candidate__reason">{candidate.reason}</div>}
+              {candidate.promotedPath && <div className="cap-candidate__path">{candidate.promotedPath}</div>}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function skillCandidateID(candidate: SkillCandidateView): string {
+  return candidate.id || candidate.candidateId || "";
+}
 
 function SkillRootSkillsList({
   skills,
@@ -1682,9 +1905,10 @@ export function MCPServersSettingsPage() {
 	const [expandedServers, setExpandedServers] = useState<Set<string>>(() => new Set());
 	const [expandedServerTools, setExpandedServerTools] = useState<Set<string>>(() => new Set());
 	const [updateStatuses, setUpdateStatuses] = useState<Record<string, BuiltInMCPUpdateStatus>>({});
+	const [benchingBackend, setBenchingBackend] = useState<string | null>(null);
 
 	const reload = useCallback(async () => {
-		setView(normalizeCapabilitiesView(await app.Capabilities().catch(() => ({ servers: [], skills: [], skillRoots: [] }))));
+		setView(normalizeCapabilitiesView(await app.Capabilities().catch(() => ({ servers: [], codeBackends: [], skills: [], skillCandidates: [], skillRoots: [] }))));
 	}, []);
 	const reloadUpdateStatuses = useCallback(async () => {
 		setUpdateStatuses(normalizeBuiltInMCPUpdateStatuses(await app.BuiltInMCPUpdateStatuses().catch(() => [])));
@@ -1730,6 +1954,30 @@ export function MCPServersSettingsPage() {
 		const ok = await mutate(() => app.UpdateBuiltInMCPServer(name));
 		await reloadUpdateStatuses();
 		return ok;
+	};
+	const toggleCodeBackend = async (backend: CodeBackendView, enabled: boolean) => {
+		if (enabled && needsCodeBackendRiskConfirm(backend) && typeof window !== "undefined" && !window.confirm(t("caps.codeBackendRiskConfirm", { risks: backend.risks.join(", ") }))) {
+			return false;
+		}
+		return mutate(() => app.SetCodeBackendEnabled(backend.id, enabled));
+	};
+	const retryCodeBackend = async (backend: CodeBackendView) => mutate(() => app.RetryCodeBackendHealth(backend.id));
+	const runCodeBackendBenchmark = async (backend: CodeBackendView) => {
+		setBusy(true);
+		setErr(null);
+		setBenchingBackend(backend.id);
+		try {
+			await app.RunCodeBackendBenchmark(backend.id);
+			await reload();
+			return true;
+		} catch (e) {
+			setErr(String((e as Error)?.message ?? e));
+			await reload();
+			return false;
+		} finally {
+			setBenchingBackend(null);
+			setBusy(false);
+		}
 	};
 
 	const serverGroups = useMemo(() => {
@@ -1796,9 +2044,19 @@ export function MCPServersSettingsPage() {
 					onConfirmMany={(names) => void mutate(() => Promise.allSettled(names.map((name) => app.RemoveMCPServer(name))))}
 				/>
 			)}
-			{view.servers.length === 0 && !adding && (
-				<div className="mem-empty">{t("caps.noServers")}</div>
-			)}
+				{view.servers.length === 0 && !adding && (
+					<div className="mem-empty">{t("caps.noServers")}</div>
+				)}
+				{view.codeBackends.length > 0 && (
+					<CodeBackendSection
+						backends={view.codeBackends}
+						busy={busy}
+						benching={benchingBackend}
+						onToggle={(backend, enabled) => void toggleCodeBackend(backend, enabled)}
+						onRetry={(backend) => void retryCodeBackend(backend)}
+						onBenchmark={(backend) => void runCodeBackendBenchmark(backend)}
+					/>
+				)}
 			{serverGroups.active.length > 0 && (
 				<div className="cap-server-section">
 					<div className="cap-server-section__title">{t("caps.availableServers")}</div>
@@ -1845,7 +2103,7 @@ export function SkillsSettingsPage() {
 	const [expandedSkills, setExpandedSkills] = useState<Set<string>>(() => new Set());
 
 	const reload = useCallback(async () => {
-		setView(normalizeCapabilitiesView(await app.Capabilities().catch(() => ({ servers: [], skills: [], skillRoots: [] }))));
+		setView(normalizeCapabilitiesView(await app.Capabilities().catch(() => ({ servers: [], codeBackends: [], skills: [], skillCandidates: [], skillRoots: [] }))));
 	}, []);
 	useEffect(() => { void reload(); }, [reload]);
 

@@ -23,7 +23,6 @@ import (
 
 	"reasonix/internal/agent"
 	"reasonix/internal/boot"
-	"reasonix/internal/builtinmcp"
 	"reasonix/internal/config"
 	"reasonix/internal/control"
 	"reasonix/internal/event"
@@ -91,6 +90,12 @@ func Run(args []string, version string) int {
 	case "codegraph":
 		configureCLIThemeFromConfigNoProbe()
 		return codegraphCommand(rest)
+	case "workflow", "workflows":
+		configureCLIThemeFromConfigNoProbe()
+		return workflowCommand(rest)
+	case "skilleval", "skill-eval":
+		configureCLIThemeFromConfigNoProbe()
+		return skillEvalCommand(rest)
 	case "doctor":
 		configureCLIThemeFromConfigNoProbe()
 		return doctorCommand(rest, version)
@@ -1832,6 +1837,6 @@ func configAutoPlanUsage() {
 
 func configReasoningLanguageUsage() {
 	fmt.Print(`Usage:
-  reasonix config reasoning-language [--local] [auto|zh|en]
+  maddog config reasoning-language [--local] [auto|zh|en]
 `)
 }

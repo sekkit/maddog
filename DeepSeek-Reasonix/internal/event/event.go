@@ -13,6 +13,7 @@ package event
 
 import (
 	"reasonix/internal/evidence"
+	"reasonix/internal/loop"
 	"reasonix/internal/nilutil"
 	"reasonix/internal/provider"
 )
@@ -96,6 +97,22 @@ const (
 	// Advisor reports an automatic advisor consultation and its guidance. Text is
 	// a compact summary; Advisor carries the structured payload for rich UIs.
 	Advisor
+	// Steer reports mid-turn user guidance queued into an active run.
+	Steer
+	// Readiness reports the pre-run workflow readiness gate result. Blocked
+	// readiness prevents the turn from starting; warnings are emitted and logged.
+	Readiness
+	// ProviderStatus reports a role-scoped provider usage/status snapshot for
+	// runtime monitors. It carries only provider/model/profile references and
+	// aggregate usage; never raw credentials or request headers.
+	ProviderStatus
+	// RunReportReady reports that a loop run report has been written and can be
+	// surfaced without reading the raw JSONL log.
+	RunReportReady
+	// MakerChecker reports the checker verdict and completion gate for a loop run.
+	MakerChecker
+	// HumanGate reports a pending or resolved human gate for a risky operation.
+	HumanGate
 )
 
 // Level classifies a Notice so sinks can style or filter it.
@@ -125,6 +142,41 @@ type AdvisorConsultation struct {
 	MaxUsesPerSession    int
 }
 
+// SkillCandidateSnapshot links a generated runtime skill event to the replay
+// bundle and candidate record that must be reviewed before promotion.
+type SkillCandidateSnapshot struct {
+	SkillName   string `json:"skillName,omitempty"`
+	BundleID    string `json:"bundleId,omitempty"`
+	CandidateID string `json:"candidateId,omitempty"`
+	Status      string `json:"status,omitempty"`
+}
+
+// ProviderStatusSnapshot describes one role-scoped provider usage/status view.
+// The token and cost fields are cumulative for Role within the current agent
+// session, while budget fields are role-specific hard-cap state where available.
+type ProviderStatusSnapshot struct {
+	Role                  string  `json:"role"`
+	Provider              string  `json:"provider,omitempty"`
+	Model                 string  `json:"model,omitempty"`
+	Status                string  `json:"status,omitempty"`
+	UpgradeReason         string  `json:"upgradeReason,omitempty"`
+	RequestCount          int     `json:"requestCount,omitempty"`
+	PromptTokens          int     `json:"promptTokens,omitempty"`
+	CompletionTokens      int     `json:"completionTokens,omitempty"`
+	TotalTokens           int     `json:"totalTokens,omitempty"`
+	CacheHitTokens        int     `json:"cacheHitTokens,omitempty"`
+	CacheMissTokens       int     `json:"cacheMissTokens,omitempty"`
+	ReasoningTokens       int     `json:"reasoningTokens,omitempty"`
+	Cost                  float64 `json:"cost,omitempty"`
+	Currency              string  `json:"currency,omitempty"`
+	RateStatus            string  `json:"rateStatus,omitempty"`
+	Balance               string  `json:"balance,omitempty"`
+	BudgetUsedTokens      int64   `json:"budgetUsedTokens,omitempty"`
+	BudgetLimitTokens     int64   `json:"budgetLimitTokens,omitempty"`
+	BudgetRemainingTokens int64   `json:"budgetRemainingTokens,omitempty"`
+	Warning               string  `json:"warning,omitempty"`
+}
+
 // Tool describes a tool call for ToolDispatch / ToolResult events. On dispatch
 // only ID/Name/Args/ReadOnly are set; on result Output/Err/Truncated are filled
 // in. Args is the raw JSON arguments — a sink compacts it for display.
@@ -145,8 +197,23 @@ type Tool struct {
 	// sub-agent's calls carry the parent `task` call's ID so a frontend can nest
 	// them under it. Empty for top-level calls.
 	ParentID string
+	// Compression describes model-facing tool output compression. Output remains
+	// the display/raw value for UI surfaces; the model may receive a compressed
+	// body recorded in the session.
+	Compression *ToolCompression
 	FileDiff
 	Profile *Profile // ToolDispatch: subagent model/effort (set for task/skill calls)
+}
+
+type ToolCompression struct {
+	Compressed      bool   `json:"compressed,omitempty"`
+	Strategy        string `json:"strategy,omitempty"`
+	RawRef          string `json:"rawRef,omitempty"`
+	RawAvailable    bool   `json:"rawAvailable,omitempty"`
+	RawError        string `json:"rawError,omitempty"`
+	OriginalBytes   int    `json:"originalBytes,omitempty"`
+	CompressedBytes int    `json:"compressedBytes,omitempty"`
+	SavedBytes      int    `json:"savedBytes,omitempty"`
 }
 
 // FileDiff is a previewed change carried on a writer tool's full ToolDispatch
@@ -237,16 +304,22 @@ type Event struct {
 	// session (Usage events only), so a frontend can show the aggregate hit-rate
 	// — which doesn't crater on a short turn or after compaction — alongside
 	// Usage's single-turn numbers.
-	SessionHit   int        // Usage: cumulative cache-hit prompt tokens this session
-	SessionMiss  int        // Usage: cumulative cache-miss prompt tokens this session
-	Level        Level      // Notice
-	Approval     Approval   // ApprovalRequest
-	Ask          Ask        // AskRequest
-	Err          error      // TurnDone: non-nil on failure
-	Compaction   Compaction // Compaction
-	Advisor      AdvisorConsultation
-	RetryAttempt int // Retrying: 1-based attempt about to be made
-	RetryMax     int // Retrying: total attempts before giving up
+	SessionHit     int        // Usage: cumulative cache-hit prompt tokens this session
+	SessionMiss    int        // Usage: cumulative cache-miss prompt tokens this session
+	Level          Level      // Notice
+	Approval       Approval   // ApprovalRequest
+	Ask            Ask        // AskRequest
+	Err            error      // TurnDone: non-nil on failure
+	Compaction     Compaction // Compaction
+	Advisor        AdvisorConsultation
+	SkillCandidate *SkillCandidateSnapshot
+	ProviderStatus ProviderStatusSnapshot
+	RunReport      *loop.RunReport
+	MakerChecker   *loop.MakerCheckerResult
+	HumanGate      *loop.HumanGateResult
+	RetryAttempt   int // Retrying: 1-based attempt about to be made
+	RetryMax       int // Retrying: total attempts before giving up
+	Readiness      *loop.ReadinessResult
 }
 
 // ReadinessAuditSink is an optional sink capability. Sinks that do not care

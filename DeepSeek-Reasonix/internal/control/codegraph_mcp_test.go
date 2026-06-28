@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"reasonix/internal/codegraph"
 	"reasonix/internal/config"
 	"reasonix/internal/plugin"
 	"reasonix/internal/tool"
@@ -42,6 +43,10 @@ func TestConnectCodegraphMCPServerForRootPinsRootAndStripsPrefix(t *testing.T) {
 	}
 	if _, ok := reg.Get("mcp__codegraph__codegraph_context"); ok {
 		t.Fatalf("raw codegraph prefix leaked into visible tool names; names=%v", reg.Names())
+	}
+	backend := codegraph.RegistryFromConfig(cfg.Codegraph, codegraph.RuntimeSnapshot{}).DefaultBackend()
+	if got := backend.ToolMapping["context"]; got != "mcp__codegraph__context" {
+		t.Fatalf("backend context tool mapping = %q, want mcp__codegraph__context", got)
 	}
 	t.Cleanup(func() {
 		c.DisconnectMCPServer("codegraph")

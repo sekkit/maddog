@@ -1,4 +1,4 @@
-// Reasonix site — vanilla interactions
+// Maddog site — vanilla interactions
 (function () {
   const motionOK = () =>
     document.body.dataset.motion === "rich" &&
@@ -144,7 +144,7 @@
   });
 
   /* refresh the Go-preview version from the published manifest between rebuilds */
-  fetch("https://dl.reasonix.io/latest/latest.json", { cache: "no-cache" })
+  fetch("https://dl.maddog.dev/latest/latest.json", { cache: "no-cache" })
     .then((r) => (r.ok ? r.json() : null))
     .then((d) => {
       const v = String((d && d.version) || "").replace(/^v/, "");

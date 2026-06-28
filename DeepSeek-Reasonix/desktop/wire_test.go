@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"reasonix/internal/event"
+	"reasonix/internal/loop"
 	"reasonix/internal/provider"
 )
 
@@ -79,10 +80,15 @@ func TestToWireToolDispatchProfile(t *testing.T) {
 }
 
 func TestToWireToolResult(t *testing.T) {
-	e := event.Event{Kind: event.ToolResult, Tool: event.Tool{ID: "1", Output: "ok", Truncated: true, DurationMs: 522}}
+	e := event.Event{Kind: event.ToolResult, Tool: event.Tool{ID: "1", Output: "ok", Truncated: true, DurationMs: 522, Compression: &event.ToolCompression{
+		Compressed: true, Strategy: "deterministic_head_tail_errors", RawRef: "tool://1/raw", OriginalBytes: 100, CompressedBytes: 40, SavedBytes: 60,
+	}}}
 	w := toWire(e)
 	if w.Tool == nil || w.Tool.Output != "ok" || !w.Tool.Truncated || w.Tool.DurationMs != 522 {
 		t.Errorf("tool result = %+v", w.Tool)
+	}
+	if w.Tool.Compression == nil || !w.Tool.Compression.Compressed || w.Tool.Compression.RawRef != "tool://1/raw" || w.Tool.Compression.SavedBytes != 60 {
+		t.Errorf("tool compression = %+v", w.Tool.Compression)
 	}
 }
 
@@ -174,9 +180,9 @@ func TestToWireSteer(t *testing.T) {
 }
 
 func TestKindNamesComplete(t *testing.T) {
-	// Advisor is the last Kind; every value through it must have a wire name,
+	// HumanGate is the last Kind; every value through it must have a wire name,
 	// or toWire emits kind:"" and the frontend reducer falls through to undefined.
-	for k := event.Kind(0); k <= event.Advisor; k++ {
+	for k := event.Kind(0); k <= event.HumanGate; k++ {
 		if kindNames[k] == "" {
 			t.Errorf("kind %d has no wire name — toWire would emit kind:\"\"", k)
 		}
@@ -204,6 +210,129 @@ func TestToWireRuntimeEvents(t *testing.T) {
 				t.Fatalf("runtime wire = %+v, want kind=%q level=%q text=%q", w, tt.kind, tt.level, tt.event.Text)
 			}
 		})
+	}
+}
+
+func TestToWireSkillGeneratedCandidatePayload(t *testing.T) {
+	w := toWire(event.Event{
+		Kind:  event.SkillGenerated,
+		Level: event.LevelInfo,
+		Text:  "generated pending skill candidate dynamic-docs",
+		SkillCandidate: &event.SkillCandidateSnapshot{
+			SkillName:   "dynamic-docs",
+			BundleID:    "bundle-123",
+			CandidateID: "cand-456",
+			Status:      "pending",
+		},
+	})
+	if w.Kind != "skill_generated" || w.SkillCandidate == nil {
+		t.Fatalf("skill generated wire = %+v", w)
+	}
+	if w.SkillCandidate.SkillName != "dynamic-docs" || w.SkillCandidate.BundleID != "bundle-123" || w.SkillCandidate.CandidateID != "cand-456" {
+		t.Fatalf("candidate payload = %+v", w.SkillCandidate)
+	}
+}
+
+func TestToWireReadiness(t *testing.T) {
+	e := event.Event{Kind: event.Readiness, Readiness: &loop.ReadinessResult{
+		Status:     loop.ReadinessBlocked,
+		TemplateID: "coding-task",
+		Blockers:   []string{"credential unavailable"},
+		Checks: []loop.ReadinessCheck{{
+			ID:            "credential_available",
+			Status:        loop.CheckBlocked,
+			CredentialEnv: "OPENAI_API_KEY",
+		}},
+	}}
+	w := toWire(e)
+	if w.Kind != "readiness" || w.Level != "warn" || w.Readiness == nil {
+		t.Fatalf("readiness wire = %+v", w)
+	}
+	if w.Readiness.Status != loop.ReadinessBlocked || w.Readiness.Checks[0].CredentialEnv != "OPENAI_API_KEY" {
+		t.Fatalf("readiness payload = %+v", w.Readiness)
+	}
+}
+
+func TestToWireMakerCheckerAndHumanGate(t *testing.T) {
+	mc := toWire(event.Event{Kind: event.MakerChecker, MakerChecker: &loop.MakerCheckerResult{
+		Mode:        loop.MakerCheckerEnforcedBeforeDone,
+		Verdict:     loop.CheckerChangesRequested,
+		CanComplete: false,
+	}})
+	if mc.Kind != "maker_checker" || mc.MakerChecker == nil || mc.MakerChecker.Verdict != loop.CheckerChangesRequested {
+		t.Fatalf("maker checker wire = %+v", mc)
+	}
+	gate := toWire(event.Event{Kind: event.HumanGate, HumanGate: &loop.HumanGateResult{
+		Kind:     loop.HumanGateGitPush,
+		Required: true,
+		Status:   "needs_human",
+	}})
+	if gate.Kind != "human_gate" || gate.HumanGate == nil || gate.HumanGate.Kind != loop.HumanGateGitPush {
+		t.Fatalf("human gate wire = %+v", gate)
+	}
+}
+
+func TestToWireProviderStatus(t *testing.T) {
+	e := event.Event{Kind: event.ProviderStatus, Level: event.LevelInfo, ProviderStatus: event.ProviderStatusSnapshot{
+		Role:                  "frontier",
+		Provider:              "anthropic-frontier",
+		Model:                 "anthropic-frontier/claude-sonnet-4",
+		Status:                "active",
+		UpgradeReason:         "2 consecutive tool failures",
+		RequestCount:          1,
+		PromptTokens:          50,
+		CompletionTokens:      7,
+		TotalTokens:           57,
+		Cost:                  0.001,
+		Currency:              "$",
+		BudgetUsedTokens:      7,
+		BudgetLimitTokens:     10,
+		BudgetRemainingTokens: 3,
+	}}
+	w := toWire(e)
+	if w.Kind != "provider_status" || w.Level != "info" || w.ProviderStatus == nil {
+		t.Fatalf("provider status wire = %+v", w)
+	}
+	if w.ProviderStatus.Role != "frontier" || w.ProviderStatus.Provider != "anthropic-frontier" || w.ProviderStatus.Model != "anthropic-frontier/claude-sonnet-4" {
+		t.Fatalf("provider status identity = %+v", w.ProviderStatus)
+	}
+	if w.ProviderStatus.TotalTokens != 57 || w.ProviderStatus.Cost != 0.001 || w.ProviderStatus.Currency != "$" {
+		t.Fatalf("provider status usage/cost = %+v", w.ProviderStatus)
+	}
+	if w.ProviderStatus.BudgetRemainingTokens != 3 || w.ProviderStatus.UpgradeReason == "" {
+		t.Fatalf("provider status budget/reason = %+v", w.ProviderStatus)
+	}
+}
+
+func TestToWireRunReportReady(t *testing.T) {
+	e := event.Event{Kind: event.RunReportReady, Level: event.LevelInfo, RunReport: &loop.RunReport{
+		RunID:       "run-1",
+		LoopID:      "coding-task",
+		TemplateID:  "coding-task",
+		Status:      "completed",
+		FinalStatus: "completed",
+		Path:        "C:/Users/Sekkit/AppData/Roaming/maddog/runs/run-1/run.jsonl",
+		ReportPath:  "C:/Users/Sekkit/AppData/Roaming/maddog/runs/run-1/report.json",
+		Events:      4,
+		Phases:      []loop.RunReportPhase{{ID: "readiness", Status: "completed"}},
+		Models:      []loop.RunReportModel{{Role: "frontier", Provider: "openai-official", Model: "gpt-5", TotalTokens: 1200, UpgradeReason: "low confidence"}},
+		Budget:      loop.RunReportBudget{UsedTokens: 1200, LimitTokens: 2000, RemainingTokens: 800, Cost: 0.42, Currency: "$"},
+		Readiness:   &loop.ReadinessResult{Status: loop.ReadinessReady, Score: 100, TemplateID: "coding-task"},
+		Checker:     &loop.MakerCheckerResult{Mode: loop.MakerCheckerEnforcedBeforeDone, Verdict: loop.CheckerApproved, CanComplete: true},
+		HumanGate:   &loop.HumanGateResult{Kind: loop.HumanGateGitPush, Required: true, Status: "pending"},
+	}}
+	w := toWire(e)
+	if w.Kind != "run_report_ready" || w.Level != "info" || w.RunReport == nil {
+		t.Fatalf("run report wire = %+v", w)
+	}
+	if w.RunReport.RunID != "run-1" || w.RunReport.Status != "completed" || w.RunReport.Events != 4 {
+		t.Fatalf("run report payload = %+v", w.RunReport)
+	}
+	if w.RunReport.ReportPath == "" || len(w.RunReport.Models) != 1 || w.RunReport.Budget.RemainingTokens != 800 {
+		t.Fatalf("run report detail missing = %+v", w.RunReport)
+	}
+	if w.RunReport.Readiness == nil || w.RunReport.Checker == nil || w.RunReport.HumanGate == nil {
+		t.Fatalf("run report gates missing = %+v", w.RunReport)
 	}
 }
 

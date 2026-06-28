@@ -36,6 +36,15 @@ func (f *fakeTurnRunner) Run(ctx context.Context, input string) error {
 	return nil
 }
 
+type fakeSkillOrchestrator struct {
+	res skill.OrchestrationResult
+	err error
+}
+
+func (f fakeSkillOrchestrator) Orchestrate(ctx context.Context, input string) (skill.OrchestrationResult, error) {
+	return f.res, f.err
+}
+
 func TestCustomCommandLookup(t *testing.T) {
 	c := New(Options{Commands: []command.Command{{Name: "review"}, {Name: "git:commit"}}})
 
@@ -59,7 +68,7 @@ func TestSkillsReflectStoreChangesAfterControllerBuild(t *testing.T) {
 	if _, ok := c.RunSkill("/hot now"); ok {
 		t.Fatal("skill should not exist before it is written")
 	}
-	writeControlSkill(t, project, "\.maddog/skills/hot/SKILL.md", "---\nname: hot\ndescription: Hot install\n---\nHot body")
+	writeControlSkill(t, project, ".maddog/skills/hot/SKILL.md", "---\nname: hot\ndescription: Hot install\n---\nHot body")
 
 	if skills := c.Skills(); len(skills) != 1 || skills[0].Name != "hot" {
 		t.Fatalf("Skills() = %+v, want newly installed hot skill", skills)
@@ -187,7 +196,7 @@ func TestSubmitRememberCommandQuickAddsMemory(t *testing.T) {
 	if len(runner.inputs) != 0 {
 		t.Fatalf("/remember should not start a model turn, inputs=%q", runner.inputs)
 	}
-	body, err := os.ReadFile(filepath.Join(dir, "AGENTS.md"))
+	body, err := os.ReadFile(filepath.Join(dir, "MADDOG.md"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -374,7 +383,7 @@ func TestRunTurnAutoPlanScoresRawPromptNotResolvedRefs(t *testing.T) {
 
 func TestRunTurnAppliesRuntimeSkillOrchestrationHint(t *testing.T) {
 	home := t.TempDir()
-	writeControlSkill(t, home, "\.maddog/skills/docs.md", "---\nname: docs\ndescription: documentation writing helper\n---\nbody")
+	writeControlSkill(t, home, ".maddog/skills/docs.md", "---\nname: docs\ndescription: documentation writing helper\n---\nbody")
 	store := skill.New(skill.Options{HomeDir: home, DisableBuiltins: true})
 	runner := &fakeTurnRunner{}
 	var generated []string
@@ -401,7 +410,7 @@ func TestRunTurnAppliesRuntimeSkillOrchestrationHint(t *testing.T) {
 
 func TestRunAppliesRuntimeSkillOrchestrationHint(t *testing.T) {
 	home := t.TempDir()
-	writeControlSkill(t, home, "\.maddog/skills/docs.md", "---\nname: docs\ndescription: documentation writing helper\n---\nbody")
+	writeControlSkill(t, home, ".maddog/skills/docs.md", "---\nname: docs\ndescription: documentation writing helper\n---\nbody")
 	store := skill.New(skill.Options{HomeDir: home, DisableBuiltins: true})
 	runner := &fakeTurnRunner{}
 	c := New(Options{
@@ -414,5 +423,36 @@ func TestRunAppliesRuntimeSkillOrchestrationHint(t *testing.T) {
 	}
 	if len(runner.inputs) != 1 || !strings.Contains(runner.inputs[0], "<runtime-skill>") {
 		t.Fatalf("headless Run should include runtime skill hint: %q", runner.inputs)
+	}
+}
+
+func TestRunTurnEmitsGeneratedSkillBundleAssociation(t *testing.T) {
+	runner := &fakeTurnRunner{}
+	var generated event.Event
+	c := New(Options{
+		Runner: runner,
+		Sink: event.FuncSink(func(e event.Event) {
+			if e.Kind == event.SkillGenerated {
+				generated = e
+			}
+		}),
+		SkillOrchestrator: fakeSkillOrchestrator{res: skill.OrchestrationResult{
+			Generated:       true,
+			Skill:           skill.Skill{Name: "dynamic-docs", Description: "Docs helper", Body: "body"},
+			Notice:          "generated pending skill candidate dynamic-docs",
+			BundleID:        "bundle-123",
+			CandidateID:     "candidate-456",
+			CandidateStatus: "pending",
+		}},
+	})
+
+	if err := c.runTurn(context.Background(), "draft docs"); err != nil {
+		t.Fatal(err)
+	}
+	if generated.Kind != event.SkillGenerated || generated.SkillCandidate == nil {
+		t.Fatalf("missing SkillGenerated payload: %+v", generated)
+	}
+	if generated.SkillCandidate.BundleID != "bundle-123" || generated.SkillCandidate.CandidateID != "candidate-456" || generated.SkillCandidate.Status != "pending" {
+		t.Fatalf("wrong candidate association: %+v", generated.SkillCandidate)
 	}
 }

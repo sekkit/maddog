@@ -145,6 +145,12 @@ func defaultTransport() *http.Transport {
 	return &http.Transport{Proxy: http.ProxyFromEnvironment}
 }
 
+// ProxyFunc exposes the resolved proxy function for callers that own their
+// transport security boundary but still need Maddog's user-facing proxy policy.
+func ProxyFunc(spec ProxySpec) (func(*http.Request) (*url.URL, error), error) {
+	return proxyFunc(spec)
+}
+
 func proxyFunc(spec ProxySpec) (func(*http.Request) (*url.URL, error), error) {
 	base, err := baseProxyFunc(spec)
 	if err != nil {

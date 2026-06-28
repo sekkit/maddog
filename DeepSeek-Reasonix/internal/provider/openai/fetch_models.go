@@ -6,10 +6,24 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"sort"
 	"strings"
 	"time"
+
+	"reasonix/internal/provider"
+	"reasonix/internal/safety"
+)
+
+type ModelFetchErrorCategory string
+
+const (
+	ModelFetchAuthFailure         ModelFetchErrorCategory = "auth_failure"
+	ModelFetchProviderUnavailable ModelFetchErrorCategory = "provider_unavailable"
+	ModelFetchEndpointMissing     ModelFetchErrorCategory = "endpoint_missing"
+	ModelFetchInvalidResponse     ModelFetchErrorCategory = "invalid_response"
+	ModelFetchRequestFailed       ModelFetchErrorCategory = "request_failed"
 )
 
 type modelFetchStatusError struct {
@@ -18,7 +32,7 @@ type modelFetchStatusError struct {
 }
 
 func (e modelFetchStatusError) Error() string {
-	return fmt.Sprintf("fetch models: status %d: %s", e.status, strings.TrimSpace(e.body))
+	return fmt.Sprintf("fetch models: %s: status %d: %s", modelFetchCategoryForStatus(e.status), e.status, strings.TrimSpace(e.body))
 }
 
 // IsModelFetchEndpointMiss reports whether a model-list request reached a
@@ -31,9 +45,49 @@ func IsModelFetchEndpointMiss(err error) bool {
 	return statusErr.status == http.StatusNotFound || statusErr.status == http.StatusMethodNotAllowed
 }
 
+func ClassifyModelFetchError(err error) ModelFetchErrorCategory {
+	if err == nil {
+		return ""
+	}
+	var statusErr modelFetchStatusError
+	if errors.As(err, &statusErr) {
+		return modelFetchCategoryForStatus(statusErr.status)
+	}
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		return ModelFetchProviderUnavailable
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return ModelFetchProviderUnavailable
+	}
+	if strings.Contains(strings.ToLower(err.Error()), "decode response") {
+		return ModelFetchInvalidResponse
+	}
+	return ModelFetchRequestFailed
+}
+
+func modelFetchCategoryForStatus(status int) ModelFetchErrorCategory {
+	switch {
+	case status == http.StatusUnauthorized || status == http.StatusForbidden:
+		return ModelFetchAuthFailure
+	case status == http.StatusNotFound || status == http.StatusMethodNotAllowed:
+		return ModelFetchEndpointMissing
+	case status == http.StatusRequestTimeout || status == http.StatusTooManyRequests || status >= 500:
+		return ModelFetchProviderUnavailable
+	default:
+		return ModelFetchRequestFailed
+	}
+}
+
 // FetchModels calls the OpenAI-compatible GET /models endpoint and returns the
 // available model IDs.
 func FetchModels(ctx context.Context, baseURL, apiKey string) ([]string, error) {
+	return FetchModelsWithAuth(ctx, baseURL, provider.AuthConfig{Type: provider.AuthTypeAPIKey, Token: apiKey}, "Authorization")
+}
+
+// FetchModelsWithAuth calls GET /models using the same auth contract as chat
+// providers, so Settings probes match the saved provider auth mode.
+func FetchModelsWithAuth(ctx context.Context, baseURL string, auth provider.AuthConfig, defaultAPIKeyHeader string) ([]string, error) {
 	cli := &http.Client{Timeout: 10 * time.Second}
 	url := strings.TrimRight(baseURL, "/")
 	if !strings.HasSuffix(url, "/models") {
@@ -44,7 +98,7 @@ func FetchModels(ctx context.Context, baseURL, apiKey string) ([]string, error) 
 	if err != nil {
 		return nil, fmt.Errorf("fetch models: build request: %w", err)
 	}
-	req.Header.Set("Authorization", "Bearer "+apiKey)
+	auth.Header(req, defaultAPIKeyHeader)
 	req.Header.Set("Accept", "application/json")
 
 	resp, err := cli.Do(req)
@@ -59,7 +113,7 @@ func FetchModels(ctx context.Context, baseURL, apiKey string) ([]string, error) 
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, modelFetchStatusError{status: resp.StatusCode, body: truncateFetchBody(string(body))}
+		return nil, modelFetchStatusError{status: resp.StatusCode, body: safety.RedactString(truncateFetchBody(string(body)))}
 	}
 
 	var result struct {

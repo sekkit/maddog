@@ -1,6 +1,7 @@
 package skill
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -8,6 +9,8 @@ import (
 	"testing"
 
 	"reasonix/internal/config"
+	"reasonix/internal/provider"
+	"reasonix/internal/skilleval"
 )
 
 func writeSkill(t *testing.T, base, rel, content string) string {
@@ -247,6 +250,7 @@ func TestBuiltinSubagentSkillsDeclareAllowedTools(t *testing.T) {
 		"explore":         {"read_file", "ls", "glob", "grep"},
 		"research":        {"read_file", "ls", "glob", "grep", "web_fetch"},
 		"review":          {"read_file", "ls", "glob", "grep", "bash"},
+		"code-review":     {"read_file", "ls", "glob", "grep"},
 		"security-review": {"read_file", "ls", "glob", "grep", "bash"},
 	}
 	for name, want := range cases {
@@ -306,6 +310,26 @@ func TestInstallCapabilityBuiltinIsInlineWithExpectedMetadata(t *testing.T) {
 	}
 	if !strings.Contains(sk.Body, "planId") {
 		t.Error("body should mention the planId echo requirement on apply=true")
+	}
+}
+
+func TestCodeReviewBuiltinReferencesDeterministicRules(t *testing.T) {
+	st := New(Options{HomeDir: t.TempDir()})
+	sk, ok := st.Read("code-review")
+	if !ok {
+		t.Fatal("code-review builtin skill must be registered")
+	}
+	if sk.Scope != ScopeBuiltin || sk.RunAs != RunSubagent {
+		t.Fatalf("code-review metadata = scope:%s runAs:%s, want builtin subagent", sk.Scope, sk.RunAs)
+	}
+	if containsString(sk.AllowedTools, "bash") {
+		t.Fatalf("code-review checker must stay read-only, got tools %v", sk.AllowedTools)
+	}
+	body := strings.ToLower(sk.Body)
+	for _, want := range []string{"deterministic rules", "secrets", "unsafe shell", "destructive sql", "diff-only fallback"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("code-review body missing %q:\n%s", want, sk.Body)
+		}
 	}
 }
 
@@ -576,22 +600,34 @@ func TestGeneratorParsesProviderMarkdownAndRetries(t *testing.T) {
 	}
 }
 
-func TestOrchestratorGeneratesValidDynamicSkillAndSkipsHighRisk(t *testing.T) {
-	st := New(Options{HomeDir: t.TempDir(), DisableBuiltins: true})
+func TestOrchestratorRecordsGeneratedSkillCandidateAndSkipsHighRisk(t *testing.T) {
+	project := t.TempDir()
+	st := New(Options{HomeDir: t.TempDir(), ProjectRoot: project, DisableBuiltins: true})
 	prov := &scriptProvider{turns: []providerTurn{{
 		text: "---\nname: dynamic-docs\ndescription: Docs helper\n---\nInspect local files and draft the requested docs.",
 	}}}
-	orch := NewOrchestrator(st, NewGenerator(prov))
+	candidates := skilleval.NewProjectStore(project)
+	orch := NewOrchestrator(st, NewGenerator(prov)).WithCandidateStore(candidates)
 
 	res, err := orch.Orchestrate(context.Background(), "draft docs for the parser")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !res.Generated || res.Skill.Name != "dynamic-docs" || !strings.Contains(res.Prompt, "run_skill") {
+	if !res.Generated || res.Skill.Name != "dynamic-docs" || res.BundleID == "" || res.CandidateID == "" || res.CandidateStatus != string(skilleval.CandidatePending) {
 		t.Fatalf("orchestration result = %+v", res)
 	}
-	if _, ok := st.Read("dynamic-docs"); !ok {
-		t.Fatal("generated skill should be injected")
+	if res.Prompt != "" {
+		t.Fatalf("generated skill should not be injected into the active prompt before promotion: %q", res.Prompt)
+	}
+	if _, ok := st.Read("dynamic-docs"); ok {
+		t.Fatal("generated skill should not be active before promotion")
+	}
+	candidate, ok, err := candidates.ReadCandidate(res.CandidateID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok || candidate.BundleID != res.BundleID || candidate.Status != skilleval.CandidatePending {
+		t.Fatalf("candidate not persisted with bundle association: %+v ok=%v", candidate, ok)
 	}
 	res, err = orch.Orchestrate(context.Background(), "rm -rf /")
 	if err != nil {

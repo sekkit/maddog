@@ -292,7 +292,7 @@ func TestRenderMCPManagerDetailCompactsConfigPath(t *testing.T) {
 		stage: mcpStageDetail,
 		name:  "github",
 		snapshot: mcpSnapshot{
-			configPath: "/Users/example/Library/Application Support/maddog/config.toml",
+			configPath: "/Users/example/Library/Application Support/maddog/profiles/very-long-profile-name/config.toml",
 			servers: []mcpServerView{{
 				Name: "github", Transport: "stdio", Status: "deferred", Configured: true,
 				Tier: "lazy", Command: "npx", Args: []string{"-y", "@modelcontextprotocol/server-github"},
@@ -305,7 +305,7 @@ func TestRenderMCPManagerDetailCompactsConfigPath(t *testing.T) {
 			t.Fatalf("detail line exceeds width 80 (%d): %q\n%s", visibleWidth(line), line, got)
 		}
 	}
-	if strings.Contains(got, "Application Support/maddog/config.toml") {
+	if strings.Contains(got, "profiles/very-long-profile-name/config.toml") {
 		t.Fatalf("long config path should be compacted:\n%s", got)
 	}
 }

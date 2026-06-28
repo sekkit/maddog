@@ -26,31 +26,43 @@ import (
 // --- read ---
 
 type ProviderView struct {
-	Name              string   `json:"name"`
-	BuiltIn           bool     `json:"builtIn"`
-	Added             bool     `json:"added"`
-	Kind              string   `json:"kind"`
-	BaseURL           string   `json:"baseUrl"`
-	Models            []string `json:"models"`
-	ModelsURL         string   `json:"modelsUrl"`
-	Default           string   `json:"default"`
-	APIKeyEnv         string   `json:"apiKeyEnv"`
-	AuthType          string   `json:"authType"`
-	AuthTokenEnv      string   `json:"authTokenEnv"`
-	AuthHeader        string   `json:"authHeader"`
-	AuthScheme        string   `json:"authScheme"`
-	IdentityEnv       string   `json:"identityEnv"`
-	IdentityFile      string   `json:"identityFile"`
-	FederationID      string   `json:"federationRuleId"`
-	Organization      string   `json:"organizationId"`
-	ServiceAcctID     string   `json:"serviceAccountId"`
-	WorkspaceID       string   `json:"workspaceId"`
-	KeySet            bool     `json:"keySet"` // the env var currently resolves to a non-empty value
-	BalanceURL        string   `json:"balanceUrl"`
-	ContextWindow     int      `json:"contextWindow"`
-	ReasoningProtocol string   `json:"reasoningProtocol"`
-	SupportedEfforts  []string `json:"supportedEfforts"`
-	DefaultEffort     string   `json:"defaultEffort"`
+	Name                  string            `json:"name"`
+	BuiltIn               bool              `json:"builtIn"`
+	Added                 bool              `json:"added"`
+	Kind                  string            `json:"kind"`
+	BaseURL               string            `json:"baseUrl"`
+	Models                []string          `json:"models"`
+	ModelsURL             string            `json:"modelsUrl"`
+	Default               string            `json:"default"`
+	APIKeyEnv             string            `json:"apiKeyEnv"`
+	AuthType              string            `json:"authType"`
+	AuthTokenEnv          string            `json:"authTokenEnv"`
+	BearerTokenEnv        string            `json:"bearerTokenEnv"`
+	AuthHeader            string            `json:"authHeader"`
+	AuthScheme            string            `json:"authScheme"`
+	IdentityEnv           string            `json:"identityEnv"`
+	IdentityFile          string            `json:"identityFile"`
+	FederationID          string            `json:"federationRuleId"`
+	Organization          string            `json:"organizationId"`
+	ServiceAcctID         string            `json:"serviceAccountId"`
+	WorkspaceID           string            `json:"workspaceId"`
+	OfficialAuthProfileID string            `json:"officialAuthProfileId"`
+	KeySet                bool              `json:"keySet"` // the env var currently resolves to a non-empty value
+	BalanceURL            string            `json:"balanceUrl"`
+	ContextWindow         int               `json:"contextWindow"`
+	ReasoningProtocol     string            `json:"reasoningProtocol"`
+	SupportedEfforts      []string          `json:"supportedEfforts"`
+	DefaultEffort         string            `json:"defaultEffort"`
+	Roles                 []string          `json:"roles"`
+	RoleModels            map[string]string `json:"roleModels"`
+	AuthMode              string            `json:"authMode"`
+	CredentialEnv         string            `json:"credentialEnv"`
+	CredentialStatus      string            `json:"credentialStatus"`
+	Gateway               string            `json:"gateway"`
+	FrontierEligible      bool              `json:"frontierEligible"`
+	SmallModelEligible    bool              `json:"smallModelEligible"`
+	BudgetEligible        bool              `json:"budgetEligible"`
+	Warnings              []string          `json:"warnings"`
 }
 
 type PermissionsView struct {
@@ -146,26 +158,37 @@ type BotSettingsView struct {
 
 // SettingsView is the whole Settings panel payload.
 type SettingsView struct {
-	DefaultModel      string          `json:"defaultModel"`
-	PlannerModel      string          `json:"plannerModel"`
-	SubagentModel     string          `json:"subagentModel"`
-	SubagentEffort    string          `json:"subagentEffort"`
-	FrontierModel     string          `json:"frontierModel"`
-	UpgradeEnabled    bool            `json:"upgradeEnabled"`
-	UpgradeThreshold  int             `json:"upgradeThreshold"`
-	FrontierBudget    int64           `json:"frontierBudget"`
-	AutoPlan          string          `json:"autoPlan"`
-	Providers         []ProviderView  `json:"providers"`
-	OfficialProviders []ProviderView  `json:"officialProviders"`
-	Permissions       PermissionsView `json:"permissions"`
-	Sandbox           SandboxView     `json:"sandbox"`
-	Network           NetworkView     `json:"network"`
-	Agent             AgentView       `json:"agent"`
-	DesktopLanguage   string          `json:"desktopLanguage"`
-	DesktopTheme      string          `json:"desktopTheme"`
-	DesktopThemeStyle string          `json:"desktopThemeStyle"`
-	CloseBehavior     string          `json:"closeBehavior"`
-	ConfigPath        string          `json:"configPath"`
+	DefaultModel            string                    `json:"defaultModel"`
+	PlannerModel            string                    `json:"plannerModel"`
+	SubagentModel           string                    `json:"subagentModel"`
+	SubagentEffort          string                    `json:"subagentEffort"`
+	FrontierModel           string                    `json:"frontierModel"`
+	UpgradeEnabled          bool                      `json:"upgradeEnabled"`
+	UpgradeThreshold        int                       `json:"upgradeThreshold"`
+	FrontierBudget          int64                     `json:"frontierBudget"`
+	AutoPlan                string                    `json:"autoPlan"`
+	ContextPolicy           string                    `json:"contextPolicy"`
+	Providers               []ProviderView            `json:"providers"`
+	OfficialProviders       []ProviderView            `json:"officialProviders"`
+	ProviderProfileWarnings []ProviderRoleWarningView `json:"providerProfileWarnings"`
+	Permissions             PermissionsView           `json:"permissions"`
+	Sandbox                 SandboxView               `json:"sandbox"`
+	Network                 NetworkView               `json:"network"`
+	Agent                   AgentView                 `json:"agent"`
+	DesktopLanguage         string                    `json:"desktopLanguage"`
+	DesktopLayoutStyle      string                    `json:"desktopLayoutStyle"`
+	DesktopTheme            string                    `json:"desktopTheme"`
+	DesktopThemeStyle       string                    `json:"desktopThemeStyle"`
+	CloseBehavior           string                    `json:"closeBehavior"`
+	DisplayMode             string                    `json:"displayMode"`
+	StatusBarStyle          string                    `json:"statusBarStyle"`
+	StatusBarItems          []string                  `json:"statusBarItems"`
+	CheckUpdates            bool                      `json:"checkUpdates"`
+	Telemetry               bool                      `json:"telemetry"`
+	Metrics                 bool                      `json:"metrics"`
+	ExpandThinking          bool                      `json:"expandThinking"`
+	Bot                     BotSettingsView           `json:"bot"`
+	ConfigPath              string                    `json:"configPath"`
 	// ProviderKinds lists the provider implementations the kernel actually
 	// registered (provider.Kinds()), so the editor's "kind" picker offers only
 	// kinds that resolve — selecting an unregistered one would fail the rebuild.
@@ -176,6 +199,12 @@ type SettingsView struct {
 	AutoApproveTools bool `json:"autoApproveTools"`
 	// Bypass is the legacy JSON key for the same live state.
 	Bypass bool `json:"bypass"`
+}
+
+type ProviderRoleWarningView struct {
+	Role    string `json:"role"`
+	Ref     string `json:"ref"`
+	Message string `json:"message"`
 }
 
 func nonNil(s []string) []string {
@@ -274,28 +303,62 @@ func removeProviderAccess(c *config.Config, names ...string) {
 	c.Desktop.ProviderAccess = out
 }
 
-func providerViewFromEntry(p config.ProviderEntry, builtIn, added bool) ProviderView {
-	return ProviderView{
+func providerViewFromEntry(p config.ProviderEntry, builtIn, added bool, profile *config.ProviderProfile) ProviderView {
+	authTokenEnv := strings.TrimSpace(p.AuthTokenEnv)
+	if strings.TrimSpace(p.BearerTokenEnv) != "" {
+		authTokenEnv = strings.TrimSpace(p.BearerTokenEnv)
+	}
+	view := ProviderView{
 		Name: p.Name, BuiltIn: builtIn, Added: added, Kind: p.Kind, BaseURL: p.BaseURL,
 		Models: nonNil(p.ChatModelList()), ModelsURL: p.ModelsURL, Default: p.DefaultModel(),
-		APIKeyEnv:         p.APIKeyEnv,
-		AuthType:          p.AuthType,
-		AuthTokenEnv:      p.AuthTokenEnv,
-		AuthHeader:        p.AuthHeader,
-		AuthScheme:        p.AuthScheme,
-		IdentityEnv:       p.IdentityEnv,
-		IdentityFile:      p.IdentityFile,
-		FederationID:      p.FederationID,
-		Organization:      p.Organization,
-		ServiceAcctID:     p.ServiceAcctID,
-		WorkspaceID:       p.WorkspaceID,
-		KeySet:            p.Configured(),
-		BalanceURL:        p.BalanceURL,
-		ContextWindow:     p.ContextWindow,
-		ReasoningProtocol: p.ReasoningProtocol,
-		SupportedEfforts:  nonNil(p.SupportedEfforts),
-		DefaultEffort:     p.DefaultEffort,
+		APIKeyEnv:             p.APIKeyEnv,
+		AuthType:              p.AuthType,
+		AuthTokenEnv:          authTokenEnv,
+		BearerTokenEnv:        p.BearerTokenEnv,
+		AuthHeader:            p.AuthHeader,
+		AuthScheme:            p.AuthScheme,
+		IdentityEnv:           p.IdentityEnv,
+		IdentityFile:          p.IdentityFile,
+		FederationID:          p.FederationID,
+		Organization:          p.Organization,
+		ServiceAcctID:         p.ServiceAcctID,
+		WorkspaceID:           p.WorkspaceID,
+		OfficialAuthProfileID: p.OfficialAuthProfileID,
+		KeySet:                p.Configured(),
+		BalanceURL:            p.BalanceURL,
+		ContextWindow:         p.ContextWindow,
+		ReasoningProtocol:     p.ReasoningProtocol,
+		SupportedEfforts:      nonNil(p.SupportedEfforts),
+		DefaultEffort:         p.DefaultEffort,
 	}
+	if profile != nil {
+		view.Roles = nonNil(profile.Roles)
+		view.RoleModels = cloneStringMap(profile.RoleModels)
+		view.AuthMode = profile.AuthMode
+		view.CredentialEnv = profile.CredentialEnv
+		view.OfficialAuthProfileID = profile.OfficialAuthProfileID
+		view.CredentialStatus = profile.CredentialStatus
+		view.Gateway = profile.Gateway
+		view.FrontierEligible = profile.FrontierEligible
+		view.SmallModelEligible = profile.SmallModelEligible
+		view.BudgetEligible = profile.BudgetEligible
+		view.Warnings = nonNil(profile.Warnings)
+	} else {
+		view.Roles = []string{}
+		view.RoleModels = map[string]string{}
+		view.AuthMode = p.NormalizedAuthType()
+		view.CredentialEnv = p.AuthEnvName()
+		if p.Configured() {
+			view.CredentialStatus = config.CredentialConfigured
+		} else if view.CredentialEnv == "" {
+			view.CredentialStatus = config.CredentialNotConfigured
+		} else {
+			view.CredentialStatus = config.CredentialMissing
+		}
+		view.Gateway = ""
+		view.Warnings = []string{}
+	}
+	return view
 }
 
 func officialProviderViews(added map[string]bool) []ProviderView {
@@ -306,7 +369,7 @@ func officialProviderViews(added map[string]bool) []ProviderView {
 			continue
 		}
 		for _, entry := range entries {
-			out = append(out, providerViewFromEntry(entry, true, added[entry.Name]))
+			out = append(out, providerViewFromEntry(entry, true, added[entry.Name], nil))
 		}
 	}
 	return out
@@ -348,6 +411,7 @@ func (a *App) Settings() SettingsView {
 			Agent:              AgentView{PlannerMaxSteps: 12, ColdResumePrune: true, ReasoningLanguage: "auto"},
 			Bot:                botSettingsView(config.BotConfig{}),
 			AutoPlan:           "off",
+			ContextPolicy:      "auto",
 			DesktopLayoutStyle: "classic",
 			DesktopTheme:       "light",
 			DesktopThemeStyle:  "graphite",
@@ -380,6 +444,7 @@ func (a *App) Settings() SettingsView {
 		UpgradeThreshold:  cfg.Agent.UpgradeThreshold,
 		FrontierBudget:    cfg.Agent.FrontierBudget,
 		AutoPlan:          desktopAutoPlanMode(cfg.Agent.AutoPlan),
+		ContextPolicy:     cfg.ContextPolicy(),
 		Providers:         []ProviderView{},
 		OfficialProviders: []ProviderView{},
 		Permissions: PermissionsView{
@@ -426,11 +491,38 @@ func (a *App) Settings() SettingsView {
 	}
 	added := providerAccessSet(cfg.Desktop.ProviderAccess)
 	v.OfficialProviders = officialProviderViews(officialProviderAddedSet(cfg))
+	profileSnapshot := cfg.ProviderProfiles()
+	profiles := providerProfileMap(profileSnapshot.Profiles)
+	v.ProviderProfileWarnings = providerRoleWarningViews(profileSnapshot.Warnings)
 	for i := range cfg.Providers {
 		p := &cfg.Providers[i]
-		v.Providers = append(v.Providers, providerViewFromEntry(*p, isOfficialBuiltInProvider(*p), added[p.Name]))
+		v.Providers = append(v.Providers, providerViewFromEntry(*p, isOfficialBuiltInProvider(*p), added[p.Name], profiles[p.Name]))
 	}
 	return v
+}
+
+func cloneStringMap(in map[string]string) map[string]string {
+	out := map[string]string{}
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
+}
+
+func providerProfileMap(profiles []config.ProviderProfile) map[string]*config.ProviderProfile {
+	out := map[string]*config.ProviderProfile{}
+	for i := range profiles {
+		out[profiles[i].Name] = &profiles[i]
+	}
+	return out
+}
+
+func providerRoleWarningViews(warnings []config.ProviderRoleWarning) []ProviderRoleWarningView {
+	out := make([]ProviderRoleWarningView, 0, len(warnings))
+	for _, warning := range warnings {
+		out = append(out, ProviderRoleWarningView{Role: warning.Role, Ref: warning.Ref, Message: warning.Message})
+	}
+	return out
 }
 
 func botSettingsView(b config.BotConfig) BotSettingsView {
@@ -994,11 +1086,17 @@ func (a *App) SaveProvider(p ProviderView) error {
 		e.ModelsURL = p.ModelsURL
 		e.APIKeyEnv = p.APIKeyEnv
 		e.AuthType = p.AuthType
+		bearerTokenEnv := strings.TrimSpace(p.BearerTokenEnv)
+		if bearerTokenEnv == "" {
+			bearerTokenEnv = strings.TrimSpace(p.AuthTokenEnv)
+		}
+		e.BearerTokenEnv = bearerTokenEnv
 		e.AuthTokenEnv = p.AuthTokenEnv
 		e.AuthHeader = p.AuthHeader
 		e.AuthScheme = p.AuthScheme
 		e.IdentityEnv = p.IdentityEnv
 		e.IdentityFile = p.IdentityFile
+		e.OfficialAuthProfileID = strings.TrimSpace(p.OfficialAuthProfileID)
 		e.FederationID = p.FederationID
 		e.Organization = p.Organization
 		e.ServiceAcctID = p.ServiceAcctID
@@ -1057,17 +1155,24 @@ func (a *App) AddOfficialProviderAccess(kind, key string) error {
 // endpoint and returns the available model IDs. This is a settings-only helper:
 // it never touches chat request serialization or provider-visible prompt data.
 func (a *App) FetchProviderModels(p ProviderView) ([]string, error) {
+	bearerTokenEnv := strings.TrimSpace(p.BearerTokenEnv)
+	if bearerTokenEnv == "" {
+		bearerTokenEnv = strings.TrimSpace(p.AuthTokenEnv)
+	}
 	e := config.ProviderEntry{
-		Name:         p.Name,
-		BaseURL:      p.BaseURL,
-		ModelsURL:    p.ModelsURL,
-		APIKeyEnv:    p.APIKeyEnv,
-		AuthType:     p.AuthType,
-		AuthTokenEnv: p.AuthTokenEnv,
-		AuthHeader:   p.AuthHeader,
-		AuthScheme:   p.AuthScheme,
-		IdentityEnv:  p.IdentityEnv,
-		IdentityFile: p.IdentityFile,
+		Name:                  p.Name,
+		Kind:                  p.Kind,
+		BaseURL:               p.BaseURL,
+		ModelsURL:             p.ModelsURL,
+		APIKeyEnv:             p.APIKeyEnv,
+		AuthType:              p.AuthType,
+		BearerTokenEnv:        bearerTokenEnv,
+		AuthTokenEnv:          p.AuthTokenEnv,
+		AuthHeader:            p.AuthHeader,
+		AuthScheme:            p.AuthScheme,
+		IdentityEnv:           p.IdentityEnv,
+		IdentityFile:          p.IdentityFile,
+		OfficialAuthProfileID: p.OfficialAuthProfileID,
 	}
 	ctx, cancel := context.WithTimeout(a.reqCtx(), 15*time.Second)
 	defer cancel()
@@ -1571,6 +1676,10 @@ func (a *App) SetAgentParams(temperature float64, maxSteps int, plannerMaxSteps 
 
 func (a *App) SetColdResumePrune(enabled bool) error {
 	return a.applyConfigChange(func(c *config.Config) error { return c.SetColdResumePrune(enabled) })
+}
+
+func (a *App) SetContextPolicy(mode string) error {
+	return a.applyConfigChange(func(c *config.Config) error { return c.SetContextPolicy(mode) })
 }
 
 func (a *App) SetReasoningLanguage(lang string) error {

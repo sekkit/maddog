@@ -29,6 +29,22 @@ function fmtTokens(n: number): string {
   return String(n);
 }
 
+function fmtBytes(n?: number): string {
+  if (!n || n <= 0) return "-";
+  if (n >= 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+  if (n >= 1024) return `${Math.round(n / 1024)} KB`;
+  return `${Math.round(n)} B`;
+}
+
+export function contextCompressionDisplay(
+  compression?: Pick<NonNullable<ContextInfo["compression"]>, "savedBytes" | "savingsRatio"> | null,
+): string {
+  const savedBytes = compression?.savedBytes ?? 0;
+  if (savedBytes <= 0) return "-";
+  const ratio = compression?.savingsRatio ? Math.round(compression.savingsRatio * 100) : 0;
+  return `${fmtBytes(savedBytes)} · ${ratio}%`;
+}
+
 function fmtTime(ms?: number): string {
   if (!ms) return "";
   return new Date(ms).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
@@ -229,6 +245,7 @@ export function ContextPanel({
 
   const usagePct = windowTokens > 0 ? Math.min(100, Math.round((usedTokens / windowTokens) * 100)) : 0;
   const compactPct = context?.compactRatio ? Math.round(context.compactRatio * 100) : 0;
+  const compressionDisplay = contextCompressionDisplay(context?.compression);
   const cachePct = cacheHitTokens + cacheMissTokens > 0
     ? Math.round((cacheHitTokens / (cacheHitTokens + cacheMissTokens)) * 100)
     : 0;
@@ -291,6 +308,7 @@ export function ContextPanel({
             <div className="context-panel__stats">
               <MetricCard label={t("context.time")} value={fmtDuration(elapsed, t)} />
               <MetricCard label={t("context.requests")} value={requestCount > 0 ? String(requestCount) : "-"} />
+              <MetricCard label={t("context.compressionSaved")} value={compressionDisplay} tone="accent" />
               <MetricCard label={t("context.sessionTokens")} value={totalTokens > 0 ? totalTokens.toLocaleString() : "-"} wide />
             </div>
           </section>

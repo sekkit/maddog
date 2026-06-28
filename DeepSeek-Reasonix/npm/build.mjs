@@ -45,7 +45,7 @@ for (const t of TARGETS) {
       `-s -w -X main.version=${tag}`,
       "-o",
       join(dir, "bin", exe),
-      "./cmd/reasonix",
+      "./cmd/maddog",
     ],
     {
       cwd: ROOT,

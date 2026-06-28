@@ -26,6 +26,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"reasonix/internal/netclient"
@@ -96,15 +97,17 @@ func New(cfg provider.Config) (provider.Provider, error) {
 		root = defaultBaseURL
 	}
 	return &client{
-		name:     name,
-		apiKey:   cfg.APIKey,
-		keyEnv:   keyEnv,
-		auth:     auth,
-		baseURL:  strings.TrimRight(baseURL, "/"),
-		model:    cfg.Model,
-		thinking: thinking,
-		effort:   effort,
-		http:     httpClient, // no overall timeout; lifecycle is ctx-driven
+		name:        name,
+		apiKey:      cfg.APIKey,
+		keyEnv:      keyEnv,
+		auth:        auth,
+		baseURL:     root,
+		model:       cfg.Model,
+		thinking:    thinking,
+		vision:      vision,
+		effort:      effort,
+		http:        httpClient, // no overall timeout; lifecycle is ctx-driven
+		idleTimeout: defaultStreamIdleTimeout,
 	}, nil
 }
 
@@ -114,17 +117,20 @@ func newHTTPClient(cfg provider.Config) (*http.Client, error) {
 }
 
 type client struct {
-	name     string
-	apiKey   string
-	keyEnv   string // api_key_env name, surfaced in auth errors
-	auth     provider.AuthConfig
-	baseURL  string
-	model    string
-	thinking string // "adaptive" enables extended thinking; "" = off (config-driven)
-	effort   string // output_config.effort: low|medium|high|xhigh|max; "" = provider default
-	http     *http.Client
-	authMu   sync.Mutex
-	authExp  time.Time
+	name        string
+	apiKey      string
+	keyEnv      string // api_key_env name, surfaced in auth errors
+	auth        provider.AuthConfig
+	baseURL     string
+	model       string
+	thinking    string // "adaptive" enables extended thinking; "" = off (config-driven)
+	vision      bool
+	effort      string // output_config.effort: low|medium|high|xhigh|max; "" = provider default
+	http        *http.Client
+	authMu      sync.Mutex
+	authExp     time.Time
+	idleTimeout time.Duration
+	authed      atomic.Bool
 }
 
 func (c *client) Name() string { return c.name }
@@ -684,6 +690,7 @@ type contentBlock struct {
 	Input        json.RawMessage `json:"input,omitempty"`       // tool_use
 	ToolUseID    string          `json:"tool_use_id,omitempty"` // tool_result
 	Content      any             `json:"content,omitempty"`     // tool_result / server tool result
+	Source       *imageSource    `json:"source,omitempty"`      // image
 	CacheControl *cacheControl   `json:"cache_control,omitempty"`
 }
 

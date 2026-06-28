@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"reasonix/internal/codegraph"
 	"reasonix/internal/config"
 )
 
@@ -79,6 +80,43 @@ func TestCollectReportRedactsSecrets(t *testing.T) {
 	}
 }
 
+func TestCollectReportIncludesAuthModeAndOfficialProfileWithoutToken(t *testing.T) {
+	t.Setenv("OPENAI_ACCESS_TOKEN", "sk-official-secret")
+
+	cfg := config.Default()
+	cfg.DefaultModel = "openai-official"
+	cfg.Providers = []config.ProviderEntry{{
+		Name:                  "openai-official",
+		Kind:                  "openai",
+		BaseURL:               "https://api.openai.com/v1",
+		Model:                 "gpt-5",
+		AuthType:              "official_auth",
+		BearerTokenEnv:        "OPENAI_ACCESS_TOKEN",
+		OfficialAuthProfileID: "openai-desktop",
+	}}
+
+	report := Collect(Options{Version: "test-version", Config: cfg})
+	if len(report.Providers) != 1 {
+		t.Fatalf("providers = %+v", report.Providers)
+	}
+	p := report.Providers[0]
+	if p.AuthMode != "official_auth" || p.CredentialEnv != "OPENAI_ACCESS_TOKEN" || p.OfficialAuthProfileID != "openai-desktop" {
+		t.Fatalf("provider auth diagnostics = %+v", p)
+	}
+	text := RenderText(report)
+	raw, err := json.Marshal(report)
+	if err != nil {
+		t.Fatal(err)
+	}
+	combined := text + "\n" + string(raw)
+	if !strings.Contains(combined, "official_auth") || !strings.Contains(combined, "openai-desktop") {
+		t.Fatalf("doctor report missing auth diagnostics:\n%s", combined)
+	}
+	if strings.Contains(combined, "sk-official-secret") {
+		t.Fatalf("doctor report leaked official token:\n%s", combined)
+	}
+}
+
 func TestCollectReportDoesNotRequireAPIKey(t *testing.T) {
 	t.Setenv("DEEPSEEK_API_KEY", "")
 
@@ -123,5 +161,57 @@ func TestRenderTextFlagsInactiveSandbox(t *testing.T) {
 	active := RenderText(Report{Sandbox: SandboxReport{Bash: "enforce", Available: true}})
 	if strings.Contains(active, "inactive") {
 		t.Fatalf("enforce with an OS sandbox should not be flagged inactive:\n%s", active)
+	}
+}
+
+func TestCollectReportIncludesRecentCodeintelBenchmarkSummary(t *testing.T) {
+	configRoot := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", configRoot)
+	t.Setenv("APPDATA", configRoot)
+
+	report := codegraph.BenchmarkReport{
+		GeneratedAt: "2026-06-28T09:00:00Z",
+		Backends: []codegraph.BackendBenchmarkReport{{
+			BackendID:          "builtin-codegraph",
+			BackendName:        "CodeGraph",
+			Health:             codegraph.BackendHealthAvailable,
+			TopKRelevance:      0.75,
+			ToolFailures:       1,
+			Unsupported:        2,
+			TokenCharsReturned: 128,
+		}},
+	}
+	path, err := codegraph.WriteLatestBenchmarkReport(config.CacheDir(), report)
+	if err != nil {
+		t.Fatalf("WriteLatestBenchmarkReport: %v", err)
+	}
+
+	got := Collect(Options{Version: "bench-test", Config: config.Default()})
+	if got.Codegraph.RecentBench == nil {
+		t.Fatalf("recent benchmark summary missing: %+v", got.Codegraph)
+	}
+	if got.Codegraph.RecentBench.Path == "" || strings.Contains(got.Codegraph.RecentBench.Path, configRoot) {
+		t.Fatalf("recent benchmark path should be present and redacted, got %+v (raw path %s)", got.Codegraph.RecentBench, path)
+	}
+	if len(got.Codegraph.RecentBench.Backends) != 1 || got.Codegraph.RecentBench.Backends[0].BackendID != "builtin-codegraph" {
+		t.Fatalf("recent benchmark backends = %+v", got.Codegraph.RecentBench.Backends)
+	}
+	text := RenderText(got)
+	if !strings.Contains(text, "recent bench") || !strings.Contains(text, "builtin-codegraph") || !strings.Contains(text, "failures:1") {
+		t.Fatalf("text report should surface recent bench summary:\n%s", text)
+	}
+}
+
+func TestCollectReportIncludesHybridStoreSpikeAssessment(t *testing.T) {
+	got := Collect(Options{Version: "hybrid-test", Config: config.Default()})
+	if got.Codegraph.HybridStoreSpike == nil {
+		t.Fatalf("hybrid store spike missing: %+v", got.Codegraph)
+	}
+	if got.Codegraph.HybridStoreSpike.CandidateID != "zvec" || got.Codegraph.HybridStoreSpike.DefaultEnabled {
+		t.Fatalf("hybrid store spike should be zvec and default-off: %+v", got.Codegraph.HybridStoreSpike)
+	}
+	text := RenderText(got)
+	if !strings.Contains(text, "hybrid store") || !strings.Contains(text, "zvec") || !strings.Contains(text, "default:false") {
+		t.Fatalf("text report should surface hybrid store spike:\n%s", text)
 	}
 }

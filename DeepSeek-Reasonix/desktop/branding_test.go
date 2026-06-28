@@ -21,10 +21,10 @@ func TestWailsDevBinaryNameIsMaddog(t *testing.T) {
 		t.Fatalf("parse wails.json: %v", err)
 	}
 
-	if cfg.OutputFilename != "maddog" {
-		t.Fatalf("outputfilename = %q, want maddog so wails dev emits maddog-dev.exe", cfg.OutputFilename)
+	if cfg.OutputFilename != "maddog-dev" {
+		t.Fatalf("outputfilename = %q, want maddog-dev so Wails emits maddog-dev.exe", cfg.OutputFilename)
 	}
-	if got := cfg.OutputFilename + "-dev.exe"; got != "maddog-dev.exe" {
+	if got := cfg.OutputFilename + ".exe"; got != "maddog-dev.exe" {
 		t.Fatalf("derived dev exe = %q, want maddog-dev.exe", got)
 	}
 	if strings.Contains(strings.ToLower(cfg.Name), "reasonix") {

@@ -29,7 +29,7 @@ type GatewayConfig struct {
 	Enabled            map[Platform]bool
 	Debounce           time.Duration
 	OnInbound          func(InboundMessage)
-	// OnSessionReady persists the concrete Reasonix session ID after the bot
+	// OnSessionReady persists the concrete Maddog session ID after the bot
 	// has created or reused the controller for an inbound remote.
 	OnSessionReady func(InboundMessage, string) error
 	// OnToolApprovalModeChange persists a remote IM request such as /yolo on.
@@ -63,7 +63,7 @@ type AllowlistConfig struct {
 	Groups   map[Platform][]string
 }
 
-// BotGateway 是 reasonix bot 消息网关，管理 Controller 生命周期、session 并发、
+// BotGateway 是 Maddog bot 消息网关，管理 Controller 生命周期、session 并发、
 // 事件渲染和平台适配器。
 type BotGateway struct {
 	cfg      GatewayConfig

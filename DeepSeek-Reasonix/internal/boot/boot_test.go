@@ -24,6 +24,7 @@ import (
 	"reasonix/internal/builtinmcp"
 	"reasonix/internal/codegraph"
 	"reasonix/internal/config"
+	ctxcompress "reasonix/internal/context"
 	"reasonix/internal/event"
 	"reasonix/internal/memory"
 	"reasonix/internal/netclient"
@@ -89,12 +90,36 @@ api_key_env = "REASONIX_TEST_KEY_UNSET"
 	}
 }
 
+func TestContextCompressionPolicyControlsCompressorAndRawStore(t *testing.T) {
+	if compressor, store := contextCompressionForPolicy("off", t.TempDir()); compressor != nil || store != nil {
+		t.Fatalf("off policy = compressor:%T store:%T, want nil/nil", compressor, store)
+	}
+
+	sessionDir := t.TempDir()
+	compressor, store := contextCompressionForPolicy("aggressive", sessionDir)
+	if compressor == nil || store == nil {
+		t.Fatalf("aggressive policy did not create compressor/store")
+	}
+	raw := "HEAD\n" + strings.Repeat("noise\n", 900) + "TAIL"
+	got := compressor.Compress(ctxcompress.ToolOutput{Tool: "read_file", CallID: "policy-raw", Output: raw})
+	if !got.Compressed || !got.RawAvailable || !strings.HasPrefix(got.RawRef, "raw://tool-output/") {
+		t.Fatalf("aggressive compression = %+v", got)
+	}
+	stored, err := store.Get(got.RawRef)
+	if err != nil {
+		t.Fatalf("raw store Get: %v", err)
+	}
+	if stored != raw {
+		t.Fatalf("stored raw mismatch")
+	}
+}
+
 func TestBuildRegistersUsableHistoryAndMemoryRetrievalTools(t *testing.T) {
 	isolateConfigHome(t)
 	dir := robustTempDir(t)
 	t.Chdir(dir)
 
-	writeFile(t, dir, "reasonix.toml", `
+	writeFile(t, dir, config.ProjectConfigFilename, `
 default_model = "test-model"
 
 [codegraph]
@@ -102,6 +127,9 @@ enabled = false
 
 [agent]
 system_prompt = "BASE"
+
+[skills]
+runtime_orchestration = false
 
 [[providers]]
 name = "test-model"
@@ -328,7 +356,7 @@ func TestBuildSubagentSkillFailedContinuationPersistsTranscript(t *testing.T) {
 	registerBootSubagentTestProvider()
 	prov := &bootSubagentTestProvider{}
 	setBootSubagentTestProvider(t, prov)
-	writeFile(t, dir, "reasonix.toml", `
+	writeFile(t, dir, config.ProjectConfigFilename, `
 default_model = "test-model"
 
 [codegraph]
@@ -389,7 +417,7 @@ func TestBuildSubagentStoreHonorsSessionDirOverride(t *testing.T) {
 	registerBootSubagentTestProvider()
 	prov := &bootSubagentTestProvider{}
 	setBootSubagentTestProvider(t, prov)
-	writeFile(t, dir, "reasonix.toml", `
+	writeFile(t, dir, config.ProjectConfigFilename, `
 default_model = "test-model"
 
 [codegraph]
@@ -439,7 +467,7 @@ func TestBuildSubagentSkillUsesLiveReasoningLanguage(t *testing.T) {
 	registerBootSubagentTestProvider()
 	prov := &bootSubagentTestProvider{}
 	setBootSubagentTestProvider(t, prov)
-	writeFile(t, dir, "reasonix.toml", `
+	writeFile(t, dir, config.ProjectConfigFilename, `
 default_model = "test-model"
 
 [codegraph]
@@ -606,7 +634,7 @@ func TestBuildHeadlessRunRunsTaskSubagentWithoutSessionPath(t *testing.T) {
 	registerHeadlessTaskTestProvider()
 	prov := &headlessTaskTestProvider{}
 	setHeadlessTaskTestProvider(t, prov)
-	writeFile(t, dir, "reasonix.toml", `
+	writeFile(t, dir, config.ProjectConfigFilename, `
 default_model = "test-model"
 
 [codegraph]
@@ -803,7 +831,7 @@ func TestBuildHonorsSessionDirOverride(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
 	t.Setenv("AppData", filepath.Join(home, "AppData"))
 	t.Chdir(dir)
-	writeFile(t, dir, "reasonix.toml", `
+	writeFile(t, dir, config.ProjectConfigFilename, `
 default_model = "test-model"
 
 [codegraph]
@@ -889,7 +917,7 @@ func TestBuildTokenFullMatchesDefaultRequestPrefix(t *testing.T) {
 	dir := robustTempDir(t)
 	t.Chdir(dir)
 
-	writeFile(t, dir, "reasonix.toml", `
+	writeFile(t, dir, config.ProjectConfigFilename, `
 default_model = "test-model"
 
 [codegraph]
@@ -898,12 +926,15 @@ enabled = false
 [agent]
 system_prompt = "BASE"
 
+[skills]
+runtime_orchestration = false
+
 [[providers]]
 name = "test-model"
 kind = "boot-token-profile-test"
 model = "x"
 `)
-	writeFile(t, dir, ".reasonix/skills/projskill.md", "---\ndescription: a project skill\n---\nplaybook")
+	writeFile(t, dir, ".maddog/skills/projskill.md", "---\ndescription: a project skill\n---\nplaybook")
 
 	defaultReq := firstTokenProfileRequest(t, "")
 	fullReq := firstTokenProfileRequest(t, TokenModeFull)
@@ -936,7 +967,7 @@ func TestBuildTokenEconomyStartsWithLeanToolSurface(t *testing.T) {
 	registerBootTokenProfileTestProvider()
 	prov := testutil.NewMock("token-economy", testutil.Turn{Text: "done"})
 	setBootTokenProfileTestProvider(t, prov)
-	writeFile(t, dir, "reasonix.toml", `
+	writeFile(t, dir, config.ProjectConfigFilename, `
 default_model = "test-model"
 
 [codegraph]
@@ -944,6 +975,9 @@ enabled = false
 
 [agent]
 system_prompt = "BASE"
+
+[skills]
+runtime_orchestration = false
 
 [[providers]]
 name = "test-model"
@@ -954,7 +988,7 @@ model = "x"
 name = "mockmcp"
 command = "reasonix-missing-mockmcp"
 `)
-	writeFile(t, dir, ".reasonix/skills/projskill.md", "---\ndescription: a project skill\n---\nplaybook")
+	writeFile(t, dir, ".maddog/skills/projskill.md", "---\ndescription: a project skill\n---\nplaybook")
 
 	ctrl, err := Build(context.Background(), Options{Sink: event.Discard, TokenMode: TokenModeEconomy})
 	if err != nil {
@@ -1034,7 +1068,7 @@ func TestBuildTokenEconomyConnectsWebFetchOnDemand(t *testing.T) {
 		testutil.Turn{Text: "done"},
 	)
 	setBootTokenProfileTestProvider(t, prov)
-	writeFile(t, dir, "reasonix.toml", `
+	writeFile(t, dir, config.ProjectConfigFilename, `
 default_model = "test-model"
 
 [codegraph]
@@ -1042,6 +1076,9 @@ enabled = false
 
 [agent]
 system_prompt = "BASE"
+
+[skills]
+runtime_orchestration = false
 
 [[providers]]
 name = "test-model"
@@ -1085,7 +1122,7 @@ func TestBuildTokenEconomyCodegraphSetsShortDaemonIdleTimeout(t *testing.T) {
 		testutil.Turn{Text: "done"},
 	)
 	setBootTokenProfileTestProvider(t, prov)
-	writeFile(t, dir, "reasonix.toml", fmt.Sprintf(`
+	writeFile(t, dir, config.ProjectConfigFilename, fmt.Sprintf(`
 default_model = "test-model"
 
 [codegraph]
@@ -1094,6 +1131,9 @@ path = %q
 
 [agent]
 system_prompt = "BASE"
+
+[skills]
+runtime_orchestration = false
 
 [[providers]]
 name = "test-model"
@@ -1123,8 +1163,8 @@ model = "x"
 	if err != nil {
 		t.Fatalf("read codegraph idle timeout env: %v", err)
 	}
-	if string(got) != codegraph.ReasonixDaemonIdleTimeoutMS {
-		t.Fatalf("%s = %q; want %q", codegraph.DaemonIdleTimeoutEnv, got, codegraph.ReasonixDaemonIdleTimeoutMS)
+	if string(got) != codegraph.MaddogDaemonIdleTimeoutMS {
+		t.Fatalf("%s = %q; want %q", codegraph.DaemonIdleTimeoutEnv, got, codegraph.MaddogDaemonIdleTimeoutMS)
 	}
 }
 
@@ -1141,7 +1181,7 @@ func TestBuildTokenEconomyPlanModeCanConnectWebFetch(t *testing.T) {
 		testutil.Turn{Text: "done"},
 	)
 	setBootTokenProfileTestProvider(t, prov)
-	writeFile(t, dir, "reasonix.toml", `
+	writeFile(t, dir, config.ProjectConfigFilename, `
 default_model = "test-model"
 
 [codegraph]
@@ -1192,7 +1232,7 @@ func TestBuildTokenEconomyWebFetchConnectorHonorsDisabledBuiltin(t *testing.T) {
 		testutil.Turn{Text: "done"},
 	)
 	setBootTokenProfileTestProvider(t, prov)
-	writeFile(t, dir, "reasonix.toml", `
+	writeFile(t, dir, config.ProjectConfigFilename, `
 default_model = "test-model"
 
 [tools]
@@ -1249,7 +1289,7 @@ func TestBuildTokenEconomyConnectsSkillsOnDemand(t *testing.T) {
 		testutil.Turn{Text: "done"},
 	)
 	setBootTokenProfileTestProvider(t, prov)
-	writeFile(t, dir, "reasonix.toml", `
+	writeFile(t, dir, config.ProjectConfigFilename, `
 default_model = "test-model"
 
 [codegraph]
@@ -1263,7 +1303,7 @@ name = "test-model"
 kind = "boot-token-profile-test"
 model = "x"
 `)
-	writeFile(t, dir, ".reasonix/skills/projskill.md", "---\ndescription: a project skill\n---\nplaybook")
+	writeFile(t, dir, ".maddog/skills/projskill.md", "---\ndescription: a project skill\n---\nplaybook")
 
 	ctrl, err := Build(context.Background(), Options{Sink: event.Discard, TokenMode: TokenModeEconomy})
 	if err != nil {
@@ -1574,7 +1614,7 @@ allow = ["Bash(user)"]
 
 	const rule = "Edit(src/app.go)"
 	res := rememberPermissionRule(workspace, rule)
-	if !res.Saved || res.Path != filepath.Join(workspace, "reasonix.toml") {
+	if !res.Saved || res.Path != filepath.Join(workspace, config.ProjectConfigFilename) {
 		t.Fatalf("remember result = %+v, want saved to workspace config", res)
 	}
 
@@ -1582,7 +1622,7 @@ allow = ["Bash(user)"]
 	if hasPermissionRule(userCfg.Permissions.Allow, rule) {
 		t.Fatalf("workspace rule was written to user config: %v", userCfg.Permissions.Allow)
 	}
-	workspaceCfg := config.LoadForEdit(filepath.Join(workspace, "reasonix.toml"))
+	workspaceCfg := config.LoadForEdit(filepath.Join(workspace, config.ProjectConfigFilename))
 	if !hasPermissionRule(workspaceCfg.Permissions.Allow, rule) {
 		t.Fatalf("workspace rule missing from project config: %v", workspaceCfg.Permissions.Allow)
 	}
@@ -1620,7 +1660,7 @@ allow = ["Bash(user*)"]
 
 func TestRememberPermissionRuleSkipsRuleCoveredByExistingAllow(t *testing.T) {
 	workspace := robustTempDir(t)
-	writeFile(t, workspace, "reasonix.toml", `
+	writeFile(t, workspace, config.ProjectConfigFilename, `
 [permissions]
 allow = ["Bash(go test:*)"]
 `)
@@ -1629,7 +1669,7 @@ allow = ["Bash(go test:*)"]
 	if res.Saved || res.CoveredBy != "Bash(go test:*)" {
 		t.Fatalf("remember result = %+v, want already covered", res)
 	}
-	cfg := config.LoadForEdit(filepath.Join(workspace, "reasonix.toml"))
+	cfg := config.LoadForEdit(filepath.Join(workspace, config.ProjectConfigFilename))
 	if len(cfg.Permissions.Allow) != 1 || cfg.Permissions.Allow[0] != "Bash(go test:*)" {
 		t.Fatalf("allow rules = %v, want only existing prefix", cfg.Permissions.Allow)
 	}
@@ -1637,7 +1677,7 @@ allow = ["Bash(go test:*)"]
 
 func TestRememberPermissionRulePrunesNarrowRulesWhenSavingBroaderRule(t *testing.T) {
 	workspace := robustTempDir(t)
-	writeFile(t, workspace, "reasonix.toml", `
+	writeFile(t, workspace, config.ProjectConfigFilename, `
 [permissions]
 allow = ["Bash(go test ./...)", "Bash(go build ./...)"]
 `)
@@ -1646,7 +1686,7 @@ allow = ["Bash(go test ./...)", "Bash(go build ./...)"]
 	if !res.Saved || res.CoveredBy != "" {
 		t.Fatalf("remember result = %+v, want saved broader rule", res)
 	}
-	cfg := config.LoadForEdit(filepath.Join(workspace, "reasonix.toml"))
+	cfg := config.LoadForEdit(filepath.Join(workspace, config.ProjectConfigFilename))
 	if hasPermissionRule(cfg.Permissions.Allow, "Bash(go test ./...)") {
 		t.Fatalf("narrow go test rule should be pruned: %v", cfg.Permissions.Allow)
 	}
@@ -2006,7 +2046,7 @@ func TestBuildCodegraphSetsShortDaemonIdleTimeout(t *testing.T) {
 	envOut := filepath.Join(dir, "codegraph-idle-env")
 	t.Setenv("REASONIX_CODEGRAPH_HELPER_ENV_OUT", envOut)
 
-	writeFile(t, dir, "reasonix.toml", fmt.Sprintf(`
+	writeFile(t, dir, config.ProjectConfigFilename, fmt.Sprintf(`
 default_model = "test-model"
 
 [codegraph]
@@ -2036,11 +2076,11 @@ api_key_env = "REASONIX_TEST_KEY_UNSET"
 	var got []byte
 	for {
 		got, err = os.ReadFile(envOut)
-		if err == nil && string(got) == codegraph.ReasonixDaemonIdleTimeoutMS {
+		if err == nil && string(got) == codegraph.MaddogDaemonIdleTimeoutMS {
 			break
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("codegraph helper idle timeout env = %q, want %q (read error: %v)", got, codegraph.ReasonixDaemonIdleTimeoutMS, err)
+			t.Fatalf("codegraph helper idle timeout env = %q, want %q (read error: %v)", got, codegraph.MaddogDaemonIdleTimeoutMS, err)
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
@@ -2062,7 +2102,7 @@ func TestBuildWarmCodegraphIgnoresLegacyEagerTier(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	writeFile(t, dir, "reasonix.toml", fmt.Sprintf(`
+	writeFile(t, dir, config.ProjectConfigFilename, fmt.Sprintf(`
 default_model = "test-model"
 
 [codegraph]
@@ -2100,7 +2140,7 @@ func TestBuildDefaultsToNearestGitRoot(t *testing.T) {
 	if err := os.MkdirAll(subdir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	writeFile(t, root, "reasonix.toml", `
+	writeFile(t, root, config.ProjectConfigFilename, `
 default_model = "root-model"
 
 [codegraph]

@@ -45,15 +45,18 @@ type ConfigReport struct {
 }
 
 type ProviderReport struct {
-	Name          string   `json:"name"`
-	Kind          string   `json:"kind"`
-	BaseURLHost   string   `json:"base_url_host,omitempty"`
-	Model         string   `json:"model,omitempty"`
-	Models        []string `json:"models,omitempty"`
-	APIKeyEnv     string   `json:"api_key_env,omitempty"`
-	KeyPresent    bool     `json:"key_present"`
-	IsDefault     bool     `json:"is_default"`
-	ContextWindow int      `json:"context_window,omitempty"`
+	Name                  string   `json:"name"`
+	Kind                  string   `json:"kind"`
+	BaseURLHost           string   `json:"base_url_host,omitempty"`
+	Model                 string   `json:"model,omitempty"`
+	Models                []string `json:"models,omitempty"`
+	APIKeyEnv             string   `json:"api_key_env,omitempty"`
+	AuthMode              string   `json:"auth_mode,omitempty"`
+	CredentialEnv         string   `json:"credential_env,omitempty"`
+	OfficialAuthProfileID string   `json:"official_auth_profile_id,omitempty"`
+	KeyPresent            bool     `json:"key_present"`
+	IsDefault             bool     `json:"is_default"`
+	ContextWindow         int      `json:"context_window,omitempty"`
 }
 
 type PluginReport struct {
@@ -64,12 +67,14 @@ type PluginReport struct {
 }
 
 type CodegraphReport struct {
-	Enabled     bool   `json:"enabled"`
-	AutoInstall bool   `json:"auto_install"`
-	Version     string `json:"version"`
-	CacheDir    string `json:"cache_dir,omitempty"`
-	Resolved    bool   `json:"resolved"`
-	Path        string `json:"path,omitempty"`
+	Enabled          bool                              `json:"enabled"`
+	AutoInstall      bool                              `json:"auto_install"`
+	Version          string                            `json:"version"`
+	CacheDir         string                            `json:"cache_dir,omitempty"`
+	Resolved         bool                              `json:"resolved"`
+	Path             string                            `json:"path,omitempty"`
+	RecentBench      *codegraph.BenchmarkDoctorSummary `json:"recent_bench,omitempty"`
+	HybridStoreSpike *codegraph.HybridStoreAssessment  `json:"hybrid_store_spike,omitempty"`
 }
 
 type LSPReport struct {
@@ -130,10 +135,11 @@ func Collect(opts Options) Report {
 			DefaultModel: cfg.DefaultModel,
 		},
 		Codegraph: CodegraphReport{
-			Enabled:     cfg.Codegraph.Enabled,
-			AutoInstall: cfg.Codegraph.AutoInstall,
-			Version:     codegraph.Version,
-			CacheDir:    redactHome(codegraph.CacheDir()),
+			Enabled:          cfg.Codegraph.Enabled,
+			AutoInstall:      cfg.Codegraph.AutoInstall,
+			Version:          codegraph.Version,
+			CacheDir:         redactHome(codegraph.CacheDir()),
+			HybridStoreSpike: pointerTo(codegraph.ZvecHybridStoreAssessment()),
 		},
 		LSP: LSPReport{
 			Enabled: cfg.LSP.Enabled,
@@ -164,19 +170,26 @@ func Collect(opts Options) Report {
 		report.Codegraph.Resolved = true
 		report.Codegraph.Path = redactHome(p)
 	}
+	if bench, ok := codegraph.ReadLatestBenchmarkSummary(config.CacheDir()); ok {
+		bench.Path = redactHome(bench.Path)
+		report.Codegraph.RecentBench = &bench
+	}
 	for i := range cfg.Providers {
 		p := cfg.Providers[i]
 		models := p.ModelList()
 		report.Providers = append(report.Providers, ProviderReport{
-			Name:          p.Name,
-			Kind:          p.Kind,
-			BaseURLHost:   hostOnly(p.BaseURL),
-			Model:         p.Model,
-			Models:        models,
-			APIKeyEnv:     p.APIKeyEnv,
-			KeyPresent:    p.Configured(),
-			IsDefault:     p.Name == cfg.DefaultModel,
-			ContextWindow: p.ContextWindow,
+			Name:                  p.Name,
+			Kind:                  p.Kind,
+			BaseURLHost:           hostOnly(p.BaseURL),
+			Model:                 p.Model,
+			Models:                models,
+			APIKeyEnv:             p.APIKeyEnv,
+			AuthMode:              p.NormalizedAuthType(),
+			CredentialEnv:         p.AuthEnvName(),
+			OfficialAuthProfileID: strings.TrimSpace(p.OfficialAuthProfileID),
+			KeyPresent:            p.Configured(),
+			IsDefault:             p.Name == cfg.DefaultModel,
+			ContextWindow:         p.ContextWindow,
 		})
 	}
 	for _, p := range cfg.Plugins {
@@ -221,7 +234,15 @@ func RenderText(r Report) string {
 		if p.IsDefault {
 			marker = " default"
 		}
-		fmt.Fprintf(&b, "  %-16s %-8s %-24s key:%s%s\n", p.Name, p.Kind, valueOr(p.BaseURLHost, "(no host)"), key, marker)
+		auth := p.AuthMode
+		if auth == "" {
+			auth = "api_key"
+		}
+		credential := valueOr(p.CredentialEnv, p.OfficialAuthProfileID)
+		if credential == "" {
+			credential = "none"
+		}
+		fmt.Fprintf(&b, "  %-16s %-8s %-24s auth:%s credential:%s key:%s%s\n", p.Name, p.Kind, valueOr(p.BaseURLHost, "(no host)"), auth, credential, key, marker)
 	}
 
 	fmt.Fprintf(&b, "\nplugins\n")
@@ -242,6 +263,28 @@ func RenderText(r Report) string {
 	fmt.Fprintf(&b, "  auto_install %v\n", r.Codegraph.AutoInstall)
 	fmt.Fprintf(&b, "  version      %s\n", r.Codegraph.Version)
 	fmt.Fprintf(&b, "  resolved     %s\n", resolved)
+	if r.Codegraph.RecentBench != nil {
+		fmt.Fprintf(&b, "  recent bench %s\n", valueOr(r.Codegraph.RecentBench.Path, "unknown"))
+		for _, backend := range r.Codegraph.RecentBench.Backends {
+			fmt.Fprintf(&b, "    %-16s health:%s relevance:%s chars:%d failures:%d unsupported:%d\n",
+				backend.BackendID,
+				backend.Health,
+				percent(backend.TopKRelevance),
+				backend.TokenCharsReturned,
+				backend.ToolFailures,
+				backend.Unsupported,
+			)
+		}
+	}
+	if r.Codegraph.HybridStoreSpike != nil {
+		spike := r.Codegraph.HybridStoreSpike
+		fmt.Fprintf(&b, "  hybrid store %-12s optional:%v default:%v checks:%d\n",
+			spike.CandidateID,
+			spike.OptionalViable,
+			spike.DefaultEnabled,
+			len(spike.Checks),
+		)
+	}
 
 	fmt.Fprintf(&b, "\nlsp\n")
 	fmt.Fprintf(&b, "  enabled      %v\n", r.LSP.Enabled)
@@ -325,6 +368,14 @@ func valueOr(s, fallback string) string {
 		return fallback
 	}
 	return s
+}
+
+func percent(v float64) string {
+	return fmt.Sprintf("%.0f%%", v*100)
+}
+
+func pointerTo[T any](v T) *T {
+	return &v
 }
 
 // redactHome rewrites a path under the user's home directory to start with "~",

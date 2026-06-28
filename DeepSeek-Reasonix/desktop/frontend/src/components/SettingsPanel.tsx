@@ -5,7 +5,7 @@ import { asArray } from "../lib/array";
 import { useDeferredClose } from "../lib/useMountTransition";
 import { app } from "../lib/bridge";
 import { normalizeLangPref, useI18n, useT, type DictKey, type LangPref } from "../lib/i18n";
-import { mergedFetchedProviderModels, providerDefaultModel, providerModelCandidates } from "../lib/providerModels";
+import { classifyProviderModelProbeError, mergedFetchedProviderModels, providerDefaultModel, providerModelCandidates } from "../lib/providerModels";
 import { useUpdater } from "../lib/useUpdater";
 import {
   THEME_STYLES,
@@ -33,7 +33,8 @@ import {
 import { getAvailableFontFamilies, getAvailableMonoFontFamilies } from "../lib/fontAvailability";
 import { getDisplayMode, onDisplayModeChange, setDisplayMode as setLocalDisplayMode } from "../lib/displayMode";
 import { DEFAULT_STATUS_BAR_ITEMS, normalizeStatusBarItems, type StatusBarItemId } from "../lib/statusBarItems";
-import type { BotAllowlistView, BotConnectionDiagnostic, BotConnectionView, BotInstallStartResult, BotSettingsView, HookConfigView, HooksSettingsView, NetworkView, ProviderView, SettingsTab, SettingsView } from "../lib/types";
+import { SETTINGS_TABS } from "../lib/settingsTabs";
+import type { BotAllowlistView, BotConnectionDiagnostic, BotConnectionView, BotInstallStartResult, BotSettingsView, HookConfigView, HooksSettingsView, NetworkView, ProviderView, ReadinessResultView, SettingsTab, SettingsView, WorkflowTemplateView } from "../lib/types";
 import { InlineConfirmButton } from "./InlineConfirmButton";
 import { Tooltip } from "./Tooltip";
 import { AnchoredPopover } from "./AnchoredPopover";
@@ -44,7 +45,6 @@ import { SoundSelect } from "./SoundSelect";
 import { getSuccessPreference, setSuccessPreference, getAttentionPreference, setAttentionPreference, playSuccessChime, playAttentionChime, type SoundWavPref } from "../lib/sound";
 import { ModalCloseButton } from "./ModalCloseButton";
 
-const SETTINGS_TABS: SettingsTab[] = ["general", "models", "bots", "mcp", "skills", "memory", "hooks", "permissions", "sandbox", "network", "appearance", "updates"];
 export type SettingsInitialFocus = { target: "bot-allowlist"; connectionId?: string };
 
 // SettingsPanel is the desktop settings centre — a centred modal with left
@@ -159,6 +159,7 @@ export function SettingsPanel({
               <>
                 {tab === "general" && s && <SettingsPageShell key={tab} s={s} tab={tab} busy={busy} apply={apply}><GeneralSection s={s} busy={busy} apply={apply} agentRunning={agentRunning} /></SettingsPageShell>}
                 {tab === "models" && s && <SettingsPageShell key={tab} s={s} tab={tab} busy={busy} apply={apply}><ModelsSection s={s} busy={busy} apply={apply} backgroundApply={backgroundApply} /></SettingsPageShell>}
+                {tab === "workflows" && <SettingsPageShell key={tab} s={s} tab={tab} busy={false} apply={apply}><WorkflowsSection /></SettingsPageShell>}
                 {tab === "bots" && s && <SettingsPageShell key={tab} s={s} tab={tab} busy={busy} apply={apply}><BotsSection s={s} busy={busy} apply={apply} initialFocus={initialFocus} /></SettingsPageShell>}
                 {tab === "mcp" && <SettingsPageShell key={tab} s={s} tab={tab} busy={false} apply={apply}><MCPServersSettingsPage /></SettingsPageShell>}
                 {tab === "skills" && <SettingsPageShell key={tab} s={s} tab={tab} busy={false} apply={apply}><SkillsSettingsPage /></SettingsPageShell>}
@@ -251,6 +252,7 @@ function SettingsPageShell({ s: _s, tab, children }: { s: SettingsView | null; t
 function settingsPageKind(tab: SettingsTab): "form" | "manager" {
   switch (tab) {
     case "models":
+    case "workflows":
     case "mcp":
     case "skills":
     case "memory":
@@ -359,6 +361,8 @@ function settingsTabLabel(id: SettingsTab, t: ReturnType<typeof useT>): string {
       return t("settings.tab.models");
     case "providers":
       return t("settings.tab.providers");
+    case "workflows":
+      return t("settings.tab.workflows");
     case "bots":
       return t("settings.tab.bots");
     case "mcp":
@@ -390,6 +394,8 @@ function settingsTabMeta(id: SettingsTab, s: SettingsView, t: ReturnType<typeof 
       return `${desktopLayoutStyleLabel(normalizeDesktopLayoutStyle(s.desktopLayoutStyle), t)} · ${closeBehaviorLabel(normalizeCloseBehavior(s.closeBehavior), t)}`;
     case "providers":
       return t("settings.providerCount", { n: s.providers.length });
+    case "workflows":
+      return t("settings.tabSub.workflows");
     case "bots":
       return botSettingsMeta(s.bot, t);
     case "mcp":
@@ -443,7 +449,9 @@ function allRefs(s: SettingsView): string[] {
 
 function providerCredentialEnv(p: ProviderView | undefined): string {
   if (!p) return "";
-  return normalizeAuthType(p.authType) === "api_key" ? p.apiKeyEnv : p.authTokenEnv || p.identityEnv;
+  const auth = normalizeAuthType(p.authType);
+  if (auth === "api_key") return p.apiKeyEnv;
+  return p.bearerTokenEnv || p.authTokenEnv || p.identityEnv;
 }
 
 // toRef normalises a stored model id (a provider name, a bare model, or a ref) to
@@ -466,14 +474,16 @@ const PROXY_MODES = ["auto", "custom", "off"] as const;
 // here is what the user sees in the dropdown.
 const EFFORT_PRESETS: readonly string[] = ["low", "medium", "high", "xhigh", "max"];
 const REASONING_PROTOCOLS: readonly string[] = ["", "deepseek", "openai", "none"];
-const AUTH_TYPES: readonly string[] = ["api_key", "bearer", "workload_identity"];
+const AUTH_TYPES: readonly string[] = ["api_key", "bearer", "workload_identity", "official_auth"];
 const PROXY_TYPES = ["http", "https", "socks5", "socks5h"] as const;
 const LANGUAGE_PREFS: LangPref[] = ["", "zh", "en"];
 const AUTO_PLAN_MODES = ["off", "on"] as const;
+const CONTEXT_POLICIES = ["off", "auto", "aggressive"] as const;
 const BOT_TOOL_APPROVAL_MODES = ["", "ask", "auto", "yolo"] as const;
 
 type ProxyMode = (typeof PROXY_MODES)[number];
 type AutoPlanMode = (typeof AUTO_PLAN_MODES)[number];
+type ContextPolicy = (typeof CONTEXT_POLICIES)[number];
 type BotConnectionToolApprovalMode = (typeof BOT_TOOL_APPROVAL_MODES)[number];
 
 function normalizeProxyMode(mode: string): ProxyMode {
@@ -493,6 +503,11 @@ function normalizeNetworkView(network: NetworkView): NetworkView {
 
 function normalizeAutoPlan(mode: string | undefined): AutoPlanMode {
   return mode === "ask" || mode === "on" ? "on" : "off";
+}
+
+function normalizeContextPolicy(mode: string | undefined): ContextPolicy {
+  if (mode === "off" || mode === "aggressive") return mode;
+  return "auto";
 }
 
 function sanitizeInteger(value: number, min: number): number {
@@ -519,6 +534,9 @@ function normalizeAuthType(authType: string | undefined): string {
 }
 
 function normalizeProviderView(p: ProviderView): ProviderView {
+  const authType = normalizeAuthType(p.authType);
+  const bearerTokenEnv = p.bearerTokenEnv || p.authTokenEnv || "";
+  const credentialEnv = p.credentialEnv ?? (authType === "api_key" ? p.apiKeyEnv : bearerTokenEnv || p.identityEnv) ?? "";
   return {
     ...p,
     builtIn: Boolean(p.builtIn),
@@ -526,8 +544,9 @@ function normalizeProviderView(p: ProviderView): ProviderView {
     models: asArray(p.models),
     modelsUrl: p.modelsUrl ?? "",
     apiKeyEnv: p.apiKeyEnv ?? "",
-    authType: normalizeAuthType(p.authType),
-    authTokenEnv: p.authTokenEnv ?? "",
+    authType,
+    authTokenEnv: p.authTokenEnv || bearerTokenEnv,
+    bearerTokenEnv,
     authHeader: p.authHeader ?? "",
     authScheme: p.authScheme ?? "",
     identityEnv: p.identityEnv ?? "",
@@ -536,9 +555,20 @@ function normalizeProviderView(p: ProviderView): ProviderView {
     organizationId: p.organizationId ?? "",
     serviceAccountId: p.serviceAccountId ?? "",
     workspaceId: p.workspaceId ?? "",
+    officialAuthProfileId: p.officialAuthProfileId ?? "",
     keySet: Boolean(p.keySet),
     reasoningProtocol: normalizeReasoningProtocol(p.reasoningProtocol),
     supportedEfforts: asArray(p.supportedEfforts),
+    roles: asArray(p.roles),
+    roleModels: p.roleModels ?? {},
+    authMode: normalizeAuthType(p.authMode || p.authType),
+    credentialEnv,
+    credentialStatus: p.credentialStatus ?? (p.keySet ? "configured" : credentialEnv ? "missing" : "not_configured"),
+    gateway: p.gateway ?? "",
+    frontierEligible: Boolean(p.frontierEligible),
+    smallModelEligible: Boolean(p.smallModelEligible),
+    budgetEligible: Boolean(p.budgetEligible),
+    warnings: asArray(p.warnings),
   };
 }
 
@@ -681,6 +711,7 @@ function normalizeSettingsView(view: SettingsView | null | undefined): SettingsV
     ...view,
     providers: asArray(view.providers).map(normalizeProviderView),
     officialProviders: asArray(view.officialProviders).map(normalizeProviderView),
+    providerProfileWarnings: asArray(view.providerProfileWarnings),
     providerKinds: asArray(view.providerKinds),
     permissions: {
       ...permissions,
@@ -702,6 +733,7 @@ function normalizeSettingsView(view: SettingsView | null | undefined): SettingsV
     upgradeThreshold: sanitizeInteger(view.upgradeThreshold ?? 0, 0),
     frontierBudget: sanitizeInteger(view.frontierBudget ?? 0, 0),
     autoPlan: normalizeAutoPlan(view.autoPlan),
+    contextPolicy: normalizeContextPolicy(view.contextPolicy),
     autoApproveTools: Boolean(view.autoApproveTools ?? view.bypass),
     bypass: Boolean(view.autoApproveTools ?? view.bypass),
     desktopLanguage: normalizeLangPref(view.desktopLanguage),
@@ -765,6 +797,12 @@ function statusBarItemLabel(id: StatusBarItemId, t: ReturnType<typeof useT>): st
       return t("status.turnCostLabel");
     case "session_turns":
       return t("status.sessionTurnsLabel");
+    case "readiness":
+      return t("status.readinessLabel");
+    case "provider_status":
+      return t("status.providerLabel");
+    case "run_report":
+      return t("status.runReportLabel");
     case "context":
       return t("status.ctxLabel");
     case "compact":
@@ -774,6 +812,147 @@ function statusBarItemLabel(id: StatusBarItemId, t: ReturnType<typeof useT>): st
     case "balance":
       return t("status.balanceLabel");
   }
+}
+
+function WorkflowsSection() {
+  const t = useT();
+  const [templates, setTemplates] = useState<WorkflowTemplateView[]>([]);
+  const [selectedID, setSelectedID] = useState("coding-task");
+  const [readiness, setReadiness] = useState<ReadinessResultView | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [checking, setChecking] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const selected = templates.find((template) => template.id === selectedID) ?? templates[0];
+
+  const loadTemplates = useCallback(async () => {
+    setLoading(true);
+    setErr(null);
+    try {
+      const next = asArray(await app.WorkflowTemplates());
+      setTemplates(next);
+      setSelectedID((current) => next.some((template) => template.id === current) ? current : next[0]?.id ?? "coding-task");
+    } catch (error) {
+      setErr(String((error as Error)?.message ?? error));
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  const refreshReadiness = useCallback(async (templateID: string) => {
+    if (!templateID) return;
+    setChecking(true);
+    setErr(null);
+    try {
+      setReadiness(await app.WorkflowReadiness(templateID));
+    } catch (error) {
+      setErr(String((error as Error)?.message ?? error));
+    } finally {
+      setChecking(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadTemplates();
+  }, [loadTemplates]);
+  useEffect(() => {
+    if (selected?.id) void refreshReadiness(selected.id);
+  }, [selected?.id, refreshReadiness]);
+
+  return (
+    <SettingsSection
+      title={t("settings.workflowsTitle")}
+      actions={
+        <button className="btn btn--small" onClick={() => selected?.id && refreshReadiness(selected.id)} disabled={!selected || checking}>
+          {checking ? <Loader2 className="spin" size={14} /> : <RefreshCw size={14} />}
+          {t("settings.workflowsRefresh")}
+        </button>
+      }
+    >
+      {err && <div className="banner banner--error">{err}</div>}
+      {loading ? (
+        <div className="empty">{t("settings.loading")}</div>
+      ) : templates.length === 0 ? (
+        <div className="empty">{t("settings.workflowsEmpty")}</div>
+      ) : (
+        <div className="workflow-settings">
+          <div className="workflow-settings__list" role="listbox" aria-label={t("settings.tab.workflows")}>
+            {templates.map((template) => (
+              <button
+                type="button"
+                key={template.id}
+                className={`workflow-settings__item${selected?.id === template.id ? " workflow-settings__item--active" : ""}`}
+                onClick={() => setSelectedID(template.id)}
+              >
+                <span>{template.name || template.id}</span>
+                <small>{template.risk} · {template.source}</small>
+              </button>
+            ))}
+          </div>
+          {selected && (
+            <div className="workflow-settings__detail">
+              <div className="workflow-settings__head">
+                <div>
+                  <div className="workflow-settings__name">{selected.name || selected.id}</div>
+                  <div className="workflow-settings__meta">{selected.id} · {selected.hash}</div>
+                </div>
+                {readiness && <span className={`workflow-settings__status workflow-settings__status--${readiness.status}`}>{readiness.status} {readiness.score}%</span>}
+              </div>
+              <div className="workflow-settings__grid">
+                <span>{t("settings.workflowsBudget")}</span><b>{formatWorkflowBudget(selected.budget)}</b>
+                <span>{t("settings.workflowsRoles")}</span><b>{selected.providerRoles.join(", ") || t("common.none")}</b>
+                <span>{t("settings.workflowsHumanGates")}</span><b>{selected.humanGates.join(", ") || t("common.none")}</b>
+                <span>{t("settings.workflowsCapabilities")}</span><b>{selected.requiredCapabilities.join(", ") || t("common.none")}</b>
+                <span>{t("settings.workflowsMakerChecker")}</span><b>{selected.makerChecker.mode}</b>
+                <span>{t("settings.workflowsArtifacts")}</span><b>{formatWorkflowArtifacts(selected)}</b>
+                <span>{t("settings.workflowsRefinement")}</span><b>{formatWorkflowRefinement(selected)}</b>
+              </div>
+              {selected.phases.length > 0 && (
+                <div className="workflow-settings__chips">
+                  {selected.phases.map((phase) => <span key={phase.id}>{phase.id}</span>)}
+                </div>
+              )}
+              {readiness && readiness.checks.length > 0 && (
+                <ul className="workflow-settings__checks">
+                  {readiness.checks.slice(0, 8).map((check) => (
+                    <li key={`${check.id}-${check.role ?? check.capability ?? ""}`}>
+                      <span>{check.id}</span>
+                      <b>{check.status}</b>
+                      {check.credentialEnv && <em>{check.credentialEnv}</em>}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+    </SettingsSection>
+  );
+}
+
+function formatWorkflowBudget(budget: WorkflowTemplateView["budget"]): string {
+  const frontier = budget.frontierTokens > 0 ? budget.frontierTokens.toLocaleString() : "-";
+  const total = typeof budget.totalTokens === "number" && budget.totalTokens > 0 ? budget.totalTokens.toLocaleString() : "-";
+  return `${frontier} frontier / ${total} total`;
+}
+
+function formatWorkflowArtifacts(template: WorkflowTemplateView): string {
+  const artifacts = template.artifacts;
+  const packet = artifacts?.taskPacketFields?.length ?? 0;
+  const fanOut = artifacts?.boundedFanOut?.maxParallel ?? 0;
+  const final = artifacts?.finalVerificationArtifacts?.length ?? 0;
+  const report = artifacts?.runReportMapping?.length ?? 0;
+  if (packet + fanOut + final + report === 0) return "-";
+  return `packet ${packet} / fan-out ${fanOut || "-"} / final ${final} / report ${report}`;
+}
+
+function formatWorkflowRefinement(template: WorkflowTemplateView): string {
+  const strategy = template.refinementStrategy;
+  if (!strategy || strategy.searchModes.length === 0) return "-";
+  const mode = strategy.enabled ? "on" : "off";
+  const budget = strategy.budgetCapTokens > 0 ? strategy.budgetCapTokens.toLocaleString() : "-";
+  return `${mode} / ${strategy.searchModes.join(", ")} / ${budget}`;
 }
 
 function closeBehaviorLabel(mode: CloseBehavior, t: ReturnType<typeof useT>): string {
@@ -810,6 +989,8 @@ function reasoningProtocolLabel(protocol: string, t: ReturnType<typeof useT>): s
 
 function authTypeLabel(authType: string, t: ReturnType<typeof useT>): string {
   switch (normalizeAuthType(authType)) {
+    case "official_auth":
+      return t("settings.authType.officialAuth");
     case "bearer":
       return t("settings.authType.bearer");
     case "workload_identity":
@@ -817,6 +998,42 @@ function authTypeLabel(authType: string, t: ReturnType<typeof useT>): string {
     default:
       return t("settings.authType.apiKey");
   }
+}
+
+function providerCredentialStatusLabel(status: string, t: ReturnType<typeof useT>): string {
+  switch (status) {
+    case "configured":
+      return t("settings.credentialStatus.configured");
+    case "missing":
+      return t("settings.credentialStatus.missing");
+    case "not_configured":
+      return t("settings.credentialStatus.notConfigured");
+    default:
+      return status || t("common.none");
+  }
+}
+
+function providerGatewayLabel(gateway: string, t: ReturnType<typeof useT>): string {
+  switch (gateway) {
+    case "official_openai":
+      return t("settings.gateway.officialOpenAI");
+    case "official_anthropic":
+      return t("settings.gateway.officialAnthropic");
+    case "icodeeasy":
+      return t("settings.gateway.icodeeasy");
+    case "openai_compatible":
+      return t("settings.gateway.openAICompatible");
+    case "anthropic_compatible":
+      return t("settings.gateway.anthropicCompatible");
+    case "custom":
+      return t("settings.gateway.custom");
+    default:
+      return gateway || t("common.none");
+  }
+}
+
+function providerRolesLabel(roles: string[], t: ReturnType<typeof useT>): string {
+  return roles.length > 0 ? roles.join(", ") : t("common.none");
 }
 
 function GeneralSection({ s, busy, apply, agentRunning }: SectionProps & { agentRunning: boolean }) {
@@ -834,6 +1051,7 @@ function GeneralSection({ s, busy, apply, agentRunning }: SectionProps & { agent
   useEffect(() => onDisplayModeChange((mode) => setDisplayMode(mode)), []);
   useEffect(() => () => mouseDragCleanupRef.current?.(), []);
   const autoPlan = normalizeAutoPlan(s.autoPlan);
+  const contextPolicy = normalizeContextPolicy(s.contextPolicy);
   const languagePref = normalizeLangPref(s.desktopLanguage);
   const desktopLayoutStyle = normalizeDesktopLayoutStyle(s.desktopLayoutStyle);
   const [genMusicPreset, setGenMusicPreset] = useState<GenerativePreset>(getGenerativePreset());
@@ -1061,6 +1279,20 @@ function GeneralSection({ s, busy, apply, agentRunning }: SectionProps & { agent
               onClick={() => void apply(() => app.SetAutoPlan(mode))}
             >
               {t(`settings.autoPlan.${mode}`)}
+            </button>
+          ))}
+        </div>
+      </SettingsField>
+      <SettingsField label={t("settings.contextPolicy")}>
+        <div className="set-seg">
+          {CONTEXT_POLICIES.map((mode) => (
+            <button
+              key={mode}
+              className={`set-seg__btn${contextPolicy === mode ? " set-seg__btn--on" : ""}`}
+              disabled={busy}
+              onClick={() => void apply(() => app.SetContextPolicy(mode))}
+            >
+              {t(`settings.contextPolicy.${mode}`)}
             </button>
           ))}
         </div>
@@ -3444,7 +3676,7 @@ function ProvidersSection({ s, busy, apply }: SectionProps) {
       await apply(async () => {
         await app.SetProviderKey(apiKeyEnv, value);
         try {
-          const authPatch = normalizeAuthType(probe.authType) === "api_key" ? { apiKeyEnv } : { authTokenEnv: apiKeyEnv };
+          const authPatch = normalizeAuthType(probe.authType) === "api_key" ? { apiKeyEnv } : { authTokenEnv: apiKeyEnv, bearerTokenEnv: apiKeyEnv };
           const probeWithAuth = { ...probe, ...authPatch };
           const fetched = await app.FetchProviderModels(probeWithAuth);
           if (fetched.length > 0) {
@@ -3584,11 +3816,22 @@ type ProviderAccessGroup = {
   builtIn: boolean;
   providers: ProviderView[];
   apiKeyEnv: string;
+  bearerTokenEnv: string;
   authType: string;
   keySet: boolean;
   baseUrl: string;
   kind: string;
   models: string[];
+  roles: string[];
+  authMode: string;
+  credentialEnv: string;
+  officialAuthProfileId: string;
+  credentialStatus: string;
+  gateway: string;
+  frontierEligible: boolean;
+  smallModelEligible: boolean;
+  budgetEligible: boolean;
+  warnings: string[];
 };
 
 type ProviderFetchResult = {
@@ -3838,8 +4081,17 @@ function ProviderAccessCard({
       <div className="provider-access-meta">
         <span>{group.kind}</span>
         <span>{group.baseUrl}</span>
-        <span>{authTypeLabel(group.authType, t)}</span>
-        <span>{group.apiKeyEnv || t("common.none")}</span>
+        <span>{providerGatewayLabel(group.gateway, t)}</span>
+        <span>{authTypeLabel(group.authMode || group.authType, t)}</span>
+        <span>{group.credentialEnv || group.officialAuthProfileId || group.apiKeyEnv || t("common.none")}</span>
+        <span>{providerCredentialStatusLabel(group.credentialStatus, t)}</span>
+      </div>
+
+      <div className="provider-access-meta provider-access-meta--roles">
+        <span>{providerRolesLabel(group.roles, t)}</span>
+        {group.frontierEligible && <span>{t("settings.providerProfile.frontier")}</span>}
+        {group.smallModelEligible && <span>{t("settings.providerProfile.small")}</span>}
+        {group.budgetEligible && <span>{t("settings.providerProfile.budget")}</span>}
       </div>
 
       <div className="provider-card-block">
@@ -3889,6 +4141,7 @@ function ProviderAccessCard({
               <div className="provider-profile-row" key={p.name}>
                 <span>{p.name}</span>
                 <span>{p.models.join(", ") || t("common.none")}</span>
+                <span>{providerRolesLabel(p.roles, t)}</span>
                 <button
                   className="btn btn--small"
                   disabled={busy}
@@ -4005,7 +4258,14 @@ function providerAccessGroups(providers: ProviderView[], t: ReturnType<typeof us
     if (existing) {
       existing.providers.push(p);
       existing.keySet = existing.keySet || p.keySet;
+      if (!existing.bearerTokenEnv && p.bearerTokenEnv) existing.bearerTokenEnv = p.bearerTokenEnv;
+      if (!existing.officialAuthProfileId && p.officialAuthProfileId) existing.officialAuthProfileId = p.officialAuthProfileId;
       existing.models = uniqueStrings([...existing.models, ...p.models]);
+      existing.roles = uniqueStrings([...existing.roles, ...p.roles]);
+      existing.frontierEligible = existing.frontierEligible || p.frontierEligible;
+      existing.smallModelEligible = existing.smallModelEligible || p.smallModelEligible;
+      existing.budgetEligible = existing.budgetEligible || p.budgetEligible;
+      existing.warnings = uniqueStrings([...existing.warnings, ...p.warnings]);
       continue;
     }
     groups.set(id, {
@@ -4015,11 +4275,22 @@ function providerAccessGroups(providers: ProviderView[], t: ReturnType<typeof us
       builtIn,
       providers: [p],
       apiKeyEnv: p.apiKeyEnv,
+      bearerTokenEnv: p.bearerTokenEnv,
       authType: p.authType,
+      authMode: p.authMode,
+      credentialEnv: p.credentialEnv,
+      officialAuthProfileId: p.officialAuthProfileId,
+      credentialStatus: p.credentialStatus,
+      gateway: p.gateway,
       keySet: p.keySet,
       baseUrl: p.baseUrl,
       kind: p.kind,
       models: uniqueStrings(p.models),
+      roles: uniqueStrings(p.roles),
+      frontierEligible: p.frontierEligible,
+      smallModelEligible: p.smallModelEligible,
+      budgetEligible: p.budgetEligible,
+      warnings: uniqueStrings(p.warnings),
     });
   }
   return Array.from(groups.values());
@@ -4142,7 +4413,7 @@ function ProviderEditor({
   const [modelsUrl] = useState(initial?.modelsUrl ?? "");
   const [apiKeyEnv, setApiKeyEnv] = useState(initial?.apiKeyEnv ?? "");
   const [authType, setAuthType] = useState(normalizeAuthType(initial?.authType));
-  const [authTokenEnv, setAuthTokenEnv] = useState(initial?.authTokenEnv ?? "");
+  const [authTokenEnv, setAuthTokenEnv] = useState(initial?.bearerTokenEnv || initial?.authTokenEnv || "");
   const [authHeader, setAuthHeader] = useState(initial?.authHeader ?? "");
   const [authScheme, setAuthScheme] = useState(initial?.authScheme ?? "");
   const [identityEnv, setIdentityEnv] = useState(initial?.identityEnv ?? "");
@@ -4151,6 +4422,7 @@ function ProviderEditor({
   const [organizationId, setOrganizationId] = useState(initial?.organizationId ?? "");
   const [serviceAccountId, setServiceAccountId] = useState(initial?.serviceAccountId ?? "");
   const [workspaceId, setWorkspaceId] = useState(initial?.workspaceId ?? "");
+  const [officialAuthProfileId, setOfficialAuthProfileId] = useState(initial?.officialAuthProfileId ?? "");
   const [keyDraft, setKeyDraft] = useState("");
   const [balanceUrl, setBalanceUrl] = useState(initial?.balanceUrl ?? "");
   // Empty when unset so the placeholder (and its "0 = default" hint) reads instead
@@ -4200,6 +4472,20 @@ function ProviderEditor({
     if (defaultEffort === level) setDefaultEffort("");
   };
 
+  const profileDraftFields = (credentialEnv: string): Pick<ProviderView, "roles" | "roleModels" | "authMode" | "credentialEnv" | "credentialStatus" | "gateway" | "frontierEligible" | "smallModelEligible" | "budgetEligible" | "warnings" | "officialAuthProfileId"> => ({
+    roles: initial?.roles ?? [],
+    roleModels: initial?.roleModels ?? {},
+    authMode: normalizeAuthType(authType),
+    credentialEnv,
+    credentialStatus: Boolean(keyDraft.trim()) || Boolean(officialAuthProfileId.trim()) || (initial?.keySet ?? false) ? "configured" : credentialEnv ? "missing" : "not_configured",
+    officialAuthProfileId: officialAuthProfileId.trim(),
+    gateway: initial?.gateway ?? "",
+    frontierEligible: initial?.frontierEligible ?? false,
+    smallModelEligible: initial?.smallModelEligible ?? false,
+    budgetEligible: initial?.budgetEligible ?? false,
+    warnings: initial?.warnings ?? [],
+  });
+
   const fetchModels = async () => {
     setFetchingModels(true);
     setFetchStatus(null);
@@ -4223,6 +4509,7 @@ function ProviderEditor({
         apiKeyEnv: effectiveApiKeyEnv,
         authType,
         authTokenEnv: authType === "api_key" ? "" : effectiveAuthTokenEnv,
+        bearerTokenEnv: authType === "api_key" ? "" : effectiveAuthTokenEnv,
         authHeader: authHeader.trim(),
         authScheme: authScheme.trim(),
         identityEnv: identityEnv.trim(),
@@ -4237,6 +4524,7 @@ function ProviderEditor({
         reasoningProtocol,
         supportedEfforts,
         defaultEffort,
+        ...profileDraftFields(credentialEnv),
       });
       if (fetched.length === 0) throw new Error(t("settings.fetchModelsEmpty"));
       setModels(fetched.join(", "));
@@ -4244,7 +4532,14 @@ function ProviderEditor({
       setDefaultEffort((v) => v);
       setFetchStatus(t("settings.fetchModelsSuccess", { n: fetched.length }));
     } catch (e) {
-      setFetchErr(String((e as Error)?.message ?? e));
+      const message = String((e as Error)?.message ?? e);
+      const category = classifyProviderModelProbeError(message);
+      const prefix = category === "auth_failure"
+        ? t("settings.fetchModelsAuthFailure")
+        : category === "provider_unavailable"
+          ? t("settings.fetchModelsProviderUnavailable")
+          : "";
+      setFetchErr(prefix ? `${prefix}: ${message}` : message);
     } finally {
       setFetchingModels(false);
     }
@@ -4270,6 +4565,7 @@ function ProviderEditor({
       apiKeyEnv: effectiveApiKeyEnv,
       authType,
       authTokenEnv: authType === "api_key" ? "" : effectiveAuthTokenEnv,
+      bearerTokenEnv: authType === "api_key" ? "" : effectiveAuthTokenEnv,
       authHeader: authHeader.trim(),
       authScheme: authScheme.trim(),
       identityEnv: identityEnv.trim(),
@@ -4287,11 +4583,12 @@ function ProviderEditor({
       // Clear the stored default if no levels are selected; the backend's
       // NormalizeEffort would otherwise silently ignore an unsupported value.
       defaultEffort: supportedEfforts.length > 0 ? defaultEffort : "",
+      ...profileDraftFields(credentialEnv),
     });
   };
 
   if (builtIn) {
-    const keyEnv = (initial?.authType === "api_key" ? initial?.apiKeyEnv : initial?.authTokenEnv || initial?.identityEnv || initial?.apiKeyEnv)?.trim() ?? "";
+    const keyEnv = (initial?.authType === "api_key" ? initial?.apiKeyEnv : initial?.bearerTokenEnv || initial?.authTokenEnv || initial?.identityEnv || initial?.apiKeyEnv)?.trim() ?? "";
     return (
       <div className="provider-editor provider-editor--builtin provider-editor--key-only">
         {initial && onSaveKey && keyEnv && (
@@ -4371,6 +4668,18 @@ function ProviderEditor({
             <div className="mem-hint">{t("settings.authTokenEnvHint")}</div>
           </>
         )}
+        {authType === "official_auth" && (
+          <>
+            <label className="set-label">{t("settings.officialAuthProfileId")}</label>
+            <input
+              className="mem-input"
+              placeholder="openai-desktop"
+              value={officialAuthProfileId}
+              onChange={(e) => setOfficialAuthProfileId(e.target.value)}
+            />
+            <div className="mem-hint">{t("settings.officialAuthProfileIdHint")}</div>
+          </>
+        )}
         {authType === "workload_identity" && (
           <>
             <label className="set-label">{t("settings.identityEnv")}</label>
@@ -4388,7 +4697,7 @@ function ProviderEditor({
             <input className="mem-input" placeholder="wrkspc_..." value={workspaceId} onChange={(e) => setWorkspaceId(e.target.value)} />
           </>
         )}
-        {(authType === "bearer" || authType === "workload_identity") && (
+        {(authType === "bearer" || authType === "workload_identity" || authType === "official_auth") && (
           <>
             <label className="set-label">{t("settings.authHeader")}</label>
             <input className="mem-input" placeholder="Authorization" value={authHeader} onChange={(e) => setAuthHeader(e.target.value)} />

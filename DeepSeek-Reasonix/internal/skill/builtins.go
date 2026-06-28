@@ -139,6 +139,25 @@ Your final answer:
 
 The 'task' names what to review. Stay on it; don't redesign the feature.`
 
+const builtinCodeReviewBody = `You are running as a Maddog code-review subagent. Combine deterministic review rules with normal LLM judgment over the pending diff.
+
+How to operate:
+- First inspect the current diff and prefer codegraph tools for symbol impact when available.
+- Apply the deterministic rules Maddog also runs offline: secrets, unsafe shell execution, destructive SQL, and large diff summaries.
+- If codegraph or another code backend is degraded, continue with a diff-only fallback and say that scope is reduced.
+- Use LLM judgment for correctness, missing tests, behavioral regressions, and edge cases beyond the rules.
+- Stay read-only. Never commit or modify files from this skill.
+
+Your final answer:
+- Lead with the verdict.
+- List deterministic findings separately from judgment findings when both exist.
+- Cite file:line for every actionable item.
+- If there are no issues, say so plainly and mention whether the review used a diff-only fallback.
+
+` + tuiFormatting + `
+
+The 'task' names what to review. Stay on it; don't redesign the feature.`
+
 const builtinTestBody = `This skill is INLINED — you run in the parent loop. The user asked you to run the tests and fix failures. Run the project's test suite, diagnose any failure, propose and apply fixes, then re-run. Repeat until green or you hit a wall worth escalating.
 
 How to operate:
@@ -236,6 +255,15 @@ func builtinSkills() []Skill {
 			Path:         "(builtin)",
 			RunAs:        RunSubagent,
 			AllowedTools: append([]string(nil), reviewTools...),
+		},
+		{
+			Name:         "code-review",
+			Description:  "Review the pending diff with Maddog deterministic rules plus LLM judgment; uses codegraph when available and falls back to diff-only review when degraded. Read-only.",
+			Body:         builtinCodeReviewBody,
+			Scope:        ScopeBuiltin,
+			Path:         "(builtin)",
+			RunAs:        RunSubagent,
+			AllowedTools: append([]string(nil), readCodeTools...),
 		},
 		{
 			Name:         "security-review",

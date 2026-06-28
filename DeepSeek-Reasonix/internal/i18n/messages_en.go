@@ -364,11 +364,12 @@ var English = Messages{
 
 Usage:
   maddog chat [--model NAME] [-c|--continue] [--resume]   interactive session (multi-turn; -c resumes the latest, --resume picks one)
-  maddog run  [--model NAME] [--max-steps N] <task>   run one task and exit
+  maddog run  [--model NAME] [--max-steps N] [-c|--continue] [--resume PATH] <task>   run one task and exit
   maddog serve [--model NAME] [--addr HOST:PORT]      serve the session over HTTP+SSE (browser client at /)
   maddog acp [--model NAME]                           serve Agent Client Protocol over stdio (also: maddog --acp)
   maddog setup [path]                                 interactive config wizard; writes maddog.toml (+ credentials)
   maddog config auto-plan [off|on]                    configure automatic plan mode
+  maddog workflows <list|show>                        inspect loop workflow templates
   maddog mcp <add|remove|list>                        manage MCP servers in maddog.toml
   maddog doctor [--json]                              print redacted local diagnostics
   maddog version

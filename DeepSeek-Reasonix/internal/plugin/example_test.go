@@ -24,7 +24,7 @@ func buildExamplePlugin(t *testing.T) string {
 	if runtime.GOOS == "windows" {
 		bin += ".exe"
 	}
-	out, err := exec.Command("go", "build", "-o", bin, "reasonix/cmd/reasonix-plugin-example").CombinedOutput()
+	out, err := exec.Command("go", "build", "-o", bin, "reasonix/cmd/maddog-plugin-example").CombinedOutput()
 	if err != nil {
 		t.Fatalf("build example plugin: %v\n%s", err, out)
 	}

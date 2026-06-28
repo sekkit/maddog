@@ -9,8 +9,8 @@ CODEGRAPH_VERSION := v0.9.7
 .PHONY: build vet fmt test hooks cross clean e2e-codegraph
 
 build:
-	CGO_ENABLED=0 go build -ldflags "$(LDFLAGS)" -o bin/maddog$(GOEXE) ./cmd/reasonix
-	CGO_ENABLED=0 go build -ldflags "$(LDFLAGS)" -o bin/maddog-plugin-example$(GOEXE) ./cmd/reasonix-plugin-example
+	CGO_ENABLED=0 go build -ldflags "$(LDFLAGS)" -o bin/maddog$(GOEXE) ./cmd/maddog
+	CGO_ENABLED=0 go build -ldflags "$(LDFLAGS)" -o bin/maddog-plugin-example$(GOEXE) ./cmd/maddog-plugin-example
 
 vet:
 	go vet ./...
@@ -30,7 +30,7 @@ cross:
 	@for p in darwin/amd64 darwin/arm64 linux/amd64 linux/arm64 windows/amd64 windows/arm64; do \
 		os=$${p%/*}; arch=$${p#*/}; ext=; [ $$os = windows ] && ext=.exe; \
 		echo "build $$os/$$arch"; \
-		CGO_ENABLED=0 GOOS=$$os GOARCH=$$arch go build -ldflags "$(LDFLAGS)" -o dist/maddog-$$os-$$arch$$ext ./cmd/reasonix; \
+		CGO_ENABLED=0 GOOS=$$os GOARCH=$$arch go build -ldflags "$(LDFLAGS)" -o dist/maddog-$$os-$$arch$$ext ./cmd/maddog; \
 	done
 
 clean:

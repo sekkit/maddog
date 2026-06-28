@@ -39,6 +39,7 @@ func TestUserStatePathsUseMaddogRoot(t *testing.T) {
 }
 
 func TestProjectConfigIgnoresReasonixProjectConfig(t *testing.T) {
+	isolateUserConfigHome(t)
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "reasonix.toml"), []byte("default_model = \"legacy\"\n"), 0o644); err != nil {
 		t.Fatal(err)

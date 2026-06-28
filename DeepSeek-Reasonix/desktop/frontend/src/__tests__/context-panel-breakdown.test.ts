@@ -1,6 +1,6 @@
 // Run: tsx src/__tests__/context-panel-breakdown.test.ts
 
-import { contextBreakdown, contextCostDisplay } from "../components/ContextPanel";
+import { contextBreakdown, contextCompressionDisplay, contextCostDisplay } from "../components/ContextPanel";
 import { currencySymbol, formatMoney } from "../lib/money";
 
 let passed = 0;
@@ -79,6 +79,12 @@ eq(formatMoney(infoCost.amount, infoCost.currency, "dash"), "$0.1759", "USD pane
 eq(currencySymbol("楼"), "¥", "unexpected currency text does not leak into money values");
 eq(currencySymbol("aud"), "AUD ", "unknown ISO currency codes stay readable");
 eq(currencySymbol("A$"), "A$", "compact multi-character currency symbols are preserved");
+
+console.log("\ncontext panel compression");
+
+eq(contextCompressionDisplay(undefined), "-", "missing compression metrics render as empty");
+eq(contextCompressionDisplay({ savedBytes: 0, savingsRatio: 0.25 }), "-", "zero saved bytes render as empty");
+eq(contextCompressionDisplay({ savedBytes: 5 * 1024, savingsRatio: 0.5 }), "5 KB · 50%", "compression savings show bytes and ratio");
 
 console.log(`\n${passed} passed, ${failed} failed, ${passed + failed} total`);
 if (failed > 0) process.exit(1);

@@ -58,11 +58,211 @@ func TestProviderViewFromEntry_FiltersNonChatModels(t *testing.T) {
 			"mimo-v2-tts-voiceclone", "mimo-v2-tts-voicedesign",
 		},
 	}
-	view := providerViewFromEntry(p, true, false)
+	view := providerViewFromEntry(p, true, false, nil)
 	want := []string{"mimo-v2", "mimo-v2-pro"}
 	if !reflect.DeepEqual(view.Models, want) {
 		t.Errorf("ProviderView.Models = %v, want %v", view.Models, want)
 	}
+}
+
+func TestSettingsIncludesProviderProfilesWithoutSecrets(t *testing.T) {
+	isolateDesktopUserDirs(t)
+	t.Setenv("OPENAI_MAIN_KEY", "sk-openai-secret")
+	t.Setenv("ANTHROPIC_FRONTIER_KEY", "sk-anthropic-secret")
+
+	cfg := config.Default()
+	cfg.DefaultModel = "openai-main/gpt-4o"
+	cfg.Agent.FrontierModel = "anthropic-frontier/claude-sonnet-4"
+	cfg.Agent.FrontierBudget = 123456
+	cfg.Agent.SubagentModel = "icodeeasy-small/qwen2.5-coder"
+	cfg.Agent.SubagentModels = map[string]string{
+		"advisor": "anthropic-frontier/claude-sonnet-4",
+		"maker":   "openai-main/gpt-4o",
+		"checker": "anthropic-frontier/claude-sonnet-4",
+	}
+	cfg.Providers = []config.ProviderEntry{
+		{Name: "openai-main", Kind: "openai", BaseURL: "https://api.openai.com/v1", Models: []string{"gpt-4o"}, APIKeyEnv: "OPENAI_MAIN_KEY"},
+		{Name: "anthropic-frontier", Kind: "anthropic", BaseURL: "https://api.anthropic.com", Models: []string{"claude-sonnet-4"}, APIKeyEnv: "ANTHROPIC_FRONTIER_KEY"},
+		{Name: "icodeeasy-small", Kind: "openai", BaseURL: "https://gateway.icodeeasy.com/v1", Models: []string{"qwen2.5-coder"}, APIKeyEnv: "ICODEEASY_KEY"},
+	}
+	cfg.Desktop.ProviderAccess = []string{"openai-main", "anthropic-frontier", "icodeeasy-small"}
+	if err := os.MkdirAll(filepath.Dir(config.UserConfigPath()), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := cfg.WriteFile(config.UserConfigPath()); err != nil {
+		t.Fatal(err)
+	}
+
+	view := NewApp().Settings()
+	openai := findProviderView(view.Providers, "openai-main")
+	if openai == nil || !containsString(openai.Roles, "default") || !containsString(openai.Roles, "maker") {
+		t.Fatalf("openai provider profile = %+v", openai)
+	}
+	if openai.RoleModels["default"] != "openai-main/gpt-4o" || openai.Gateway != "official_openai" || openai.CredentialStatus != "configured" {
+		t.Fatalf("openai provider profile fields = %+v", openai)
+	}
+	frontier := findProviderView(view.Providers, "anthropic-frontier")
+	if frontier == nil || !containsString(frontier.Roles, "frontier") || !containsString(frontier.Roles, "advisor") || !frontier.BudgetEligible {
+		t.Fatalf("frontier provider profile = %+v", frontier)
+	}
+	small := findProviderView(view.Providers, "icodeeasy-small")
+	if small == nil || small.Gateway != "icodeeasy" || small.CredentialStatus != "missing" || !small.SmallModelEligible {
+		t.Fatalf("small provider profile = %+v", small)
+	}
+
+	raw, err := json.Marshal(view)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "sk-openai-secret") || strings.Contains(string(raw), "sk-anthropic-secret") {
+		t.Fatalf("settings JSON leaked credential: %s", raw)
+	}
+}
+
+func TestSettingsSavesOfficialAuthProfileAndBearerTokenEnv(t *testing.T) {
+	isolateDesktopUserDirs(t)
+	t.Setenv("OPENAI_ACCESS_TOKEN", "sk-official-secret")
+	cfg := config.Default()
+	if err := os.MkdirAll(filepath.Dir(config.UserConfigPath()), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := cfg.WriteFile(config.UserConfigPath()); err != nil {
+		t.Fatal(err)
+	}
+
+	app := NewApp()
+	err := app.SaveProvider(ProviderView{
+		Name:                  "openai-official",
+		Kind:                  "openai",
+		BaseURL:               "https://api.openai.com/v1",
+		Models:                []string{"gpt-5"},
+		Default:               "gpt-5",
+		APIKeyEnv:             "OLD_OPENAI_API_KEY",
+		AuthType:              "official_auth",
+		BearerTokenEnv:        "OPENAI_ACCESS_TOKEN",
+		OfficialAuthProfileID: "openai-desktop",
+	})
+	if err != nil {
+		t.Fatalf("SaveProvider: %v", err)
+	}
+
+	saved := config.LoadForEdit(config.UserConfigPath())
+	entry, ok := saved.Provider("openai-official")
+	if !ok {
+		t.Fatalf("openai-official missing after save: %+v", saved.Providers)
+	}
+	if entry.BearerTokenEnv != "OPENAI_ACCESS_TOKEN" || entry.OfficialAuthProfileID != "openai-desktop" {
+		t.Fatalf("saved auth fields = %+v", entry)
+	}
+	view := app.Settings()
+	p := findProviderView(view.Providers, "openai-official")
+	if p == nil {
+		t.Fatalf("settings provider missing: %+v", view.Providers)
+	}
+	if p.AuthMode != "official_auth" || p.CredentialEnv != "OPENAI_ACCESS_TOKEN" || p.OfficialAuthProfileID != "openai-desktop" {
+		t.Fatalf("settings auth fields = %+v", p)
+	}
+	raw, err := json.Marshal(view)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "sk-official-secret") {
+		t.Fatalf("settings JSON leaked token: %s", raw)
+	}
+}
+
+func TestSettingsBearerAuthDoesNotDisplayOldAPIKeyEnvAsCredential(t *testing.T) {
+	isolateDesktopUserDirs(t)
+	cfg := config.Default()
+	cfg.Providers = []config.ProviderEntry{{
+		Name:           "openai-bearer",
+		Kind:           "openai",
+		BaseURL:        "https://api.openai.com/v1",
+		Models:         []string{"gpt-5"},
+		APIKeyEnv:      "OLD_OPENAI_API_KEY",
+		AuthType:       "bearer",
+		BearerTokenEnv: "OPENAI_ACCESS_TOKEN",
+	}}
+	cfg.Desktop.ProviderAccess = []string{"openai-bearer"}
+	if err := os.MkdirAll(filepath.Dir(config.UserConfigPath()), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := cfg.WriteFile(config.UserConfigPath()); err != nil {
+		t.Fatal(err)
+	}
+
+	view := NewApp().Settings()
+	p := findProviderView(view.Providers, "openai-bearer")
+	if p == nil {
+		t.Fatalf("openai-bearer missing: %+v", view.Providers)
+	}
+	if p.CredentialEnv != "OPENAI_ACCESS_TOKEN" {
+		t.Fatalf("CredentialEnv = %q, want bearer token env", p.CredentialEnv)
+	}
+}
+
+func TestSettingsProviderProfilesReportUnresolvedRoleWarnings(t *testing.T) {
+	isolateDesktopUserDirs(t)
+	cfg := config.Default()
+	cfg.Agent.FrontierModel = "missing-frontier/claude"
+	if err := os.MkdirAll(filepath.Dir(config.UserConfigPath()), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := cfg.WriteFile(config.UserConfigPath()); err != nil {
+		t.Fatal(err)
+	}
+
+	view := NewApp().Settings()
+	if len(view.ProviderProfileWarnings) == 0 {
+		t.Fatalf("ProviderProfileWarnings = none, want unresolved frontier warning")
+	}
+	if view.ProviderProfileWarnings[0].Role != "frontier" || view.ProviderProfileWarnings[0].Ref != "missing-frontier/claude" {
+		t.Fatalf("ProviderProfileWarnings = %+v", view.ProviderProfileWarnings)
+	}
+}
+
+func TestSettingsExposesAndUpdatesContextPolicy(t *testing.T) {
+	isolateDesktopUserDirs(t)
+	cfg := config.Default()
+	cfg.Agent.ContextPolicy = "aggressive"
+	if err := os.MkdirAll(filepath.Dir(config.UserConfigPath()), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := cfg.WriteFile(config.UserConfigPath()); err != nil {
+		t.Fatal(err)
+	}
+
+	app := NewApp()
+	if got := app.Settings().ContextPolicy; got != "aggressive" {
+		t.Fatalf("Settings.ContextPolicy = %q, want aggressive", got)
+	}
+	if err := app.SetContextPolicy("off"); err != nil {
+		t.Fatalf("SetContextPolicy: %v", err)
+	}
+	if got := config.LoadForEdit(config.UserConfigPath()).ContextPolicy(); got != "off" {
+		t.Fatalf("saved context_policy = %q, want off", got)
+	}
+	if err := app.SetContextPolicy("invalid"); err == nil {
+		t.Fatal("SetContextPolicy should reject invalid policy")
+	}
+}
+
+func findProviderView(items []ProviderView, name string) *ProviderView {
+	for i := range items {
+		if items[i].Name == name {
+			return &items[i]
+		}
+	}
+	return nil
+}
+
+func containsString(items []string, want string) bool {
+	for _, item := range items {
+		if item == want {
+			return true
+		}
+	}
+	return false
 }
 
 func TestFetchProviderModelsFiltersNonChatModels(t *testing.T) {
@@ -96,6 +296,37 @@ func TestFetchProviderModelsFiltersNonChatModels(t *testing.T) {
 		t.Fatalf("FetchProviderModels: %v", err)
 	}
 	want := []string{"mimo-v2.5-pro"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("FetchProviderModels = %v, want %v", got, want)
+	}
+}
+
+func TestFetchProviderModelsUsesBearerAuthFromSettingsView(t *testing.T) {
+	t.Setenv("OLD_OPENAI_API_KEY", "old-api-key")
+	t.Setenv("OPENAI_ACCESS_TOKEN", "official-token")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer official-token" {
+			http.Error(w, "bad bearer", http.StatusUnauthorized)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": []map[string]string{{"id": "gpt-5"}, {"id": "text-embedding-3-small"}},
+		})
+	}))
+	defer srv.Close()
+
+	got, err := NewApp().FetchProviderModels(ProviderView{
+		Name:           "openai-official",
+		Kind:           "openai",
+		BaseURL:        srv.URL,
+		APIKeyEnv:      "OLD_OPENAI_API_KEY",
+		AuthType:       "bearer",
+		BearerTokenEnv: "OPENAI_ACCESS_TOKEN",
+	})
+	if err != nil {
+		t.Fatalf("FetchProviderModels: %v", err)
+	}
+	want := []string{"gpt-5"}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("FetchProviderModels = %v, want %v", got, want)
 	}
@@ -196,7 +427,7 @@ func TestSetReasoningLanguagePersistsToUserConfig(t *testing.T) {
 func TestSetReasoningLanguageUpdatesLiveTabControllers(t *testing.T) {
 	isolateDesktopUserDirs(t)
 	projectRoot := t.TempDir()
-	if err := os.WriteFile(filepath.Join(projectRoot, "reasonix.toml"), []byte("[agent]\nreasoning_language = \"en\"\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(projectRoot, "maddog.toml"), []byte("[agent]\nreasoning_language = \"en\"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -324,7 +555,7 @@ func TestProjectHooksSettingsUseActiveWorkspaceRootAndTrust(t *testing.T) {
 	if len(view.Hooks) != 1 || view.Hooks[0].Event != string(hook.Stop) || view.Hooks[0].Description != "Turn done" {
 		t.Fatalf("project hooks = %+v", view.Hooks)
 	}
-	if _, err := os.Stat(filepath.Join(project, ".reasonix", "settings.json")); err != nil {
+	if _, err := os.Stat(filepath.Join(project, ".maddog", "settings.json")); err != nil {
 		t.Fatalf("project hooks settings file missing: %v", err)
 	}
 }
@@ -368,10 +599,10 @@ func TestSaveHooksSettingsForRootUsesDisplayedProjectRoot(t *testing.T) {
 	}}); err != nil {
 		t.Fatalf("SaveHooksSettingsForRoot: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(projectA, ".reasonix", "settings.json")); err != nil {
+	if _, err := os.Stat(filepath.Join(projectA, ".maddog", "settings.json")); err != nil {
 		t.Fatalf("displayed project root settings missing: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(projectB, ".reasonix", "settings.json")); err == nil {
+	if _, err := os.Stat(filepath.Join(projectB, ".maddog", "settings.json")); err == nil {
 		t.Fatal("active project root was written instead of displayed project root")
 	}
 }

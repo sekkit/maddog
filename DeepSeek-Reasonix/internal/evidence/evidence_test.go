@@ -29,6 +29,33 @@ func TestLedgerRecordsSuccessAndFailureReceipts(t *testing.T) {
 	}
 }
 
+func TestLedgerFailureSignalSummarizesRecentToolFailures(t *testing.T) {
+	ledger := NewLedger()
+	ledger.Record(Receipt{ToolName: "read_file", Success: true})
+	frontierStart := ledger.Count()
+	ledger.Record(Receipt{ToolName: "bash", Success: false})
+	ledger.Record(Receipt{ToolName: "write_file", Success: false})
+
+	sig := ledger.FailureSignal()
+	if sig.ConsecutiveErrors != 2 {
+		t.Fatalf("ConsecutiveErrors = %d, want 2", sig.ConsecutiveErrors)
+	}
+	if sig.ErrorStreak != 2 {
+		t.Fatalf("ErrorStreak = %d, want 2", sig.ErrorStreak)
+	}
+	if sig.LastErrorTool != "write_file" {
+		t.Fatalf("LastErrorTool = %q, want write_file", sig.LastErrorTool)
+	}
+	if sig.HealthScore >= 0.5 {
+		t.Fatalf("HealthScore = %.2f, want degraded health", sig.HealthScore)
+	}
+
+	since := ledger.FailureSignalSince(frontierStart)
+	if since.ConsecutiveErrors != 2 || since.LastErrorTool != "write_file" || since.HealthScore != 0 {
+		t.Fatalf("FailureSignalSince = %+v, want only frontier failures", since)
+	}
+}
+
 func TestLedgerMatchesFileReadAndWriteReceipts(t *testing.T) {
 	ledger := NewLedger()
 	ledger.Record(Receipt{ToolName: "read_file", Success: true, Paths: []string{`internal/tool/builtin/completestep.go`}, Read: true})

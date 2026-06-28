@@ -154,7 +154,7 @@ func resolveStdioExecutable(ctx context.Context, s Spec, env []string) (string, 
 // enrichStdioShellPATH probes the user's interactive login shell for its PATH
 // and prepends those directories to the current environment. The result is the
 // subprocess environment with a PATH that matches what the user sees in their
-// terminal, even when Reasonix was launched from the Finder / Dock / open(1).
+// terminal, even when Maddog was launched from the Finder / Dock / open(1).
 func enrichStdioShellPATH(ctx context.Context, env []string) []string {
 	currentPath, _ := envValue(env, "PATH")
 	if shellPath := strings.TrimSpace(stdioShellPATH(ctx)); shellPath != "" {

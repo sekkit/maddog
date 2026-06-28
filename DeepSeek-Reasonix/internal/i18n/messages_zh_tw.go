@@ -317,10 +317,11 @@ var ChineseTraditional = Messages{
   maddog chat [--model NAME] [-c|--continue] [--resume]   互動式會話（多輪；-c 恢復最近一次，--resume 選擇一個）
   maddog run  [--model NAME] [--max-steps N] [-c|--continue] [--resume PATH] <task>   執行單次任務後退出
   maddog serve [--model NAME] [--addr HOST:PORT]      透過 HTTP+SSE 提供會話（瀏覽器客戶端在 /）
-  maddog acp [--model NAME]                           透過 stdio 提供 Agent Client Protocol（也可用：reasonix --acp）
+  maddog acp [--model NAME]                           透過 stdio 提供 Agent Client Protocol（也可用：maddog --acp）
   maddog setup [path]                                 互動式設定精靈；生成 maddog.toml（及 .env）
   maddog config auto-plan [off|on]                    設定自動計畫模式
   maddog config reasoning-language [auto|zh|en]        設定可見思考語言
+  maddog workflows <list|show>                        查看 loop workflow 模板
   maddog mcp <add|remove|list>                        管理 maddog.toml 裡的 MCP 伺服器
   maddog doctor [--json]                              輸出脫敏的本機診斷資訊
   maddog version

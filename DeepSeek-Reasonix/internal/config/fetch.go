@@ -31,13 +31,14 @@ func (e *ProviderEntry) FetchModels(ctx context.Context) ([]string, error) {
 	if key == "" {
 		return nil, fmt.Errorf("fetch models: provider %q has no auth token (set %s in .env)", e.Name, e.AuthEnvName())
 	}
+	auth := e.AuthConfig()
 	candidates, err := BuildModelFetchURLs(e.BaseURL, e.ModelsURL)
 	if err != nil {
 		return nil, err
 	}
 	var lastErr error
 	for _, u := range candidates {
-		models, err := openai.FetchModels(ctx, u, key)
+		models, err := openai.FetchModelsWithAuth(ctx, u, auth, defaultModelFetchAPIKeyHeader(e))
 		if err == nil {
 			return models, nil
 		}
@@ -47,6 +48,15 @@ func (e *ProviderEntry) FetchModels(ctx context.Context) ([]string, error) {
 		}
 	}
 	return nil, lastErr
+}
+
+func defaultModelFetchAPIKeyHeader(e *ProviderEntry) string {
+	switch strings.ToLower(strings.TrimSpace(e.Kind)) {
+	case "anthropic":
+		return "x-api-key"
+	default:
+		return "Authorization"
+	}
 }
 
 // BuildModelFetchURLs derives likely OpenAI-compatible model-list endpoints.

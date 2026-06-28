@@ -51,4 +51,22 @@ func TestProviderAuthMaterial(t *testing.T) {
 	if got := bearer.AuthEnvName(); got != "REASONIX_TEST_TOKEN" {
 		t.Fatalf("bearer AuthEnvName = %q", got)
 	}
+
+	official := ProviderEntry{
+		AuthType:              "official_auth",
+		BearerTokenEnv:        "REASONIX_TEST_TOKEN",
+		OfficialAuthProfileID: "openai-desktop",
+	}
+	if got := official.AuthToken(); got != "token" {
+		t.Fatalf("official AuthToken = %q, want token", got)
+	}
+	if got := official.NormalizedAuthType(); got != "official_auth" {
+		t.Fatalf("official NormalizedAuthType = %q", got)
+	}
+	if got := official.AuthEnvName(); got != "REASONIX_TEST_TOKEN" {
+		t.Fatalf("official AuthEnvName = %q", got)
+	}
+	if !official.Configured() {
+		t.Fatal("official auth profile with bearer token env should be configured")
+	}
 }

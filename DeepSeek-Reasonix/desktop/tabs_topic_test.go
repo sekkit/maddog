@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"reasonix/internal/agent"
+	"reasonix/internal/config"
+	"reasonix/internal/control"
 )
 
 func waitForTabReady(t *testing.T, app *App, tabID string) *WorkspaceTab {
@@ -1210,7 +1212,7 @@ func TestOpenProjectTabResolvesProjectSessionFromLegacyDir(t *testing.T) {
 	if err := setTopicTitle(projectRoot, topicID, topicTitle); err != nil {
 		t.Fatalf("set topic title: %v", err)
 	}
-	dir := config.SessionDir()
+	dir := desktopSessionDir()
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatalf("mkdir sessions: %v", err)
 	}
@@ -1359,7 +1361,7 @@ func TestTrashTopicCancelsRunningSessionRuntime(t *testing.T) {
 	if err := setTopicTitle(projectRoot, topicID, "Running trash"); err != nil {
 		t.Fatalf("set topic title: %v", err)
 	}
-	dir := config.SessionDir()
+	dir := desktopSessionDir()
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatalf("mkdir sessions: %v", err)
 	}
@@ -1425,7 +1427,7 @@ func TestTrashTopicTrashConflictKeepsRunningRuntime(t *testing.T) {
 	if err := setTopicTitle(projectRoot, topicID, "Trash conflict"); err != nil {
 		t.Fatalf("set topic title: %v", err)
 	}
-	dir := config.SessionDir()
+	dir := desktopSessionDir()
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatalf("mkdir sessions: %v", err)
 	}
@@ -1547,7 +1549,7 @@ func TestLegacyMigrationConcurrentRunsHaveNoLostUpdates(t *testing.T) {
 
 func TestFindTopicSessionIndexRefreshesWhenMetaChanges(t *testing.T) {
 	isolateDesktopUserDirs(t)
-	dir := config.SessionDir()
+	dir := desktopSessionDir()
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -1588,7 +1590,7 @@ func TestFindTopicSessionIndexRefreshesWhenMetaChanges(t *testing.T) {
 
 func TestUpdateTopicSessionTitlesUsesTopicIndex(t *testing.T) {
 	isolateDesktopUserDirs(t)
-	dir := config.SessionDir()
+	dir := desktopSessionDir()
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}

@@ -11,11 +11,29 @@ import (
 	"golang.org/x/sys/windows"
 )
 
+const createSuspended = 0x00000004
+
 // SetProcessGroupKill is a no-op on Windows: the Job Object that StartTracked
 // assigns reaps the whole tree on close, so Setpgid (which doesn't exist here)
 // is unnecessary. It exists so non-Windows callers can request group kill
 // uniformly.
 func SetProcessGroupKill(*exec.Cmd) {}
+
+func StartTracked(cmd *exec.Cmd) (uintptr, error) {
+	if cmd == nil {
+		return 0, nil
+	}
+	if cmd.SysProcAttr == nil {
+		cmd.SysProcAttr = &syscall.SysProcAttr{}
+	}
+	cmd.SysProcAttr.CreationFlags |= createSuspended
+	if err := cmd.Start(); err != nil {
+		return 0, err
+	}
+	job := TrackTree(cmd)
+	resumeProcess(uint32(cmd.Process.Pid))
+	return job, nil
+}
 
 // KillTree terminates cmd and every descendant it spawned. Process.Kill only
 // signals the direct child, so a launcher (cmd.exe → node.exe) leaves the

@@ -64,7 +64,11 @@ func (c *responsesClient) Stream(ctx context.Context, req provider.Request) (<-c
 		c.auth.Header(httpReq, "Authorization")
 		return httpReq, nil
 	}
-	resp, err := provider.SendWithRetry(ctx, c.http, c.name, c.keyEnv, newReq)
+	resp, err := provider.SendWithRetry(ctx, c.http, provider.SendOptions{
+		Provider:   c.name,
+		KeyEnv:     c.keyEnv,
+		KeyPresent: strings.TrimSpace(c.auth.Token) != "",
+	}, newReq)
 	if err != nil {
 		return nil, err
 	}

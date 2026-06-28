@@ -26,7 +26,7 @@ func ConfineBash(spec sandbox.Spec, timeout ...time.Duration) tool.Tool {
 	return b
 }
 
-// ConfineWebFetch returns the web_fetch built-in bound to Reasonix proxy
+// ConfineWebFetch returns the web_fetch built-in bound to Maddog proxy
 // settings while preserving its SSRF-guarded dialer.
 func ConfineWebFetch(proxySpec netclient.ProxySpec) tool.Tool {
 	return webFetch{proxySpec: proxySpec}

@@ -78,7 +78,7 @@ func TestDesktopBotRuntimeConfigUsesUserBotSettings(t *testing.T) {
 	}
 
 	project := robustTempDir(t)
-	if err := os.WriteFile(filepath.Join(project, "reasonix.toml"), []byte(`
+	if err := os.WriteFile(filepath.Join(project, "maddog.toml"), []byte(`
 [bot]
 enabled = false
 `), 0o644); err != nil {
@@ -207,7 +207,7 @@ func TestDesktopBotRuntimeMigratesLegacyProjectBotSettings(t *testing.T) {
 	}
 
 	project := robustTempDir(t)
-	if err := os.WriteFile(filepath.Join(project, "reasonix.toml"), []byte(`
+	if err := os.WriteFile(filepath.Join(project, "maddog.toml"), []byte(`
 [bot]
 enabled = true
 
@@ -253,7 +253,7 @@ func TestDesktopBotRuntimePersistsLegacyProjectBotWhenUserConfigMissing(t *testi
 	isolateDesktopUserDirs(t)
 
 	project := robustTempDir(t)
-	if err := os.WriteFile(filepath.Join(project, "reasonix.toml"), []byte(`
+	if err := os.WriteFile(filepath.Join(project, "maddog.toml"), []byte(`
 [desktop]
 theme = "dark"
 
@@ -302,7 +302,7 @@ func TestDesktopSettingsBotMigrationPersistsOnlyBotBeforeFirstEdit(t *testing.T)
 	isolateDesktopUserDirs(t)
 
 	project := robustTempDir(t)
-	if err := os.WriteFile(filepath.Join(project, "reasonix.toml"), []byte(`
+	if err := os.WriteFile(filepath.Join(project, "maddog.toml"), []byte(`
 [desktop]
 theme = "dark"
 close_behavior = "quit"
@@ -360,7 +360,7 @@ func TestDesktopBotRuntimeMigrationDoesNotOverwriteUserBotSettings(t *testing.T)
 	}
 
 	project := robustTempDir(t)
-	if err := os.WriteFile(filepath.Join(project, "reasonix.toml"), []byte(`
+	if err := os.WriteFile(filepath.Join(project, "maddog.toml"), []byte(`
 [bot]
 enabled = true
 

@@ -157,7 +157,7 @@ bash_timeout_seconds = 120   # foreground safety cap; set 0 for no tool-local ca
 # # start. Use /mcp or the desktop MCP panel to refresh, reconnect, or disable.
 
 # Bot gateway: multi-channel IM bot for QQ, Feishu, and WeChat.
-# Start with `reasonix bot start --channels qq,feishu,weixin`.
+# Start with `maddog bot start --channels qq,feishu,weixin`.
 # All secrets are read from environment variables; never put keys here.
 # [bot]
 # enabled    = false

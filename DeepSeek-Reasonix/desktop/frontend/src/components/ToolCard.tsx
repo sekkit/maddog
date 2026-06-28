@@ -109,6 +109,9 @@ export const ToolCard = memo(function ToolCard({ item, subcalls }: { item: ToolI
 
   const duration = item.status === "running" ? "" : formatToolDuration(item.durationMs);
   const summary = item.status === "running" ? "" : item.summary || summarize(item.name, effectiveArgs, effectiveOutput, item.error);
+  const compressionLabel = item.compression?.compressed && item.compression.savedBytes
+    ? `-${item.compression.savedBytes.toLocaleString()} B`
+    : "";
 
   // GSAP-driven collapse/expand for tool body
   const toolBodyRef = useRef<HTMLDivElement>(null);
@@ -133,6 +136,7 @@ export const ToolCard = memo(function ToolCard({ item, subcalls }: { item: ToolI
         </span>
         {profileText && <span className="tool__profile">{profileText}</span>}
         {summary && <span className="tool__summary">{summary}</span>}
+        {compressionLabel && <span className="tool__compression" title={t("tool.compressed")}>{compressionLabel}</span>}
         {duration && <span className="tool__duration">{duration}</span>}
         {hasBody && (
           <span className={`tool__chevron${open ? " tool__chevron--open" : ""}`}>

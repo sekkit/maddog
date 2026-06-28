@@ -6,7 +6,7 @@
 &nbsp;·&nbsp;
 <a href="./SPEC.md">规格</a>
 
-Hooks 让 Reasonix 在会话、用户输入、工具调用、模型返回、压缩上下文等节点执行本地 shell 命令。桌面端在“设置 -> Hooks”里提供图形化编辑入口，本质上读写同一份 `settings.json`。
+Hooks 让 Maddog 在会话、用户输入、工具调用、模型返回、压缩上下文等节点执行本地 shell 命令。桌面端在“设置 -> Hooks”里提供图形化编辑入口，本质上读写同一份 `settings.json`。
 
 > Hook 命令会在本机执行 shell。全局 hooks 默认可信；项目 hooks 必须显式信任项目后才会加载。
 
@@ -34,7 +34,7 @@ Hooks 让 Reasonix 在会话、用户输入、工具调用、模型返回、压�
     ],
     "Stop": [
       {
-        "command": "echo Reasonix turn finished"
+        "command": "echo Maddog turn finished"
       }
     ]
   }
@@ -66,7 +66,7 @@ Hooks 让 Reasonix 在会话、用户输入、工具调用、模型返回、压�
       { "command": "node ~/.maddog/hooks/check-prompt.js" }
     ],
     "Stop": [
-      { "command": "osascript -e 'display notification \"Turn done\" with title \"Reasonix\"'" }
+      { "command": "osascript -e 'display notification \"Turn done\" with title \"Maddog\"'" }
     ]
   }
 }
@@ -104,7 +104,7 @@ Hooks 让 Reasonix 在会话、用户输入、工具调用、模型返回、压�
 
 `match` 是锚定正则：`"file"` 不会匹配 `read_file`，需要写成 `".*file"`。正则非法时该 hook 不会触发。
 
-`command` 会通过平台 shell 执行：macOS/Linux 使用 `sh -c`，Windows 使用 `cmd /c`。stdin 是 Reasonix 写入的一行 JSON，见下面的 payload 表。
+`command` 会通过平台 shell 执行：macOS/Linux 使用 `sh -c`，Windows 使用 `cmd /c`。stdin 是 Maddog 写入的一行 JSON，见下面的 payload 表。
 
 ## 配置里的事件 key
 
@@ -127,7 +127,7 @@ Hooks 让 Reasonix 在会话、用户输入、工具调用、模型返回、压�
 
 ## Hook 命令收到的 payload
 
-Reasonix 会把一行 JSON 写入 hook 命令的 stdin。所有 payload 都至少有：
+Maddog 会把一行 JSON 写入 hook 命令的 stdin。所有 payload 都至少有：
 
 | key | 类型 | 说明 |
 | --- | --- | --- |
@@ -165,7 +165,7 @@ stdout 和 stderr 会被捕获、去掉首尾空白，并限制单路输出最�
 
 特殊 stdout 行为：
 
-- `PostLLMCall`：exit 0 且 stdout 非空时，stdout 会替换用户看到的 reasoning。若 provider 的 reasoning 带签名，Reasonix 会保留原始 signed reasoning 用于后续请求，同时仍展示 hook 转换后的文本。
+- `PostLLMCall`：exit 0 且 stdout 非空时，stdout 会替换用户看到的 reasoning。若 provider 的 reasoning 带签名，Maddog 会保留原始 signed reasoning 用于后续请求，同时仍展示 hook 转换后的文本。
 - `PreCompact`：所有非空 stdout 会按换行拼接，作为本次压缩摘要的额外指导。
 - 其它事件：stdout 只在非通过结果中作为提示文本使用，不会自动进入模型上下文。
 

@@ -60,6 +60,8 @@ func isolateDesktopUserDirs(t *testing.T) string {
 	t.Setenv("USERPROFILE", home)
 	t.Setenv("XDG_CONFIG_HOME", xdg)
 	t.Setenv("AppData", appData)
+	t.Setenv("APPDATA", appData)
+	t.Setenv("LOCALAPPDATA", filepath.Join(home, "LocalAppData"))
 	return home
 }
 
@@ -1052,7 +1054,7 @@ func TestDeleteProviderRejectsAffectedBackgroundJobs(t *testing.T) {
 		t.Fatalf("save config: %v", err)
 	}
 
-	dir := config.SessionDir()
+	dir := desktopSessionDir()
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatalf("mkdir session dir: %v", err)
 	}
@@ -1242,7 +1244,7 @@ func TestSetTokenModeRejectsRunningTurn(t *testing.T) {
 func TestSetTokenModeRejectsBackgroundJobs(t *testing.T) {
 	isolateDesktopUserDirs(t)
 
-	dir := config.SessionDir()
+	dir := desktopSessionDir()
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatalf("mkdir session dir: %v", err)
 	}
@@ -2046,7 +2048,7 @@ func TestCapabilitiesShowsManuallyEnabledContext7Deferred(t *testing.T) {
 	isolateDesktopUserDirs(t)
 	dir := robustTempDir(t)
 	t.Chdir(dir)
-	if err := os.WriteFile(filepath.Join(dir, "reasonix.toml"), []byte(`
+	if err := os.WriteFile(filepath.Join(dir, "maddog.toml"), []byte(`
 [codegraph]
 enabled = false
 
@@ -2089,7 +2091,7 @@ func TestConfiguredMCPWithBuiltInNameTakesPrecedence(t *testing.T) {
 	isolateDesktopUserDirs(t)
 	dir := robustTempDir(t)
 	t.Chdir(dir)
-	if err := os.WriteFile(filepath.Join(dir, "reasonix.toml"), []byte(`
+	if err := os.WriteFile(filepath.Join(dir, "maddog.toml"), []byte(`
 [codegraph]
 enabled = false
 
@@ -2140,7 +2142,7 @@ func TestEditAndRemoveConfiguredMCPWithBuiltInName(t *testing.T) {
 	isolateDesktopUserDirs(t)
 	dir := robustTempDir(t)
 	t.Chdir(dir)
-	if err := os.WriteFile(filepath.Join(dir, "reasonix.toml"), []byte(`
+	if err := os.WriteFile(filepath.Join(dir, "maddog.toml"), []byte(`
 [codegraph]
 enabled = false
 
@@ -2719,7 +2721,7 @@ func TestUpdateBuiltInMCPServerUpdatesCodegraphRuntime(t *testing.T) {
 	isolateDesktopUserDirs(t)
 	dir := robustTempDir(t)
 	t.Chdir(dir)
-	if err := os.WriteFile(filepath.Join(dir, "reasonix.toml"), []byte(`
+	if err := os.WriteFile(filepath.Join(dir, "maddog.toml"), []byte(`
 [codegraph]
 enabled = false
 `), 0o644); err != nil {

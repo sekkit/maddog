@@ -64,9 +64,28 @@ Reasonix 现有架构已具备多 provider（openai + anthropic）、skill 系�
 | Provider cost wrapper | frontier 成本控制 + 所有 provider 的用量可见性 |
 | Desktop UI 扩展（路由指示器、advisor 面板） | 用户可见的路由决策（spec §5.B 要求） |
 
-## 3. 竞品方案调研
+## 3. 外部方案参考
 
-> 本节省略。maddog 是内部开发者工具，融合方案是内部架构决策，不涉及外部产品竞争。
+maddog 是内部开发者工具，不做竞品替换式迁移；外部项目只作为架构模式参考。`cobusgreyling/loop-engineering` 对 maddog 有明确参考价值，但不应引入它的 CLI、Grok `/loop` 语义或外部 agent host。
+
+### 3.1 loop-engineering 可复用模式
+
+| 模式 | maddog 落地方式 | 不直接移植的内容 |
+|---|---|---|
+| Loop template registry | 定义 maddog 自有 `LoopTemplateV1` schema，描述 goal、phases、provider roles、budget、readiness gates、human gates、maker/checker、required MCP/skills、state policy | 不直接复用 `patterns/registry.yaml` 作为运行时格式 |
+| Readiness audit | 作为每次任务启动前的 pre-run gate，检查 provider、credential、budget、MCP/code backend、skills、workspace、kill switch、human gate policy | 不只做文档 checklist 或 UI 提示 |
+| Budget/run log | 建立 loop-level run log，把 provider usage、frontier upgrade、advisor、dynamic skill、replay judge、human gate 归入同一执行链 | 不重新实现一套独立 provider/cost 计算 |
+| Maker/checker execution mode | 在现有 subagent/frontier/advisor 能力上增加 read-only checker gate，再逐步支持自动返工 | 不把 advisor 等同于 checker，也不引入外部 agent host |
+| Loop Control Surface | Desktop GUI 中呈现 workflow templates、readiness、budget、maker-checker、live run、run report | 不做 landing page 或只读说明页 |
+
+### 3.2 maddog 设计约束
+
+- 新增 loop 能力必须进入单体 Go runtime，继续以 Reasonix kernel + Wails desktop 为基座。
+- `LoopTemplateV1`、`ReadinessResult`、`RunLog`、`MakerChecker`、`ProviderRole/Profile` 是开发前必须冻结的五个契约。
+- 后台执行必须有 `RunID / LoopID / TurnID / StepID`，所有模型调用、工具调用、预算扣减、human gate、kill switch、checker verdict 都要能追踪到同一条执行链。
+- Budget 是请求路径上的硬上限，不是 UI 提醒；frontier、advisor、dynamic skill generation、replay judge 均计入同一个 loop/session budget ledger。
+- Kill switch 分三层：单次 turn cancel、整个 loop stop、全局 emergency stop，并向 agent context、provider stream、MCP/plugin、子进程树传播。
+- 凭据只允许记录 env var 名称、auth profile id 或系统凭据引用；run log、session、replay bundle 不得写入 API key、OAuth token、icodeeasy token 或 Authorization header。
 
 ## 4. 方案对比
 
@@ -289,7 +308,7 @@ func (s *Store) Inject(sk Skill) error   // 注入到内存索引，不写盘
 func (s *Store) Remove(name string)      // 从内存索引移除
 ```
 
-`Inject()` 将 skill 加入 `Store` 的内部 map（与 `List()` / `Read()` 共享同一个 `byName` 索引）。不创建文件，不触及 `.reasonix/skills/` 目录。`Remove()` 仅在 session 结束时清理，或在 validator 拒绝时立即移除。
+`Inject()` 将 skill 加入 `Store` 的内部 map（与 `List()` / `Read()` 共享同一个 `byName` 索引）。不创建文件，不触及 Maddog 持久 skill root（如 `.maddog/skills` 或用户配置目录）。`Remove()` 仅在 session 结束时清理，或在 validator 拒绝时立即移除。
 
 **运行时编排流程：**
 
@@ -326,7 +345,7 @@ flowchart LR
 方向性指引，非实现规格：
 
 type ReplayBundle struct {
-    Session    []provider.Message   // 完整 message log
+    Session    []provider.Message   // 脱敏后的 message log 引用或摘要
     Evidence   []evidence.Receipt   // 对应 turn 的 tool receipt
     Outcome    OutcomeInfo          // 任务级别结果
     Timestamp  time.Time
@@ -344,22 +363,22 @@ type OutcomeInfo struct {
 
 **Replay 采集点**（`internal/agent/agent.go:448`）：
 
-在 `Agent.Run()` 正常返回（model 给出 final answer）时，采集当前 session messages + evidence receipts → 写入 replay bundle。采集**不阻塞** turn 完成（异步写入）。
+在 `Agent.Run()` 正常返回（model 给出 final answer）时，采集当前 session 摘要/引用 + evidence receipts → 写入 replay bundle。采集**不阻塞** turn 完成（异步写入）。实现时必须复用 loop run log 的脱敏策略，不把 provider headers、API key、OAuth token、icodeeasy token 或 dotenv secret 写入 bundle。
 
 **离线评测管线（独立 CLI 命令或复用 `cmd/e2ebench/`）：**
 
 ```mermaid
 flowchart TB
-    Bundles["Replay Bundles\n(session + evidence + outcome)"] --> Split["split → held-out set"]
-    Split --> Replay["Replay Runner\n用 session messages 重新执行"]
+    Bundles["Replay Bundles\n(sanitized session ref + evidence + outcome)"] --> Split["split → held-out set"]
+    Split --> Replay["Replay Runner\n用脱敏 session ref 重新执行"]
     Replay --> Score["Frontier Scorer\n对比 outcome"]
     Score --> Guard["Guardrail Check\n回归检测\n质量阈值"]
     Guard -->|"通过"| Promote["Promote → Skill 版本晋升"]
     Guard -->|"失败"| Reject["Reject → 保留旧版本"]
-    Promote --> Store2["Store skill 新版本\n(.reasonix/skills/)"]
+    Promote --> Store2["Store skill 新版本\n(.maddog/skills 或 Maddog skill root)"]
 ```
 
-**Replay Runner** 复用现有 `RunSubAgent()` 机制（`internal/agent/task.go:229`）——给定 session messages + skill definition，重新执行并比较 outcome。
+**Replay Runner** 复用现有 `RunSubAgent()` 机制（`internal/agent/task.go:229`）——给定脱敏 session ref + skill definition，重新执行并比较 outcome。
 
 **打分前沿**：frontier 模型（最强模型）作为"裁判"，对比原始 outcome 和 replayed outcome，给出 0-1 分。
 
@@ -506,13 +525,13 @@ sequenceDiagram
 
 maddog 为内部开发者工具，不涉及 PII/PCI/GDPR 合规。但需注意：
 - Frontier provider 的 API key 通过环境变量注入（复用 Reasonix 的 `api_key_env` 机制），不落盘
-- Skill 版本晋升的历史记录（哪个版本何时被 promot）写入 session 日志，供审计
+- Skill 版本晋升的历史记录（哪个版本何时被 promote）写入 Maddog run log / promotion audit，供审计
 
 ### 7.3 敏感数据处理
 
 - Frontier API key：通过 `api_key_env` → `os.Getenv()` 读取，不在 config.toml 或 session 中持久化
-- Replay bundle：存储完整 message log（可能包含代码、文件路径），存储在 `config.SessionDir()` 下，跟随 Reasonix 现有 session 存储权限（0600）
-- Budget 数据：仅 session 内存中的原子计数器，不落盘
+- Replay bundle：只存储脱敏后的 message 摘要/引用、evidence、outcome、raw output ref；落在 Maddog 数据目录的 run/replay 存储下，并继承 run log 的 redaction、retention、export 策略
+- Budget 数据：请求路径中以 ledger enforce；run report 只保存脱敏后的 token/cost 汇总和 budget decision，不保存 credential 或 provider headers
 
 ## 8. 性能设计
 

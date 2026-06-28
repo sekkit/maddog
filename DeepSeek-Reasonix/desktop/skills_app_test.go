@@ -3,11 +3,13 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"reasonix/internal/config"
 	"reasonix/internal/control"
 	"reasonix/internal/skill"
+	"reasonix/internal/skilleval"
 )
 
 func TestNormalizeSkillPathDirectoryLayout(t *testing.T) {
@@ -232,6 +234,138 @@ func TestCapabilitiesIncludesDisabledSkills(t *testing.T) {
 	if !ok || enabled {
 		t.Fatalf("review should be disabled but present in capabilities: %+v", view.Skills)
 	}
+}
+
+func TestCapabilitiesIncludesSkillCandidatesAndPromotionAudit(t *testing.T) {
+	isolateDesktopUserDirs(t)
+	project := robustTempDir(t)
+	t.Chdir(project)
+	store := skilleval.NewProjectStore(project)
+	candidate := seedDesktopSkillCandidate(t, store, skilleval.DecisionPromotable)
+	a := NewApp()
+	a.setTestCtrl(control.New(control.Options{}), "")
+	defer a.activeCtrl().Close()
+
+	view := a.Capabilities()
+	if len(view.SkillCandidates) != 1 || view.SkillCandidates[0].ID != candidate.ID || view.SkillCandidates[0].Decision != string(skilleval.DecisionPromotable) {
+		t.Fatalf("skill candidates view = %+v", view.SkillCandidates)
+	}
+
+	promoted, err := a.PromoteSkillCandidate(candidate.ID)
+	if err != nil {
+		t.Fatalf("PromoteSkillCandidate: %v", err)
+	}
+	if promoted.Status != string(skilleval.CandidatePromoted) || promoted.PromotedPath == "" {
+		t.Fatalf("promoted candidate view = %+v", promoted)
+	}
+	body, err := os.ReadFile(filepath.Join(project, ".maddog", "skills", "dynamic-docs", skill.SkillFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(body), "Inspect files and draft focused docs.") {
+		t.Fatalf("promoted skill file body = %s", body)
+	}
+	view = a.Capabilities()
+	if !hasSkillView(view.Skills, "dynamic-docs") {
+		t.Fatalf("promoted skill should appear in capabilities skills: %+v", view.Skills)
+	}
+
+	if err := a.RollbackPromotedSkill(candidate.ID); err != nil {
+		t.Fatalf("RollbackPromotedSkill: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(project, ".maddog", "skills", "dynamic-docs", skill.SkillFile)); !os.IsNotExist(err) {
+		t.Fatalf("rollback should remove promoted skill, stat err=%v", err)
+	}
+	rolledBack, ok, err := store.ReadCandidate(candidate.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok || rolledBack.Status != skilleval.CandidatePending {
+		t.Fatalf("rolled back candidate = %+v ok=%v", rolledBack, ok)
+	}
+	audit, err := os.ReadFile(filepath.Join(project, ".maddog", "skilleval", "audit.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(audit), `"action":"promote"`) || !strings.Contains(string(audit), `"action":"rollback"`) {
+		t.Fatalf("audit log missing promote/rollback: %s", audit)
+	}
+}
+
+func TestRejectSkillCandidateKeepsCandidateTraceable(t *testing.T) {
+	isolateDesktopUserDirs(t)
+	project := robustTempDir(t)
+	t.Chdir(project)
+	store := skilleval.NewProjectStore(project)
+	candidate := seedDesktopSkillCandidate(t, store, skilleval.DecisionReviewNeeded)
+	a := NewApp()
+	a.setTestCtrl(control.New(control.Options{}), "")
+	defer a.activeCtrl().Close()
+
+	rejected, err := a.RejectSkillCandidate(candidate.ID, "needs more held-out bundles")
+	if err != nil {
+		t.Fatalf("RejectSkillCandidate: %v", err)
+	}
+	if rejected.Status != string(skilleval.CandidateRejected) || !strings.Contains(rejected.Reason, "held-out") {
+		t.Fatalf("rejected view = %+v", rejected)
+	}
+	view := a.Capabilities()
+	if len(view.SkillCandidates) != 1 || view.SkillCandidates[0].Status != string(skilleval.CandidateRejected) {
+		t.Fatalf("rejected candidate should remain visible: %+v", view.SkillCandidates)
+	}
+}
+
+func seedDesktopSkillCandidate(t *testing.T, store *skilleval.Store, decision skilleval.Decision) skilleval.Candidate {
+	t.Helper()
+	bundle := skilleval.BuildBundle(skilleval.BundleInput{
+		Task:     "draft docs",
+		Source:   "test",
+		Snapshot: map[string]any{"tool": "read_file"},
+	})
+	if err := store.WriteBundle(bundle); err != nil {
+		t.Fatal(err)
+	}
+	candidate, _, err := store.AddCandidate(skilleval.CandidateInput{
+		BundleID: bundle.ID,
+		Skill: skilleval.SkillSnapshot{
+			Name:        "dynamic-docs",
+			Description: "Docs helper",
+			Body:        "Inspect files and draft focused docs.",
+			RunAs:       string(skill.RunInline),
+		},
+		Validation: skilleval.ValidationSnapshot{Valid: true},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.UpdateCandidateEvaluation(candidate.ID, skilleval.EvaluationSummary{
+		CandidateID:       candidate.ID,
+		Decision:          string(decision),
+		Reason:            "test decision",
+		ReplayCases:       2,
+		HeldOutCases:      2,
+		BaselinePassRate:  0,
+		CandidatePassRate: 1,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	candidate, ok, err := store.ReadCandidate(candidate.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("candidate disappeared")
+	}
+	return candidate
+}
+
+func hasSkillView(skills []SkillView, name string) bool {
+	for _, sk := range skills {
+		if sk.Name == name {
+			return true
+		}
+	}
+	return false
 }
 
 func realTestPath(path string) string {

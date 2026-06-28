@@ -382,7 +382,7 @@ type Messages struct {
 	ProviderPickLabel    string // label for provider model picker
 	ProviderNoModelsFmt  string // provider has no models
 
-	// `reasonix upgrade` / `reasonix update` — self-update
+	// `maddog upgrade` / `maddog update` — self-update
 	UpgradeChecking            string // "Checking for updates…"
 	UpgradeDevBuild            string // dev builds cannot self-update
 	UpgradeFetchFailed         string // "failed to check for updates: %v"

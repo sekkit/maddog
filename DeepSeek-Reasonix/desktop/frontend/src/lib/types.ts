@@ -24,6 +24,11 @@ export type EventKind =
   | "budget_exceeded"
   | "skill_promoted"
   | "steer"
+  | "readiness"
+  | "provider_status"
+  | "run_report_ready"
+  | "maker_checker"
+  | "human_gate"
   | "advisor";
 
 export interface WireCompaction {
@@ -50,6 +55,18 @@ export interface WireTool {
   partial?: boolean; // an early dispatch (name only) — a full one with args follows
   parentId?: string; // set on a sub-agent's calls — the parent `task` call's id
   profile?: WireProfile; // subagent model/effort resolved for this call
+  compression?: ToolCompressionView;
+}
+
+export interface ToolCompressionView {
+  compressed?: boolean;
+  strategy?: string;
+  rawRef?: string;
+  rawAvailable?: boolean;
+  rawError?: string;
+  originalBytes?: number;
+  compressedBytes?: number;
+  savedBytes?: number;
 }
 
 export interface WireUsage {
@@ -79,6 +96,129 @@ export interface WireAdvisor {
   remainingThisSession?: number;
   maxUsesPerTurn?: number;
   maxUsesPerSession?: number;
+}
+
+export interface SkillCandidateView {
+  id?: string;
+  skillName?: string;
+  description?: string;
+  bundleId?: string;
+  bundleIds?: string[];
+  candidateId?: string;
+  status?: string;
+  decision?: string;
+  reason?: string;
+  promotedPath?: string;
+  replayCases?: number;
+  heldOutCases?: number;
+  baselinePassRate?: number;
+  candidatePassRate?: number;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface ProviderStatusView {
+  role: string;
+  provider?: string;
+  model?: string;
+  status?: string;
+  upgradeReason?: string;
+  requestCount?: number;
+  promptTokens?: number;
+  completionTokens?: number;
+  totalTokens?: number;
+  cacheHitTokens?: number;
+  cacheMissTokens?: number;
+  reasoningTokens?: number;
+  cost?: number;
+  currency?: string;
+  rateStatus?: string;
+  balance?: string;
+  budgetUsedTokens?: number;
+  budgetLimitTokens?: number;
+  budgetRemainingTokens?: number;
+  warning?: string;
+}
+
+export type ReadinessStatus = "ready" | "warning" | "blocked" | "needs_approval" | string;
+export type ReadinessCheckStatus = "passed" | "warning" | "blocked" | "needs_approval" | string;
+
+export interface ReadinessCheckView {
+  id: string;
+  label?: string;
+  status: ReadinessCheckStatus;
+  message?: string;
+  repairHint?: string;
+  role?: string;
+  provider?: string;
+  modelRef?: string;
+  credentialEnv?: string;
+  capability?: string;
+}
+
+export interface ReadinessResultView {
+  status: ReadinessStatus;
+  score: number;
+  checks: ReadinessCheckView[];
+  blockers?: string[];
+  warnings?: string[];
+  repairHints?: string[];
+  templateId?: string;
+  runId?: string;
+}
+
+export interface RunReportView {
+  runId?: string;
+  loopId?: string;
+  templateId?: string;
+  status: string;
+  finalStatus?: string;
+  path: string;
+  reportPath?: string;
+  events: number;
+  phases?: { id: string; status?: string }[];
+  models?: {
+    role?: string;
+    provider?: string;
+    model?: string;
+    totalTokens?: number;
+    cost?: number;
+    currency?: string;
+    upgradeReason?: string;
+  }[];
+  budget?: {
+    usedTokens?: number;
+    limitTokens?: number;
+    remainingTokens?: number;
+    cost?: number;
+    currency?: string;
+  };
+  readiness?: ReadinessResultView;
+  checker?: MakerCheckerResultView;
+  humanGate?: HumanGateResultView;
+}
+
+export interface MakerCheckerResultView {
+  mode: "off" | "review_only" | "enforced_before_done" | string;
+  verdict?: "approved" | "changes_requested" | "blocked" | "needs_human" | string;
+  isolation?: "none" | "weak" | "strong" | string;
+  canComplete: boolean;
+  retryAllowed?: boolean;
+  retryCount?: number;
+  maxRetries?: number;
+  makerProvider?: string;
+  makerModel?: string;
+  checkerProvider?: string;
+  checkerModel?: string;
+  reason?: string;
+  humanGate?: HumanGateResultView;
+}
+
+export interface HumanGateResultView {
+  kind?: "git_push" | "delete_files" | "credential_change" | "budget_increase" | "skill_promotion" | "checker_verdict" | string;
+  required: boolean;
+  status?: string;
+  reason?: string;
 }
 
 export interface WireApproval {
@@ -119,6 +259,12 @@ export interface WireEvent {
   tool?: WireTool;
   usage?: WireUsage;
   advisor?: WireAdvisor;
+  skillCandidate?: SkillCandidateView;
+  providerStatus?: ProviderStatusView;
+  readiness?: ReadinessResultView;
+  runReport?: RunReportView;
+  makerChecker?: MakerCheckerResultView;
+  humanGate?: HumanGateResultView;
   approval?: WireApproval;
   ask?: WireAsk;
   compaction?: WireCompaction;
@@ -312,6 +458,17 @@ export interface ContextInfo {
   window: number;
   sessionTokens: number;
   compactRatio?: number;
+  compression?: CompressionMetricsView;
+}
+
+export interface CompressionMetricsView {
+  items?: number;
+  compressedItems?: number;
+  originalBytes?: number;
+  compressedBytes?: number;
+  savedBytes?: number;
+  savingsRatio?: number;
+  byStrategy?: Record<string, number>;
 }
 
 export interface Meta {
@@ -478,6 +635,34 @@ export interface MCPToolView {
   name: string;
   description: string;
 }
+export interface CodeBackendView {
+  id: string;
+  name: string;
+  server: string;
+  kind: string;
+  default: boolean;
+  builtIn: boolean;
+  enabled: boolean;
+  health: "available" | "degraded" | "disabled" | "invalid" | string;
+  indexFreshness: string;
+  toolCount: number;
+  lastError?: string;
+  capabilities: string[];
+  risks: string[];
+  toolMapping: Record<string, string>;
+  benchmark?: CodeBackendBenchmarkView;
+}
+export interface CodeBackendBenchmarkView {
+  backendId: string;
+  path: string;
+  generatedAt: string;
+  health: string;
+  topKRelevance: number;
+  citationPrecision?: number;
+  toolFailures: number;
+  unsupported: number;
+  tokenCharsReturned: number;
+}
 export interface SkillView {
   name: string;
   description: string;
@@ -504,8 +689,71 @@ export interface SkillRootView {
 }
 export interface CapabilitiesView {
   servers: ServerView[];
+  codeBackends: CodeBackendView[];
   skills: SkillView[];
+  skillCandidates: SkillCandidateView[];
   skillRoots: SkillRootView[];
+}
+
+export interface WorkflowPhaseView {
+  id: string;
+  name: string;
+  goal: string;
+}
+export interface WorkflowBudgetView {
+  frontierTokens: number;
+  totalTokens?: number;
+}
+export interface MakerCheckerView {
+  mode: "off" | "review_only" | "enforced_before_done" | string;
+}
+export interface WorkflowBoundedFanOutView {
+  maxParallel: number;
+  maxDepth: number;
+  requiresHumanApproval: boolean;
+}
+export interface WorkflowArtifactMappingView {
+  artifact: string;
+  reportField: string;
+}
+export interface WorkflowArtifactsView {
+  taskPacketFields: string[];
+  boundedFanOut: WorkflowBoundedFanOutView;
+  delegationArtifacts: string[];
+  integrationChecklist: string[];
+  finalVerificationArtifacts: string[];
+  runReportMapping: WorkflowArtifactMappingView[];
+}
+export interface WorkflowRefinementStrategyView {
+  enabled: boolean;
+  searchModes: string[];
+  critiqueRounds: number;
+  correctionRounds: number;
+  finalJudgeIsolation: "none" | "weak" | "strong" | string;
+  budgetCapTokens: number;
+  killSwitchRequired: boolean;
+  humanApprovalRequired: boolean;
+}
+export interface WorkflowTemplateView {
+  schemaVersion: "v1" | string;
+  id: string;
+  name: string;
+  goal: string;
+  risk: string;
+  phases: WorkflowPhaseView[];
+  providerRoles: string[];
+  budget: WorkflowBudgetView;
+  readinessGates: string[];
+  humanGates: string[];
+  makerChecker: MakerCheckerView;
+  requiredCapabilities: string[];
+  artifacts: WorkflowArtifactsView;
+  refinementStrategy: WorkflowRefinementStrategyView;
+  statePolicy: string;
+  maxIterations: number;
+  source: "built-in" | "project" | string;
+  sourcePath?: string;
+  hash: string;
 }
 export interface BuiltInMCPUpdateResult {
   name: string;
@@ -625,7 +873,7 @@ export interface MemoryView {
 }
 
 // SettingsTab is the top-level navigation item in the Settings Centre modal.
-export type SettingsTab = "general" | "models" | "providers" | "bots" | "mcp" | "skills" | "memory" | "hooks" | "permissions" | "sandbox" | "network" | "appearance" | "updates";
+export type SettingsTab = "general" | "models" | "providers" | "workflows" | "bots" | "mcp" | "skills" | "memory" | "hooks" | "permissions" | "sandbox" | "network" | "appearance" | "updates";
 
 // Settings panel payloads (desktop/settings_app.go).
 export interface ProviderView {
@@ -638,8 +886,9 @@ export interface ProviderView {
   modelsUrl: string; // optional override for model discovery; empty derives from baseUrl
   default: string;
   apiKeyEnv: string;
-  authType: string; // api_key|bearer|workload_identity; empty = api_key
+  authType: string; // api_key|bearer|workload_identity|official_auth; empty = api_key
   authTokenEnv: string;
+  bearerTokenEnv: string;
   authHeader: string;
   authScheme: string;
   identityEnv: string;
@@ -648,12 +897,23 @@ export interface ProviderView {
   organizationId: string;
   serviceAccountId: string;
   workspaceId: string;
+  officialAuthProfileId: string;
   keySet: boolean; // the env var currently resolves to a value
   balanceUrl: string; // optional wallet-balance endpoint; "" disables the readout
   contextWindow: number;
   reasoningProtocol: string; // auto|deepseek|openai|none; empty = auto/model registry
   supportedEfforts: string[]; // custom /effort levels; empty = use built-in Kind/BaseURL default
   defaultEffort: string; // /effort level when user picks "auto" or unset; "" = supportedEfforts[0]
+  roles: string[];
+  roleModels: Record<string, string>;
+  authMode: string;
+  credentialEnv: string;
+  credentialStatus: "configured" | "missing" | "not_configured" | string;
+  gateway: "official_openai" | "official_anthropic" | "icodeeasy" | "openai_compatible" | "anthropic_compatible" | "custom" | string;
+  frontierEligible: boolean;
+  smallModelEligible: boolean;
+  budgetEligible: boolean;
+  warnings: string[];
 }
 
 // BalanceInfo is the wallet-balance readout (desktop/app.go Balance). available
@@ -872,8 +1132,10 @@ export interface SettingsView {
   upgradeThreshold: number;
   frontierBudget: number;
   autoPlan: string;
+  contextPolicy: string;
   providers: ProviderView[];
   officialProviders: ProviderView[];
+  providerProfileWarnings: ProviderRoleWarningView[];
   permissions: PermissionsView;
   sandbox: SandboxView;
   network: NetworkView;
@@ -894,6 +1156,12 @@ export interface SettingsView {
   providerKinds: string[]; // provider implementations the kernel registered (for the kind picker)
   autoApproveTools: boolean;
   bypass: boolean; // legacy JSON key for live YOLO/full-access tool auto-approval
+}
+
+export interface ProviderRoleWarningView {
+  role: string;
+  ref: string;
+  message: string;
 }
 
 // Auto-updater payloads (desktop/updater.go). UpdateInfo drives the update banner;

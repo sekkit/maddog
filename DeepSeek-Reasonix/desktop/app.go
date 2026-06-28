@@ -18,7 +18,6 @@ import (
 	"path/filepath"
 	goruntime "runtime"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -33,18 +32,21 @@ import (
 	"reasonix/internal/builtinmcp"
 	"reasonix/internal/codegraph"
 	"reasonix/internal/config"
+	ctxcompress "reasonix/internal/context"
 	"reasonix/internal/control"
 	"reasonix/internal/event"
 	"reasonix/internal/evidence"
 	"reasonix/internal/fileref"
 	fileenc "reasonix/internal/fileutil/encoding"
 	"reasonix/internal/i18n"
+	"reasonix/internal/loop"
 	"reasonix/internal/mcpdiag"
 	"reasonix/internal/memory"
 	"reasonix/internal/netclient"
 	"reasonix/internal/plugin"
 	"reasonix/internal/provider"
 	"reasonix/internal/skill"
+	"reasonix/internal/skilleval"
 )
 
 // eventChannel is the Wails runtime event name the frontend subscribes to for the
@@ -1247,7 +1249,7 @@ func (a *App) activeSessionDir() string {
 // marking the one the current conversation is writing to and attaching any
 // user-chosen titles.
 func (a *App) ListSessions() []SessionMeta {
-	dir := desktopSessionDir()
+	dir := a.activeSessionDir()
 	infos, err := agent.ListSessions(dir)
 	if err != nil {
 		return []SessionMeta{}
@@ -1266,20 +1268,19 @@ func (a *App) ListSessions() []SessionMeta {
 // ListTrashedSessions returns sessions that were moved to the local trash,
 // newest-deleted first. These can be previewed, restored, or permanently purged.
 func (a *App) ListTrashedSessions() []SessionMeta {
-	dir := desktopSessionDir()
-	paths, err := listTrashedSessionFiles(dir)
-	if err != nil {
-		return []SessionMeta{}
-	}
-	titles := loadSessionTitles(dir)
-	out := make([]SessionMeta, 0, len(paths))
-	for _, path := range paths {
-		infos, err := agent.ListSessions(filepath.Dir(path))
-		if err != nil || len(infos) == 0 {
+	out := []SessionMeta{}
+	seen := map[string]bool{}
+	for _, dir := range a.knownSessionDirs() {
+		paths, err := listTrashedSessionFiles(dir)
+		if err != nil {
 			continue
 		}
 		titles := loadSessionTitles(dir)
 		for _, path := range paths {
+			if seen[path] {
+				continue
+			}
+			seen[path] = true
 			infos, err := agent.ListSessions(filepath.Dir(path))
 			if err != nil || len(infos) == 0 {
 				continue
@@ -1307,6 +1308,14 @@ func (a *App) trashedSessionDir(path string) (string, error) {
 }
 
 func (a *App) sessionDirForPath(path string) (string, string, error) {
+	if !filepath.IsAbs(path) {
+		if dir := a.activeSessionDir(); strings.TrimSpace(dir) != "" {
+			sessionPath, _, err := validateSessionPath(dir, path)
+			if err == nil {
+				return dir, sessionPath, nil
+			}
+		}
+	}
 	for _, dir := range a.knownSessionDirs() {
 		sessionPath, _, err := validateSessionPath(dir, path)
 		if err == nil {
@@ -1339,11 +1348,11 @@ func sessionMetaFromInfo(s agent.SessionInfo, title string, current, open bool, 
 // has an in-process runtime, the runtime is cancelled and removed first so
 // autosave cannot recreate or append to the deleted file later.
 func (a *App) DeleteSession(path string) error {
-	dir := desktopSessionDir()
-	sessionPath, key, err := validateSessionPath(dir, path)
+	dir, sessionPath, err := a.sessionDirForPath(path)
 	if err != nil {
 		return err
 	}
+	key := filepath.Base(sessionPath)
 	if err := validateSessionTrashTarget(dir, sessionPath, key); err != nil {
 		return err
 	}
@@ -1635,7 +1644,10 @@ func (a *App) activeSessionPath(dir string) string {
 
 // RestoreSession moves a trashed session back into the saved-session list.
 func (a *App) RestoreSession(path string) error {
-	dir := desktopSessionDir()
+	dir, err := a.trashedSessionDir(path)
+	if err != nil {
+		return err
+	}
 	_, key, _, err := validateTrashedSessionPath(dir, path)
 	if err != nil {
 		return err
@@ -1672,13 +1684,21 @@ func (a *App) sessionDestroying(dir, sessionPath string) bool {
 // PurgeTrashedSession permanently removes a trashed session and its title/display
 // sidecars.
 func (a *App) PurgeTrashedSession(path string) error {
-	return purgeTrashedSessionFile(desktopSessionDir(), path)
+	dir, err := a.trashedSessionDir(path)
+	if err != nil {
+		return err
+	}
+	return purgeTrashedSessionFile(dir, path)
 }
 
 // RenameSession sets a custom display name for a session (empty clears it back to
 // the preview). It only affects the history panel; the file on disk is unchanged.
 func (a *App) RenameSession(path, title string) error {
-	return setSessionTitle(desktopSessionDir(), path, title)
+	dir, _, err := a.sessionDirForPath(path)
+	if err != nil {
+		return err
+	}
+	return setSessionTitle(dir, path, title)
 }
 
 // ResumeSession snapshots the current conversation, then loads the session at
@@ -1782,7 +1802,19 @@ func (a *App) rebindTabToSessionPath(tab *WorkspaceTab, sessionPath string) erro
 // PreviewSession reads a saved session for display only. It does not snapshot or
 // swap the active controller, so the history drawer can call it while a turn runs.
 func (a *App) PreviewSession(path string) ([]HistoryMessage, error) {
-	return previewSessionMessages(desktopSessionDir(), path)
+	dir, _, err := a.sessionDirForPath(path)
+	if err == nil {
+		return previewSessionMessages(dir, path)
+	}
+	trashDir, trashErr := a.trashedSessionDir(path)
+	if trashErr != nil {
+		return nil, err
+	}
+	sessionPath, _, _, trashErr := validateTrashedSessionPath(trashDir, path)
+	if trashErr != nil {
+		return nil, trashErr
+	}
+	return previewSessionFileMessages(trashDir, sessionPath)
 }
 
 // PickWorkspace opens a folder chooser and, on a pick, opens a new project tab
@@ -2148,6 +2180,10 @@ func previewSessionMessages(sessionDir, path string) ([]HistoryMessage, error) {
 	if err != nil {
 		return nil, err
 	}
+	return previewSessionFileMessages(sessionDir, sessionPath)
+}
+
+func previewSessionFileMessages(sessionDir, sessionPath string) ([]HistoryMessage, error) {
 	if out, ok, err := previewEventSessionMessages(sessionPath); ok || err != nil {
 		return out, err
 	}
@@ -2302,10 +2338,11 @@ func firstNonEmpty(values ...string) string {
 // ContextInfo is the prompt-vs-window gauge payload plus session totals. Used
 // and Window both zero means no context-window data yet.
 type ContextInfo struct {
-	Used          int     `json:"used"`
-	Window        int     `json:"window"`
-	SessionTokens int     `json:"sessionTokens"`
-	CompactRatio  float64 `json:"compactRatio,omitempty"`
+	Used          int                                    `json:"used"`
+	Window        int                                    `json:"window"`
+	SessionTokens int                                    `json:"sessionTokens"`
+	CompactRatio  float64                                `json:"compactRatio,omitempty"`
+	Compression   ctxcompress.CompressionMetricsSnapshot `json:"compression,omitempty"`
 }
 
 // ContextUsage returns the latest context-window gauge numbers.
@@ -2330,7 +2367,7 @@ func (a *App) ContextUsageForTab(tabID string) ContextInfo {
 		return ContextInfo{SessionTokens: sessionTokens}
 	}
 	used, window := ctrl.ContextSnapshot()
-	return ContextInfo{Used: used, Window: window, SessionTokens: sessionTokens, CompactRatio: ctrl.CompactRatio()}
+	return ContextInfo{Used: used, Window: window, SessionTokens: sessionTokens, CompactRatio: ctrl.CompactRatio(), Compression: ctrl.CompressionMetrics()}
 }
 
 // BalanceInfo is the wallet-balance readout for the status bar. Available is true
@@ -2650,9 +2687,11 @@ func (a *App) SlashArgs(input string) SlashArgsResult {
 // CapabilitiesView is the MCP & Skills drawer's data: connected/failed MCP
 // servers and the discoverable skills, the GUI counterpart to `/mcp` + `/skill`.
 type CapabilitiesView struct {
-	Servers    []ServerView    `json:"servers"`
-	Skills     []SkillView     `json:"skills"`
-	SkillRoots []SkillRootView `json:"skillRoots"`
+	Servers         []ServerView         `json:"servers"`
+	CodeBackends    []CodeBackendView    `json:"codeBackends"`
+	Skills          []SkillView          `json:"skills"`
+	SkillCandidates []SkillCandidateView `json:"skillCandidates"`
+	SkillRoots      []SkillRootView      `json:"skillRoots"`
 }
 
 // ServerView is one MCP server for the drawer. Status is "connected" (with
@@ -2686,10 +2725,269 @@ type ToolView struct {
 	Description string `json:"description"`
 }
 
+type CodeBackendView struct {
+	ID             string                    `json:"id"`
+	Name           string                    `json:"name"`
+	Server         string                    `json:"server"`
+	Kind           string                    `json:"kind"`
+	Default        bool                      `json:"default"`
+	BuiltIn        bool                      `json:"builtIn"`
+	Enabled        bool                      `json:"enabled"`
+	Health         string                    `json:"health"`
+	IndexFreshness string                    `json:"indexFreshness"`
+	ToolCount      int                       `json:"toolCount"`
+	LastError      string                    `json:"lastError,omitempty"`
+	Capabilities   []string                  `json:"capabilities"`
+	Risks          []string                  `json:"risks"`
+	ToolMapping    map[string]string         `json:"toolMapping"`
+	Benchmark      *CodeBackendBenchmarkView `json:"benchmark,omitempty"`
+}
+
+type CodeBackendBenchmarkView struct {
+	BackendID          string  `json:"backendId"`
+	Path               string  `json:"path"`
+	GeneratedAt        string  `json:"generatedAt"`
+	Health             string  `json:"health"`
+	TopKRelevance      float64 `json:"topKRelevance"`
+	CitationPrecision  float64 `json:"citationPrecision"`
+	ToolFailures       int     `json:"toolFailures"`
+	Unsupported        int     `json:"unsupported"`
+	TokenCharsReturned int     `json:"tokenCharsReturned"`
+}
+
 type BuiltInMCPUpdateResult struct {
 	Name    string `json:"name"`
 	Version string `json:"version"`
 	Path    string `json:"path"`
+}
+
+type WorkflowTemplateView struct {
+	SchemaVersion        string                         `json:"schemaVersion"`
+	ID                   string                         `json:"id"`
+	Name                 string                         `json:"name"`
+	Goal                 string                         `json:"goal"`
+	Risk                 string                         `json:"risk"`
+	Phases               []WorkflowPhaseView            `json:"phases"`
+	ProviderRoles        []string                       `json:"providerRoles"`
+	Budget               WorkflowBudgetView             `json:"budget"`
+	ReadinessGates       []string                       `json:"readinessGates"`
+	HumanGates           []string                       `json:"humanGates"`
+	MakerChecker         MakerCheckerView               `json:"makerChecker"`
+	RequiredCapabilities []string                       `json:"requiredCapabilities"`
+	Artifacts            WorkflowArtifactsView          `json:"artifacts"`
+	RefinementStrategy   WorkflowRefinementStrategyView `json:"refinementStrategy"`
+	StatePolicy          string                         `json:"statePolicy"`
+	MaxIterations        int                            `json:"maxIterations"`
+	Source               string                         `json:"source"`
+	SourcePath           string                         `json:"sourcePath,omitempty"`
+	Hash                 string                         `json:"hash"`
+}
+
+type WorkflowPhaseView struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	Goal string `json:"goal"`
+}
+
+type WorkflowBudgetView struct {
+	FrontierTokens int `json:"frontierTokens"`
+	TotalTokens    int `json:"totalTokens,omitempty"`
+}
+
+type MakerCheckerView struct {
+	Mode string `json:"mode"`
+}
+
+type WorkflowArtifactsView struct {
+	TaskPacketFields           []string                      `json:"taskPacketFields"`
+	BoundedFanOut              WorkflowBoundedFanOutView     `json:"boundedFanOut"`
+	DelegationArtifacts        []string                      `json:"delegationArtifacts"`
+	IntegrationChecklist       []string                      `json:"integrationChecklist"`
+	FinalVerificationArtifacts []string                      `json:"finalVerificationArtifacts"`
+	RunReportMapping           []WorkflowArtifactMappingView `json:"runReportMapping"`
+}
+
+type WorkflowBoundedFanOutView struct {
+	MaxParallel           int  `json:"maxParallel"`
+	MaxDepth              int  `json:"maxDepth"`
+	RequiresHumanApproval bool `json:"requiresHumanApproval"`
+}
+
+type WorkflowArtifactMappingView struct {
+	Artifact    string `json:"artifact"`
+	ReportField string `json:"reportField"`
+}
+
+type WorkflowRefinementStrategyView struct {
+	Enabled               bool     `json:"enabled"`
+	SearchModes           []string `json:"searchModes"`
+	CritiqueRounds        int      `json:"critiqueRounds"`
+	CorrectionRounds      int      `json:"correctionRounds"`
+	FinalJudgeIsolation   string   `json:"finalJudgeIsolation"`
+	BudgetCapTokens       int64    `json:"budgetCapTokens"`
+	KillSwitchRequired    bool     `json:"killSwitchRequired"`
+	HumanApprovalRequired bool     `json:"humanApprovalRequired"`
+}
+
+func (a *App) WorkflowTemplates() ([]WorkflowTemplateView, error) {
+	a.mu.RLock()
+	tab := a.activeTabLocked()
+	a.mu.RUnlock()
+	if tab == nil {
+		return a.WorkflowTemplatesForRoot("")
+	}
+	return a.WorkflowTemplatesForRoot(tab.WorkspaceRoot)
+}
+
+func (a *App) WorkflowTemplatesForRoot(root string) ([]WorkflowTemplateView, error) {
+	templates, err := loop.LoadTemplates(root)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]WorkflowTemplateView, 0, len(templates))
+	for _, tmpl := range templates {
+		out = append(out, workflowTemplateView(tmpl))
+	}
+	return out, nil
+}
+
+func (a *App) WorkflowReadiness(templateID string) (loop.ReadinessResult, error) {
+	a.mu.RLock()
+	tab := a.activeTabLocked()
+	a.mu.RUnlock()
+	if tab == nil {
+		return a.WorkflowReadinessForRoot("", templateID)
+	}
+	return a.WorkflowReadinessForRoot(tab.WorkspaceRoot, templateID)
+}
+
+func (a *App) WorkflowReadinessForRoot(root, templateID string) (loop.ReadinessResult, error) {
+	templates, err := loop.LoadTemplates(root)
+	if err != nil {
+		return loop.ReadinessResult{}, err
+	}
+	tmpl, ok := loop.FindTemplate(templates, strings.TrimSpace(templateID))
+	if !ok {
+		return loop.EvaluateReadiness(loop.ReadinessInput{
+			Template:       loop.LoopTemplateV1{ID: strings.TrimSpace(templateID)},
+			WorkspaceKnown: true,
+		}), nil
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		return loop.ReadinessResult{}, err
+	}
+	profiles := cfg.ProviderProfiles()
+	return loop.EvaluateReadiness(loop.ReadinessInput{
+		Template:               tmpl,
+		ProviderRoles:          workflowProviderRoleProfiles(profiles.Profiles),
+		AuthorizedCapabilities: append([]loop.Capability(nil), tmpl.RequiredCapabilities...),
+		BudgetAvailable:        cfg.Agent.FrontierBudget > 0,
+		LogSinkWritable:        workflowLogSinkWritable(),
+		KillSwitchEnabled:      true,
+		HumanGatePolicyDefined: len(tmpl.HumanGates) > 0,
+		WorkspaceKnown:         true,
+		RunID:                  "",
+	}), nil
+}
+
+func workflowProviderRoleProfiles(profiles []config.ProviderProfile) []loop.ProviderRoleProfile {
+	out := []loop.ProviderRoleProfile{}
+	for _, profile := range profiles {
+		for _, role := range profile.Roles {
+			out = append(out, loop.ProviderRoleProfile{
+				Role:               role,
+				Provider:           profile.Name,
+				ModelRef:           profile.RoleModels[role],
+				CredentialEnv:      profile.CredentialEnv,
+				CredentialStatus:   profile.CredentialStatus,
+				FrontierEligible:   profile.FrontierEligible,
+				SmallModelEligible: profile.SmallModelEligible,
+				BudgetEligible:     profile.BudgetEligible,
+				Gateway:            profile.Gateway,
+			})
+		}
+	}
+	return out
+}
+
+func workflowLogSinkWritable() bool {
+	dir := desktopSessionDir()
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return false
+	}
+	f, err := os.CreateTemp(dir, ".maddog-readiness-*")
+	if err != nil {
+		return false
+	}
+	name := f.Name()
+	_ = f.Close()
+	_ = os.Remove(name)
+	return true
+}
+
+func workflowTemplateView(tmpl loop.LoopTemplateV1) WorkflowTemplateView {
+	phases := make([]WorkflowPhaseView, 0, len(tmpl.Phases))
+	for _, phase := range tmpl.Phases {
+		phases = append(phases, WorkflowPhaseView{ID: phase.ID, Name: phase.Name, Goal: phase.Goal})
+	}
+	caps := make([]string, 0, len(tmpl.RequiredCapabilities))
+	for _, cap := range tmpl.RequiredCapabilities {
+		caps = append(caps, string(cap))
+	}
+	return WorkflowTemplateView{
+		SchemaVersion:        tmpl.SchemaVersion,
+		ID:                   tmpl.ID,
+		Name:                 tmpl.Name,
+		Goal:                 tmpl.Goal,
+		Risk:                 tmpl.Risk,
+		Phases:               phases,
+		ProviderRoles:        append([]string(nil), tmpl.ProviderRoles...),
+		Budget:               WorkflowBudgetView{FrontierTokens: tmpl.Budget.FrontierTokens, TotalTokens: tmpl.Budget.TotalTokens},
+		ReadinessGates:       append([]string(nil), tmpl.ReadinessGates...),
+		HumanGates:           append([]string(nil), tmpl.HumanGates...),
+		MakerChecker:         MakerCheckerView{Mode: string(tmpl.MakerChecker.Mode)},
+		RequiredCapabilities: caps,
+		Artifacts:            workflowArtifactsView(tmpl.Artifacts),
+		RefinementStrategy:   workflowRefinementStrategyView(tmpl.RefinementStrategy),
+		StatePolicy:          tmpl.StatePolicy,
+		MaxIterations:        tmpl.MaxIterations,
+		Source:               tmpl.Source,
+		SourcePath:           tmpl.SourcePath,
+		Hash:                 tmpl.Hash,
+	}
+}
+
+func workflowArtifactsView(artifacts loop.TemplateArtifacts) WorkflowArtifactsView {
+	mapping := make([]WorkflowArtifactMappingView, 0, len(artifacts.RunReportMapping))
+	for _, item := range artifacts.RunReportMapping {
+		mapping = append(mapping, WorkflowArtifactMappingView{Artifact: item.Artifact, ReportField: item.ReportField})
+	}
+	return WorkflowArtifactsView{
+		TaskPacketFields:           append([]string(nil), artifacts.TaskPacketFields...),
+		BoundedFanOut:              WorkflowBoundedFanOutView{MaxParallel: artifacts.BoundedFanOut.MaxParallel, MaxDepth: artifacts.BoundedFanOut.MaxDepth, RequiresHumanApproval: artifacts.BoundedFanOut.RequiresHumanApproval},
+		DelegationArtifacts:        append([]string(nil), artifacts.DelegationArtifacts...),
+		IntegrationChecklist:       append([]string(nil), artifacts.IntegrationChecklist...),
+		FinalVerificationArtifacts: append([]string(nil), artifacts.FinalVerificationArtifacts...),
+		RunReportMapping:           mapping,
+	}
+}
+
+func workflowRefinementStrategyView(strategy loop.TemplateRefinementStrategy) WorkflowRefinementStrategyView {
+	searchModes := make([]string, 0, len(strategy.SearchModes))
+	for _, mode := range strategy.SearchModes {
+		searchModes = append(searchModes, string(mode))
+	}
+	return WorkflowRefinementStrategyView{
+		Enabled:               strategy.Enabled,
+		SearchModes:           searchModes,
+		CritiqueRounds:        strategy.CritiqueRounds,
+		CorrectionRounds:      strategy.CorrectionRounds,
+		FinalJudgeIsolation:   string(strategy.FinalJudgeIsolation),
+		BudgetCapTokens:       strategy.BudgetCapTokens,
+		KillSwitchRequired:    strategy.KillSwitchRequired,
+		HumanApprovalRequired: strategy.HumanApprovalRequired,
+	}
 }
 
 // SkillView is one discoverable skill for the drawer.
@@ -2699,6 +2997,24 @@ type SkillView struct {
 	Scope       string `json:"scope"`
 	RunAs       string `json:"runAs"`
 	Enabled     bool   `json:"enabled"`
+}
+
+type SkillCandidateView struct {
+	ID                string   `json:"id"`
+	SkillName         string   `json:"skillName"`
+	Description       string   `json:"description,omitempty"`
+	Status            string   `json:"status"`
+	BundleID          string   `json:"bundleId,omitempty"`
+	BundleIDs         []string `json:"bundleIds,omitempty"`
+	Decision          string   `json:"decision,omitempty"`
+	Reason            string   `json:"reason,omitempty"`
+	PromotedPath      string   `json:"promotedPath,omitempty"`
+	ReplayCases       int      `json:"replayCases,omitempty"`
+	HeldOutCases      int      `json:"heldOutCases,omitempty"`
+	BaselinePassRate  float64  `json:"baselinePassRate,omitempty"`
+	CandidatePassRate float64  `json:"candidatePassRate,omitempty"`
+	CreatedAt         string   `json:"createdAt,omitempty"`
+	UpdatedAt         string   `json:"updatedAt,omitempty"`
 }
 
 type SkillRootSkillView struct {
@@ -2724,7 +3040,7 @@ type SkillRootView struct {
 // Capabilities projects the session's MCP servers (connected + failed) and skills
 // for the MCP & Skills drawer. Non-nil slices so the frontend can map over them.
 func (a *App) Capabilities() CapabilitiesView {
-	out := CapabilitiesView{Servers: []ServerView{}, Skills: []SkillView{}, SkillRoots: []SkillRootView{}}
+	out := CapabilitiesView{Servers: []ServerView{}, CodeBackends: []CodeBackendView{}, Skills: []SkillView{}, SkillCandidates: []SkillCandidateView{}, SkillRoots: []SkillRootView{}}
 	a.mu.RLock()
 	tab := a.activeTabLocked()
 	a.mu.RUnlock()
@@ -2864,15 +3180,132 @@ func (a *App) Capabilities() CapabilitiesView {
 	tab.mcpOrder = mergeServerOrder(tab.mcpOrder, out.Servers)
 	a.mu.Unlock()
 
+	seenSkills := map[string]bool{}
 	for _, s := range ctrl.AllSkills() {
 		out.Skills = append(out.Skills, SkillView{
 			Name: s.Name, Description: s.Description,
 			Scope: string(s.Scope), RunAs: string(s.RunAs),
 			Enabled: ctrl.SkillEnabled(s.Name),
 		})
+		seenSkills[config.SkillNameKey(s.Name)] = true
+	}
+	for _, s := range a.discoveredSkillViews(loadedCfg) {
+		if key := config.SkillNameKey(s.Name); key != "" && !seenSkills[key] {
+			out.Skills = append(out.Skills, s)
+			seenSkills[key] = true
+		}
+	}
+	out.SkillCandidates = a.skillCandidateViews()
+	if loadedCfg != nil {
+		out.CodeBackends = codeBackendViews(loadedCfg.Codegraph, ctrl.Host())
 	}
 	out.SkillRoots = skillRootsView()
 	return out
+}
+
+func codeBackendViews(cfg config.CodegraphConfig, host *plugin.Host) []CodeBackendView {
+	reg := codegraph.RegistryFromConfig(cfg, codeBackendRuntime(host))
+	backends := reg.Backends()
+	benchmarks := latestCodeBackendBenchmarks()
+	out := make([]CodeBackendView, 0, len(backends))
+	for _, b := range backends {
+		view := CodeBackendView{
+			ID:             b.ID,
+			Name:           b.Name,
+			Server:         b.Server,
+			Kind:           b.Kind,
+			Default:        b.Default,
+			BuiltIn:        b.BuiltIn,
+			Enabled:        b.Enabled,
+			Health:         string(b.Health),
+			IndexFreshness: b.IndexFreshness,
+			ToolCount:      b.ToolCount,
+			LastError:      b.LastError,
+			Capabilities:   codegraph.SortedBackendCapabilities(b.Capabilities),
+			Risks:          codegraph.SortedRisks(b.Risks),
+			ToolMapping:    cloneStringMap(b.ToolMapping),
+		}
+		if bench, ok := benchmarks[b.ID]; ok {
+			view.Benchmark = &bench
+		}
+		out = append(out, view)
+	}
+	return out
+}
+
+func (a *App) discoveredSkillViews(cfg *config.Config) []SkillView {
+	root := strings.TrimSpace(a.activeWorkspaceRoot())
+	if root == "" || root == "." {
+		if cwd, err := os.Getwd(); err == nil {
+			root = cwd
+		}
+	}
+	custom := []string{}
+	excluded := []string{}
+	maxDepth := 3
+	if cfg != nil {
+		custom = cfg.SkillCustomPaths()
+		excluded = cfg.SkillExcludedPaths()
+		maxDepth = cfg.SkillMaxDepth()
+	}
+	st := skill.New(skill.Options{ProjectRoot: root, CustomPaths: custom, ExcludedPaths: excluded, MaxDepth: maxDepth, DisableBuiltins: true, Stderr: io.Discard})
+	out := make([]SkillView, 0)
+	for _, sk := range st.List() {
+		enabled := true
+		if cfg != nil {
+			enabled = !cfg.IsSkillDisabled(sk.Name)
+		}
+		out = append(out, SkillView{
+			Name:        sk.Name,
+			Description: sk.Description,
+			Scope:       string(sk.Scope),
+			RunAs:       string(sk.RunAs),
+			Enabled:     enabled,
+		})
+	}
+	return out
+}
+
+func latestCodeBackendBenchmarks() map[string]CodeBackendBenchmarkView {
+	out := map[string]CodeBackendBenchmarkView{}
+	summary, ok := codegraph.ReadLatestBenchmarkSummary(config.CacheDir())
+	if !ok {
+		return out
+	}
+	for _, backend := range summary.Backends {
+		out[backend.BackendID] = CodeBackendBenchmarkView{
+			BackendID:          backend.BackendID,
+			Path:               summary.Path,
+			GeneratedAt:        summary.GeneratedAt,
+			Health:             string(backend.Health),
+			TopKRelevance:      backend.TopKRelevance,
+			CitationPrecision:  backend.CitationPrecision,
+			ToolFailures:       backend.ToolFailures,
+			Unsupported:        backend.Unsupported,
+			TokenCharsReturned: backend.TokenCharsReturned,
+		}
+	}
+	return out
+}
+
+func codeBackendRuntime(host *plugin.Host) codegraph.RuntimeSnapshot {
+	runtime := codegraph.RuntimeSnapshot{Servers: map[string]codegraph.RuntimeServer{}}
+	if host == nil {
+		return runtime
+	}
+	for _, s := range host.Servers() {
+		names := make([]string, 0, len(s.ToolList))
+		for _, t := range s.ToolList {
+			names = append(names, t.Name)
+		}
+		runtime.Servers[s.Name] = codegraph.RuntimeServer{Connected: true, ToolNames: names, ToolCount: s.Tools}
+	}
+	for _, f := range host.Failures() {
+		if _, ok := runtime.Servers[f.Name]; !ok {
+			runtime.Servers[f.Name] = codegraph.RuntimeServer{Connected: false, Error: f.Error}
+		}
+	}
+	return runtime
 }
 
 func withPluginConfig(v ServerView, p config.PluginEntry) ServerView {
@@ -3069,6 +3502,223 @@ func (a *App) SetSkillEnabled(name string, enabled bool) error {
 	})
 }
 
+func (a *App) PromoteSkillCandidate(candidateID string) (SkillCandidateView, error) {
+	store, root := a.skillEvalStore()
+	candidate, ok, err := store.ReadCandidate(candidateID)
+	if err != nil {
+		return SkillCandidateView{}, err
+	}
+	if !ok {
+		return SkillCandidateView{}, fmt.Errorf("skill candidate %q not found", candidateID)
+	}
+	if candidate.Evaluation == nil || candidate.Evaluation.Decision != string(skilleval.DecisionPromotable) {
+		return SkillCandidateView{}, fmt.Errorf("skill candidate %q is not promotable", candidateID)
+	}
+	path := promotedSkillPath(root, candidate.Skill.Name)
+	if err := writePromotedSkillFile(path, candidate.Skill); err != nil {
+		return skillCandidateView(candidate), err
+	}
+	candidate, err = store.UpdateCandidateStatus(candidate.ID, skilleval.CandidatePromoted, "promoted from skilleval", path)
+	if err != nil {
+		return SkillCandidateView{}, err
+	}
+	_ = appendSkillCandidateAudit(store.Root(), "promote", candidate, path, "")
+	if err := a.RefreshSkills(); err != nil {
+		return skillCandidateView(candidate), err
+	}
+	return skillCandidateView(candidate), nil
+}
+
+func (a *App) RejectSkillCandidate(candidateID, reason string) (SkillCandidateView, error) {
+	store, _ := a.skillEvalStore()
+	candidate, err := store.UpdateCandidateStatus(candidateID, skilleval.CandidateRejected, reason, "")
+	if err != nil {
+		return SkillCandidateView{}, err
+	}
+	_ = appendSkillCandidateAudit(store.Root(), "reject", candidate, "", reason)
+	return skillCandidateView(candidate), nil
+}
+
+func (a *App) RollbackPromotedSkill(candidateID string) error {
+	store, root := a.skillEvalStore()
+	candidate, ok, err := store.ReadCandidate(candidateID)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return fmt.Errorf("skill candidate %q not found", candidateID)
+	}
+	path := strings.TrimSpace(candidate.PromotedPath)
+	if path == "" {
+		path = promotedSkillPath(root, candidate.Skill.Name)
+	}
+	if err := removePromotedSkillFile(path); err != nil {
+		return err
+	}
+	candidate, err = store.UpdateCandidateStatus(candidate.ID, skilleval.CandidatePending, "rolled back promoted skill", "")
+	if err != nil {
+		return err
+	}
+	_ = appendSkillCandidateAudit(store.Root(), "rollback", candidate, path, "")
+	return a.RefreshSkills()
+}
+
+func (a *App) skillEvalStore() (*skilleval.Store, string) {
+	root := strings.TrimSpace(a.activeWorkspaceRoot())
+	if root == "" || root == "." {
+		if cwd, err := os.Getwd(); err == nil {
+			root = cwd
+		}
+	}
+	if abs, err := filepath.Abs(root); err == nil {
+		root = abs
+	}
+	return skilleval.NewProjectStore(root), root
+}
+
+func (a *App) skillCandidateViews() []SkillCandidateView {
+	store, _ := a.skillEvalStore()
+	candidates, err := store.ListCandidates()
+	if err != nil {
+		return []SkillCandidateView{}
+	}
+	out := make([]SkillCandidateView, 0, len(candidates))
+	for _, candidate := range candidates {
+		out = append(out, skillCandidateView(candidate))
+	}
+	return out
+}
+
+func skillCandidateView(candidate skilleval.Candidate) SkillCandidateView {
+	view := SkillCandidateView{
+		ID:           candidate.ID,
+		SkillName:    candidate.Skill.Name,
+		Description:  candidate.Skill.Description,
+		Status:       string(candidate.Status),
+		BundleID:     candidate.BundleID,
+		BundleIDs:    append([]string(nil), candidate.BundleIDs...),
+		Reason:       firstNonEmpty(candidate.Reason, candidate.Validation.Reason),
+		PromotedPath: candidate.PromotedPath,
+	}
+	if !candidate.CreatedAt.IsZero() {
+		view.CreatedAt = candidate.CreatedAt.Format(time.RFC3339)
+	}
+	if !candidate.UpdatedAt.IsZero() {
+		view.UpdatedAt = candidate.UpdatedAt.Format(time.RFC3339)
+	}
+	if candidate.Evaluation != nil {
+		view.Decision = candidate.Evaluation.Decision
+		view.ReplayCases = candidate.Evaluation.ReplayCases
+		view.HeldOutCases = candidate.Evaluation.HeldOutCases
+		view.BaselinePassRate = candidate.Evaluation.BaselinePassRate
+		view.CandidatePassRate = candidate.Evaluation.CandidatePassRate
+		view.Reason = firstNonEmpty(candidate.Reason, candidate.Evaluation.Reason, candidate.Validation.Reason)
+	}
+	return view
+}
+
+func promotedSkillPath(projectRoot, name string) string {
+	return filepath.Join(projectRoot, config.ProjectConventionDir, skill.SkillsDirname, name, skill.SkillFile)
+}
+
+func writePromotedSkillFile(path string, snapshot skilleval.SkillSnapshot) error {
+	if strings.TrimSpace(snapshot.Name) == "" {
+		return fmt.Errorf("skill candidate has no name")
+	}
+	if !skill.IsValidName(snapshot.Name) {
+		return fmt.Errorf("invalid skill candidate name %q", snapshot.Name)
+	}
+	if strings.TrimSpace(snapshot.Description) == "" {
+		return fmt.Errorf("skill candidate %q has no description", snapshot.Name)
+	}
+	if strings.TrimSpace(snapshot.Body) == "" {
+		return fmt.Errorf("skill candidate %q has no body", snapshot.Name)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	_, err = f.WriteString(renderPromotedSkill(snapshot))
+	return err
+}
+
+func renderPromotedSkill(snapshot skilleval.SkillSnapshot) string {
+	var b strings.Builder
+	b.WriteString("---\n")
+	b.WriteString("name: " + snapshot.Name + "\n")
+	b.WriteString("description: " + strings.ReplaceAll(snapshot.Description, "\n", " ") + "\n")
+	if strings.TrimSpace(snapshot.RunAs) != "" {
+		b.WriteString("runAs: " + snapshot.RunAs + "\n")
+	}
+	if len(snapshot.AllowedTools) > 0 {
+		b.WriteString("allowed-tools: " + strings.Join(snapshot.AllowedTools, ", ") + "\n")
+	}
+	if strings.TrimSpace(snapshot.Model) != "" {
+		b.WriteString("model: " + snapshot.Model + "\n")
+	}
+	if strings.TrimSpace(snapshot.Effort) != "" {
+		b.WriteString("effort: " + snapshot.Effort + "\n")
+	}
+	b.WriteString("---\n")
+	b.WriteString(strings.TrimSpace(snapshot.Body))
+	b.WriteString("\n")
+	return b.String()
+}
+
+func removePromotedSkillFile(path string) error {
+	if strings.TrimSpace(path) == "" {
+		return fmt.Errorf("promoted skill path is empty")
+	}
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	dir := filepath.Dir(path)
+	_ = os.Remove(dir)
+	return nil
+}
+
+type skillCandidateAuditEvent struct {
+	Action      string `json:"action"`
+	CandidateID string `json:"candidateId"`
+	SkillName   string `json:"skillName,omitempty"`
+	Path        string `json:"path,omitempty"`
+	Reason      string `json:"reason,omitempty"`
+	At          string `json:"at"`
+}
+
+func appendSkillCandidateAudit(root, action string, candidate skilleval.Candidate, path, reason string) error {
+	if strings.TrimSpace(root) == "" {
+		return nil
+	}
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		return err
+	}
+	f, err := os.OpenFile(filepath.Join(root, "audit.jsonl"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	body, err := json.Marshal(skillCandidateAuditEvent{
+		Action:      action,
+		CandidateID: candidate.ID,
+		SkillName:   candidate.Skill.Name,
+		Path:        path,
+		Reason:      reason,
+		At:          time.Now().UTC().Format(time.RFC3339),
+	})
+	if err != nil {
+		return err
+	}
+	if _, err := f.Write(append(body, '\n')); err != nil {
+		return err
+	}
+	return nil
+}
+
 func normalizeSkillPath(path string) string {
 	path = strings.TrimSpace(path)
 	if path == "" {
@@ -3158,6 +3808,199 @@ type MCPServerInput struct {
 	Args      []string          `json:"args"`
 	URL       string            `json:"url"`
 	Env       map[string]string `json:"env"`
+}
+
+// SetCodeBackendEnabled persists a code-intelligence backend toggle. Built-in
+// CodeGraph delegates to the existing MCP switch; external backends update
+// [codegraph].backends and reconnect/disconnect their MCP server when possible.
+func (a *App) SetCodeBackendEnabled(id string, enabled bool) error {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return fmt.Errorf("code backend id is required")
+	}
+	if id == codegraph.BuiltInBackendID || id == "codegraph" {
+		return a.setCodegraphEnabled(enabled)
+	}
+	tab := a.activeTab()
+	if tab == nil || tab.Ctrl == nil {
+		return fmt.Errorf("no active session")
+	}
+	cfg, err := config.LoadForRoot(tab.WorkspaceRoot)
+	if err != nil {
+		return err
+	}
+	idx := -1
+	for i, backend := range cfg.Codegraph.Backends {
+		if codeBackendConfigMatches(backend, id) {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		return fmt.Errorf("no code backend named %q", id)
+	}
+	cfg.Codegraph.Backends[idx].Enabled = enabled
+	if err := cfg.SaveForRoot(tab.WorkspaceRoot); err != nil {
+		return err
+	}
+	serverName := strings.TrimSpace(cfg.Codegraph.Backends[idx].Server)
+	if serverName == "" {
+		serverName = strings.TrimSpace(cfg.Codegraph.Backends[idx].Name)
+	}
+	if serverName == "" {
+		return nil
+	}
+	if enabled {
+		if _, err := a.connectConfiguredMCPServerForTab(tab, serverName); err != nil {
+			entry := config.PluginEntry{Name: serverName}
+			if p, found, cfgErr := a.desktopMCPServerForEdit(serverName); cfgErr == nil && found {
+				entry = p
+			}
+			recordMCPFailure(tab.Ctrl, entry, err)
+			return nil
+		}
+		a.mu.Lock()
+		delete(tab.disabledMCP, serverName)
+		a.mu.Unlock()
+		return nil
+	}
+	tab.Ctrl.DisconnectMCPServer(serverName)
+	if h := tab.Ctrl.Host(); h != nil {
+		h.ClearFailure(serverName)
+	}
+	return nil
+}
+
+// RetryCodeBackendHealth re-runs the underlying MCP connection health path for
+// the selected backend. It is intentionally a health retry, not a config edit.
+func (a *App) RetryCodeBackendHealth(id string) error {
+	backend, err := a.codeBackendByID(id)
+	if err != nil {
+		return err
+	}
+	name := backend.Server
+	if strings.TrimSpace(name) == "" {
+		name = backend.ID
+	}
+	if backend.BuiltIn {
+		name = "codegraph"
+	}
+	return a.ReconnectMCPServer(name)
+}
+
+// RunCodeBackendBenchmark executes the offline benchmark harness for one backend
+// and stores the latest JSON report in Maddog cache so Capabilities and doctor
+// can show the same summary.
+func (a *App) RunCodeBackendBenchmark(id string) (CodeBackendBenchmarkView, error) {
+	backend, err := a.codeBackendByID(id)
+	if err != nil {
+		return CodeBackendBenchmarkView{}, err
+	}
+	tab := a.activeTab()
+	if tab == nil {
+		return CodeBackendBenchmarkView{}, fmt.Errorf("no active session")
+	}
+	root := tab.WorkspaceRoot
+	if strings.TrimSpace(root) == "" {
+		root, _ = os.Getwd()
+	}
+	report, err := codegraph.RunBenchmark(a.reqCtx(), codegraph.BenchmarkOptions{
+		Root:     root,
+		Backends: []codegraph.BenchmarkBackend{desktopBenchmarkBackend(backend)},
+		Queries:  codegraph.DefaultBenchmarkQueries(),
+	})
+	if err != nil {
+		return CodeBackendBenchmarkView{}, err
+	}
+	path, err := codegraph.WriteLatestBenchmarkReport(config.CacheDir(), report)
+	if err != nil {
+		return CodeBackendBenchmarkView{}, err
+	}
+	if len(report.Backends) == 0 {
+		return CodeBackendBenchmarkView{}, fmt.Errorf("benchmark produced no backend summary")
+	}
+	return codeBackendBenchmarkView(path, report.GeneratedAt, report.Backends[0]), nil
+}
+
+func (a *App) codeBackendByID(id string) (codegraph.Backend, error) {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return codegraph.Backend{}, fmt.Errorf("code backend id is required")
+	}
+	tab := a.activeTab()
+	if tab == nil {
+		return codegraph.Backend{}, fmt.Errorf("no active session")
+	}
+	cfg, err := config.LoadForRoot(tab.WorkspaceRoot)
+	if err != nil {
+		return codegraph.Backend{}, err
+	}
+	var host *plugin.Host
+	if tab.Ctrl != nil {
+		host = tab.Ctrl.Host()
+	}
+	reg := codegraph.RegistryFromConfig(cfg.Codegraph, codeBackendRuntime(host))
+	if backend, ok := reg.Backend(id); ok {
+		return backend, nil
+	}
+	for _, backend := range reg.Backends() {
+		if backend.Server == id || backend.Name == id {
+			return backend, nil
+		}
+	}
+	return codegraph.Backend{}, fmt.Errorf("no code backend named %q", id)
+}
+
+func codeBackendConfigMatches(backend config.CodegraphBackendConfig, id string) bool {
+	return strings.TrimSpace(backend.Name) == id || strings.TrimSpace(backend.Server) == id
+}
+
+func desktopBenchmarkBackend(backend codegraph.Backend) codegraph.BenchmarkBackend {
+	if backend.BuiltIn {
+		return codegraph.NewBuiltInBenchmarkBackend()
+	}
+	return &desktopCodeBackendBenchmark{backend: backend, mock: codegraph.NewMockBenchmarkBackend()}
+}
+
+func codeBackendBenchmarkView(path, generatedAt string, report codegraph.BackendBenchmarkReport) CodeBackendBenchmarkView {
+	return CodeBackendBenchmarkView{
+		BackendID:          report.BackendID,
+		Path:               path,
+		GeneratedAt:        generatedAt,
+		Health:             string(report.Health),
+		TopKRelevance:      report.TopKRelevance,
+		CitationPrecision:  report.CitationPrecision,
+		ToolFailures:       report.ToolFailures,
+		Unsupported:        report.Unsupported,
+		TokenCharsReturned: report.TokenCharsReturned,
+	}
+}
+
+type desktopCodeBackendBenchmark struct {
+	backend codegraph.Backend
+	mock    codegraph.BenchmarkBackend
+}
+
+func (b *desktopCodeBackendBenchmark) ID() string { return b.backend.ID }
+
+func (b *desktopCodeBackendBenchmark) Name() string { return b.backend.Name }
+
+func (b *desktopCodeBackendBenchmark) Capabilities() []codegraph.BackendCapability {
+	return append([]codegraph.BackendCapability(nil), b.backend.Capabilities...)
+}
+
+func (b *desktopCodeBackendBenchmark) Health() codegraph.BackendHealth { return b.backend.Health }
+
+func (b *desktopCodeBackendBenchmark) BuildIndex(ctx context.Context, root string) error {
+	return b.mock.BuildIndex(ctx, root)
+}
+
+func (b *desktopCodeBackendBenchmark) UpdateIndex(ctx context.Context, update codegraph.BenchmarkUpdate) error {
+	return b.mock.UpdateIndex(ctx, update)
+}
+
+func (b *desktopCodeBackendBenchmark) Query(ctx context.Context, query codegraph.BenchmarkQuery) ([]codegraph.BenchmarkSearchResult, error) {
+	return b.mock.Query(ctx, query)
 }
 
 // AddMCPServer connects a server live and persists it to config (Customize → MCP →
@@ -4774,7 +5617,7 @@ func (a *App) SaveExportFile(path, payload string, base64Encoded bool) error {
 func safeExportFilename(name string) string {
 	name = strings.TrimSpace(name)
 	if name == "" {
-		return "reasonix-session.md"
+		return "maddog-session.md"
 	}
 	return filepath.Base(name)
 }

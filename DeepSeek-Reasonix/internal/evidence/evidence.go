@@ -46,6 +46,14 @@ type Receipt struct {
 	Todos    []TodoItem      `json:"todos,omitempty"`
 }
 
+// FailureSignal summarizes recent tool health for routing and advisor decisions.
+type FailureSignal struct {
+	ConsecutiveErrors int
+	ErrorStreak       int
+	LastErrorTool     string
+	HealthScore       float64
+}
+
 // Ledger stores the receipts available to complete_step for the current turn.
 type Ledger struct {
 	mu       sync.Mutex
@@ -88,6 +96,34 @@ func (l *Ledger) Record(r Receipt) {
 		}
 	}
 	l.receipts = append(l.receipts, r)
+}
+
+func (l *Ledger) Count() int {
+	if l == nil {
+		return 0
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return len(l.receipts)
+}
+
+func (l *Ledger) FailureSignal() FailureSignal {
+	return l.FailureSignalSince(0)
+}
+
+func (l *Ledger) FailureSignalSince(start int) FailureSignal {
+	if l == nil {
+		return FailureSignal{HealthScore: 1}
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if start < 0 {
+		start = 0
+	}
+	if start > len(l.receipts) {
+		start = len(l.receipts)
+	}
+	return failureSignal(l.receipts[start:])
 }
 
 func (l *Ledger) HasSuccessfulCommand(command string) bool {
@@ -460,6 +496,35 @@ func (l *Ledger) hasSuccessfulPaths(paths []string, accept func(Receipt) bool) b
 		}
 	}
 	return len(found) == len(wanted)
+}
+
+func failureSignal(receipts []Receipt) FailureSignal {
+	if len(receipts) == 0 {
+		return FailureSignal{HealthScore: 1}
+	}
+	var sig FailureSignal
+	var successes, failures int
+	for _, r := range receipts {
+		if r.Success {
+			successes++
+			continue
+		}
+		failures++
+		sig.ErrorStreak++
+		sig.LastErrorTool = strings.TrimSpace(r.ToolName)
+	}
+	for i := len(receipts) - 1; i >= 0; i-- {
+		if receipts[i].Success {
+			break
+		}
+		sig.ConsecutiveErrors++
+	}
+	if total := successes + failures; total > 0 {
+		sig.HealthScore = float64(successes) / float64(total)
+	} else {
+		sig.HealthScore = 1
+	}
+	return sig
 }
 
 type contextKey struct{}

@@ -97,3 +97,64 @@ func TestProviderFetchModelsFallsBackToV1Models(t *testing.T) {
 		t.Fatalf("got %v, want [model-a model-b]", got)
 	}
 }
+
+func TestProviderFetchModelsUsesAnthropicAPIKeyHeader(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("x-api-key") != "anthropic-key" {
+			http.Error(w, "missing anthropic key header", http.StatusUnauthorized)
+			return
+		}
+		if r.Header.Get("Authorization") != "" {
+			http.Error(w, "authorization header should not be set for api key mode", http.StatusUnauthorized)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": []map[string]string{{"id": "claude-sonnet-4"}},
+		})
+	}))
+	defer srv.Close()
+
+	t.Setenv("FETCH_MODELS_ANTHROPIC_KEY", "anthropic-key")
+	p := ProviderEntry{Name: "anthropic", Kind: "anthropic", BaseURL: srv.URL, APIKeyEnv: "FETCH_MODELS_ANTHROPIC_KEY"}
+	got, err := p.FetchModels(context.Background())
+	if err != nil {
+		t.Fatalf("FetchModels: %v", err)
+	}
+	if len(got) != 1 || got[0] != "claude-sonnet-4" {
+		t.Fatalf("models = %v, want [claude-sonnet-4]", got)
+	}
+}
+
+func TestProviderFetchModelsUsesBearerTokenEnvWithoutAPIKeyFallback(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer bearer-token" {
+			http.Error(w, "missing bearer token", http.StatusUnauthorized)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": []map[string]string{{"id": "gpt-5"}},
+		})
+	}))
+	defer srv.Close()
+
+	t.Setenv("FETCH_MODELS_OLD_API_KEY", "old-api-key")
+	t.Setenv("FETCH_MODELS_BEARER_TOKEN", "bearer-token")
+	p := ProviderEntry{
+		Name:           "openai-official",
+		Kind:           "openai",
+		BaseURL:        srv.URL,
+		APIKeyEnv:      "FETCH_MODELS_OLD_API_KEY",
+		AuthType:       "bearer",
+		BearerTokenEnv: "FETCH_MODELS_BEARER_TOKEN",
+	}
+	if got := p.AuthEnvName(); got != "FETCH_MODELS_BEARER_TOKEN" {
+		t.Fatalf("AuthEnvName = %q, want bearer token env", got)
+	}
+	got, err := p.FetchModels(context.Background())
+	if err != nil {
+		t.Fatalf("FetchModels: %v", err)
+	}
+	if len(got) != 1 || got[0] != "gpt-5" {
+		t.Fatalf("models = %v, want [gpt-5]", got)
+	}
+}

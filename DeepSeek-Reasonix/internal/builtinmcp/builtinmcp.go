@@ -1,4 +1,4 @@
-// Package builtinmcp defines MCP servers that ship with Reasonix without
+// Package builtinmcp defines MCP servers that ship with Maddog without
 // requiring user configuration.
 package builtinmcp
 
@@ -40,7 +40,7 @@ func executablePath() string {
 	if path, err := currentExecutable(); err == nil && path != "" {
 		return path
 	}
-	return "reasonix"
+	return "maddog"
 }
 
 func context7Entry() config.PluginEntry {
@@ -77,7 +77,7 @@ func Entry(name string) (config.PluginEntry, bool) {
 	return config.PluginEntry{}, false
 }
 
-// IsBuiltIn reports whether name is a Reasonix-shipped MCP server.
+// IsBuiltIn reports whether name is a Maddog-shipped MCP server.
 func IsBuiltIn(name string) bool {
 	_, ok := Entry(name)
 	return ok

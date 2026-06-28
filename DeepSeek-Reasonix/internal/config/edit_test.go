@@ -1126,6 +1126,42 @@ func TestReasoningProtocolOverrideControlsEffortCapability(t *testing.T) {
 	}
 }
 
+func TestUpsertProviderAcceptsOfficialAuthProfileAndBearerTokenEnv(t *testing.T) {
+	c := Default()
+	err := c.UpsertProvider(ProviderEntry{
+		Name:                  "openai-official",
+		Kind:                  "openai",
+		BaseURL:               "https://api.openai.com/v1",
+		Model:                 "gpt-5",
+		APIKeyEnv:             "OLD_OPENAI_API_KEY",
+		AuthType:              "official_auth",
+		BearerTokenEnv:        "OPENAI_ACCESS_TOKEN",
+		OfficialAuthProfileID: "openai-desktop",
+	})
+	if err != nil {
+		t.Fatalf("UpsertProvider official auth: %v", err)
+	}
+	got, _ := c.Provider("openai-official")
+	if got.AuthEnvName() != "OPENAI_ACCESS_TOKEN" {
+		t.Fatalf("AuthEnvName = %q, want bearer token env", got.AuthEnvName())
+	}
+}
+
+func TestUpsertProviderRejectsBearerWithoutBearerTokenEnvOrProfile(t *testing.T) {
+	c := Default()
+	err := c.UpsertProvider(ProviderEntry{
+		Name:      "openai-official",
+		Kind:      "openai",
+		BaseURL:   "https://api.openai.com/v1",
+		Model:     "gpt-5",
+		APIKeyEnv: "OLD_OPENAI_API_KEY",
+		AuthType:  "bearer",
+	})
+	if err == nil || !strings.Contains(err.Error(), "bearer_token_env") {
+		t.Fatalf("UpsertProvider error = %v, want bearer_token_env validation", err)
+	}
+}
+
 func TestNormalizeEffortCustomSupportedEfforts(t *testing.T) {
 	e := &ProviderEntry{
 		Name:             "custom",
@@ -1279,5 +1315,20 @@ func TestEffortCapabilityEmptySupportedEffortsNotConfigurable(t *testing.T) {
 	e2.SupportedEfforts = []string{}
 	if cap := EffortCapabilityForEntry(&e2); cap.Supported {
 		t.Fatalf("empty supported_efforts should also fall through to the heuristic, got %+v", cap)
+	}
+}
+
+func TestSetContextPolicyNormalizesAndRejectsInvalidValues(t *testing.T) {
+	c := &Config{}
+	for _, mode := range []string{"off", "auto", "aggressive"} {
+		if err := c.SetContextPolicy(" " + mode + " "); err != nil {
+			t.Fatalf("SetContextPolicy(%q): %v", mode, err)
+		}
+		if got := c.ContextPolicy(); got != mode {
+			t.Fatalf("ContextPolicy after %q = %q", mode, got)
+		}
+	}
+	if err := c.SetContextPolicy("always"); err == nil {
+		t.Fatal("SetContextPolicy should reject unknown policy")
 	}
 }

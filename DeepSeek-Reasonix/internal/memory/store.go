@@ -23,7 +23,8 @@ import (
 // all projects), while "project" and "reference" stay in the project-specific Dir.
 // List() and Index() merge both directories so every session sees the full set.
 type Store struct {
-	Dir string // ...maddog/projects/<slug>/memory
+	Dir       string // ...maddog/projects/<slug>/memory
+	GlobalDir string // ...maddog/memory/global
 }
 
 // Type classifies a memory, mirroring the auto-memory taxonomy.

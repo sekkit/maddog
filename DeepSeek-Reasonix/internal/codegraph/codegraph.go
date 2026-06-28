@@ -35,10 +35,10 @@ const daemonProbeTimeout = 300 * time.Millisecond
 // DaemonIdleTimeoutEnv is CodeGraph's own root-scoped daemon idle timeout knob.
 const DaemonIdleTimeoutEnv = "CODEGRAPH_DAEMON_IDLE_TIMEOUT_MS"
 
-// ReasonixDaemonIdleTimeoutMS keeps Reasonix-launched daemons short-lived after
+// MaddogDaemonIdleTimeoutMS keeps Maddog-launched daemons short-lived after
 // the last client disconnects while still preserving CodeGraph's shared-client
 // refcount semantics.
-const ReasonixDaemonIdleTimeoutMS = "1000"
+const MaddogDaemonIdleTimeoutMS = "1000"
 
 type daemonInfo struct {
 	PID        int    `json:"pid"`
@@ -257,7 +257,7 @@ func readDaemonInfo(root string) (daemonInfo, bool) {
 // recorded PID still answers on the daemon socket as the same CodeGraph process.
 // This is intentionally for explicit cleanup paths such as tests/diagnostics:
 // CodeGraph daemons are root-scoped and may be shared by other MCP clients, so a
-// normal Reasonix controller close must only close its proxy connection and let
+// normal Maddog controller close must only close its proxy connection and let
 // CodeGraph's own refcount/idle timer own daemon lifetime.
 func KillDaemon(root string) {
 	info, ok := readDaemonInfo(root)

@@ -21,16 +21,20 @@ type ImSourceMessage = {
   text: string;
 };
 
-const IM_SOURCE_START = "[[reasonix-im]]";
-const IM_SOURCE_END = "[[/reasonix-im]]";
+const IM_SOURCE_START = "[[maddog-im]]";
+const IM_SOURCE_END = "[[/maddog-im]]";
+const LEGACY_IM_SOURCE_START = "[[reasonix-im]]";
+const LEGACY_IM_SOURCE_END = "[[/reasonix-im]]";
 
 function parseImSourceMessage(text: string): ImSourceMessage | null {
   // Display-only metadata: keep IM sender/chat details out of model prompts.
-  if (!text.startsWith(IM_SOURCE_START)) return null;
-  const end = text.indexOf(IM_SOURCE_END);
+  const start = text.startsWith(IM_SOURCE_START) ? IM_SOURCE_START : text.startsWith(LEGACY_IM_SOURCE_START) ? LEGACY_IM_SOURCE_START : "";
+  if (!start) return null;
+  const endMarker = start === IM_SOURCE_START ? IM_SOURCE_END : LEGACY_IM_SOURCE_END;
+  const end = text.indexOf(endMarker);
   if (end < 0) return null;
-  const metaBlock = text.slice(IM_SOURCE_START.length, end).trim();
-  const body = text.slice(end + IM_SOURCE_END.length).replace(/^\r?\n/, "");
+  const metaBlock = text.slice(start.length, end).trim();
+  const body = text.slice(end + endMarker.length).replace(/^\r?\n/, "");
   const meta: Record<string, string> = {};
   for (const line of metaBlock.split(/\r?\n/)) {
     const index = line.indexOf("=");

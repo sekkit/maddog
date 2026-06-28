@@ -31,19 +31,21 @@ func sessionTitlesPath(dir string) string  { return filepath.Join(dir, sessionTi
 func sessionDisplayPath(dir string) string { return filepath.Join(dir, sessionDisplayFile) }
 func sessionTrashPath(dir string) string   { return filepath.Join(dir, sessionTrashDir) }
 
-func desktopSessionDir(root string) string {
-	root = strings.TrimSpace(root)
-	if root == "" {
-		cwd, err := os.Getwd()
-		if err != nil {
-			return config.SessionDir()
-		}
-		root = cwd
+func desktopSessionDir(roots ...string) string {
+	root := ""
+	if len(roots) > 0 {
+		root = strings.TrimSpace(roots[0])
 	}
-	if dir := config.ProjectSessionDir(root); dir != "" {
-		return dir
+	if root == "" || root == globalTabWorkspaceRoot() {
+		return desktopStatePath("sessions")
 	}
-	return config.SessionDir()
+	if abs, err := filepath.Abs(root); err == nil {
+		root = abs
+	}
+	if slug := config.WorkspaceSlug(root); slug != "" {
+		return desktopStatePath("projects", slug, "sessions")
+	}
+	return desktopStatePath("sessions")
 }
 
 // loadSessionTitles reads the basename→title map (missing/corrupt → empty).

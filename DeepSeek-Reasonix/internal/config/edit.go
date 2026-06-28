@@ -101,6 +101,20 @@ func (c *Config) SetAutoPlan(mode string) error {
 	return nil
 }
 
+func (c *Config) SetContextPolicy(mode string) error {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case "off":
+		c.Agent.ContextPolicy = "off"
+	case "auto", "":
+		c.Agent.ContextPolicy = "auto"
+	case "aggressive":
+		c.Agent.ContextPolicy = "aggressive"
+	default:
+		return fmt.Errorf("context_policy %q: must be off|auto|aggressive", mode)
+	}
+	return nil
+}
+
 // SetUIShortcutLayout selects the CLI keyboard shortcut layout. "classic" keeps
 // historical behavior; "desktop" enables the two-axis desktop-style shortcuts.
 func (c *Config) SetUIShortcutLayout(layout string) error {
@@ -481,14 +495,16 @@ func validateProvider(e ProviderEntry) error {
 		return fmt.Errorf("provider %q: base_url is required", e.Name)
 	case !providerHasAnyModel(e):
 		return fmt.Errorf("provider %q: model is required", e.Name)
-	case authType != provider.AuthTypeAPIKey && authType != provider.AuthTypeBearer && authType != provider.AuthTypeWorkloadIdentity:
-		return fmt.Errorf("provider %q: auth_type must be api_key|bearer|workload_identity", e.Name)
+	case authType != provider.AuthTypeAPIKey && authType != provider.AuthTypeBearer && authType != provider.AuthTypeWorkloadIdentity && authType != provider.AuthTypeOfficial:
+		return fmt.Errorf("provider %q: auth_type must be api_key|bearer|workload_identity|official_auth", e.Name)
 	case strings.TrimSpace(e.WireAPI) != "" && wireAPI != "responses":
 		return fmt.Errorf("provider %q: wire_api must be chat or responses", e.Name)
-	case authType == provider.AuthTypeBearer && strings.TrimSpace(e.AuthTokenEnv) == "" && strings.TrimSpace(e.APIKeyEnv) == "":
-		return fmt.Errorf("provider %q: auth_token_env is required for bearer auth", e.Name)
-	case authType == provider.AuthTypeWorkloadIdentity && strings.TrimSpace(e.AuthTokenEnv) == "" && strings.TrimSpace(e.IdentityEnv) == "" && strings.TrimSpace(e.IdentityFile) == "":
-		return fmt.Errorf("provider %q: auth_token_env or identity_env is required for workload identity auth", e.Name)
+	case authType == provider.AuthTypeBearer && strings.TrimSpace(e.bearerTokenEnvName()) == "" && strings.TrimSpace(e.OfficialAuthProfileID) == "":
+		return fmt.Errorf("provider %q: bearer_token_env is required for bearer auth", e.Name)
+	case authType == provider.AuthTypeOfficial && strings.TrimSpace(e.bearerTokenEnvName()) == "" && strings.TrimSpace(e.OfficialAuthProfileID) == "":
+		return fmt.Errorf("provider %q: bearer_token_env or official_auth_profile_id is required for official auth", e.Name)
+	case authType == provider.AuthTypeWorkloadIdentity && strings.TrimSpace(e.bearerTokenEnvName()) == "" && strings.TrimSpace(e.IdentityEnv) == "" && strings.TrimSpace(e.IdentityFile) == "":
+		return fmt.Errorf("provider %q: bearer_token_env or identity_env is required for workload identity auth", e.Name)
 	}
 	return nil
 }
@@ -852,7 +868,7 @@ func SaveMinimalProjectReasoningLanguage(path, lang string) (string, error) {
 	if err := cfg.SetReasoningLanguage(lang); err != nil {
 		return "", err
 	}
-	body := fmt.Sprintf(`# Reasonix project configuration.
+	body := fmt.Sprintf(`# Maddog project configuration.
 # Project-local overrides are merged over the user config.
 
 [agent]

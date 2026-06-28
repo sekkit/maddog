@@ -20,7 +20,7 @@ func TestConnectConfiguredCodegraphSetsShortDaemonIdleTimeout(t *testing.T) {
 	launcher := writeControlCodegraphHelper(t, dir)
 	envOut := filepath.Join(dir, "codegraph-idle-env")
 	t.Setenv("REASONIX_CODEGRAPH_HELPER_ENV_OUT", envOut)
-	writeControlFile(t, dir, "reasonix.toml", `
+	writeControlFile(t, dir, "maddog.toml", `
 [codegraph]
 enabled = true
 path = "`+escapeTOMLPath(launcher)+`"
@@ -36,8 +36,8 @@ path = "`+escapeTOMLPath(launcher)+`"
 	if err != nil {
 		t.Fatalf("read codegraph idle timeout env: %v", err)
 	}
-	if string(got) != codegraph.ReasonixDaemonIdleTimeoutMS {
-		t.Fatalf("%s = %q; want %q", codegraph.DaemonIdleTimeoutEnv, got, codegraph.ReasonixDaemonIdleTimeoutMS)
+	if string(got) != codegraph.MaddogDaemonIdleTimeoutMS {
+		t.Fatalf("%s = %q; want %q", codegraph.DaemonIdleTimeoutEnv, got, codegraph.MaddogDaemonIdleTimeoutMS)
 	}
 	if !ctrl.DisconnectMCPServer("codegraph") {
 		t.Fatal("DisconnectMCPServer(codegraph) returned false")

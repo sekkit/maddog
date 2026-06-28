@@ -39,18 +39,18 @@ it with `./maddog.toml`.
 For shell scripts or one-off configuration:
 
 ```bash
-reasonix config reasoning-language auto
-reasonix config reasoning-language zh
-reasonix config reasoning-language en
+maddog config reasoning-language auto
+maddog config reasoning-language zh
+maddog config reasoning-language en
 ```
 
 By default this writes the user config. To write a project-local override:
 
 ```bash
-reasonix config reasoning-language --local zh
+maddog config reasoning-language --local zh
 ```
 
-Inside `reasonix chat`, use the slash command:
+Inside `maddog chat`, use the slash command:
 
 ```text
 /reasoning-language auto
@@ -65,7 +65,7 @@ controller for subsequent turns. It does not rewrite the current project's
 Headless runs also use the same setting:
 
 ```bash
-reasonix run "explain this module"
+maddog run "explain this module"
 ```
 
 ## Config File
@@ -92,7 +92,7 @@ argument.
 `auto` is the cache-friendliest choice. It injects nothing and relies on the
 existing stable language policy.
 
-When set to `zh` or `en`, Reasonix adds a small transient
+When set to `zh` or `en`, Maddog adds a small transient
 `<reasoning-language>` block to the user turn. It does not change:
 
 - the system prompt

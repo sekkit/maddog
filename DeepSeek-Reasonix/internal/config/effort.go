@@ -317,6 +317,14 @@ func normalizeEffortLevel(s string) string {
 	return strings.ToLower(strings.TrimSpace(s))
 }
 
+func normalizeStoredEffort(s string) string {
+	level := normalizeEffortLevel(s)
+	if level == "auto" {
+		return ""
+	}
+	return level
+}
+
 func normalizedSupportedEfforts(e *ProviderEntry) []string {
 	if e == nil || len(e.SupportedEfforts) == 0 {
 		return nil

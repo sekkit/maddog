@@ -179,7 +179,7 @@ func TestUpdateDownloadsLatestAndActivates(t *testing.T) {
 		t.Skip("uses a POSIX +x launcher")
 	}
 	base := t.TempDir()
-	t.Setenv("REASONIX_CACHE_DIR", base)
+	t.Setenv("MADDOG_CACHE_DIR", base)
 	asset := assetName()
 	body := makeTarGz(t, map[string]struct {
 		body string
@@ -247,7 +247,7 @@ func TestUpdateDownloadsLatestAndActivates(t *testing.T) {
 
 func TestActiveVersionRejectsTraversal(t *testing.T) {
 	base := t.TempDir()
-	t.Setenv("REASONIX_CACHE_DIR", base)
+	t.Setenv("MADDOG_CACHE_DIR", base)
 	dir := filepath.Join(base, "codegraph")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)

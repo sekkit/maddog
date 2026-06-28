@@ -22,6 +22,8 @@ import type {
   BuiltInMCPUpdateResult,
   BuiltInMCPUpdateStatus,
   CapabilitiesView,
+  CodeBackendBenchmarkView,
+  CodeBackendView,
   CheckpointMeta,
   CommandInfo,
   ContextInfo,
@@ -50,6 +52,7 @@ import type {
   SessionMeta,
   SettingsView,
   SkillRootView,
+  SkillCandidateView,
   SkillSuggestion,
   SkillView,
   SlashArgsResult,
@@ -62,6 +65,8 @@ import type {
   GitCommitView,
   GitCommitDetailView,
   WorkspaceView,
+  ReadinessResultView,
+  WorkflowTemplateView,
 } from "./types";
 
 const GLOBAL_PROJECT_ORDER_KEY = "__global__";
@@ -161,10 +166,17 @@ export interface AppBindings {
   MetaForTab(tabID: string): Promise<Meta>;
   Commands(): Promise<CommandInfo[]>;
   Capabilities(): Promise<CapabilitiesView>;
+  WorkflowTemplates(): Promise<WorkflowTemplateView[]>;
+  WorkflowTemplatesForRoot(root: string): Promise<WorkflowTemplateView[]>;
+  WorkflowReadiness(templateID: string): Promise<ReadinessResultView>;
+  WorkflowReadinessForRoot(root: string, templateID: string): Promise<ReadinessResultView>;
   AddMCPServer(input: MCPServerInput): Promise<number>;
   UpdateMCPServer(name: string, input: MCPServerInput): Promise<void>;
   RemoveMCPServer(name: string): Promise<void>;
   ReconnectMCPServer(name: string): Promise<void>;
+  SetCodeBackendEnabled(id: string, enabled: boolean): Promise<void>;
+  RetryCodeBackendHealth(id: string): Promise<void>;
+  RunCodeBackendBenchmark(id: string): Promise<CodeBackendBenchmarkView>;
   UpdateBuiltInMCPServer(name: string): Promise<BuiltInMCPUpdateResult>;
   BuiltInMCPUpdateStatuses(): Promise<BuiltInMCPUpdateStatus[]>;
   ClearMCPServerAuthentication(name: string): Promise<void>;
@@ -173,6 +185,9 @@ export interface AppBindings {
   RemoveSkillPath(path: string): Promise<void>;
   RefreshSkills(): Promise<void>;
   SetSkillEnabled(name: string, enabled: boolean): Promise<void>;
+  PromoteSkillCandidate(candidateID: string): Promise<SkillCandidateView>;
+  RejectSkillCandidate(candidateID: string, reason: string): Promise<SkillCandidateView>;
+  RollbackPromotedSkill(candidateID: string): Promise<void>;
   SetMCPServerEnabled(name: string, enabled: boolean): Promise<void>;
   SetMCPServerTier(name: string, tier: string): Promise<void>;
   SlashArgs(input: string): Promise<SlashArgsResult>;
@@ -230,6 +245,7 @@ export interface AppBindings {
   SetSubagentEffort(level: string): Promise<void>;
   SetFrontierRoute(ref: string, enabled: boolean, threshold: number, budget: number): Promise<void>;
   SetAutoPlan(mode: string): Promise<void>;
+  SetContextPolicy(mode: string): Promise<void>;
   SaveProvider(p: ProviderView): Promise<void>;
   AddOfficialProviderAccess(kind: string, key: string): Promise<void>;
   FetchProviderModels(p: ProviderView): Promise<string[]>;
@@ -436,12 +452,12 @@ function bridgeBreadcrumb(method: string): string {
     return `turn ${method}`;
   if (/^(SetModel|SetEffort|SetTokenMode|SetDefaultModel|SetPlannerModel|SetSubagentModel|SetSubagentEffort)/.test(method))
     return `model ${method}`;
-  if (/^(SetDesktop|SetCloseBehavior|SetDisplayMode|SetStatusBar|SetExpandThinking|SetAutoPlan|SetReasoningLanguage)/.test(method))
+  if (/^(SetDesktop|SetCloseBehavior|SetDisplayMode|SetStatusBar|SetExpandThinking|SetAutoPlan|SetContextPolicy|SetReasoningLanguage)/.test(method))
     return `settings ${method}`;
   if (/^(SaveProvider|AddOfficialProviderAccess|RemoveProviderAccess|DeleteProvider|SetProviderKey|ClearProviderKey|FetchProviderModels|ConnectKey)/.test(method))
     return `provider ${method}`;
   if (/^(CheckUpdate|ApplyUpdate|OpenDownloadPage)/.test(method)) return `update ${method}`;
-  if (/^(AddMCPServer|UpdateMCPServer|RemoveMCPServer|ReconnectMCPServer|UpdateBuiltInMCPServer|BuiltInMCPUpdateStatuses|ClearMCPServerAuthentication|SetMCPServer)/.test(method))
+  if (/^(AddMCPServer|UpdateMCPServer|RemoveMCPServer|ReconnectMCPServer|UpdateBuiltInMCPServer|BuiltInMCPUpdateStatuses|ClearMCPServerAuthentication|SetMCPServer|SetCodeBackend|RetryCodeBackend|RunCodeBackend)/.test(method))
     return `mcp ${method}`;
   if (/^(AddSkillPath|RemoveSkillPath|RefreshSkills|SetSkillEnabled|AcceptSkillSuggestion)/.test(method))
     return `skill ${method}`;
@@ -587,7 +603,7 @@ function makeMockApp(): AppBindings {
       configured: true,
       autoStart: true,
       tier: "lazy",
-      command: "reasonix",
+      command: "maddog",
       args: ["builtin-mcp", "time"],
       tools: 0,
       prompts: 0,
@@ -643,10 +659,69 @@ function makeMockApp(): AppBindings {
       phase: "available",
     },
   ];
+  let codeBackends: CodeBackendView[] = [
+    {
+      id: "builtin-codegraph",
+      name: "CodeGraph",
+      server: "codegraph",
+      kind: "builtin",
+      default: true,
+      builtIn: true,
+      enabled: false,
+      health: "disabled",
+      indexFreshness: "unknown",
+      toolCount: 10,
+      capabilities: ["context_pack", "graph_trace", "health", "symbol_search"],
+      risks: ["process", "read"],
+      toolMapping: {
+        context: "mcp__codegraph__context",
+        search: "mcp__codegraph__search",
+        trace: "mcp__codegraph__trace",
+      },
+    },
+    {
+      id: "serena",
+      name: "Serena",
+      server: "serena",
+      kind: "external_mcp",
+      default: false,
+      builtIn: false,
+      enabled: false,
+      health: "disabled",
+      indexFreshness: "unknown",
+      toolCount: 0,
+      lastError: "MCP server \"serena\" is not connected",
+      capabilities: ["context_pack", "semantic_search", "symbol_search"],
+      risks: ["network", "read"],
+      toolMapping: {
+        context: "mcp__serena__context",
+        search: "mcp__serena__search",
+      },
+    },
+  ];
   const capSkills: SkillView[] = [
     { name: "explore", description: "Investigate the codebase in an isolated subagent", scope: "builtin", runAs: "subagent", enabled: true },
     { name: "review", description: "Review the staged diff", scope: "project", runAs: "inline", enabled: false },
     { name: "init", description: "Scaffold a MADDOG.md for this repo", scope: "builtin", runAs: "inline", enabled: true },
+  ];
+  let capSkillCandidates: SkillCandidateView[] = [
+    {
+      id: "cand-dynamic-docs",
+      candidateId: "cand-dynamic-docs",
+      skillName: "dynamic-docs",
+      description: "Docs helper",
+      status: "pending",
+      bundleId: "bundle-docs",
+      bundleIds: ["bundle-docs", "bundle-setup"],
+      decision: "promotable",
+      reason: "pass-rate improvement 0% -> 100%",
+      replayCases: 2,
+      heldOutCases: 2,
+      baselinePassRate: 0,
+      candidatePassRate: 1,
+      createdAt: new Date(0).toISOString(),
+      updatedAt: new Date(0).toISOString(),
+    },
   ];
   let capSkillRoots: SkillRootView[] = [
     { dir: "~/projects/maddog/.maddog/skills", scope: "project", priority: 1, status: "missing", configured: false, removable: true, skills: 0 },
@@ -674,6 +749,149 @@ function makeMockApp(): AppBindings {
       ],
     },
   ];
+  const codingTaskArtifacts: WorkflowTemplateView["artifacts"] = {
+    taskPacketFields: ["request", "workspace_state", "acceptance_criteria", "files_changed", "test_plan"],
+    boundedFanOut: { maxParallel: 3, maxDepth: 1, requiresHumanApproval: false },
+    delegationArtifacts: ["worker_summary", "files_changed", "tests_run", "concerns"],
+    integrationChecklist: ["merge_worker_outputs", "resolve_conflicts", "run_focused_tests", "run_ui_contracts"],
+    finalVerificationArtifacts: ["run_report", "test_summary", "review_notes"],
+    runReportMapping: [
+      { artifact: "task_packet", reportField: "report.templateID" },
+      { artifact: "delegation_summary", reportField: "report.phases" },
+      { artifact: "final_verification", reportField: "report.finalStatus" },
+    ],
+  };
+  const codingTaskRefinement: WorkflowTemplateView["refinementStrategy"] = {
+    enabled: false,
+    searchModes: ["bfs_hypothesis", "dfs_correction"],
+    critiqueRounds: 2,
+    correctionRounds: 2,
+    finalJudgeIsolation: "strong",
+    budgetCapTokens: 100000,
+    killSwitchRequired: true,
+    humanApprovalRequired: true,
+  };
+  const refinementOff: WorkflowTemplateView["refinementStrategy"] = {
+    enabled: false,
+    searchModes: [],
+    critiqueRounds: 0,
+    correctionRounds: 0,
+    finalJudgeIsolation: "",
+    budgetCapTokens: 0,
+    killSwitchRequired: false,
+    humanApprovalRequired: false,
+  };
+  const workflowTemplates: WorkflowTemplateView[] = [
+    {
+      schemaVersion: "v1",
+      id: "coding-task",
+      name: "Coding task",
+      goal: "Implement a code change with readiness, budget tracking, and verification.",
+      risk: "medium",
+      phases: [
+        { id: "readiness", name: "Readiness", goal: "Check providers, credentials, budget, workspace, and required capabilities." },
+        { id: "implement", name: "Implement", goal: "Make the requested code changes using the selected provider roles and tools." },
+        { id: "verify", name: "Verify", goal: "Run tests, review findings, and produce a run report." },
+      ],
+      providerRoles: ["default", "small", "frontier", "advisor", "maker", "checker"],
+      budget: { frontierTokens: 500000, totalTokens: 800000 },
+      readinessGates: ["provider_configured", "credential_available", "budget_available"],
+      humanGates: ["git_push", "delete_files", "credential_change", "budget_increase", "skill_promotion"],
+      makerChecker: { mode: "review_only" },
+      requiredCapabilities: ["read", "write", "git", "process"],
+      artifacts: codingTaskArtifacts,
+      refinementStrategy: codingTaskRefinement,
+      statePolicy: "workspace",
+      maxIterations: 6,
+      source: "built-in",
+      sourcePath: "",
+      hash: "mock-coding-task",
+    },
+    {
+      schemaVersion: "v1",
+      id: "review-task",
+      name: "Review task",
+      goal: "Review a change with deterministic checks and a read-only checker path.",
+      risk: "low",
+      phases: [{ id: "inspect", name: "Inspect", goal: "Inspect diffs, evidence, and affected symbols." }],
+      providerRoles: ["default", "small", "advisor", "checker"],
+      budget: { frontierTokens: 200000, totalTokens: 350000 },
+      readinessGates: ["provider_configured", "log_sink_writable"],
+      humanGates: ["credential_change", "budget_increase"],
+      makerChecker: { mode: "review_only" },
+      requiredCapabilities: ["read", "git"],
+      artifacts: {
+        taskPacketFields: ["diff_scope", "review_objective", "risk_focus"],
+        boundedFanOut: { maxParallel: 2, maxDepth: 1, requiresHumanApproval: false },
+        delegationArtifacts: ["review_findings", "affected_files"],
+        integrationChecklist: ["deduplicate_findings", "rank_findings", "verify_line_references"],
+        finalVerificationArtifacts: ["review_report", "residual_risk"],
+        runReportMapping: [
+          { artifact: "review_report", reportField: "report.checker" },
+          { artifact: "residual_risk", reportField: "report.finalStatus" },
+        ],
+      },
+      refinementStrategy: refinementOff,
+      statePolicy: "workspace",
+      maxIterations: 3,
+      source: "built-in",
+      sourcePath: "",
+      hash: "mock-review-task",
+    },
+    {
+      schemaVersion: "v1",
+      id: "skill-improvement",
+      name: "Skill improvement",
+      goal: "Evaluate and promote skill candidates through replay evidence and guardrails.",
+      risk: "high",
+      phases: [{ id: "evaluate", name: "Evaluate", goal: "Run replay scoring and guardrail checks." }],
+      providerRoles: ["default", "small", "frontier", "advisor", "checker"],
+      budget: { frontierTokens: 300000, totalTokens: 600000 },
+      readinessGates: ["provider_configured", "budget_available", "skill_root_writable"],
+      humanGates: ["skill_promotion", "credential_change", "budget_increase"],
+      makerChecker: { mode: "enforced_before_done" },
+      requiredCapabilities: ["read", "write", "process"],
+      artifacts: {
+        taskPacketFields: ["candidate_id", "source_bundle_id", "guardrail_policy", "held_out_bundle_set"],
+        boundedFanOut: { maxParallel: 2, maxDepth: 1, requiresHumanApproval: true },
+        delegationArtifacts: ["eval_summary", "guardrail_findings", "promotion_diff"],
+        integrationChecklist: ["validate_candidate_hash", "verify_skill_root", "record_promotion_audit"],
+        finalVerificationArtifacts: ["promotion_audit", "rollback_point"],
+        runReportMapping: [
+          { artifact: "eval_summary", reportField: "report.phases" },
+          { artifact: "promotion_audit", reportField: "report.humanGate" },
+        ],
+      },
+      refinementStrategy: refinementOff,
+      statePolicy: "workspace",
+      maxIterations: 4,
+      source: "built-in",
+      sourcePath: "",
+      hash: "mock-skill-improvement",
+    },
+  ];
+  const mockWorkflowReadiness = (tmpl?: WorkflowTemplateView): ReadinessResultView => {
+    const template = tmpl ?? workflowTemplates[0];
+    return {
+      status: "ready",
+      score: 100,
+      templateId: template.id,
+      checks: [
+        { id: "provider_configured", status: "passed", message: "all provider roles resolve" },
+        { id: "credential_available", status: "passed", message: "all provider credentials are available", credentialEnv: "DEEPSEEK_API_KEY" },
+        { id: "budget_available", status: "passed", message: "frontier budget is available" },
+        ...template.requiredCapabilities.map((capability) => ({
+          id: `capability:${capability}`,
+          status: "passed",
+          message: "capability authorized",
+          capability,
+        })),
+      ],
+      blockers: [],
+      warnings: [],
+      repairHints: [],
+    };
+  };
   const mockSwitchWorkspace = async (path: string) => {
     cwd = path || "~";
     workspaces = [cwd, ...workspaces.filter((p) => p !== cwd)].slice(0, 12);
@@ -748,6 +966,16 @@ function makeMockApp(): AppBindings {
     sessions.splice(0);
     trashedSessions.splice(0);
   }
+  const mockProviderGateway = (kind: string, baseUrl: string): string => {
+    let host = "";
+    try { host = new URL(baseUrl).hostname.toLowerCase(); } catch { host = ""; }
+    if (host.includes("icodeeasy")) return "icodeeasy";
+    if (kind === "openai" && host === "api.openai.com") return "official_openai";
+    if (kind === "anthropic" && host === "api.anthropic.com") return "official_anthropic";
+    if (kind === "openai") return "openai_compatible";
+    if (kind === "anthropic") return "anthropic_compatible";
+    return kind || "custom";
+  };
   // Mutable settings so the Settings panel's edits are observable in browser dev.
   const providerDefaults = (p: Partial<ProviderView> & { name: string; kind: string; baseUrl: string; models: string[]; default: string; apiKeyEnv: string }): ProviderView => ({
     builtIn: false,
@@ -755,6 +983,7 @@ function makeMockApp(): AppBindings {
     modelsUrl: "",
     authType: "api_key",
     authTokenEnv: "",
+    bearerTokenEnv: "",
     authHeader: "",
     authScheme: "",
     identityEnv: "",
@@ -763,12 +992,23 @@ function makeMockApp(): AppBindings {
     organizationId: "",
     serviceAccountId: "",
     workspaceId: "",
+    officialAuthProfileId: "",
     keySet: false,
     balanceUrl: "",
     contextWindow: 0,
     reasoningProtocol: "",
     supportedEfforts: [],
     defaultEffort: "",
+    roles: [],
+    roleModels: {},
+    authMode: p.authType || "api_key",
+    credentialEnv: p.authType && p.authType !== "api_key" ? (p.bearerTokenEnv || p.authTokenEnv || "") : p.apiKeyEnv,
+    credentialStatus: p.keySet || p.officialAuthProfileId ? "configured" : (p.apiKeyEnv || p.bearerTokenEnv || p.authTokenEnv ? "missing" : "not_configured"),
+    gateway: mockProviderGateway(p.kind, p.baseUrl),
+    frontierEligible: false,
+    smallModelEligible: false,
+    budgetEligible: false,
+    warnings: [],
     ...p,
   });
   const settings: SettingsView = {
@@ -781,8 +1021,9 @@ function makeMockApp(): AppBindings {
     upgradeThreshold: 3,
     frontierBudget: 500000,
     autoPlan: "off",
+    contextPolicy: "auto",
     providers: [
-      providerDefaults({ name: "deepseek", builtIn: true, added: false, kind: "openai", baseUrl: "https://api.deepseek.com", models: ["deepseek-v4-flash"], default: "deepseek-v4-flash", apiKeyEnv: "DEEPSEEK_API_KEY", keySet: true, balanceUrl: "https://api.deepseek.com/user/balance", contextWindow: 1_000_000 }),
+      providerDefaults({ name: "deepseek", builtIn: true, added: false, kind: "openai", baseUrl: "https://api.deepseek.com", models: ["deepseek-v4-flash"], default: "deepseek-v4-flash", apiKeyEnv: "DEEPSEEK_API_KEY", keySet: true, balanceUrl: "https://api.deepseek.com/user/balance", contextWindow: 1_000_000, roles: ["default", "maker"], roleModels: { default: "deepseek/deepseek-v4-flash", maker: "deepseek/deepseek-v4-flash" }, credentialStatus: "configured" }),
       providerDefaults({ name: "mimo-token-plan", builtIn: true, added: false, kind: "openai", baseUrl: "https://token-plan-cn.xiaomimimo.com/v1", models: ["mimo-v2.5-pro"], default: "mimo-v2.5-pro", apiKeyEnv: "MIMO_API_KEY", contextWindow: 1_048_576 }),
     ],
     officialProviders: [
@@ -790,6 +1031,7 @@ function makeMockApp(): AppBindings {
       providerDefaults({ name: "mimo-api", builtIn: true, added: false, kind: "openai", baseUrl: "https://api.xiaomimimo.com/v1", models: ["mimo-v2.5-pro"], default: "mimo-v2.5-pro", apiKeyEnv: "MIMO_API_KEY", contextWindow: 1_048_576 }),
       providerDefaults({ name: "mimo-token-plan", builtIn: true, added: false, kind: "openai", baseUrl: "https://token-plan-cn.xiaomimimo.com/v1", models: ["mimo-v2.5-pro"], default: "mimo-v2.5-pro", apiKeyEnv: "MIMO_API_KEY", contextWindow: 1_048_576 }),
     ],
+    providerProfileWarnings: [],
     permissions: { mode: "ask", allow: ["ls", "read_file"], ask: [], deny: ["Bash(rm:*)"] },
     sandbox: { bash: "enforce", network: true, workspaceRoot: "", allowWrite: [], shell: "auto" },
     network: {
@@ -1002,12 +1244,12 @@ function makeMockApp(): AppBindings {
           {
             role: "user",
             content: [
-              "[[reasonix-im]]",
+              "[[maddog-im]]",
               "provider=lark",
               "label=Feishu / Lark",
               "sender=ou_mock_user_001",
               "chat=p2p 会话",
-              "[[/reasonix-im]]",
+              "[[/maddog-im]]",
               "你可以做什么",
             ].join("\n"),
           },
@@ -1021,12 +1263,12 @@ function makeMockApp(): AppBindings {
           {
             role: "user",
             content: [
-              "[[reasonix-im]]",
+              "[[maddog-im]]",
               "provider=weixin",
               "label=微信",
               "sender=wxid_mock_user_001",
               "chat=单聊",
-              "[[/reasonix-im]]",
+              "[[/maddog-im]]",
               "帮我整理一下今天要做的事",
             ].join("\n"),
           },
@@ -1040,12 +1282,12 @@ function makeMockApp(): AppBindings {
           {
             role: "user",
             content: [
-              "[[reasonix-im]]",
+              "[[maddog-im]]",
               "provider=lark",
               "label=Feishu / Lark",
               "sender=ou_mock_user_001",
               "chat=p2p 会话",
-              "[[/reasonix-im]]",
+              "[[/maddog-im]]",
               "你可以做什么",
             ].join("\n"),
           },
@@ -1831,9 +2073,31 @@ function makeMockApp(): AppBindings {
     async Capabilities() {
       return {
         servers: capServers.map((s) => ({ ...s })),
+        codeBackends: codeBackends.map((b) => ({
+          ...b,
+          capabilities: [...b.capabilities],
+          risks: [...b.risks],
+          toolMapping: { ...b.toolMapping },
+          benchmark: b.benchmark ? { ...b.benchmark } : undefined,
+        })),
         skills: capSkills.map((s) => ({ ...s })),
+        skillCandidates: capSkillCandidates.map((s) => ({ ...s, bundleIds: [...(s.bundleIds ?? [])] })),
         skillRoots: capSkillRoots.map((s) => ({ ...s })),
       };
+    },
+    async WorkflowTemplates() {
+      return workflowTemplates.map((tmpl) => JSON.parse(JSON.stringify(tmpl)) as WorkflowTemplateView);
+    },
+    async WorkflowTemplatesForRoot(_root: string) {
+      return workflowTemplates.map((tmpl) => JSON.parse(JSON.stringify(tmpl)) as WorkflowTemplateView);
+    },
+    async WorkflowReadiness(templateID: string) {
+      const tmpl = workflowTemplates.find((item) => item.id === templateID) ?? workflowTemplates[0];
+      return mockWorkflowReadiness(tmpl);
+    },
+    async WorkflowReadinessForRoot(_root: string, templateID: string) {
+      const tmpl = workflowTemplates.find((item) => item.id === templateID) ?? workflowTemplates[0];
+      return mockWorkflowReadiness(tmpl);
     },
     async AddMCPServer(input: MCPServerInput) {
       const tools = input.transport === "stdio" ? 3 : 5;
@@ -1891,6 +2155,52 @@ function makeMockApp(): AppBindings {
       capServers = capServers.map((s) =>
         s.name === name ? { ...s, status: "connected", tools: s.tools || 4 } : s,
       );
+      codeBackends = codeBackends.map((backend) =>
+        backend.server === name
+          ? { ...backend, health: "available", enabled: true, toolCount: backend.toolCount || 4, lastError: undefined }
+          : backend,
+      );
+    },
+    async SetCodeBackendEnabled(id: string, enabled: boolean) {
+      codeBackends = codeBackends.map((backend) => {
+        if (backend.id !== id && backend.server !== id) return backend;
+        const nextHealth = enabled ? (backend.builtIn ? "available" : "degraded") : "disabled";
+        return {
+          ...backend,
+          enabled,
+          health: nextHealth,
+          lastError: enabled && !backend.builtIn ? backend.lastError || `MCP server "${backend.server}" is not connected` : undefined,
+        };
+      });
+      if (id === "builtin-codegraph" || id === "codegraph") {
+        await this.SetMCPServerEnabled("codegraph", enabled);
+      }
+    },
+    async RetryCodeBackendHealth(id: string) {
+      const backend = codeBackends.find((item) => item.id === id || item.server === id);
+      if (!backend) throw new Error(`unknown code backend ${id}`);
+      codeBackends = codeBackends.map((item) =>
+        item.id === backend.id
+          ? { ...item, enabled: true, health: "available", toolCount: item.toolCount || 4, lastError: undefined }
+          : item,
+      );
+    },
+    async RunCodeBackendBenchmark(id: string) {
+      const backend = codeBackends.find((item) => item.id === id || item.server === id);
+      if (!backend) throw new Error(`unknown code backend ${id}`);
+      const summary: CodeBackendBenchmarkView = {
+        backendId: backend.id,
+        path: `/tmp/maddog/codeintelbench/${backend.id}.json`,
+        generatedAt: new Date("2026-06-28T09:00:00Z").toISOString(),
+        health: backend.health,
+        topKRelevance: backend.enabled || backend.builtIn ? 0.82 : 0,
+        citationPrecision: backend.enabled || backend.builtIn ? 0.75 : 0,
+        toolFailures: backend.health === "invalid" ? 1 : 0,
+        unsupported: backend.capabilities.includes("semantic_search") ? 0 : 1,
+        tokenCharsReturned: 420,
+      };
+      codeBackends = codeBackends.map((item) => (item.id === backend.id ? { ...item, benchmark: summary } : item));
+      return summary;
     },
     async UpdateBuiltInMCPServer(name: string) {
       if (name !== "codegraph") throw new Error(`${name} is not an updatable built-in MCP server`);
@@ -1906,10 +2216,10 @@ function makeMockApp(): AppBindings {
           current: "v0.10.0",
           latest: "v0.10.0",
           phase: "activated",
-          path: "/tmp/reasonix/codegraph/mock/codegraph",
+          path: "/tmp/maddog/codegraph/mock/codegraph",
         },
       ];
-      return { name, version: "v0.10.0", path: "/tmp/reasonix/codegraph/mock/codegraph" };
+      return { name, version: "v0.10.0", path: "/tmp/maddog/codegraph/mock/codegraph" };
     },
     async BuiltInMCPUpdateStatuses() {
       return builtInMCPUpdates.map((s) => ({ ...s }));
@@ -1962,6 +2272,34 @@ function makeMockApp(): AppBindings {
       const skill = capSkills.find((s) => s.name === name);
       if (skill) skill.enabled = enabled;
     },
+    async PromoteSkillCandidate(candidateID: string) {
+      const candidate = capSkillCandidates.find((s) => s.id === candidateID || s.candidateId === candidateID);
+      if (!candidate) throw new Error(`skill candidate ${candidateID} not found`);
+      candidate.status = "promoted";
+      candidate.promotedPath = `~/projects/maddog/.maddog/skills/${candidate.skillName}/SKILL.md`;
+      candidate.updatedAt = new Date().toISOString();
+      if (candidate.skillName && !capSkills.some((s) => s.name === candidate.skillName)) {
+        capSkills.push({ name: candidate.skillName, description: candidate.description ?? "", scope: "project", runAs: "inline", enabled: true });
+      }
+      return { ...candidate, bundleIds: [...(candidate.bundleIds ?? [])] };
+    },
+    async RejectSkillCandidate(candidateID: string, reason: string) {
+      const candidate = capSkillCandidates.find((s) => s.id === candidateID || s.candidateId === candidateID);
+      if (!candidate) throw new Error(`skill candidate ${candidateID} not found`);
+      candidate.status = "rejected";
+      candidate.reason = reason;
+      candidate.updatedAt = new Date().toISOString();
+      return { ...candidate, bundleIds: [...(candidate.bundleIds ?? [])] };
+    },
+    async RollbackPromotedSkill(candidateID: string) {
+      const candidate = capSkillCandidates.find((s) => s.id === candidateID || s.candidateId === candidateID);
+      if (!candidate) throw new Error(`skill candidate ${candidateID} not found`);
+      candidate.status = "pending";
+      candidate.promotedPath = undefined;
+      candidate.updatedAt = new Date().toISOString();
+      const idx = capSkills.findIndex((s) => s.name === candidate.skillName);
+      if (idx >= 0 && candidate.skillName?.startsWith("dynamic-")) capSkills.splice(idx, 1);
+    },
     async SetMCPServerEnabled(name: string, enabled: boolean) {
       capServers = capServers.map((s) =>
         s.name === name
@@ -1975,6 +2313,17 @@ function makeMockApp(): AppBindings {
               authUrl: !enabled && s.transport !== "stdio" ? s.url : undefined,
             }
           : s,
+      );
+      codeBackends = codeBackends.map((backend) =>
+        backend.server === name
+          ? {
+              ...backend,
+              enabled,
+              health: enabled ? "available" : "disabled",
+              toolCount: enabled ? backend.toolCount || 4 : 0,
+              lastError: undefined,
+            }
+          : backend,
       );
     },
     async SetMCPServerTier(name: string, tier: string) {
@@ -2306,8 +2655,14 @@ function makeMockApp(): AppBindings {
     async SetAutoPlan(mode: string) {
       settings.autoPlan = mode;
     },
+    async SetContextPolicy(mode: string) {
+      settings.contextPolicy = mode;
+    },
     async SaveProvider(p: ProviderView) {
       p.added = true;
+      if (!p.bearerTokenEnv && p.authTokenEnv) p.bearerTokenEnv = p.authTokenEnv;
+      p.credentialEnv = p.authType === "api_key" ? p.apiKeyEnv : (p.bearerTokenEnv || p.authTokenEnv || p.identityEnv || "");
+      p.credentialStatus = p.keySet || p.officialAuthProfileId ? "configured" : p.credentialEnv ? "missing" : "not_configured";
       const i = settings.providers.findIndex((x) => x.name === p.name);
       if (i >= 0) settings.providers[i] = p;
       else settings.providers.push(p);
@@ -2325,7 +2680,7 @@ function makeMockApp(): AppBindings {
     },
     async FetchProviderModels(p: ProviderView) {
       if (!p.baseUrl.trim()) throw new Error(t("settings.fetchModelsMissingBaseUrl"));
-      const authEnv = p.authType === "api_key" ? p.apiKeyEnv : p.authTokenEnv;
+      const authEnv = p.authType === "api_key" ? p.apiKeyEnv : (p.bearerTokenEnv || p.authTokenEnv);
       if (!authEnv.trim()) throw new Error(t("settings.fetchModelsMissingKeyEnv"));
       await delay(350);
       if (p.baseUrl.includes("deepseek")) return ["deepseek-v4-flash", "deepseek-v4-pro"];
@@ -2342,12 +2697,18 @@ function makeMockApp(): AppBindings {
     },
     async SetProviderKey(apiKeyEnv: string, _value: string) {
       settings.providers.forEach((p) => {
-        if (p.apiKeyEnv === apiKeyEnv || p.authTokenEnv === apiKeyEnv || p.identityEnv === apiKeyEnv) p.keySet = true;
+        if (p.apiKeyEnv === apiKeyEnv || p.bearerTokenEnv === apiKeyEnv || p.authTokenEnv === apiKeyEnv || p.identityEnv === apiKeyEnv) {
+          p.keySet = true;
+          p.credentialStatus = "configured";
+        }
       });
     },
     async ClearProviderKey(apiKeyEnv: string) {
       settings.providers.forEach((p) => {
-        if (p.apiKeyEnv === apiKeyEnv || p.authTokenEnv === apiKeyEnv || p.identityEnv === apiKeyEnv) p.keySet = false;
+        if (p.apiKeyEnv === apiKeyEnv || p.bearerTokenEnv === apiKeyEnv || p.authTokenEnv === apiKeyEnv || p.identityEnv === apiKeyEnv) {
+          p.keySet = false;
+          p.credentialStatus = p.credentialEnv ? "missing" : "not_configured";
+        }
       });
     },
     async SetPermissionMode(mode: string) {
@@ -2413,7 +2774,7 @@ function makeMockApp(): AppBindings {
             provider: normalizedProvider,
             domain: normalizedDomain,
             installId: `mock-${normalizedProvider}-${normalizedDomain}`,
-            url: "https://example.com/reasonix-bot-qr",
+            url: "https://example.com/maddog-bot-qr",
             deviceCode: "MOCKDEVICE",
             userCode: normalizedProvider === "weixin" ? "" : "MOCK-CODE",
             interval: 3,

@@ -36,12 +36,14 @@ import (
 	"reasonix/internal/codegraph"
 	"reasonix/internal/command"
 	"reasonix/internal/config"
+	ctxcompress "reasonix/internal/context"
 	"reasonix/internal/diff"
 	"reasonix/internal/event"
 	"reasonix/internal/evidence"
 	"reasonix/internal/hook"
 	"reasonix/internal/i18n"
 	"reasonix/internal/jobs"
+	"reasonix/internal/loop"
 	"reasonix/internal/memory"
 	"reasonix/internal/nilutil"
 	"reasonix/internal/permission"
@@ -56,6 +58,14 @@ import (
 // while one is already active in the same Controller.
 var ErrTurnRunning = errors.New("turn already running")
 
+// ErrReadinessBlocked reports that a workflow readiness gate prevented the turn
+// from starting. The emitted Readiness event carries the detailed blockers.
+var ErrReadinessBlocked = errors.New("readiness blocked")
+
+// ErrReadinessNeedsApproval reports that a workflow readiness gate requires a
+// human decision before the turn may start.
+var ErrReadinessNeedsApproval = errors.New("readiness needs approval")
+
 // Controller drives one chat session. Construct with New; drive with the command
 // methods; observe through the Sink passed in Options.
 type Controller struct {
@@ -64,20 +74,24 @@ type Controller struct {
 	sink     event.Sink
 	policy   permission.Policy
 
-	label             string
-	systemPrompt      string
-	sessionDir        string
-	host              *plugin.Host
-	commands          []command.Command
-	skills            []skill.Skill
-	allSkills         []skill.Skill
-	skillStore        *skill.Store
-	allSkillStore     *skill.Store
-	hooks             *hook.Runner // session hook runner; nil-safe (no hooks configured)
-	mem               *memory.Set
-	cleanup           func()
-	autoPlan          string
-	reasoningLanguage string
+	label              string
+	systemPrompt       string
+	sessionDir         string
+	host               *plugin.Host
+	commands           []command.Command
+	skills             []skill.Skill
+	allSkills          []skill.Skill
+	skillStore         *skill.Store
+	allSkillStore      *skill.Store
+	skillOrchestrator  skillOrchestrator
+	hooks              *hook.Runner // session hook runner; nil-safe (no hooks configured)
+	mem                *memory.Set
+	cleanup            func()
+	autoPlan           string
+	reasoningLanguage  string
+	readinessEvaluator func(context.Context) loop.ReadinessResult
+	runLog             *loop.RunLog
+	rawToolStore       ctxcompress.RawStore
 	// disableColdResumePrune skips stale-tool-result elision on cold resume.
 	// Zero value keeps the prune on (the cheaper default).
 	disableColdResumePrune bool
@@ -176,6 +190,10 @@ type Controller struct {
 	displayRecorder func(content, display string)
 }
 
+type skillOrchestrator interface {
+	Orchestrate(context.Context, string) (skill.OrchestrationResult, error)
+}
+
 type approvalReply struct {
 	allow   bool
 	session bool
@@ -226,23 +244,24 @@ type RememberResult struct {
 // lets the controller mint and rotate session files; Host/Commands are surfaced
 // to frontends that resolve MCP prompts and slash commands.
 type Options struct {
-	Runner        agent.Runner
-	Executor      *agent.Agent
-	Sink          event.Sink
-	Policy        permission.Policy
-	Label         string
-	SystemPrompt  string
-	SessionDir    string
-	SessionPath   string
-	Host          *plugin.Host
-	Commands      []command.Command
-	Skills        []skill.Skill
-	AllSkills     []skill.Skill
-	SkillStore    *skill.Store
-	AllSkillStore *skill.Store
-	Hooks         *hook.Runner
-	Memory        *memory.Set
-	Cleanup       func()
+	Runner            agent.Runner
+	Executor          *agent.Agent
+	Sink              event.Sink
+	Policy            permission.Policy
+	Label             string
+	SystemPrompt      string
+	SessionDir        string
+	SessionPath       string
+	Host              *plugin.Host
+	Commands          []command.Command
+	Skills            []skill.Skill
+	AllSkills         []skill.Skill
+	SkillStore        *skill.Store
+	AllSkillStore     *skill.Store
+	SkillOrchestrator skillOrchestrator
+	Hooks             *hook.Runner
+	Memory            *memory.Set
+	Cleanup           func()
 	// BalanceURL/BalanceKey wire the active provider's optional wallet-balance
 	// endpoint and bearer key; empty when the provider declares no balance_url.
 	BalanceURL    string
@@ -270,6 +289,16 @@ type Options struct {
 	// matches the agent's configured [tools.shell] choice. Zero value = auto.
 	Shell      sandbox.Shell
 	Classifier autoPlanClassifier
+	// ReadinessEvaluator, when set, runs before each turn and may block the run
+	// with a structured loop.ReadinessResult. Nil preserves the legacy no-gate
+	// behavior for callers that have not selected a workflow template yet.
+	ReadinessEvaluator func(context.Context) loop.ReadinessResult
+	// RunLog, when set, records loop-level lifecycle events and emits a
+	// RunReportReady event after the synchronous headless run closes.
+	RunLog *loop.RunLog
+	// RawToolStore resolves externalized raw tool outputs referenced by
+	// compressed session messages.
+	RawToolStore ctxcompress.RawStore
 	// OnRemember, when set, is invoked with a new allow rule the user chose to
 	// persist to disk (e.g. "Bash(go test:*)"). The callback is wired into the
 	// permission Gate on EnableInteractiveApproval.
@@ -305,11 +334,15 @@ func New(opts Options) *Controller {
 		allSkills:              opts.AllSkills,
 		skillStore:             opts.SkillStore,
 		allSkillStore:          opts.AllSkillStore,
+		skillOrchestrator:      opts.SkillOrchestrator,
 		hooks:                  opts.Hooks,
 		mem:                    opts.Memory,
 		cleanup:                opts.Cleanup,
 		autoPlan:               normalizeAutoPlan(opts.AutoPlan),
 		reasoningLanguage:      config.NormalizeReasoningLanguage(opts.ReasoningLanguage),
+		readinessEvaluator:     opts.ReadinessEvaluator,
+		runLog:                 opts.RunLog,
+		rawToolStore:           opts.RawToolStore,
 		disableColdResumePrune: opts.DisableColdResumePrune,
 		shell:                  opts.Shell,
 		classifier:             classifier,
@@ -449,6 +482,11 @@ func (c *Controller) runGuarded(body func(ctx context.Context) error) {
 			}
 		}()
 		err := body(ctx)
+		status := "completed"
+		if err != nil {
+			status = "failed"
+		}
+		c.finishRunLog(status)
 		c.mu.Lock()
 		c.running = false
 		c.cancel = nil
@@ -469,6 +507,7 @@ func (c *Controller) Send(input string) {
 // resolved @-reference payloads so referenced file contents cannot inflate the
 // complexity score.
 func (c *Controller) SendWithRaw(input, raw string) {
+	c.startRunLog(input)
 	c.runGuarded(func(ctx context.Context) error { return c.runGoalLoopWithRaw(ctx, input, raw) })
 }
 
@@ -539,12 +578,20 @@ func (c *Controller) runGoalLoopWithRawDisplay(ctx context.Context, input, raw, 
 }
 
 func (c *Controller) runTurnWithRawDisplay(ctx context.Context, input, raw, display string) error {
+	if err := c.checkReadiness(ctx); err != nil {
+		return err
+	}
 	c.maybeSessionStart(ctx)
 	c.maybeAutoPlan(ctx, raw)
 	parentSession := c.parentSessionID()
 	ctx = agent.WithParentSession(ctx, parentSession)
 	ctx = jobs.WithSession(ctx, parentSession)
 	ctx = agent.WithUserImages(ctx, c.inputImages(input))
+	var err error
+	input, err = c.applyRuntimeSkillOrchestration(ctx, input)
+	if err != nil {
+		return err
+	}
 	input = c.Compose(input)
 	startMessages := c.messageCount()
 	defer c.snapshotActivityIfChanged(startMessages)
@@ -608,6 +655,38 @@ func (c *Controller) runTurnWithRawDisplay(ctx context.Context, input, raw, disp
 		c.completePlanTodos(todoArgs)
 	}
 	return nil
+}
+
+func (c *Controller) applyRuntimeSkillOrchestration(ctx context.Context, input string) (string, error) {
+	if c.skillOrchestrator == nil {
+		return input, nil
+	}
+	res, err := c.skillOrchestrator.Orchestrate(ctx, input)
+	if err != nil {
+		c.sink.Emit(event.Event{Kind: event.Notice, Level: event.LevelWarn, Text: "runtime skill orchestration failed: " + err.Error()})
+		return input, nil
+	}
+	if !res.Matched && !res.Generated {
+		return input, nil
+	}
+	if res.Notice != "" {
+		kind := event.Notice
+		var candidate *event.SkillCandidateSnapshot
+		if res.Generated {
+			kind = event.SkillGenerated
+			candidate = &event.SkillCandidateSnapshot{
+				SkillName:   res.Skill.Name,
+				BundleID:    res.BundleID,
+				CandidateID: res.CandidateID,
+				Status:      res.CandidateStatus,
+			}
+		}
+		c.sink.Emit(event.Event{Kind: kind, Level: event.LevelInfo, Text: res.Notice, SkillCandidate: candidate})
+	}
+	if strings.TrimSpace(res.Prompt) == "" {
+		return input, nil
+	}
+	return res.Prompt + "\n\n" + input, nil
 }
 
 func (c *Controller) continueGoal(ctx context.Context) error {
@@ -1129,22 +1208,119 @@ func (c *Controller) notice(text string) {
 // headless `maddog run` path, where the Sink renders to stdout and the caller
 // just needs the exit status — no TurnDone event, no cancel bookkeeping.
 func (c *Controller) Run(ctx context.Context, input string) error {
+	if err := c.checkReadiness(ctx); err != nil {
+		return err
+	}
+	runID := "run"
+	loopID := c.label
+	if loopID == "" {
+		loopID = "default"
+	}
+	_ = c.appendRunEvent(loop.RunEvent{
+		Kind:    loop.RunEventStarted,
+		RunID:   runID,
+		LoopID:  loopID,
+		TurnID:  "turn-1",
+		Message: input,
+	})
+	status := "completed"
+	defer func() {
+		_ = c.appendRunEvent(loop.RunEvent{Kind: loop.RunEventStopped, RunID: runID, LoopID: loopID, TurnID: "turn-1", Message: status})
+		_ = c.appendRunEvent(loop.RunEvent{Kind: loop.RunEventReportReady, RunID: runID, LoopID: loopID, TurnID: "turn-1", Message: status})
+		if c.runLog == nil {
+			return
+		}
+		report, err := c.runLog.Close(status)
+		if err != nil {
+			c.sink.Emit(event.Event{Kind: event.Notice, Level: event.LevelWarn, Text: err.Error()})
+			return
+		}
+		c.sink.Emit(event.Event{Kind: event.RunReportReady, Level: event.LevelInfo, RunReport: &report})
+	}()
 	c.maybeSessionStart(ctx)
 	parentSession := c.parentSessionID()
 	ctx = agent.WithParentSession(ctx, parentSession)
 	ctx = jobs.WithSession(ctx, parentSession)
 	ctx = agent.WithUserImages(ctx, c.inputImages(input))
+	var err error
+	input, err = c.applyRuntimeSkillOrchestration(ctx, input)
+	if err != nil {
+		status = "failed"
+		return err
+	}
 	input = c.Compose(input)
 	startMessages := c.messageCount()
 	defer c.snapshotActivityIfChanged(startMessages)
 	if c.hooks.Enabled() {
 		c.turn++
 		if block, _ := c.hooks.PromptSubmit(ctx, input, c.turn); block {
+			status = "blocked"
 			return nil
 		}
 		defer func() { c.hooks.Stop(ctx, lastAssistantText(c.History()), c.turn) }()
 	}
-	return c.runner.Run(ctx, input)
+	if err := c.runner.Run(ctx, input); err != nil {
+		status = "failed"
+		return err
+	}
+	return nil
+}
+
+func (c *Controller) appendRunEvent(e loop.RunEvent) error {
+	if c == nil || c.runLog == nil {
+		return nil
+	}
+	return c.runLog.Append(e)
+}
+
+func (c *Controller) startRunLog(input string) {
+	_ = c.appendRunEvent(loop.RunEvent{
+		Kind:    loop.RunEventStarted,
+		RunID:   "run",
+		LoopID:  c.loopLogID(),
+		TurnID:  "turn-1",
+		Message: input,
+	})
+}
+
+func (c *Controller) finishRunLog(status string) {
+	if c == nil || c.runLog == nil {
+		return
+	}
+	if status == "" {
+		status = "completed"
+	}
+	_ = c.appendRunEvent(loop.RunEvent{Kind: loop.RunEventStopped, RunID: "run", LoopID: c.loopLogID(), TurnID: "turn-1", Message: status})
+	_ = c.appendRunEvent(loop.RunEvent{Kind: loop.RunEventReportReady, RunID: "run", LoopID: c.loopLogID(), TurnID: "turn-1", Message: status})
+	report, err := c.runLog.Close(status)
+	if err != nil {
+		c.sink.Emit(event.Event{Kind: event.Notice, Level: event.LevelWarn, Text: err.Error()})
+		return
+	}
+	c.sink.Emit(event.Event{Kind: event.RunReportReady, Level: event.LevelInfo, RunReport: &report})
+}
+
+func (c *Controller) loopLogID() string {
+	if c == nil || strings.TrimSpace(c.label) == "" {
+		return "default"
+	}
+	return strings.TrimSpace(c.label)
+}
+
+func (c *Controller) checkReadiness(ctx context.Context) error {
+	if c.readinessEvaluator == nil {
+		return nil
+	}
+	result := c.readinessEvaluator(ctx)
+	c.sink.Emit(event.Event{Kind: event.Readiness, Readiness: &result})
+	switch result.Status {
+	case loop.ReadinessBlocked:
+		return ErrReadinessBlocked
+	case loop.ReadinessNeedsApproval:
+		return ErrReadinessNeedsApproval
+	default:
+		return nil
+	}
 }
 
 // Cancel aborts the in-flight turn. A goroutine blocked awaiting approval
@@ -1154,6 +1330,7 @@ func (c *Controller) Cancel() {
 	cancel := c.cancel
 	c.mu.Unlock()
 	if cancel != nil {
+		_ = c.appendRunEvent(loop.RunEvent{Kind: loop.RunEventKillSwitchTriggered, RunID: "run", LoopID: c.loopLogID(), TurnID: "turn-1", Message: "cancel requested"})
 		cancel()
 	}
 }
@@ -2159,11 +2336,21 @@ func (c *Controller) SessionCache() (hit, miss int) {
 	return c.executor.SessionCache()
 }
 
+func (c *Controller) CompressionMetrics() ctxcompress.CompressionMetricsSnapshot {
+	if c == nil || c.executor == nil {
+		return ctxcompress.CompressionMetricsSnapshot{ByStrategy: map[string]int{}}
+	}
+	return c.executor.CompressionMetrics()
+}
+
 // ToolResultData holds the full arguments and output for one tool call, loaded
 // on demand when a frontend expands a collapsed tool card.
 type ToolResultData struct {
-	Args   string `json:"args"`
-	Output string `json:"output"`
+	Args         string `json:"args"`
+	Output       string `json:"output"`
+	RawRef       string `json:"rawRef,omitempty"`
+	RawAvailable bool   `json:"rawAvailable,omitempty"`
+	RawError     string `json:"rawError,omitempty"`
 }
 
 // ToolResult looks up a tool call by its ID in the session history and returns
@@ -2185,6 +2372,17 @@ func (c *Controller) ToolResult(toolID string) *ToolResultData {
 			Args:   "",
 			Output: msgs[i].Content,
 		}
+		if ref := compressedRawRef(msgs[i].Content); ref != "" {
+			out.RawRef = ref
+			if c.rawToolStore != nil {
+				if raw, err := c.rawToolStore.Get(ref); err == nil {
+					out.Output = raw
+					out.RawAvailable = true
+				} else {
+					out.RawError = "raw output unavailable"
+				}
+			}
+		}
 		// Walk back to find the assistant turn that issued this call.
 		for j := i; j >= 0; j-- {
 			if msgs[j].Role != provider.RoleAssistant {
@@ -2200,6 +2398,16 @@ func (c *Controller) ToolResult(toolID string) *ToolResultData {
 		return out
 	}
 	return nil
+}
+
+func compressedRawRef(content string) string {
+	for _, line := range strings.Split(content, "\n") {
+		ref, ok := strings.CutPrefix(strings.TrimSpace(line), "raw_ref:")
+		if ok {
+			return strings.TrimSpace(ref)
+		}
+	}
+	return ""
 }
 
 // Balance queries the active provider's wallet balance, or (nil, nil) when the

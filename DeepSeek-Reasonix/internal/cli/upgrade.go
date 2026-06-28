@@ -26,8 +26,8 @@ import (
 )
 
 const (
-	ghOwner        = "esengine"
-	ghRepo         = "DeepSeek-Reasonix"
+	ghOwner        = "sekkit"
+	ghRepo         = "maddog"
 	ghAPIReleases  = "https://api.github.com/repos/" + ghOwner + "/" + ghRepo + "/releases"
 	ghDownloadBase = "https://github.com/" + ghOwner + "/" + ghRepo + "/releases/download"
 	upgradeTimeout = 60 * time.Second
@@ -46,7 +46,7 @@ type ghAsset struct {
 	Size               int64  `json:"size"`
 }
 
-// upgradeCommand handles `reasonix upgrade` (and `reasonix update`).
+// upgradeCommand handles `maddog upgrade` (and `maddog update`).
 func upgradeCommand(args []string, version string) int {
 	fs := flag.NewFlagSet("upgrade", flag.ContinueOnError)
 	checkOnly := fs.Bool("check", false, "check for updates without installing")
@@ -106,7 +106,7 @@ func upgradeCommand(args []string, version string) int {
 	}
 
 	// 5. Find the asset for the current platform.
-	base := fmt.Sprintf("reasonix-%s-%s", runtime.GOOS, runtime.GOARCH)
+	base := fmt.Sprintf("maddog-%s-%s", runtime.GOOS, runtime.GOARCH)
 	var asset *ghAsset
 	for i := range rel.Assets {
 		if strings.HasPrefix(rel.Assets[i].Name, base) {
@@ -143,9 +143,9 @@ func upgradeCommand(args []string, version string) int {
 	}
 
 	// 9. Extract binary from archive.
-	binName := "reasonix"
+	binName := "maddog"
 	if runtime.GOOS == "windows" {
-		binName = "reasonix.exe"
+		binName = "maddog.exe"
 	}
 	binary, err := extractBinary(archiveData, asset.Name, binName)
 	if err != nil {
@@ -188,7 +188,7 @@ func isCLITag(tag string) bool {
 
 // pickCLIRelease returns the newest CLI-namespace (v*) release from a
 // reverse-chronological list, skipping foreign namespaces ("desktop-v",
-// "npm-v"). Prereleases are kept: only 1.x carries `reasonix upgrade`, and the
+// "npm-v"). Prereleases are kept: only 1.x carries `maddog upgrade`, and the
 // 1.x line ships as rc on npm @next, so there is no stable user to hold back —
 // the command should always move to the newest 1.x.
 func pickCLIRelease(rels []ghRelease) *ghRelease {
@@ -208,7 +208,7 @@ func fetchLatestRelease(c *http.Client) (*ghRelease, error) {
 		return nil, err
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
-	req.Header.Set("User-Agent", "reasonix-cli")
+	req.Header.Set("User-Agent", "maddog-cli")
 
 	resp, err := c.Do(req)
 	if err != nil {
@@ -265,7 +265,7 @@ func verifyChecksum(data []byte, fileName string, checksumFile []byte) error {
 	return fmt.Errorf(i18n.M.UpgradeChecksumNotFoundFmt, fileName)
 }
 
-// extractBinary pulls the "reasonix" binary from a .tar.gz or .zip archive.
+// extractBinary pulls the "maddog" binary from a .tar.gz or .zip archive.
 func extractBinary(data []byte, archiveName, binaryName string) ([]byte, error) {
 	if strings.HasSuffix(archiveName, ".zip") {
 		return extractFromZip(data, binaryName)

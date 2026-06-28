@@ -23,10 +23,16 @@ import type {
   MemoryView,
   Meta,
   Mode,
+  HumanGateResultView,
+  MakerCheckerResultView,
+  ProviderStatusView,
   QuestionAnswer,
+  ReadinessResultView,
+  RunReportView,
   SessionMeta,
   TabMeta,
   TokenMode,
+  ToolCompressionView,
   ToolApprovalMode,
   WireApproval,
   WireAdvisor,
@@ -47,6 +53,11 @@ export type Item =
   | { kind: "phase"; id: string; text: string }
   | { kind: "notice"; id: string; level: "info" | "warn"; text: string }
   | { kind: "runtime_event"; id: string; event: "upgrade" | "skill_generated" | "budget_exceeded" | "skill_promoted"; level: "info" | "warn"; text: string }
+  | { kind: "provider_status"; id: string; level: "info" | "warn"; text: string; providerStatus: ProviderStatusView }
+  | { kind: "readiness"; id: string; level: "info" | "warn"; text: string; readiness: ReadinessResultView }
+  | { kind: "run_report"; id: string; level: "info" | "warn"; text: string; runReport: RunReportView }
+  | { kind: "maker_checker"; id: string; level: "info" | "warn"; text: string; makerChecker: MakerCheckerResultView }
+  | { kind: "human_gate"; id: string; level: "info" | "warn"; text: string; humanGate: HumanGateResultView }
   | { kind: "advisor"; id: string; level: "info" | "warn"; text: string; advisor: WireAdvisor }
   | {
       kind: "compaction";
@@ -69,6 +80,7 @@ export type Item =
       truncated?: boolean;
       dataArchived?: boolean; // args/output trimmed for memory; full data available via backend
       durationMs?: number;
+      compression?: ToolCompressionView;
       summary?: string; // stable collapsed readout kept even after args/output archive
       isShell?: boolean; // true for !-prefix shell commands (controls default expand)
       parentId?: string; // a sub-agent call nests under the `task` call with this id
@@ -101,7 +113,12 @@ interface State {
   sessionCost: number;
   sessionCurrency: string;
   routeStatus?: string;
+  providerStatus?: ProviderStatusView;
   skillStatus?: string;
+  readiness?: ReadinessResultView;
+  runReport?: RunReportView;
+  makerChecker?: MakerCheckerResultView;
+  humanGate?: HumanGateResultView;
   retry?: { attempt: number; max: number };
   seq: number;
 }
@@ -466,7 +483,7 @@ function applyEvent(s: State, e: WireEvent): State {
           const existing = it;
           const shortArgs = existing.args && existing.args.length > 200 ? existing.args.slice(0, 200) + "…" : existing.args;
           const summary = t.err ? undefined : existing.summary || summarize(existing.name, existing.args, t.output);
-          next[idx] = { ...existing, status: t.err ? "error" : "done", args: shortArgs, output: undefined, error: t.err, truncated: t.truncated, durationMs: t.durationMs, dataArchived: true, summary };
+          next[idx] = { ...existing, status: t.err ? "error" : "done", args: shortArgs, output: undefined, error: t.err, truncated: t.truncated, durationMs: t.durationMs, compression: t.compression ?? existing.compression, dataArchived: true, summary };
         }
       }
       return { ...s, items: next };
@@ -513,6 +530,69 @@ function applyEvent(s: State, e: WireEvent): State {
         items: [...s.items, { kind: "runtime_event", id: `rt${s.seq}`, event: e.kind, level: e.level ?? "info", text }],
       };
     }
+    case "provider_status": {
+      if (!e.providerStatus) return s;
+      const text = e.text ?? providerStatusEventText(e.providerStatus);
+      return {
+        ...s,
+        running: s.turnActive ? s.running : false,
+        routeStatus: e.providerStatus.upgradeReason || s.routeStatus,
+        providerStatus: e.providerStatus,
+        seq: s.seq + 1,
+        items: [...s.items, { kind: "provider_status", id: `ps${s.seq}`, level: e.level ?? "info", text, providerStatus: e.providerStatus }],
+      };
+    }
+    case "run_report_ready": {
+      if (!e.runReport) return s;
+      const text = e.text ?? runReportEventText(e.runReport);
+      return {
+        ...s,
+        running: s.turnActive ? s.running : false,
+        runReport: e.runReport,
+        readiness: e.runReport.readiness ?? s.readiness,
+        makerChecker: e.runReport.checker ?? s.makerChecker,
+        humanGate: e.runReport.humanGate ?? s.humanGate,
+        seq: s.seq + 1,
+        items: [...s.items, { kind: "run_report", id: `rr${s.seq}`, level: e.level ?? "info", text, runReport: e.runReport }],
+      };
+    }
+    case "readiness": {
+      if (!e.readiness) return s;
+      const level = e.level ?? (e.readiness.status === "ready" ? "info" : "warn");
+      const text = e.text ?? readinessEventText(e.readiness);
+      return {
+        ...s,
+        running: s.turnActive ? s.running : false,
+        readiness: e.readiness,
+        seq: s.seq + 1,
+        items: [...s.items, { kind: "readiness", id: `ready${s.seq}`, level, text, readiness: e.readiness }],
+      };
+    }
+    case "maker_checker": {
+      if (!e.makerChecker) return s;
+      const level = e.level ?? (e.makerChecker.canComplete ? "info" : "warn");
+      const text = e.text ?? makerCheckerEventText(e.makerChecker);
+      return {
+        ...s,
+        running: s.turnActive ? s.running : false,
+        makerChecker: e.makerChecker,
+        humanGate: e.makerChecker.humanGate ?? s.humanGate,
+        seq: s.seq + 1,
+        items: [...s.items, { kind: "maker_checker", id: `mc${s.seq}`, level, text, makerChecker: e.makerChecker }],
+      };
+    }
+    case "human_gate": {
+      if (!e.humanGate) return s;
+      const level = e.level ?? (e.humanGate.required ? "warn" : "info");
+      const text = e.text ?? humanGateEventText(e.humanGate);
+      return {
+        ...s,
+        running: s.turnActive ? s.running : false,
+        humanGate: e.humanGate,
+        seq: s.seq + 1,
+        items: [...s.items, { kind: "human_gate", id: `hg${s.seq}`, level, text, humanGate: e.humanGate }],
+      };
+    }
     case "advisor":
       return {
         ...s,
@@ -553,6 +633,38 @@ function applyEvent(s: State, e: WireEvent): State {
     }
     default: return s;
   }
+}
+
+function readinessEventText(readiness: ReadinessResultView): string {
+  const primary = readiness.blockers?.[0] || readiness.warnings?.[0];
+  if (primary) return primary;
+  return readiness.status === "ready" ? "Workflow readiness passed." : `Workflow readiness: ${readiness.status}`;
+}
+
+function providerStatusEventText(status: ProviderStatusView): string {
+  const role = status.role || "provider";
+  const model = status.model || status.provider || "-";
+  if (status.upgradeReason && role === "frontier") return `Provider frontier: ${model} (${status.upgradeReason})`;
+  return `Provider ${role}: ${model}`;
+}
+
+function runReportEventText(report: RunReportView): string {
+  const id = report.runId || report.loopId || "run";
+  return `Run report ${id}: ${report.status}`;
+}
+
+function makerCheckerEventText(result: MakerCheckerResultView): string {
+  const verdict = result.verdict || "pending";
+  const isolation = result.isolation ? `, ${result.isolation} isolation` : "";
+  if (result.retryAllowed) return `Checker verdict ${verdict}${isolation}; retry allowed.`;
+  if (!result.canComplete) return `Checker verdict ${verdict}${isolation}; completion is gated.`;
+  return `Checker verdict ${verdict}${isolation}; run can complete.`;
+}
+
+function humanGateEventText(gate: HumanGateResultView): string {
+  if (gate.reason) return gate.reason;
+  const kind = gate.kind || "human_gate";
+  return gate.required ? `Human approval required: ${kind}` : `Human gate ${kind}: ${gate.status || "not required"}`;
 }
 
 export function reducer(s: State, a: Action): State {

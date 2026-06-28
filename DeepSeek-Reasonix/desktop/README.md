@@ -66,7 +66,7 @@ diff seam can all be built without rebuilding Go.
 
 ```sh
 cd desktop
-wails build          # -> build/bin/maddog(.app/.exe)
+wails build          # -> build/bin/maddog-dev(.app/.exe)
 ```
 
 **Linux on WebKitGTK 4.1 only** (Fedora 40+, Ubuntu 24.04+, Arch — no
@@ -213,7 +213,7 @@ desktop/
 
 ## Telemetry
 
-The desktop app sends one anonymous ping per launch to `crash.reasonix.io`:
+The desktop app sends one anonymous ping per launch to `crash.maddog.dev`:
 a random install id (generated locally, tied to nothing), app version, OS,
 arch, and OS version. It exists solely to count active installs. It never
 includes conversations, API keys, file contents, or paths.

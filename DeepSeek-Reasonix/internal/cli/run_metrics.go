@@ -27,6 +27,10 @@ type RunMetrics struct {
 	ReadinessMissingProjectChecks int     `json:"readiness_missing_project_checks"`
 	ReadinessIncompleteTodos      int     `json:"readiness_incomplete_todos"`
 	ReadinessCommandMismatches    int     `json:"readiness_command_mismatches"`
+	CompressionItems              int     `json:"compression_items"`
+	CompressionSavedBytes         int     `json:"compression_saved_bytes"`
+	CompressionRawAvailable       int     `json:"compression_raw_available"`
+	CompressionRawUnavailable     int     `json:"compression_raw_unavailable"`
 }
 
 // metricsSink forwards every event to the real sink and accumulates the per-call
@@ -54,6 +58,15 @@ func (s *metricsSink) Emit(e event.Event) {
 	}
 	if e.Kind == event.CompactionStarted {
 		s.m.Compactions++
+	}
+	if e.Kind == event.ToolResult && e.Tool.Compression != nil && e.Tool.Compression.Compressed {
+		s.m.CompressionItems++
+		s.m.CompressionSavedBytes += e.Tool.Compression.SavedBytes
+		if e.Tool.Compression.RawAvailable {
+			s.m.CompressionRawAvailable++
+		} else {
+			s.m.CompressionRawUnavailable++
+		}
 	}
 	s.inner.Emit(e)
 }

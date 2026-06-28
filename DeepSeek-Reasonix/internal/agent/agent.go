@@ -11,6 +11,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	ctxcompress "reasonix/internal/context"
 	"reasonix/internal/diff"
 	"reasonix/internal/event"
 	"reasonix/internal/evidence"
@@ -153,13 +154,17 @@ type ToolHooks interface {
 // Agent drives a single task: a Provider, a tool Registry, and a Session wired
 // into the main loop.
 type Agent struct {
-	prov        provider.Provider
-	tools       *tool.Registry
-	session     *Session
-	sessMu      sync.Mutex // guards the session pointer for external Session()/SetSession
-	maxSteps    int
-	temperature float64
-	pricing     *provider.Pricing
+	prov                 provider.Provider
+	tools                *tool.Registry
+	session              *Session
+	sessMu               sync.Mutex // guards the session pointer for external Session()/SetSession
+	maxSteps             int
+	maxStepsKey          string
+	temperature          float64
+	pricing              *provider.Pricing
+	providerRole         string
+	toolOutputCompressor ctxcompress.Compressor
+	compressionMetrics   ctxcompress.CompressionMetrics
 
 	upgradePolicy         UpgradePolicy
 	frontierProv          provider.Provider
@@ -178,6 +183,8 @@ type Agent struct {
 	nativeAdvisor         *provider.NativeAdvisorConfig
 	advisorTurnUses       int
 	advisorSessionUses    int
+	providerUsage         map[string]*providerStatusTotals
+	lastUpgradeReason     string
 
 	// sink receives the turn's typed event stream (reasoning/text deltas, tool
 	// dispatch/results, usage, notices). The agent no longer formats output
@@ -210,6 +217,8 @@ type Agent struct {
 	// and the model sees a "blocked" result it can adapt to. Toggled from
 	// the outside via SetPlanMode.
 	planMode atomic.Bool
+
+	reasoningLanguage atomic.Value
 
 	// gate, when non-nil, is the per-call permission gate consulted after the
 	// plan-mode check. nil disables gating entirely.
@@ -305,6 +314,8 @@ type Agent struct {
 	// stormSig: a model keeps doing the same successful write, so there is no
 	// error for the failure-only storm breaker to see.
 	repeatSuccessCounts map[string]int
+
+	executorHandoffGuard bool
 }
 
 // SetPlanMode flips the read-only gate. While true, executeOne refuses any
@@ -312,6 +323,13 @@ type Agent struct {
 // running it. The cache-friendly bits — system prompt, tools schema, message
 // history — are left untouched, so the toggle costs nothing in cache hits.
 func (a *Agent) SetPlanMode(v bool) { a.planMode.Store(v) }
+
+func (a *Agent) SetReasoningLanguage(lang string) {
+	if a == nil {
+		return
+	}
+	a.reasoningLanguage.Store(NormalizeReasoningLanguage(lang))
+}
 
 // SetGate installs the per-call permission gate. Used by `maddog chat` to swap the
 // headless gate built in setup for an interactive one that prompts the user;
@@ -382,6 +400,15 @@ func (a *Agent) LastUsage() *provider.Usage { return a.lastUsage.Load() }
 // API call this session — the basis for the status line's aggregate hit-rate.
 func (a *Agent) SessionCache() (hit, miss int) {
 	return int(a.sessCacheHit.Load()), int(a.sessCacheMiss.Load())
+}
+
+// CompressionMetrics returns cumulative model-context compression savings for
+// tool outputs in this agent session.
+func (a *Agent) CompressionMetrics() ctxcompress.CompressionMetricsSnapshot {
+	if a == nil {
+		return ctxcompress.CompressionMetricsSnapshot{ByStrategy: map[string]int{}}
+	}
+	return a.compressionMetrics.Snapshot()
 }
 
 // ContextWindow returns the configured context-window size in tokens. 0
@@ -472,8 +499,12 @@ type Options struct {
 	// MaxStepsKey names the configuration knob shown when the MaxSteps guard is
 	// hit. Empty defaults to agent.max_steps.
 	MaxStepsKey string
-	Temperature float64
-	Pricing     *provider.Pricing // optional, for per-turn cost display
+	// ReasoningLanguage controls the preferred language for visible reasoning
+	// text. It is injected per turn, not into the stable system prompt.
+	ReasoningLanguage string
+	Temperature       float64
+	Pricing           *provider.Pricing // optional, for per-turn cost display
+	ProviderRole      string            // optional runtime role label: default, small, advisor, maker, checker
 
 	// Gate is the per-call permission gate. nil disables gating.
 	Gate Gate
@@ -507,6 +538,9 @@ type Options struct {
 	Advisor               AdvisorConfig
 	AdvisorRunner         AdvisorRunner
 	NativeAdvisor         *provider.NativeAdvisorConfig
+	// ToolOutputCompressor rewrites model-facing tool outputs while ToolResult
+	// events keep display/raw output and carry compression metrics.
+	ToolOutputCompressor ctxcompress.Compressor
 }
 
 // New constructs an Agent. MaxSteps <= 0 means no cap — the run loop continues
@@ -537,13 +571,20 @@ func New(prov provider.Provider, tools *tool.Registry, session *Session, opts Op
 	if nilutil.IsNil(hooks) {
 		hooks = nil
 	}
-	return &Agent{
+	maxStepsKey := strings.TrimSpace(opts.MaxStepsKey)
+	if maxStepsKey == "" {
+		maxStepsKey = "agent.max_steps"
+	}
+	a := &Agent{
 		prov:                  prov,
 		tools:                 tools,
 		session:               session,
 		maxSteps:              opts.MaxSteps,
+		maxStepsKey:           maxStepsKey,
 		temperature:           opts.Temperature,
 		pricing:               opts.Pricing,
+		providerRole:          strings.TrimSpace(opts.ProviderRole),
+		toolOutputCompressor:  opts.ToolOutputCompressor,
 		upgradePolicy:         opts.UpgradePolicy,
 		frontierProv:          opts.FrontierProvider,
 		frontierPricing:       opts.FrontierPricing,
@@ -552,6 +593,7 @@ func New(prov provider.Provider, tools *tool.Registry, session *Session, opts Op
 		advisor:               opts.Advisor,
 		advisorRunner:         opts.AdvisorRunner,
 		nativeAdvisor:         cloneNativeAdvisor(opts.NativeAdvisor),
+		providerUsage:         map[string]*providerStatusTotals{},
 		sink:                  sink,
 		gate:                  gate,
 		hooks:                 hooks,
@@ -564,27 +606,6 @@ func New(prov provider.Provider, tools *tool.Registry, session *Session, opts Op
 		compactForceRatio:     opts.CompactForceRatio,
 		recentKeep:            opts.RecentKeep,
 		archiveDir:            opts.ArchiveDir,
-	}
-	a := &Agent{
-		prov:              prov,
-		tools:             tools,
-		session:           session,
-		maxSteps:          opts.MaxSteps,
-		maxStepsKey:       maxStepsKey,
-		temperature:       opts.Temperature,
-		pricing:           opts.Pricing,
-		sink:              sink,
-		gate:              gate,
-		hooks:             hooks,
-		jobs:              opts.Jobs,
-		evidence:          evidence.NewLedger(),
-		projectChecks:     append([]instruction.VerifyCheck(nil), opts.ProjectChecks...),
-		contextWindow:     opts.ContextWindow,
-		softCompactRatio:  opts.SoftCompactRatio,
-		compactRatio:      opts.CompactRatio,
-		compactForceRatio: opts.CompactForceRatio,
-		recentKeep:        opts.RecentKeep,
-		archiveDir:        opts.ArchiveDir,
 	}
 	a.SetReasoningLanguage(opts.ReasoningLanguage)
 	return a
@@ -652,6 +673,12 @@ func (a *Agent) Run(ctx context.Context, input string) error {
 				step-- // recovery retries do not consume the tool-round maxSteps budget
 				continue
 			}
+			if a.onFrontier && ctx.Err() == nil {
+				a.downgradeFromFrontier()
+				a.sink.Emit(event.Event{Kind: event.Upgrade, Level: event.LevelWarn, Text: "frontier stream failed, switched back to default"})
+				step-- // frontier fallback retries the same model turn on the default provider
+				continue
+			}
 			return err
 		}
 		streamRecoveries = 0
@@ -662,6 +689,10 @@ func (a *Agent) Run(ctx context.Context, input string) error {
 			a.sink.Emit(event.Event{Kind: event.Usage, Usage: usage, Pricing: a.pricing,
 				CacheDiagnostics: &cacheDiagnostics,
 				SessionHit:       int(a.sessCacheHit.Load()), SessionMiss: int(a.sessCacheMiss.Load())})
+			a.emitProviderUsageStatus(usage)
+			if a.onFrontier {
+				a.emitFrontierBudgetIfExceeded()
+			}
 		}
 		if msg, ok := finishReasonMessage(usage); ok {
 			a.sink.Emit(event.Event{Kind: event.Notice, Level: event.LevelWarn, Text: msg})
@@ -746,7 +777,7 @@ func (a *Agent) Run(ctx context.Context, input string) error {
 	// Only reached when a positive maxSteps guard is configured. The work so far
 	// is already in the session, so the user can just send another message to pick
 	// up where it left off.
-	return fmt.Errorf("paused after %d tool-call rounds (agent.max_steps) — the work so far is saved; send another message to continue, or set max_steps higher or to 0 for no limit", a.maxSteps)
+	return fmt.Errorf("paused after %d tool-call rounds (%s) — the work so far is saved; send another message to continue, or set %s higher or to 0 for no limit", a.maxSteps, a.maxStepsKey, a.maxStepsKey)
 }
 
 func (a *Agent) resetRoutingForTurn() {
@@ -794,7 +825,9 @@ func (a *Agent) evaluateRoutingAfterTools(ctx context.Context, turn int) {
 	if strings.TrimSpace(decision.Reason) != "" {
 		text += ": " + strings.TrimSpace(decision.Reason)
 	}
+	a.lastUpgradeReason = strings.TrimSpace(decision.Reason)
 	a.sink.Emit(event.Event{Kind: event.Upgrade, Level: event.LevelInfo, Text: text})
+	a.emitProviderRouteStatus("frontier", "active")
 }
 
 func (a *Agent) consultAdvisor(ctx context.Context, sig evidence.FailureSignal, d UpgradeDecision) {
@@ -819,6 +852,7 @@ func (a *Agent) consultAdvisor(ctx context.Context, sig evidence.FailureSignal, 
 	a.advisorTurnUses++
 	a.advisorSessionUses++
 	turnRemaining, sessionRemaining = a.advisorRemaining()
+	a.emitAdvisorProviderStatus()
 	payload := event.AdvisorConsultation{
 		Reason:               req.Reason,
 		Question:             req.Question,
@@ -888,6 +922,7 @@ func (a *Agent) emitFrontierBudgetIfExceeded() bool {
 		if tracked.Exceeded() {
 			a.sink.Emit(event.Event{Kind: event.BudgetExceeded, Level: event.LevelWarn,
 				Text: fmt.Sprintf("frontier budget exceeded: %d/%d output tokens used", tracked.OutputTokens(), tracked.BudgetLimit())})
+			a.emitProviderRouteStatus("frontier", "budget_exceeded")
 			return true
 		}
 	}
@@ -898,6 +933,7 @@ func (a *Agent) emitFrontierBudgetIfExceeded() bool {
 		if limit > 0 && a.frontierTokens.Load() >= limit {
 			a.sink.Emit(event.Event{Kind: event.BudgetExceeded, Level: event.LevelWarn,
 				Text: fmt.Sprintf("frontier budget exceeded: %d/%d output tokens used", a.frontierTokens.Load(), limit)})
+			a.emitProviderRouteStatus("frontier", "budget_exceeded")
 			return true
 		}
 	}
@@ -1374,6 +1410,9 @@ func (a *Agent) executeBatch(ctx context.Context, calls []provider.ToolCall) []s
 	run := func(i int) {
 		start := time.Now()
 		outcomes[i] = a.executeOne(ctx, calls[i])
+		if outcomes[i].displayOutput == "" {
+			outcomes[i].displayOutput = outcomes[i].output
+		}
 		durations[i] = time.Since(start).Milliseconds()
 		results[i] = outcomes[i].output
 	}
@@ -1392,14 +1431,15 @@ func (a *Agent) executeBatch(ctx context.Context, calls []provider.ToolCall) []s
 		o := outcomes[i]
 		t, ok := a.tools.Get(c.Name)
 		a.sink.Emit(event.Event{Kind: event.ToolResult, Tool: event.Tool{
-			ID:         c.ID,
-			Name:       c.Name,
-			Args:       c.Arguments,
-			Output:     o.output,
-			Err:        o.errMsg,
-			ReadOnly:   ok && t.ReadOnly(),
-			Truncated:  o.truncated,
-			DurationMs: durations[i],
+			ID:          c.ID,
+			Name:        c.Name,
+			Args:        c.Arguments,
+			Output:      o.displayOutput,
+			Err:         o.errMsg,
+			ReadOnly:    ok && t.ReadOnly(),
+			Truncated:   o.truncated,
+			DurationMs:  durations[i],
+			Compression: o.compression,
 		}})
 		if o.truncated && o.truncMsg != "" {
 			a.sink.Emit(event.Event{Kind: event.Notice, Level: event.LevelInfo, Text: o.truncMsg})
@@ -1547,11 +1587,13 @@ func batchStormSignature(calls []provider.ToolCall, outcomes []toolOutcome) (str
 // blocked narrows that to a refusal (plan mode / permission). truncMsg is set
 // (without the "· " prefix) when the output was head+tailed.
 type toolOutcome struct {
-	output    string
-	blocked   bool
-	errMsg    string
-	truncated bool
-	truncMsg  string
+	output        string
+	displayOutput string
+	blocked       bool
+	errMsg        string
+	truncated     bool
+	truncMsg      string
+	compression   *event.ToolCompression
 }
 
 // executeOne runs a single tool call. It is pure with respect to the event sink
@@ -1674,8 +1716,10 @@ func (a *Agent) executeOne(ctx context.Context, call provider.ToolCall) toolOutc
 		if !json.Valid([]byte(call.Arguments)) {
 			detail = strings.TrimRight(detail, "\n") + "\nThe arguments were not valid JSON. Re-emit them exactly per this schema:\n" + string(t.Schema())
 		}
-		body, truncMsg := truncateToolOutput(fmt.Sprintf("error: %v\n%s", err, detail))
-		return toolOutcome{output: body, errMsg: firstLine(err.Error()), truncated: truncMsg != "", truncMsg: truncMsg}
+		raw := fmt.Sprintf("error: %v\n%s", err, detail)
+		modelOutput, compression := a.compressToolOutput(call, raw)
+		body, truncMsg := truncateToolOutput(modelOutput)
+		return toolOutcome{output: body, displayOutput: raw, errMsg: firstLine(err.Error()), truncated: truncMsg != "" || compression != nil, truncMsg: truncMsg, compression: compression}
 	}
 	a.recordRepeatSuccess(call, t)
 	// A foreground `task` sub-agent just finished — its result is the final answer.
@@ -1684,8 +1728,33 @@ func (a *Agent) executeOne(ctx context.Context, call provider.ToolCall) toolOutc
 	if a.hooks != nil && call.Name == "task" && !isBackgroundTaskCall(call.Arguments) {
 		a.hooks.SubagentStop(ctx, result)
 	}
-	body, truncMsg := truncateToolOutput(result)
-	return toolOutcome{output: body, truncated: truncMsg != "", truncMsg: truncMsg}
+	modelOutput, compression := a.compressToolOutput(call, result)
+	body, truncMsg := truncateToolOutput(modelOutput)
+	return toolOutcome{output: body, displayOutput: result, truncated: truncMsg != "" || compression != nil, truncMsg: truncMsg, compression: compression}
+}
+
+func (a *Agent) compressToolOutput(call provider.ToolCall, output string) (string, *event.ToolCompression) {
+	if a == nil || nilutil.IsNil(a.toolOutputCompressor) {
+		return output, nil
+	}
+	res := a.toolOutputCompressor.Compress(ctxcompress.ToolOutput{Tool: call.Name, CallID: call.ID, Args: call.Arguments, Output: output})
+	if res.Text == "" && output != "" {
+		res.Text = output
+	}
+	a.compressionMetrics.Record(res)
+	if !res.Compressed {
+		return res.Text, nil
+	}
+	return res.Text, &event.ToolCompression{
+		Compressed:      true,
+		Strategy:        res.Strategy,
+		RawRef:          res.RawRef,
+		RawAvailable:    res.RawAvailable,
+		RawError:        res.RawError,
+		OriginalBytes:   res.OriginalBytes,
+		CompressedBytes: res.CompressedBytes,
+		SavedBytes:      res.SavedBytes,
+	}
 }
 
 func (a *Agent) repeatedSuccessBlock(call provider.ToolCall, t tool.Tool) (string, bool) {

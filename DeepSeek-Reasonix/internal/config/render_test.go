@@ -26,8 +26,8 @@ func TestUserConfigDisplayPathCollapsesHome(t *testing.T) {
 	if !strings.HasPrefix(got, "~/") {
 		t.Fatalf("display path = %q, want ~/ prefix", got)
 	}
-	if !strings.HasSuffix(got, "reasonix/config.toml") {
-		t.Fatalf("display path = %q, want reasonix/config.toml suffix", got)
+	if !strings.HasSuffix(got, "maddog/config.toml") {
+		t.Fatalf("display path = %q, want maddog/config.toml suffix", got)
 	}
 	if strings.Contains(got, home) {
 		t.Fatalf("display path %q must not embed the absolute home", got)
@@ -37,9 +37,42 @@ func TestUserConfigDisplayPathCollapsesHome(t *testing.T) {
 func TestRenderTOMLHeaderShowsResolvedConfigPath(t *testing.T) {
 	isolateUserConfigHome(t)
 	out := RenderTOML(Default())
-	want := "> " + userConfigDisplayPath() + " > built-in defaults."
+	want := "flag > ./maddog.toml > ~/.config/maddog/config.toml > built-in defaults."
 	if !strings.Contains(out, want) {
 		t.Fatalf("rendered header missing resolved config path %q", want)
+	}
+}
+
+func TestRenderTOMLRoundTripsBearerTokenAndOfficialAuthProfile(t *testing.T) {
+	orig := Default()
+	orig.Providers = append(orig.Providers, ProviderEntry{
+		Name:                  "openai-official",
+		Kind:                  "openai",
+		BaseURL:               "https://api.openai.com/v1",
+		Model:                 "gpt-5",
+		AuthType:              "official_auth",
+		BearerTokenEnv:        "OPENAI_ACCESS_TOKEN",
+		OfficialAuthProfileID: "openai-desktop",
+	})
+
+	rendered := RenderTOML(orig)
+	if !strings.Contains(rendered, `bearer_token_env = "OPENAI_ACCESS_TOKEN"`) {
+		t.Fatalf("rendered TOML missing bearer_token_env:\n%s", rendered)
+	}
+	if !strings.Contains(rendered, `official_auth_profile_id = "openai-desktop"`) {
+		t.Fatalf("rendered TOML missing official_auth_profile_id:\n%s", rendered)
+	}
+
+	var got Config
+	if _, err := toml.Decode(rendered, &got); err != nil {
+		t.Fatalf("rendered TOML does not parse: %v\n---\n%s", err, rendered)
+	}
+	p, ok := got.Provider("openai-official")
+	if !ok {
+		t.Fatalf("openai-official missing after decode: %+v", got.Providers)
+	}
+	if p.BearerTokenEnv != "OPENAI_ACCESS_TOKEN" || p.OfficialAuthProfileID != "openai-desktop" {
+		t.Fatalf("decoded provider auth fields = %+v", p)
 	}
 }
 

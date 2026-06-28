@@ -1,6 +1,9 @@
 package main
 
-import "reasonix/internal/event"
+import (
+	"reasonix/internal/event"
+	"reasonix/internal/loop"
+)
 
 // wireEvent is the JSON shape an event.Event takes when emitted to the webview.
 // It mirrors the serve transport's SSE wire form field-for-field on purpose: both
@@ -12,19 +15,25 @@ import "reasonix/internal/event"
 // may diverge later; if they don't, this is the obvious thing to lift into a
 // shared event.ToWire.)
 type wireEvent struct {
-	Kind         string          `json:"kind"`
-	Text         string          `json:"text,omitempty"`
-	Reasoning    string          `json:"reasoning,omitempty"`
-	Level        string          `json:"level,omitempty"`
-	Tool         *wireTool       `json:"tool,omitempty"`
-	Usage        *wireUsage      `json:"usage,omitempty"`
-	Advisor      *wireAdvisor    `json:"advisor,omitempty"`
-	Approval     *wireApproval   `json:"approval,omitempty"`
-	Ask          *wireAsk        `json:"ask,omitempty"`
-	Compaction   *wireCompaction `json:"compaction,omitempty"`
-	Err          string          `json:"err,omitempty"`
-	RetryAttempt int             `json:"retryAttempt,omitempty"`
-	RetryMax     int             `json:"retryMax,omitempty"`
+	Kind           string                        `json:"kind"`
+	Text           string                        `json:"text,omitempty"`
+	Reasoning      string                        `json:"reasoning,omitempty"`
+	Level          string                        `json:"level,omitempty"`
+	Tool           *wireTool                     `json:"tool,omitempty"`
+	Usage          *wireUsage                    `json:"usage,omitempty"`
+	Advisor        *wireAdvisor                  `json:"advisor,omitempty"`
+	SkillCandidate *event.SkillCandidateSnapshot `json:"skillCandidate,omitempty"`
+	ProviderStatus *event.ProviderStatusSnapshot `json:"providerStatus,omitempty"`
+	Readiness      *loop.ReadinessResult         `json:"readiness,omitempty"`
+	RunReport      *loop.RunReport               `json:"runReport,omitempty"`
+	MakerChecker   *loop.MakerCheckerResult      `json:"makerChecker,omitempty"`
+	HumanGate      *loop.HumanGateResult         `json:"humanGate,omitempty"`
+	Approval       *wireApproval                 `json:"approval,omitempty"`
+	Ask            *wireAsk                      `json:"ask,omitempty"`
+	Compaction     *wireCompaction               `json:"compaction,omitempty"`
+	Err            string                        `json:"err,omitempty"`
+	RetryAttempt   int                           `json:"retryAttempt,omitempty"`
+	RetryMax       int                           `json:"retryMax,omitempty"`
 }
 
 // wireCompaction is the JSON form of an event.Compaction. On a compaction_started
@@ -56,17 +65,18 @@ type wireAsk struct {
 }
 
 type wireTool struct {
-	ID         string       `json:"id,omitempty"`
-	Name       string       `json:"name"`
-	Args       string       `json:"args,omitempty"`
-	Output     string       `json:"output,omitempty"`
-	Err        string       `json:"err,omitempty"`
-	ReadOnly   bool         `json:"readOnly"`
-	Truncated  bool         `json:"truncated,omitempty"`
-	DurationMs int64        `json:"durationMs,omitempty"`
-	Partial    bool         `json:"partial,omitempty"`
-	ParentID   string       `json:"parentId,omitempty"`
-	Profile    *wireProfile `json:"profile,omitempty"`
+	ID          string                 `json:"id,omitempty"`
+	Name        string                 `json:"name"`
+	Args        string                 `json:"args,omitempty"`
+	Output      string                 `json:"output,omitempty"`
+	Err         string                 `json:"err,omitempty"`
+	ReadOnly    bool                   `json:"readOnly"`
+	Truncated   bool                   `json:"truncated,omitempty"`
+	DurationMs  int64                  `json:"durationMs,omitempty"`
+	Partial     bool                   `json:"partial,omitempty"`
+	ParentID    string                 `json:"parentId,omitempty"`
+	Profile     *wireProfile           `json:"profile,omitempty"`
+	Compression *event.ToolCompression `json:"compression,omitempty"`
 }
 
 type wireProfile struct {
@@ -147,6 +157,12 @@ var kindNames = map[event.Kind]string{
 	event.BudgetExceeded:    "budget_exceeded",
 	event.SkillPromoted:     "skill_promoted",
 	event.Advisor:           "advisor",
+	event.Steer:             "steer",
+	event.Readiness:         "readiness",
+	event.ProviderStatus:    "provider_status",
+	event.RunReportReady:    "run_report_ready",
+	event.MakerChecker:      "maker_checker",
+	event.HumanGate:         "human_gate",
 }
 
 // toWireAsk converts an event.Ask into its JSON wire form.
@@ -172,6 +188,9 @@ func toWire(e event.Event) wireEvent {
 		} else {
 			w.Level = "info"
 		}
+		if e.Kind == event.SkillGenerated {
+			w.SkillCandidate = e.SkillCandidate
+		}
 	case event.Advisor:
 		if e.Level == event.LevelWarn {
 			w.Level = "warn"
@@ -179,13 +198,52 @@ func toWire(e event.Event) wireEvent {
 			w.Level = "info"
 		}
 		w.Advisor = toWireAdvisor(e.Advisor)
+	case event.ProviderStatus:
+		if e.Level == event.LevelWarn {
+			w.Level = "warn"
+		} else {
+			w.Level = "info"
+		}
+		status := e.ProviderStatus
+		w.ProviderStatus = &status
+	case event.RunReportReady:
+		if e.Level == event.LevelWarn {
+			w.Level = "warn"
+		} else {
+			w.Level = "info"
+		}
+		w.RunReport = e.RunReport
+	case event.MakerChecker:
+		w.MakerChecker = e.MakerChecker
+		if e.MakerChecker != nil && !e.MakerChecker.CanComplete {
+			w.Level = "warn"
+		} else {
+			w.Level = "info"
+		}
+	case event.HumanGate:
+		w.HumanGate = e.HumanGate
+		if e.HumanGate != nil && e.HumanGate.Required {
+			w.Level = "warn"
+		} else {
+			w.Level = "info"
+		}
+	case event.Readiness:
+		if e.Readiness != nil {
+			w.Readiness = e.Readiness
+			if e.Readiness.Status == loop.ReadinessReady {
+				w.Level = "info"
+			} else {
+				w.Level = "warn"
+			}
+		}
 	case event.ToolDispatch, event.ToolResult, event.ToolProgress:
 		wt := &wireTool{
 			ID: e.Tool.ID, Name: e.Tool.Name, Args: e.Tool.Args,
 			Output: e.Tool.Output, Err: e.Tool.Err,
 			ReadOnly: e.Tool.ReadOnly, Truncated: e.Tool.Truncated,
 			DurationMs: e.Tool.DurationMs, Partial: e.Tool.Partial,
-			ParentID: e.Tool.ParentID,
+			ParentID:    e.Tool.ParentID,
+			Compression: e.Tool.Compression,
 		}
 		if e.Tool.Profile != nil {
 			wt.Profile = &wireProfile{Model: e.Tool.Profile.Model, Effort: e.Tool.Profile.Effort}

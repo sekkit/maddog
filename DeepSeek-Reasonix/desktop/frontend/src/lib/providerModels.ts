@@ -12,6 +12,25 @@ export function providerDefaultModel(currentDefault: string, models: string[]): 
   return currentDefault && models.includes(currentDefault) ? currentDefault : models[0] ?? "";
 }
 
+export function classifyProviderModelProbeError(message: string): "auth_failure" | "provider_unavailable" | "unknown" {
+  const lower = String(message ?? "").toLowerCase();
+  if (lower.includes("auth_failure") || lower.includes("status 401") || lower.includes("status 403")) return "auth_failure";
+  if (
+    lower.includes("provider_unavailable") ||
+    lower.includes("status 408") ||
+    lower.includes("status 429") ||
+    lower.includes("status 500") ||
+    lower.includes("status 502") ||
+    lower.includes("status 503") ||
+    lower.includes("status 504") ||
+    lower.includes("timeout") ||
+    lower.includes("deadline exceeded")
+  ) {
+    return "provider_unavailable";
+  }
+  return "unknown";
+}
+
 export function isLikelyChatModel(model: string): boolean {
   const lower = model.trim().toLowerCase();
   if (!lower) return false;

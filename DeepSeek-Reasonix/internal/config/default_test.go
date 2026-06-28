@@ -32,3 +32,23 @@ func TestDefaultAdvisorGuardrails(t *testing.T) {
 		t.Fatal("advisor_native_enabled should default off because it is a provider beta")
 	}
 }
+
+func TestDefaultLoopConfig(t *testing.T) {
+	cfg := Default()
+	if !cfg.Loop.Enabled {
+		t.Fatal("Loop.Enabled = false, want true")
+	}
+	if cfg.Loop.DefaultTemplate != "coding-task" {
+		t.Fatalf("Loop.DefaultTemplate = %q, want coding-task", cfg.Loop.DefaultTemplate)
+	}
+	if cfg.Loop.ProjectTemplateDir != ".maddog/loops" {
+		t.Fatalf("Loop.ProjectTemplateDir = %q, want .maddog/loops", cfg.Loop.ProjectTemplateDir)
+	}
+}
+
+func TestDefaultContextPolicyAuto(t *testing.T) {
+	cfg := Default()
+	if got := cfg.ContextPolicy(); got != "auto" {
+		t.Fatalf("default context_policy = %q, want auto", got)
+	}
+}

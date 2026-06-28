@@ -47,23 +47,27 @@ func SkillNameKey(name string) string {
 
 // Config is Maddog's runtime configuration.
 type Config struct {
-	ConfigVersion int                 `toml:"config_version"`
-	DefaultModel  string              `toml:"default_model"`
-	Language      string              `toml:"language"` // ui/model language tag (e.g. "zh"); empty = auto-detect from $LANG / $MADDOG_LANG
-	UI            UIConfig            `toml:"ui"`
-	Desktop       DesktopConfig       `toml:"desktop"`
-	Notifications NotificationsConfig `toml:"notifications"`
-	Agent         AgentConfig         `toml:"agent"`
-	Providers     []ProviderEntry     `toml:"providers"`
-	Tools         ToolsConfig         `toml:"tools"`
-	Permissions   PermissionsConfig   `toml:"permissions"`
-	Sandbox       SandboxConfig       `toml:"sandbox"`
-	Network       NetworkConfig       `toml:"network"`
-	Plugins       []PluginEntry       `toml:"plugins"`
-	Skills        SkillsConfig        `toml:"skills"`
-	Codegraph     CodegraphConfig     `toml:"codegraph"`
-	Statusline    StatuslineConfig    `toml:"statusline"`
-	LSP           LSPConfig           `toml:"lsp"`
+	ConfigVersion     int                     `toml:"config_version"`
+	DefaultModel      string                  `toml:"default_model"`
+	Language          string                  `toml:"language"` // ui/model language tag (e.g. "zh"); empty = auto-detect from $LANG / $MADDOG_LANG
+	UI                UIConfig                `toml:"ui"`
+	Desktop           DesktopConfig           `toml:"desktop"`
+	Notifications     NotificationsConfig     `toml:"notifications"`
+	Agent             AgentConfig             `toml:"agent"`
+	Loop              LoopConfig              `toml:"loop"`
+	Providers         []ProviderEntry         `toml:"providers"`
+	Tools             ToolsConfig             `toml:"tools"`
+	Permissions       PermissionsConfig       `toml:"permissions"`
+	Sandbox           SandboxConfig           `toml:"sandbox"`
+	Network           NetworkConfig           `toml:"network"`
+	Plugins           []PluginEntry           `toml:"plugins"`
+	BuiltInMCP        BuiltInMCPConfig        `toml:"builtin_mcp"`
+	BuiltInMCPUpdates BuiltInMCPUpdatesConfig `toml:"builtin_mcp_updates"`
+	Skills            SkillsConfig            `toml:"skills"`
+	Codegraph         CodegraphConfig         `toml:"codegraph"`
+	Statusline        StatuslineConfig        `toml:"statusline"`
+	LSP               LSPConfig               `toml:"lsp"`
+	Bot               BotConfig               `toml:"bot"`
 }
 
 // UIConfig controls CLI presentation-only settings. Desktop appearance is kept in
@@ -101,6 +105,13 @@ type NotificationsConfig struct {
 	TurnDone        bool `toml:"turn_done"`
 	ApprovalRequest bool `toml:"approval_request"`
 	AskRequest      bool `toml:"ask_request"`
+}
+
+// LoopConfig controls Maddog workflow templates and loop-governance defaults.
+type LoopConfig struct {
+	Enabled            bool   `toml:"enabled"`
+	DefaultTemplate    string `toml:"default_template"`
+	ProjectTemplateDir string `toml:"project_template_dir"`
 }
 
 // UITheme normalizes ui.theme to a supported value.
@@ -323,6 +334,20 @@ func (c *Config) ColdResumePruneEnabled() bool {
 	return *c.Agent.ColdResumePrune
 }
 
+func (c *Config) ContextPolicy() string {
+	if c == nil {
+		return "auto"
+	}
+	switch strings.ToLower(strings.TrimSpace(c.Agent.ContextPolicy)) {
+	case "off":
+		return "off"
+	case "aggressive":
+		return "aggressive"
+	default:
+		return "auto"
+	}
+}
+
 // ReasoningLanguage normalizes agent.reasoning_language. Empty means auto:
 // visible reasoning follows the conversation language already described by the
 // stable LanguagePolicy. Legacy "default" is treated as auto.
@@ -401,17 +426,27 @@ type StatuslineConfig struct {
 // search / context / explore / trace / node tools. Enabled defaults to true so
 // upgrades keep it for existing configs; first-run scaffolds write enabled =
 // false so only brand-new users start without it. AutoInstall (default true)
-// lets reasonix fetch the CodeGraph runtime into its cache when CodeGraph is
-// enabled but missing; set false to require an explicit `reasonix codegraph
+// lets Maddog fetch the CodeGraph runtime into its cache when CodeGraph is
+// enabled but missing; set false to require an explicit `maddog codegraph
 // install` (e.g. for air-gapped or headless runs). Path overrides binary
 // resolution; empty resolves the cache, then a `codegraph` on PATH, then a
 // bundle beside the executable. CodeGraph always starts in the background when
 // enabled; legacy tier values are ignored and removed during config load.
 type CodegraphConfig struct {
-	Enabled     bool   `toml:"enabled"`
-	AutoInstall bool   `toml:"auto_install"`
-	Path        string `toml:"path"`
-	Tier        string `toml:"tier"`
+	Enabled     bool                     `toml:"enabled"`
+	AutoInstall bool                     `toml:"auto_install"`
+	Path        string                   `toml:"path"`
+	Tier        string                   `toml:"tier"`
+	Backends    []CodegraphBackendConfig `toml:"backends"`
+}
+
+type CodegraphBackendConfig struct {
+	Name         string            `toml:"name"`
+	Server       string            `toml:"server"`
+	Enabled      bool              `toml:"enabled"`
+	Capabilities []string          `toml:"capabilities"`
+	Risks        []string          `toml:"risks"`
+	ToolMapping  map[string]string `toml:"tool_mapping"`
 }
 
 func (c CodegraphConfig) ShouldAutoStart() bool {
@@ -422,7 +457,7 @@ func (c CodegraphConfig) ResolvedTier() string {
 	return "background"
 }
 
-// BuiltInMCPConfig controls Reasonix-shipped MCP servers that require no user
+// BuiltInMCPConfig controls Maddog-shipped MCP servers that require no user
 // server definition. They are off by default and become provider-visible only
 // after the user enables them.
 type BuiltInMCPConfig struct {
@@ -474,7 +509,7 @@ const (
 	defaultBuiltInMCPUpdateInterval = 24 * time.Hour
 )
 
-// BuiltInMCPUpdatesConfig controls background update checks for Reasonix-owned
+// BuiltInMCPUpdatesConfig controls background update checks for Maddog-owned
 // built-in MCP runtimes. The default is notify-only so startup never silently
 // changes provider-visible MCP tool schemas.
 type BuiltInMCPUpdatesConfig struct {
@@ -692,10 +727,12 @@ func (c *Config) NetworkProxyMode() string {
 // hides named skills from the agent prompt, slash invocation, and skill tools
 // while keeping them manageable.
 type SkillsConfig struct {
-	Paths          []string `toml:"paths"`
-	ExcludedPaths  []string `toml:"excluded_paths"`
-	DisabledSkills []string `toml:"disabled_skills"`
-	MaxDepth       int      `toml:"max_depth"`
+	Paths                []string `toml:"paths"`
+	ExcludedPaths        []string `toml:"excluded_paths"`
+	DisabledSkills       []string `toml:"disabled_skills"`
+	MaxDepth             int      `toml:"max_depth"`
+	RuntimeOrchestration bool     `toml:"runtime_orchestration"`
+	DynamicSkills        bool     `toml:"dynamic_skills"`
 }
 
 // SkillCustomPaths returns the configured custom skill roots with ${VAR}
@@ -846,6 +883,7 @@ type AgentConfig struct {
 	SystemPrompt              string            `toml:"system_prompt"`
 	SystemPromptFile          string            `toml:"system_prompt_file"`
 	MaxSteps                  int               `toml:"max_steps"` // tool-call rounds per turn; 0 = unlimited
+	PlannerMaxSteps           int               `toml:"planner_max_steps"`
 	Temperature               float64           `toml:"temperature"`
 	PlannerModel              string            `toml:"planner_model"`
 	SubagentModel             string            `toml:"subagent_model"`
@@ -870,6 +908,9 @@ type AgentConfig struct {
 	// plan mode automatically: "off" keeps plan mode manual, "on" enables the
 	// approval gate. Legacy "ask" is treated as "on".
 	AutoPlan string `toml:"auto_plan"`
+	// ContextPolicy controls model-facing tool-output compression: off disables
+	// compression, auto uses conservative thresholds, aggressive compresses sooner.
+	ContextPolicy string `toml:"context_policy"`
 	// ReasoningLanguage controls the preferred language for visible reasoning
 	// text. Empty/auto follows the conversation language. Applied as transient
 	// turn context, not the stable prompt.
@@ -890,27 +931,29 @@ type AgentConfig struct {
 // token budget; the harness compacts older history as a turn's prompt approaches
 // it (see agent compaction). 0 disables compaction for the instance.
 type ProviderEntry struct {
-	Name          string            `toml:"name"`
-	Kind          string            `toml:"kind"`
-	BaseURL       string            `toml:"base_url"`
-	Model         string            `toml:"model"`      // a single model (back-compat)
-	Models        []string          `toml:"models"`     // a vendor's model list (one base_url/key, many models)
-	ModelsURL     string            `toml:"models_url"` // auto-fetch models from this URL on startup
-	Default       string            `toml:"default"`    // default model when Models is set (else Models[0])
-	APIKeyEnv     string            `toml:"api_key_env"`
-	AuthType      string            `toml:"auth_type"`      // api_key (default), bearer, or workload_identity
-	AuthTokenEnv  string            `toml:"auth_token_env"` // bearer/access-token env var; API key auth falls back to api_key_env
-	AuthHeader    string            `toml:"auth_header"`    // optional override; defaults to provider-specific header
-	AuthScheme    string            `toml:"auth_scheme"`    // optional override; bearer modes default to Bearer
-	IdentityEnv   string            `toml:"identity_env"`   // WIF OIDC/JWT assertion env var
-	IdentityFile  string            `toml:"identity_file"`  // WIF OIDC/JWT assertion file
-	FederationID  string            `toml:"federation_rule_id"`
-	Organization  string            `toml:"organization_id"`
-	ServiceAcctID string            `toml:"service_account_id"`
-	WorkspaceID   string            `toml:"workspace_id"`
-	BalanceURL    string            `toml:"balance_url"` // optional; a provider-specific wallet-balance endpoint (DeepSeek: https://api.deepseek.com/user/balance). Empty = no balance readout.
-	ContextWindow int               `toml:"context_window"`
-	Price         *provider.Pricing `toml:"price"`
+	Name                  string            `toml:"name"`
+	Kind                  string            `toml:"kind"`
+	BaseURL               string            `toml:"base_url"`
+	Model                 string            `toml:"model"`      // a single model (back-compat)
+	Models                []string          `toml:"models"`     // a vendor's model list (one base_url/key, many models)
+	ModelsURL             string            `toml:"models_url"` // auto-fetch models from this URL on startup
+	Default               string            `toml:"default"`    // default model when Models is set (else Models[0])
+	APIKeyEnv             string            `toml:"api_key_env"`
+	AuthType              string            `toml:"auth_type"`                // api_key (default), bearer, workload_identity, or official_auth
+	BearerTokenEnv        string            `toml:"bearer_token_env"`         // bearer/access-token env var
+	AuthTokenEnv          string            `toml:"auth_token_env"`           // legacy alias for bearer/access-token env var
+	AuthHeader            string            `toml:"auth_header"`              // optional override; defaults to provider-specific header
+	AuthScheme            string            `toml:"auth_scheme"`              // optional override; bearer modes default to Bearer
+	IdentityEnv           string            `toml:"identity_env"`             // WIF OIDC/JWT assertion env var
+	IdentityFile          string            `toml:"identity_file"`            // WIF OIDC/JWT assertion file
+	OfficialAuthProfileID string            `toml:"official_auth_profile_id"` // non-secret official auth profile reference
+	FederationID          string            `toml:"federation_rule_id"`
+	Organization          string            `toml:"organization_id"`
+	ServiceAcctID         string            `toml:"service_account_id"`
+	WorkspaceID           string            `toml:"workspace_id"`
+	BalanceURL            string            `toml:"balance_url"` // optional; a provider-specific wallet-balance endpoint (DeepSeek: https://api.deepseek.com/user/balance). Empty = no balance readout.
+	ContextWindow         int               `toml:"context_window"`
+	Price                 *provider.Pricing `toml:"price"`
 	// Thinking / Effort are provider-kind-specific knobs forwarded to the provider
 	// via Config.Extra. The anthropic provider reads Thinking="adaptive" to enable
 	// extended thinking and Effort ("low".."max") to tune depth. The
@@ -1216,6 +1259,7 @@ func Default() *Config {
 			// if you want a hard guard against runaway.
 			MaxSteps:                  0,
 			AutoPlan:                  "off",
+			ContextPolicy:             "auto",
 			UpgradeEnabled:            true,
 			UpgradeThreshold:          3,
 			FrontierBudget:            500000,
@@ -1228,6 +1272,11 @@ func Default() *Config {
 			SoftCompactRatio:          0.5,
 			CompactRatio:              0.8,
 			CompactForceRatio:         0.9,
+		},
+		Loop: LoopConfig{
+			Enabled:            true,
+			DefaultTemplate:    "coding-task",
+			ProjectTemplateDir: ".maddog/loops",
 		},
 		Skills: SkillsConfig{
 			RuntimeOrchestration: true,
@@ -1335,6 +1384,7 @@ func LoadForRoot(root string) (*Config, error) {
 	normalizePluginCommandLines(cfg)
 	normalizeLegacyEffort(cfg)
 	normalizeLegacyMCPTiers(cfg)
+	normalizeProviderAuthAliases(cfg)
 	normalizeLegacyProviderModels(cfg)
 	normalizeDesktopOfficialProviderAccess(cfg)
 	normalizeEffortConfig(cfg)
@@ -1447,6 +1497,7 @@ func LoadForEdit(path string) *Config {
 	normalizePluginCommandLines(cfg)
 	normalizeLegacyEffort(cfg)
 	normalizeLegacyMCPTiers(cfg)
+	normalizeProviderAuthAliases(cfg)
 	normalizeLegacyProviderModels(cfg)
 	normalizeDesktopOfficialProviderAccess(cfg)
 	normalizeEffortConfig(cfg)
@@ -1554,6 +1605,21 @@ func normalizeLegacyProviderModels(c *Config) {
 		}
 		if model := legacyOfficialProviderModel(p.Name); model != "" {
 			p.Model = model
+		}
+	}
+}
+
+func normalizeProviderAuthAliases(c *Config) {
+	if c == nil {
+		return
+	}
+	for i := range c.Providers {
+		p := &c.Providers[i]
+		if strings.TrimSpace(p.BearerTokenEnv) == "" && strings.TrimSpace(p.AuthTokenEnv) != "" {
+			p.BearerTokenEnv = strings.TrimSpace(p.AuthTokenEnv)
+		}
+		if strings.TrimSpace(p.AuthTokenEnv) == "" && strings.TrimSpace(p.BearerTokenEnv) != "" {
+			p.AuthTokenEnv = strings.TrimSpace(p.BearerTokenEnv)
 		}
 	}
 }
@@ -1790,11 +1856,13 @@ func officialProviderFromLegacy(entry ProviderEntry, old *ProviderEntry) Provide
 	entry.ModelsURL = old.ModelsURL
 	entry.APIKeyEnv = old.APIKeyEnv
 	entry.AuthType = old.AuthType
+	entry.BearerTokenEnv = old.BearerTokenEnv
 	entry.AuthTokenEnv = old.AuthTokenEnv
 	entry.AuthHeader = old.AuthHeader
 	entry.AuthScheme = old.AuthScheme
 	entry.IdentityEnv = old.IdentityEnv
 	entry.IdentityFile = old.IdentityFile
+	entry.OfficialAuthProfileID = old.OfficialAuthProfileID
 	entry.FederationID = old.FederationID
 	entry.Organization = old.Organization
 	entry.ServiceAcctID = old.ServiceAcctID
@@ -1913,6 +1981,19 @@ func userConfigPath() string {
 		return ""
 	}
 	return filepath.Join(dir, AppName, "config.toml")
+}
+
+func userConfigDisplayPath() string {
+	path := userConfigPath()
+	if path == "" {
+		return ""
+	}
+	if home, err := os.UserHomeDir(); err == nil {
+		if rel, err := filepath.Rel(home, path); err == nil && rel != "." && !strings.HasPrefix(rel, "..") {
+			return filepath.ToSlash(filepath.Join("~", rel))
+		}
+	}
+	return filepath.ToSlash(path)
 }
 
 // UserConfigPath is the user-global config file (~/.config/maddog/config.toml),
@@ -2182,30 +2263,35 @@ func (e *ProviderEntry) NormalizedAuthType() string {
 	return provider.AuthConfig{Type: e.AuthType}.NormalizedType()
 }
 
+func (e *ProviderEntry) bearerTokenEnvName() string {
+	if strings.TrimSpace(e.BearerTokenEnv) != "" {
+		return strings.TrimSpace(e.BearerTokenEnv)
+	}
+	return strings.TrimSpace(e.AuthTokenEnv)
+}
+
 // AuthEnvName returns the credential env var used by the current auth mode.
 func (e *ProviderEntry) AuthEnvName() string {
 	switch e.NormalizedAuthType() {
-	case provider.AuthTypeBearer:
-		if strings.TrimSpace(e.AuthTokenEnv) != "" {
-			return strings.TrimSpace(e.AuthTokenEnv)
-		}
-		return strings.TrimSpace(e.APIKeyEnv)
+	case provider.AuthTypeBearer, provider.AuthTypeOfficial:
+		return e.bearerTokenEnvName()
 	case provider.AuthTypeWorkloadIdentity:
-		if strings.TrimSpace(e.AuthTokenEnv) != "" {
-			return strings.TrimSpace(e.AuthTokenEnv)
+		if env := e.bearerTokenEnvName(); env != "" {
+			return env
 		}
 		if strings.TrimSpace(e.IdentityEnv) != "" {
 			return strings.TrimSpace(e.IdentityEnv)
 		}
-		return strings.TrimSpace(e.APIKeyEnv)
+		return ""
 	default:
 		return strings.TrimSpace(e.APIKeyEnv)
 	}
 }
 
 // AuthToken resolves the entry's request token from env. API key auth reads
-// api_key_env; bearer auth reads auth_token_env with api_key_env as a legacy
-// fallback; workload identity reads a pre-minted access token when present.
+// api_key_env; bearer/official auth read bearer_token_env (or legacy
+// auth_token_env); workload identity reads a pre-minted access token when
+// present.
 func (e *ProviderEntry) AuthToken() string {
 	env := e.AuthEnvName()
 	if env == "" {
@@ -2239,11 +2325,13 @@ func (e *ProviderEntry) AuthConfig() provider.AuthConfig {
 		HeaderScheme:  e.AuthScheme,
 		IdentityToken: e.IdentityToken(),
 		IdentityEnv:   strings.TrimSpace(e.IdentityEnv),
+		ProfileID:     strings.TrimSpace(e.OfficialAuthProfileID),
 		Extra: map[string]string{
-			"federation_rule_id": strings.TrimSpace(e.FederationID),
-			"organization_id":    strings.TrimSpace(e.Organization),
-			"service_account_id": strings.TrimSpace(e.ServiceAcctID),
-			"workspace_id":       strings.TrimSpace(e.WorkspaceID),
+			"federation_rule_id":       strings.TrimSpace(e.FederationID),
+			"organization_id":          strings.TrimSpace(e.Organization),
+			"service_account_id":       strings.TrimSpace(e.ServiceAcctID),
+			"workspace_id":             strings.TrimSpace(e.WorkspaceID),
+			"official_auth_profile_id": strings.TrimSpace(e.OfficialAuthProfileID),
 		},
 	}
 }
@@ -2260,6 +2348,9 @@ func (e *ProviderEntry) APIKey() string {
 // present — the same check Validate enforces, so pickers can filter on it.
 func (e *ProviderEntry) Configured() bool {
 	if e.AuthToken() != "" {
+		return true
+	}
+	if strings.TrimSpace(e.OfficialAuthProfileID) != "" {
 		return true
 	}
 	return e.NormalizedAuthType() == provider.AuthTypeWorkloadIdentity && e.IdentityToken() != ""

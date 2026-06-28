@@ -259,3 +259,141 @@ func TestRunEmitsBudgetExceededAfterFrontierUsage(t *testing.T) {
 		t.Fatalf("budget events = %+v, want one 7/5 event", events)
 	}
 }
+
+func TestRunEmitsProviderStatusForDefaultAndFrontierUsage(t *testing.T) {
+	defaultProv := testutil.NewMock("default-provider",
+		testutil.Turn{
+			ToolCalls: []provider.ToolCall{{ID: "c1", Name: "write_file", Arguments: `{}`}},
+			Usage:     &provider.Usage{PromptTokens: 100, CompletionTokens: 20, TotalTokens: 120, CacheMissTokens: 100},
+		},
+		testutil.Turn{
+			ToolCalls: []provider.ToolCall{{ID: "c2", Name: "write_file", Arguments: `{}`}},
+			Usage:     &provider.Usage{PromptTokens: 80, CompletionTokens: 10, TotalTokens: 90, CacheMissTokens: 80},
+		},
+	)
+	frontierProv := testutil.NewMock("frontier-provider", testutil.Turn{
+		Text:  "frontier answer",
+		Usage: &provider.Usage{PromptTokens: 50, CompletionTokens: 7, TotalTokens: 57, CacheMissTokens: 50},
+	})
+	sink := &recordSink{}
+	reg := echoRegistry()
+	reg.Add(failTool{name: "write_file"})
+
+	a := New(defaultProv, reg, NewSession(""), Options{
+		Pricing:          &provider.Pricing{Input: 2, Output: 10, Currency: "USD"},
+		UpgradePolicy:    ThresholdUpgradePolicy{Threshold: 2, BudgetLimit: 10, TargetModel: "frontier-model"},
+		FrontierProvider: frontierProv,
+		FrontierPricing:  &provider.Pricing{Input: 4, Output: 20, Currency: "USD"},
+		FrontierTarget:   "frontier-model",
+	}, sink)
+
+	if err := a.Run(context.Background(), "try route with observable providers"); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	statuses := sink.kinds(event.ProviderStatus)
+	if len(statuses) < 3 {
+		t.Fatalf("provider status events = %d, want at least default usage, upgrade, frontier usage: %+v", len(statuses), statuses)
+	}
+	var defaultStatus, frontierStatus *event.ProviderStatusSnapshot
+	for i := range statuses {
+		status := statuses[i].ProviderStatus
+		switch status.Role {
+		case "default":
+			defaultStatus = &status
+		case "frontier":
+			frontierStatus = &status
+		}
+		if strings.Contains(status.Provider, "sk-") || strings.Contains(status.Model, "sk-") || strings.Contains(status.UpgradeReason, "sk-") {
+			t.Fatalf("provider status leaked credential-like text: %+v", status)
+		}
+	}
+	if defaultStatus == nil {
+		t.Fatalf("missing default provider status: %+v", statuses)
+	}
+	if defaultStatus.Provider != "default-provider" || defaultStatus.RequestCount != 2 || defaultStatus.TotalTokens != 210 {
+		t.Fatalf("default status = %+v, want provider default-provider with 2 requests and 210 tokens", defaultStatus)
+	}
+	if defaultStatus.Cost <= 0 || defaultStatus.Currency != "$" {
+		t.Fatalf("default cost = %f %q, want positive $", defaultStatus.Cost, defaultStatus.Currency)
+	}
+	if frontierStatus == nil {
+		t.Fatalf("missing frontier provider status: %+v", statuses)
+	}
+	if frontierStatus.Provider != "frontier-provider" || frontierStatus.Model != "frontier-model" {
+		t.Fatalf("frontier identity = provider:%q model:%q", frontierStatus.Provider, frontierStatus.Model)
+	}
+	if !strings.Contains(frontierStatus.UpgradeReason, "2 consecutive") {
+		t.Fatalf("frontier upgrade reason = %q, want policy reason", frontierStatus.UpgradeReason)
+	}
+	if frontierStatus.BudgetLimitTokens != 10 || frontierStatus.BudgetUsedTokens != 7 || frontierStatus.BudgetRemainingTokens != 3 {
+		t.Fatalf("frontier budget = used:%d limit:%d remaining:%d, want 7/10/3",
+			frontierStatus.BudgetUsedTokens, frontierStatus.BudgetLimitTokens, frontierStatus.BudgetRemainingTokens)
+	}
+}
+
+func TestRunEmitsProviderStatusForConfiguredSmallRole(t *testing.T) {
+	smallProv := testutil.NewMock("small-provider", testutil.Turn{
+		Text:  "small answer",
+		Usage: &provider.Usage{PromptTokens: 12, CompletionTokens: 3, TotalTokens: 15, CacheMissTokens: 12},
+	})
+	sink := &recordSink{}
+	a := New(smallProv, echoRegistry(), NewSession(""), Options{
+		ProviderRole: "small",
+		Pricing:      &provider.Pricing{Input: 1, Output: 2, Currency: "USD"},
+	}, sink)
+
+	if err := a.Run(context.Background(), "delegate this"); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	statuses := sink.kinds(event.ProviderStatus)
+	if len(statuses) != 1 {
+		t.Fatalf("provider status events = %d, want 1: %+v", len(statuses), statuses)
+	}
+	status := statuses[0].ProviderStatus
+	if status.Role != "small" || status.Provider != "small-provider" || status.TotalTokens != 15 || status.Cost <= 0 {
+		t.Fatalf("small provider status = %+v", status)
+	}
+}
+
+func TestAdvisorConsultationEmitsProviderStatus(t *testing.T) {
+	defaultProv := testutil.NewMock("default",
+		testutil.Turn{ToolCalls: []provider.ToolCall{{ID: "c1", Name: "write_file", Arguments: `{}`}}},
+		testutil.Turn{ToolCalls: []provider.ToolCall{{ID: "c2", Name: "write_file", Arguments: `{}`}}},
+	)
+	frontierProv := testutil.NewMock("frontier", testutil.Turn{Text: "frontier used advice"})
+	sink := &recordSink{}
+	reg := echoRegistry()
+	reg.Add(failTool{name: "write_file"})
+
+	a := New(defaultProv, reg, NewSession(""), Options{
+		UpgradePolicy:    ThresholdUpgradePolicy{Threshold: 2, TargetModel: "frontier-model"},
+		FrontierProvider: frontierProv,
+		FrontierTarget:   "frontier-model",
+		Advisor: AdvisorConfig{
+			MaxUsesPerTurn:    1,
+			MaxUsesPerSession: 2,
+		},
+		AdvisorRunner: func(context.Context, AdvisorRequest) (string, error) {
+			return "Inspect the failing write_file arguments first.", nil
+		},
+	}, sink)
+
+	if err := a.Run(context.Background(), "make progress"); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	var advisorStatus *event.ProviderStatusSnapshot
+	for _, e := range sink.kinds(event.ProviderStatus) {
+		status := e.ProviderStatus
+		if status.Role == "advisor" {
+			advisorStatus = &status
+			break
+		}
+	}
+	if advisorStatus == nil {
+		t.Fatalf("missing advisor provider status: %+v", sink.kinds(event.ProviderStatus))
+	}
+	if advisorStatus.Provider != "advisor" || advisorStatus.RequestCount != 1 || advisorStatus.Status != "active" {
+		t.Fatalf("advisor provider status = %+v", advisorStatus)
+	}
+}

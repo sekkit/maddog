@@ -45,13 +45,24 @@ func captureStdout(t *testing.T, fn func()) string {
 	os.Stdout = w
 	defer func() { os.Stdout = old }()
 
+	readDone := make(chan struct {
+		data []byte
+		err  error
+	}, 1)
+	go func() {
+		data, err := io.ReadAll(r)
+		readDone <- struct {
+			data []byte
+			err  error
+		}{data: data, err: err}
+	}()
 	fn()
 	if err := w.Close(); err != nil {
 		t.Fatal(err)
 	}
-	data, err := io.ReadAll(r)
-	if err != nil {
-		t.Fatal(err)
+	result := <-readDone
+	if result.err != nil {
+		t.Fatal(result.err)
 	}
-	return string(data)
+	return string(result.data)
 }

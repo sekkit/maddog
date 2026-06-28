@@ -321,6 +321,7 @@ var Chinese = Messages{
 
 	ProviderErrBadRequest:          "请求格式错误 (HTTP 400)：请求体被拒绝，通常是程序缺陷。若持续出现请反馈。",
 	ProviderErrAuth:                "认证失败 (HTTP 401)：API key 缺失、错误或已过期。请检查 Maddog credentials 或项目 .env 中的密钥，或运行 `maddog setup`。",
+	ProviderErrAuthRejected:        "认证失败 (HTTP 401)：服务端拒绝了你的 API key。可能是 key 错误或已过期，也可能是服务端出现瞬时鉴权/额度问题——已退避重试仍失败。请稍后再试，或检查 .env 中的密钥 / 运行 `maddog setup`。",
 	ProviderErrInsufficientBalance: "余额不足 (HTTP 402)：账户余额不足，请前往充值后重试。",
 	ProviderErrUnprocessable:       "参数错误 (HTTP 422)：某个请求参数被拒绝，通常是程序缺陷。若持续出现请反馈。",
 	ProviderErrRateLimited:         "请求速率达到上限 (HTTP 429)：请求过于频繁 (TPM/RPM)。已退避重试，请放慢速率或稍后再试。",
@@ -365,11 +366,12 @@ var Chinese = Messages{
 
 用法：
   maddog chat [--model NAME] [-c|--continue] [--resume]   交互式会话（多轮；-c 恢复最近一次，--resume 选择一个）
-  maddog run  [--model NAME] [--max-steps N] <task>   执行单次任务后退出
+  maddog run  [--model NAME] [--max-steps N] [-c|--continue] [--resume PATH] <task>   执行单次任务后退出
   maddog serve [--model NAME] [--addr HOST:PORT]      通过 HTTP+SSE 提供会话（浏览器客户端在 /）
   maddog acp [--model NAME]                           通过 stdio 提供 Agent Client Protocol（也可用：maddog --acp）
   maddog setup [path]                                 交互式配置向导；生成 maddog.toml（及 credentials）
   maddog config auto-plan [off|on]                    配置自动计划模式
+  maddog workflows <list|show>                        查看 loop workflow 模板
   maddog mcp <add|remove|list>                        管理 maddog.toml 里的 MCP 服务器
   maddog doctor [--json]                              输出脱敏的本地诊断信息
   maddog version

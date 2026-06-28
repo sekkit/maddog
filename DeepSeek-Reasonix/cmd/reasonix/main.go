@@ -1,4 +1,4 @@
-// Command maddog is a config- and plugin-driven coding agent CLI.
+// Command reasonix is the legacy compatibility entrypoint for the Maddog CLI.
 package main
 
 import (

@@ -176,6 +176,7 @@ func RenderTOMLForScope(c *Config, scope RenderScope) string {
 		autoPlan = "off"
 	}
 	fmt.Fprintf(&b, "auto_plan   = %q   # off|on; off keeps plan mode manual\n", autoPlan)
+	fmt.Fprintf(&b, "context_policy = %q   # off|auto|aggressive tool-output compression policy\n", c.ContextPolicy())
 	if lang := c.ReasoningLanguage(); lang != "auto" {
 		fmt.Fprintf(&b, "reasoning_language = %q   # visible reasoning language: auto|zh|en\n", lang)
 	} else {
@@ -251,10 +252,10 @@ func RenderTOMLForScope(c *Config, scope RenderScope) string {
 				fmt.Fprintf(&b, "api_key_env = %q\n", p.APIKeyEnv)
 			}
 			if p.AuthType != "" {
-				fmt.Fprintf(&b, "auth_type   = %q   # api_key|bearer|workload_identity\n", p.AuthType)
+				fmt.Fprintf(&b, "auth_type   = %q   # api_key|bearer|workload_identity|official_auth\n", p.AuthType)
 			}
-			if p.AuthTokenEnv != "" {
-				fmt.Fprintf(&b, "auth_token_env = %q\n", p.AuthTokenEnv)
+			if env := p.bearerTokenEnvName(); env != "" {
+				fmt.Fprintf(&b, "bearer_token_env = %q\n", env)
 			}
 			if p.AuthHeader != "" {
 				fmt.Fprintf(&b, "auth_header = %q\n", p.AuthHeader)
@@ -267,6 +268,9 @@ func RenderTOMLForScope(c *Config, scope RenderScope) string {
 			}
 			if p.IdentityFile != "" {
 				fmt.Fprintf(&b, "identity_file = %q   # workload identity JWT/OIDC assertion file\n", p.IdentityFile)
+			}
+			if p.OfficialAuthProfileID != "" {
+				fmt.Fprintf(&b, "official_auth_profile_id = %q\n", p.OfficialAuthProfileID)
 			}
 			if p.FederationID != "" {
 				fmt.Fprintf(&b, "federation_rule_id = %q\n", p.FederationID)
@@ -337,6 +341,21 @@ func RenderTOMLForScope(c *Config, scope RenderScope) string {
 		fmt.Fprintf(&b, "path         = %q   # optional launcher override\n", c.Codegraph.Path)
 	} else {
 		b.WriteString("# path       = \"\"   # empty = cache, then PATH, then a bundle beside maddog\n")
+	}
+	for _, backend := range c.Codegraph.Backends {
+		fmt.Fprintf(&b, "\n[[codegraph.backends]]\n")
+		fmt.Fprintf(&b, "name = %q\n", backend.Name)
+		fmt.Fprintf(&b, "server = %q\n", backend.Server)
+		fmt.Fprintf(&b, "enabled = %v\n", backend.Enabled)
+		if len(backend.Capabilities) > 0 {
+			fmt.Fprintf(&b, "capabilities = %s\n", renderStringArray(backend.Capabilities))
+		}
+		if len(backend.Risks) > 0 {
+			fmt.Fprintf(&b, "risks = %s\n", renderStringArray(backend.Risks))
+		}
+		if len(backend.ToolMapping) > 0 {
+			fmt.Fprintf(&b, "tool_mapping = %s\n", renderStringMap(backend.ToolMapping))
+		}
 	}
 	b.WriteString("\n")
 

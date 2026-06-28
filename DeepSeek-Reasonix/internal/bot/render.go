@@ -12,7 +12,7 @@ import (
 	"reasonix/internal/event"
 )
 
-// renderSink 将 Reasonix 事件流渲染为平台消息。
+// renderSink 将 Maddog 事件流渲染为平台消息。
 type renderSink struct {
 	ctx        context.Context
 	adapter    Adapter

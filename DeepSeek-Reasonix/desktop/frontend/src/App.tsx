@@ -744,6 +744,41 @@ function sessionItemsToMarkdown(title: string, items: Item[], live?: LiveStream)
       case "runtime_event":
         lines.push(`### Runtime Event: ${item.event}`, "", item.text.trim(), "");
         break;
+      case "readiness":
+        lines.push("### Workflow Readiness", "", `Status: ${item.readiness.status}`, `Score: ${item.readiness.score}`);
+        if (item.text.trim()) lines.push("", item.text.trim());
+        if (item.readiness.blockers?.length) lines.push("", ...item.readiness.blockers.map((b) => `- ${b}`));
+        lines.push("");
+        break;
+      case "provider_status":
+        lines.push("### Provider Status", "", `Role: ${item.providerStatus.role}`);
+        if (item.providerStatus.provider) lines.push(`Provider: ${item.providerStatus.provider}`);
+        if (item.providerStatus.model) lines.push(`Model: ${item.providerStatus.model}`);
+        if (item.providerStatus.totalTokens) lines.push(`Tokens: ${item.providerStatus.totalTokens}`);
+        if (item.providerStatus.cost) lines.push(`Cost: ${item.providerStatus.currency ?? ""}${item.providerStatus.cost}`);
+        if (item.providerStatus.upgradeReason) lines.push(`Upgrade: ${item.providerStatus.upgradeReason}`);
+        lines.push("");
+        break;
+      case "run_report":
+        lines.push("### Run Report", "", `Status: ${item.runReport.finalStatus || item.runReport.status}`, `Events: ${item.runReport.events}`);
+        if (item.runReport.runId) lines.push(`Run: ${item.runReport.runId}`);
+        if (item.runReport.loopId) lines.push(`Loop: ${item.runReport.loopId}`);
+        if (item.runReport.templateId) lines.push(`Template: ${item.runReport.templateId}`);
+        if (item.runReport.path) lines.push(`Path: ${item.runReport.path}`);
+        if (item.runReport.reportPath) lines.push(`Report: ${item.runReport.reportPath}`);
+        if (item.runReport.budget) {
+          const budget = item.runReport.budget;
+          lines.push(`Budget: ${budget.usedTokens ?? 0}/${budget.limitTokens ?? 0} tokens, ${budget.remainingTokens ?? 0} remaining`);
+          if (budget.cost) lines.push(`Cost: ${budget.currency ?? ""}${budget.cost}`);
+        }
+        for (const model of item.runReport.models ?? []) {
+          lines.push(`Model: ${model.role ?? "model"} ${[model.provider, model.model].filter(Boolean).join("/")}`);
+          if (model.upgradeReason) lines.push(`Upgrade: ${model.upgradeReason}`);
+        }
+        if (item.runReport.checker) lines.push(`Checker: ${item.runReport.checker.verdict || item.runReport.checker.mode}`);
+        if (item.runReport.humanGate) lines.push(`Human gate: ${item.runReport.humanGate.status || item.runReport.humanGate.kind}`);
+        lines.push("");
+        break;
       case "advisor":
         lines.push("### Advisor", "");
         if (item.advisor.reason?.trim()) lines.push(`Reason: ${item.advisor.reason.trim()}`, "");
@@ -2985,6 +3020,9 @@ export default function App() {
               cost={state.sessionCost}
               currency={state.sessionCurrency}
               modelLabel={state.meta?.label}
+              readiness={state.readiness}
+              providerStatus={state.providerStatus}
+              runReport={state.runReport}
               labelStyle={statusBarStyle}
               items={statusBarItems}
             />

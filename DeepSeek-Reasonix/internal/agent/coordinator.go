@@ -28,7 +28,7 @@ for the executor. Output executor-ready instructions: what to do, which files or
 commands are relevant, expected blockers, and key decisions. Keep it short and
 actionable.`
 
-const executorHandoffMarker = "Reasonix executor handoff"
+const executorHandoffMarker = "Maddog executor handoff"
 
 // PlannerPromptWithContext appends cache-stable standing context, such as loaded
 // MADDOG.md / AGENTS.md memory, to the planner's smaller system prompt.

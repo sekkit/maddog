@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"reasonix/internal/event"
@@ -50,6 +51,45 @@ func TestMetricsSinkAccumulatesReadinessAudit(t *testing.T) {
 	}
 	if s.m.ReadinessCommandMismatches != 2 {
 		t.Fatalf("command mismatches = %d, want 2", s.m.ReadinessCommandMismatches)
+	}
+}
+
+func TestMetricsSinkRecordsCompressionMetadataWithoutRawOutput(t *testing.T) {
+	s := &metricsSink{inner: event.Discard}
+	s.Emit(event.Event{
+		Kind: event.ToolResult,
+		Tool: event.Tool{
+			ID:     "call-1",
+			Name:   "bash",
+			Output: "sk-secret-raw-output",
+			Compression: &event.ToolCompression{
+				Compressed:      true,
+				Strategy:        "shell_summary",
+				RawRef:          "raw://tool-output/call-1.txt",
+				RawAvailable:    true,
+				OriginalBytes:   1000,
+				CompressedBytes: 250,
+				SavedBytes:      750,
+			},
+		},
+	})
+
+	if s.m.CompressionItems != 1 || s.m.CompressionSavedBytes != 750 || s.m.CompressionRawAvailable != 1 {
+		t.Fatalf("compression metrics = %+v", s.m)
+	}
+	path := filepath.Join(t.TempDir(), "metrics.json")
+	if err := writeMetrics(path, s.m); err != nil {
+		t.Fatalf("writeMetrics: %v", err)
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if strings.Contains(string(b), "sk-secret-raw-output") || strings.Contains(string(b), "raw://tool-output/call-1.txt") {
+		t.Fatalf("metrics JSON leaked raw output/ref: %s", b)
+	}
+	if !strings.Contains(string(b), `"compression_saved_bytes"`) || !strings.Contains(string(b), `"compression_raw_available"`) {
+		t.Fatalf("metrics JSON missing compression summary: %s", b)
 	}
 }
 

@@ -6,7 +6,7 @@ import { replaceAttachmentRefsForDisplay } from "../lib/attachmentDisplay";
 import { AssistantMessage, TurnActions, UserMessage } from "./Message";
 import { ProcessCard, ProcessCompactIcon, ProcessPhaseIcon, ProcessStatusIcon } from "./ProcessCard";
 import { ToolCard } from "./ToolCard";
-import { ChevronRight, GitPullRequestArrow, MessagesSquare, Route, ShieldAlert, Sparkles } from "lucide-react";
+import { ChevronRight, FileClock, GitPullRequestArrow, MessagesSquare, Route, ShieldAlert, ShieldCheck, Sparkles, UserCheck } from "lucide-react";
 import { Welcome } from "./Welcome";
 import { ReadOnlyBatch } from "./ReadOnlyBatch";
 import { getDisplayMode, onDisplayModeChange, type DisplayMode } from "../lib/displayMode";
@@ -841,6 +841,11 @@ function WarmTurnItems({
       case "phase": nodes.push(<PhaseCard key={it.id} text={it.text} />); break;
       case "notice": nodes.push(<NoticeCard key={it.id} level={it.level} text={it.text} />); break;
       case "runtime_event": nodes.push(<RuntimeEventCard key={it.id} event={it.event} level={it.level} text={it.text} />); break;
+      case "provider_status": nodes.push(<NoticeCard key={it.id} level={it.level} text={it.text} />); break;
+      case "run_report": nodes.push(<RunReportCard key={it.id} item={it} />); break;
+      case "readiness": nodes.push(<ReadinessCard key={it.id} item={it} />); break;
+      case "maker_checker": nodes.push(<MakerCheckerCard key={it.id} item={it} />); break;
+      case "human_gate": nodes.push(<HumanGateCard key={it.id} item={it} />); break;
       case "advisor": nodes.push(<AdvisorCard key={it.id} item={it} />); break;
       case "compaction": nodes.push(<CompactionCard key={it.id} item={it} />); break;
     }
@@ -1123,6 +1128,10 @@ function QuestionJumpBar({ questions, onJump }: { questions: QuestionAnchor[]; o
 type CompactionItem = Extract<Item, { kind: "compaction" }>;
 type NoticeItem = Extract<Item, { kind: "notice" }>;
 type RuntimeEventItem = Extract<Item, { kind: "runtime_event" }>;
+type ReadinessItem = Extract<Item, { kind: "readiness" }>;
+type RunReportItem = Extract<Item, { kind: "run_report" }>;
+type MakerCheckerItem = Extract<Item, { kind: "maker_checker" }>;
+type HumanGateItem = Extract<Item, { kind: "human_gate" }>;
 type AdvisorItem = Extract<Item, { kind: "advisor" }>;
 
 function PhaseCard({ text }: { text: string }) {
@@ -1152,6 +1161,184 @@ function RuntimeEventCard({ event, level, text }: { event: RuntimeEventItem["eve
       className={`notice notice--${level} runtime-event runtime-event--${event}`}
     >
       <div className="notice__body">{text || t("runtimeEvent.noDetail")}</div>
+    </ProcessCard>
+  );
+}
+
+function ReadinessCard({ item }: { item: ReadinessItem }) {
+  const t = useT();
+  const r = item.readiness;
+  const ready = r.status === "ready";
+  const attention = r.status === "blocked" || r.status === "needs_approval";
+  const title = readinessTitle(r.status, t);
+  const topChecks = r.checks.slice(0, 6);
+  return (
+    <ProcessCard
+      tone={ready ? "success" : attention ? "warning" : "accent"}
+      icon={ready ? <ShieldCheck size={12} /> : <ShieldAlert size={12} />}
+      kind={t("readiness.kind")}
+      name={title}
+      meta={<span>{t("readiness.score", { n: r.score ?? 0 })}</span>}
+      defaultOpen={!ready}
+      className={`notice notice--${item.level} readiness readiness--${r.status}`}
+    >
+      <div className="notice__body readiness__body">
+        <div>{item.text || t("runtimeEvent.noDetail")}</div>
+        {topChecks.length > 0 && (
+          <ul className="readiness__checks">
+            {topChecks.map((check) => (
+              <li key={`${check.id}-${check.role ?? check.capability ?? ""}`}>
+                <span>{check.id}</span>
+                <b>{check.status}</b>
+                {check.credentialEnv && <em>{check.credentialEnv}</em>}
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    </ProcessCard>
+  );
+}
+
+function readinessTitle(status: string, t: ReturnType<typeof useT>): string {
+  switch (status) {
+    case "ready":
+      return t("readiness.ready");
+    case "warning":
+      return t("readiness.warning");
+    case "blocked":
+      return t("readiness.blocked");
+    case "needs_approval":
+      return t("readiness.needsApproval");
+    default:
+      return status || t("readiness.kind");
+  }
+}
+
+function RunReportCard({ item }: { item: RunReportItem }) {
+  const report = item.runReport;
+  const status = report.finalStatus || report.status || "unknown";
+  const template = report.templateId || report.loopId || report.runId || "run";
+  const budget = report.budget;
+  const models = report.models ?? [];
+  const path = report.reportPath || report.path;
+  const ready = status === "completed" || status === "success";
+  return (
+    <ProcessCard
+      tone={ready ? "success" : item.level === "warn" ? "warning" : "accent"}
+      icon={<FileClock size={12} />}
+      kind="Run report"
+      name={template}
+      meta={<span>{status} · {report.events ?? 0} events</span>}
+      defaultOpen
+      className={`notice notice--${item.level} run-report run-report--${status}`}
+    >
+      <div className="notice__body run-report__body">
+        <div>{item.text}</div>
+        <div className="run-report__grid">
+          <span>Template</span><b>{template}</b>
+          <span>Status</span><b>{status}</b>
+          {budget && (
+            <>
+              <span>Budget</span><b>{formatBudget(budget.usedTokens, budget.limitTokens, budget.remainingTokens)}</b>
+              <span>Cost</span><b>{formatCost(budget.cost, budget.currency)}</b>
+            </>
+          )}
+          {report.checker && (
+            <>
+              <span>Checker</span><b>{report.checker.verdict || report.checker.mode}</b>
+            </>
+          )}
+          {report.humanGate && (
+            <>
+              <span>Human gate</span><b>{report.humanGate.status || report.humanGate.kind || "pending"}</b>
+            </>
+          )}
+          {path && (
+            <>
+              <span>Path</span><b className="run-report__path">{path}</b>
+            </>
+          )}
+        </div>
+        {models.length > 0 && (
+          <ul className="run-report__models">
+            {models.slice(0, 6).map((model, index) => (
+              <li key={`${model.role || "model"}-${model.provider || ""}-${model.model || ""}-${index}`}>
+                <span>{model.role || "model"}</span>
+                <b>{[model.provider, model.model].filter(Boolean).join(" / ") || "-"}</b>
+                <em>{formatModelUsage(model.totalTokens, model.cost, model.currency, model.upgradeReason)}</em>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    </ProcessCard>
+  );
+}
+
+function formatBudget(used?: number, limit?: number, remaining?: number): string {
+  const usedLabel = typeof used === "number" ? used.toLocaleString() : "-";
+  const limitLabel = typeof limit === "number" && limit > 0 ? limit.toLocaleString() : "-";
+  const remainingLabel = typeof remaining === "number" ? remaining.toLocaleString() : "-";
+  return `${usedLabel}/${limitLabel} used, ${remainingLabel} left`;
+}
+
+function formatCost(cost?: number, currency?: string): string {
+  if (typeof cost !== "number" || cost <= 0) return "-";
+  return `${currency ?? ""}${cost}`;
+}
+
+function formatModelUsage(tokens?: number, cost?: number, currency?: string, upgradeReason?: string): string {
+  const parts: string[] = [];
+  if (typeof tokens === "number" && tokens > 0) parts.push(`${tokens.toLocaleString()} tokens`);
+  const costLabel = formatCost(cost, currency);
+  if (costLabel !== "-") parts.push(costLabel);
+  if (upgradeReason) parts.push(upgradeReason);
+  return parts.join(" · ") || "-";
+}
+
+function MakerCheckerCard({ item }: { item: MakerCheckerItem }) {
+  const result = item.makerChecker;
+  const approved = result.canComplete;
+  const retry = result.retryAllowed;
+  return (
+    <ProcessCard
+      tone={approved ? "success" : "warning"}
+      icon={approved ? <ShieldCheck size={12} /> : <ShieldAlert size={12} />}
+      kind="Checker"
+      name={retry ? "Changes requested" : approved ? "Approved" : "Completion gated"}
+      meta={<span>{result.isolation || "no"} isolation</span>}
+      defaultOpen={!approved}
+      className={`notice notice--${item.level} maker-checker maker-checker--${result.verdict || "pending"}`}
+    >
+      <div className="notice__body maker-checker__body">
+        <div>{item.text}</div>
+        <div className="maker-checker__grid">
+          <span>Mode</span><b>{result.mode}</b>
+          <span>Verdict</span><b>{result.verdict || "pending"}</b>
+          <span>Retry</span><b>{retry ? `${result.retryCount ?? 0}/${result.maxRetries ?? 0}` : "no"}</b>
+        </div>
+      </div>
+    </ProcessCard>
+  );
+}
+
+function HumanGateCard({ item }: { item: HumanGateItem }) {
+  const gate = item.humanGate;
+  return (
+    <ProcessCard
+      tone={gate.required ? "warning" : "success"}
+      icon={<UserCheck size={12} />}
+      kind="Human gate"
+      name={gate.required ? "Needs decision" : "Not required"}
+      meta={<span>{gate.kind || "gate"}</span>}
+      defaultOpen={gate.required}
+      className={`notice notice--${item.level} human-gate human-gate--${gate.status || "none"}`}
+    >
+      <div className="notice__body maker-checker__body">
+        <div>{item.text}</div>
+        {gate.status && <div className="maker-checker__status">{gate.status}</div>}
+      </div>
     </ProcessCard>
   );
 }
