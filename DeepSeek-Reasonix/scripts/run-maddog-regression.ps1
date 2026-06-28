@@ -296,10 +296,10 @@ $CoverageMatrix = @(
   [pscustomobject]@{
     capability = "Maddog naming, config/storage isolation, desktop GUI settings, and app build"
     evidence = @("core-go", "desktop-go", "frontend", "manifest")
-    notes = "Desktop installer/runtime smoke is separate from frontend and Wails package checks."
+    notes = "Desktop Go tests pin maddog-dev native binary naming, Maddog storage roots, release packaging names, settings wiring, signing, and updater helpers; packaged installer runtime smoke remains a native Windows release check."
     status = "verified-offline"
     remaining = @()
-    optional_remaining = @("Run desktop installer/runtime smoke on a packaged Windows build.")
+    optional_remaining = @("Run packaged Windows installer/runtime smoke on a signed release build.")
   },
   [pscustomobject]@{
     capability = "General coding-agent task performance"

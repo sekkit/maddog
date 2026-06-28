@@ -228,8 +228,11 @@ func TestMaddogBenchmarkCoverageAudit(t *testing.T) {
 		"Desktop provider settings and Maddog isolation": {
 			"desktop/app_test.go:frontier settings",
 			"desktop/app_test.go:workload_identity",
+			"desktop/wails.json:\"outputfilename\": \"maddog-dev\"",
 			"desktop/settings_app_test.go:openai",
 			"desktop/branding_test.go:maddog-dev.exe",
+			"scripts/desktop-build.sh:BINNAME=\"maddog-dev\"",
+			"scripts/desktop-build.sh:build/bin/${BINNAME}.app",
 			"desktop/release_branding_test.go:${APPNAME}-windows-${arch}-installer.exe",
 		},
 		"Desktop GUI model/provider/advisor controls": {

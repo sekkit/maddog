@@ -25,7 +25,7 @@ arch="${PLATFORM#*/}"
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 APPNAME="Maddog"            # wails.json productName -> Maddog.app
-BINNAME="maddog"    # wails.json outputfilename -> linux binary name
+BINNAME="maddog-dev"        # wails.json outputfilename -> native binary name
 
 cd "$ROOT/desktop"
 
@@ -51,14 +51,14 @@ mkdir -p "$ROOT/dist"
 
 case "$os" in
 darwin)
-	# Wails names the bundle after outputfilename (maddog.app); repackage
+	# Wails names the bundle after outputfilename (maddog-dev.app); repackage
 	# it as Maddog.app for a clean user-facing name. Ad-hoc sign the copy (still
 	# not notarized — the real fix is a Developer ID cert); this cuts down the
 	# Gatekeeper "is damaged / can't be opened" error on a downloaded build, though
 	# users may still need to clear the quarantine attribute (see desktop/README.md).
 	staging=$(mktemp -d)
 	app="$staging/${APPNAME}.app"
-	cp -R "build/bin/maddog.app" "$app"
+	cp -R "build/bin/${BINNAME}.app" "$app"
 	codesign --force --deep -s - "$app"
 	if [ "$arch" = universal ]; then
 		# One universal .app covers Intel + Apple Silicon; publish it under both

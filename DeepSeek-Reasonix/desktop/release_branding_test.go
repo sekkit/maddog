@@ -12,7 +12,8 @@ func TestDesktopReleaseScriptsUseMaddogArtifacts(t *testing.T) {
 	buildScript := readText(t, filepath.Join(root, "scripts", "desktop-build.sh"))
 	for _, want := range []string{
 		`APPNAME="Maddog"`,
-		`BINNAME="maddog"`,
+		`BINNAME="maddog-dev"`,
+		`build/bin/${BINNAME}.app`,
 		`${APPNAME}-windows-${arch}-installer.exe`,
 		`${APPNAME}-windows-${arch}.zip`,
 		`${APPNAME}-linux-${arch}.tar.gz`,
@@ -26,6 +27,8 @@ func TestDesktopReleaseScriptsUseMaddogArtifacts(t *testing.T) {
 		"Reasonix-windows",
 		"Reasonix-linux",
 		"reasonix-dev.exe",
+		`BINNAME="maddog"`,
+		"build/bin/maddog.app",
 	} {
 		if strings.Contains(buildScript, forbidden) {
 			t.Fatalf("desktop-build.sh still references %q", forbidden)
