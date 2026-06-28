@@ -24,6 +24,80 @@ $DefaultModel = "icodeeasy/gpt-4.1"
 $LocalSmokeModel = "benchmark-local/local-smoke-model"
 $LocalSmokeKeyEnv = "MADDOG_BENCHMARK_LOCAL_KEY"
 
+function Get-BenchmarkResultDirs {
+  param([string]$Root)
+  $resultsRoot = Join-Path $Root "results"
+  if (!(Test-Path $resultsRoot)) {
+    return @()
+  }
+  return @(Get-ChildItem $resultsRoot -Directory | Sort-Object LastWriteTimeUtc)
+}
+
+function Find-NewBenchmarkResultDir {
+  param(
+    [string]$Root,
+    [string[]]$Before
+  )
+  $beforeSet = @{}
+  foreach ($path in $Before) {
+    $beforeSet[$path] = $true
+  }
+  $newDirs = @(
+    Get-BenchmarkResultDirs $Root |
+      Where-Object { -not $beforeSet.ContainsKey($_.FullName) } |
+      Sort-Object LastWriteTimeUtc -Descending
+  )
+  if ($newDirs.Count -gt 0) {
+    return $newDirs[0].FullName
+  }
+  $allDirs = @(Get-BenchmarkResultDirs $Root | Sort-Object LastWriteTimeUtc -Descending)
+  if ($allDirs.Count -gt 0) {
+    return $allDirs[0].FullName
+  }
+  return ""
+}
+
+function Assert-LocalSmokeResult {
+  param([string]$RunDir)
+  if ($RunDir -eq "" -or !(Test-Path $RunDir)) {
+    throw "coding-agent-benchmark did not write a results directory"
+  }
+  $summaryPath = Join-Path $RunDir "summary.json"
+  $taskPath = Join-Path (Join-Path $RunDir "maddog") "00-smoke-test.json"
+  if (!(Test-Path $summaryPath)) {
+    throw "coding-agent-benchmark summary missing: $summaryPath"
+  }
+  if (!(Test-Path $taskPath)) {
+    throw "coding-agent-benchmark Maddog smoke result missing: $taskPath"
+  }
+  $summary = Get-Content -Raw $summaryPath | ConvertFrom-Json
+  if (!$summary.maddog) {
+    throw "coding-agent-benchmark summary does not contain Maddog results"
+  }
+  if ([int]$summary.maddog.total_tasks -ne 1 -or [int]$summary.maddog.tasks_fully_passed -ne 1) {
+    throw "coding-agent-benchmark Maddog local smoke summary did not fully pass: $summaryPath"
+  }
+  $score = @($summary.maddog.scores)[0]
+  if (!$score -or $score.task -ne "00-smoke-test" -or $score.status -ne "pass" -or [int]$score.tests_passed -ne 2 -or [int]$score.tests_total -ne 2) {
+    throw "coding-agent-benchmark Maddog smoke score is not a 2/2 pass: $summaryPath"
+  }
+  $task = Get-Content -Raw $taskPath | ConvertFrom-Json
+  if (-not $task.passed -or $task.status -ne "pass" -or [int]$task.tests_passed -ne 2 -or [int]$task.tests_total -ne 2) {
+    throw "coding-agent-benchmark Maddog smoke task did not pass 2/2 tests: $taskPath"
+  }
+  $raw = [string]$task.agent_raw_output
+  foreach ($needle in @("Benchmark smoke fixture completed.", "write_file", "math_utils.py", "out 6")) {
+    if (!$raw.Contains($needle)) {
+      throw "coding-agent-benchmark Maddog smoke output missing '$needle': $taskPath"
+    }
+  }
+  $testRaw = [string]$task.test_raw_output
+  if (!$testRaw.Contains("2 passed")) {
+    throw "coding-agent-benchmark Maddog smoke pytest output did not report 2 passed: $taskPath"
+  }
+  Write-Host "Verified coding-agent-benchmark local smoke result: $RunDir"
+}
+
 if ($UseProxy) {
   $env:HTTP_PROXY = "http://127.0.0.1:10809"
   $env:HTTPS_PROXY = "http://127.0.0.1:10809"
@@ -71,6 +145,7 @@ if ($LocalSmoke) {
 
 $fixtureProcess = $null
 $pushedBenchmarkDir = $false
+$beforeResultDirs = @(Get-BenchmarkResultDirs $BenchmarkDir | ForEach-Object { $_.FullName })
 try {
   if ($LocalSmoke) {
     if (Test-Path $FixtureReadyFile) {
@@ -149,6 +224,10 @@ no_proxy = true
   python @args
   if ($LASTEXITCODE -ne 0) {
     throw "coding-agent-benchmark exited with code $LASTEXITCODE"
+  }
+  if ($LocalSmoke) {
+    $runDir = Find-NewBenchmarkResultDir -Root $BenchmarkDir -Before $beforeResultDirs
+    Assert-LocalSmokeResult $runDir
   }
 } finally {
   if ($pushedBenchmarkDir) {
