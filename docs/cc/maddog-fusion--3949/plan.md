@@ -10,7 +10,7 @@ source_tech: docs/cc/maddog-fusion--3949/tech.md
 
 ## 概述
 
-将 **Reasonix**（Go agent 运行时 + Wails 桌面 app）与 **tinyctx** 的"智能层"融合为单一 app。基座为 Reasonix，移植 tinyctx "半 B"（失败信号升级 / advisor / auto-skill / 自改进）。
+将 **Maddog**（Go agent 运行时 + Wails 桌面 app）与 **tinyctx** 的"智能层"融合为单一 app。基座为 Maddog，移植 tinyctx "半 B"（失败信号升级 / advisor / auto-skill / 自改进）。
 
 **阶段路线**（保持 spec 的 A→B→C1→C2 排序，与 tech.md 一致）：
 
@@ -57,7 +57,7 @@ source_tech: docs/cc/maddog-fusion--3949/tech.md
 
 | 维度 | 现状（分开用） | 融合后 |
 |---|---|---|
-| 进程数 | reasonix + tinyctx 双进程 | 单一进程 |
+| 进程数 | maddog + tinyctx 双进程 | 单一进程 |
 | 配置 | 两套配置 / provider / api key | 一套 |
 | 调试 | 跨进程追踪困难 | event stream 统一 |
 | 技能维护 | 人工编写/更新 | 自动编排 + 离线优化 |
@@ -92,7 +92,7 @@ source_tech: docs/cc/maddog-fusion--3949/tech.md
   - "/boot/"、"/sys/" 写入
 
 内存/文件覆盖:
-  - 不可覆盖 `REASONIX.md`、`AGENTS.md`、`SYSTEM.md`
+  - 不可覆盖 `MADDOG.md`、`AGENTS.md`、`SYSTEM.md`
   - 不可覆盖 memory（`remember`/`forget` 工具 restriction）
 ```
 
@@ -125,14 +125,14 @@ source_tech: docs/cc/maddog-fusion--3949/tech.md
 
 ### 说明
 
-multi-provider 已由 Reasonix 原生实现（spec §5.A）。本阶段仅做验收确认。
+multi-provider 已由 Maddog 原生实现（spec §5.A）。本阶段仅做验收确认。
 
 ### Implementation Unit A1: Provider 验收测试
 
 **文件变更**：仅测试文件
 
-- `DeepSeek-Reasonix/internal/provider/openai/openai_test.go`（追加验收用例）
-- `DeepSeek-Reasonix/internal/provider/anthropic/anthropic_test.go`（追加验收用例）
+- `maddog/internal/provider/openai/openai_test.go`（追加验收用例）
+- `maddog/internal/provider/anthropic/anthropic_test.go`（追加验收用例）
 
 **验收标准**：
 
@@ -166,7 +166,7 @@ multi-provider 已由 Reasonix 原生实现（spec §5.A）。本阶段仅做验
 
 **文件新增/修改**：
 
-- `DeepSeek-Reasonix/internal/evidence/evidence.go` — 新增 `FailureSignal()` 方法
+- `maddog/internal/evidence/evidence.go` — 新增 `FailureSignal()` 方法
 
 **变更内容**：
 
@@ -192,7 +192,7 @@ func (l *Ledger) FailureSignal() FailureSignal
 
 **依赖**：无。
 
-**测试场景**（`DeepSeek-Reasonix/internal/evidence/evidence_test.go`）：
+**测试场景**（`maddog/internal/evidence/evidence_test.go`）：
 
 | # | 场景 | 预期 |
 |---|---|---|
@@ -206,8 +206,8 @@ func (l *Ledger) FailureSignal() FailureSignal
 
 **文件新增/修改**：
 
-- `DeepSeek-Reasonix/internal/agent/upgrade.go`（新文件：UpgradePolicy interface + ThresholdUpgradePolicy + UpgradeDecision）
-- `DeepSeek-Reasonix/internal/agent/agent.go` — Agent 结构体新增字段 + New() + Run() loop 修改 + `switchToFrontier()` + `downgradeFromFrontier()`
+- `maddog/internal/agent/upgrade.go`（新文件：UpgradePolicy interface + ThresholdUpgradePolicy + UpgradeDecision）
+- `maddog/internal/agent/agent.go` — Agent 结构体新增字段 + New() + Run() loop 修改 + `switchToFrontier()` + `downgradeFromFrontier()`
 
 **变更内容**：
 
@@ -329,7 +329,7 @@ frontierFailures     int  // 升级后的连续失败计数
 - Context window 在升/降时同步更新——不同 provider 的 context window 不同
 - **与 stormBreaker 的互补关系**：stormBreaker 检测"同一 error signature 重复 N=3 次"，触发时给模型一次改方法的机会；UpgradePolicy 检测 "任意连续 tool 失败 ≥ upgrade_threshold=3 次"，两者在默认阈值上对齐（均为 3）。stormBreaker 先于 UpgradePolicy 触发——如果模型在 storm 警告后成功改变策略，UpgradePolicy 的连续错误计数会被成功 call 中断，false-positive 升级自动避免
 
-**测试场景**（`DeepSeek-Reasonix/internal/agent/agent_test.go`）：
+**测试场景**（`maddog/internal/agent/agent_test.go`）：
 
 | # | 场景 | 预期 |
 |---|---|---|
@@ -347,7 +347,7 @@ frontierFailures     int  // 升级后的连续失败计数
 
 **文件修改**：
 
-- `DeepSeek-Reasonix/internal/config/config.go` — `AgentConfig` 新增字段
+- `maddog/internal/config/config.go` — `AgentConfig` 新增字段
 
 ```go
 // Frontier upgrade — 配置在 [agent] 节下
@@ -359,7 +359,7 @@ UpgradeEnabled    bool   `toml:"upgrade_enabled"`    // 全局开关，默认 tr
 
 **默认值策略**：`UpgradeThreshold` 为 0 时 → 不启用升级（0 = disabled）。`FrontierBudget` 为 0 时 → 不限制（仅内部开发者自用场景）。`UpgradeEnabled` 默认 true 但如果 `frontier_model` 未配置，实际不生效。
 
-- `DeepSeek-Reasonix/internal/boot/boot.go` — `Build()` 中装配 UpgradePolicy 和 FrontierProvider
+- `maddog/internal/boot/boot.go` — `Build()` 中装配 UpgradePolicy 和 FrontierProvider
 
 **Coordinator 兼容性**：当 `planner_model` 配置时，boot 创建 Coordinator（双 Agent：planner + executor）。UpgradePolicy **仅装配到 executor Agent**（不装配到 planner）。Planner 的职责是拆解任务，不应因 tool 失败而升级——那是 executor 的职责。
 
@@ -397,7 +397,7 @@ if cfg.Agent.UpgradeEnabled && cfg.Agent.FrontierModel != "" {
 
 **文件新增**：
 
-- `DeepSeek-Reasonix/internal/provider/costwrap/costwrap.go`（新包）
+- `maddog/internal/provider/costwrap/costwrap.go`（新包）
 
 **变更内容**：
 
@@ -437,7 +437,7 @@ sink.Emit(event.Event{Kind: event.BudgetExceeded, Level: event.LevelWarn,
 
 **文件新增**：
 
-- `DeepSeek-Reasonix/internal/skill/builtin_advisor.go`（注册到 `builtinSkills()`）
+- `maddog/internal/skill/builtin_advisor.go`（注册到 `builtinSkills()`）
 
 **Skill 定义**：
 
@@ -453,7 +453,7 @@ allowed-tools: read_file, grep, glob, ls, lsp_hover, lsp_definition, lsp_referen
 
 **变更内容**：
 
-- `DeepSeek-Reasonix/internal/skill/skill.go` — `builtinSkills()` 列表加入 advisor
+- `maddog/internal/skill/skill.go` — `builtinSkills()` 列表加入 advisor
 - advisor 的技能体沿用 tinyctx `ask_advisor` 契约：≤100 词、enumerated steps、`Risks:` 段
 
 **触发机制**：
@@ -473,7 +473,7 @@ allowed-tools: read_file, grep, glob, ls, lsp_hover, lsp_definition, lsp_referen
 
 **文件修改**：
 
-- `DeepSeek-Reasonix/internal/event/event.go` — Kind 新增事件类型
+- `maddog/internal/event/event.go` — Kind 新增事件类型
 
 ```go
 const (
@@ -486,7 +486,7 @@ const (
 )
 ```
 
-**实现策略**：在 `event.go` 的现有 Kind 常量末尾追加（CompactionDone → ToolProgress → MCPSurfaceReady 之后），**不插入到中间**——Go iota 依赖于常量位置，插入会改变后续常量的值。Kind 值用于内部事件路由，改变已有值会破坏 session 兼容性。在末尾添加注释 `// === REASONIX-FUSION: appended, do not insert before this line ===`。
+**实现策略**：在 `event.go` 的现有 Kind 常量末尾追加（CompactionDone → ToolProgress → MCPSurfaceReady 之后），**不插入到中间**——Go iota 依赖于常量位置，插入会改变后续常量的值。Kind 值用于内部事件路由，改变已有值会破坏 session 兼容性。在末尾添加注释 `// === MADDOG-FUSION: appended, do not insert before this line ===`。
 
 **各 event 的 emit 点**：
 
@@ -531,7 +531,7 @@ B6 (event kind) ──── 被 B2 使用
 
 **文件修改**：
 
-- `DeepSeek-Reasonix/internal/skill/skill.go` — Store 新增 `Inject()` 和 `Remove()` 方法
+- `maddog/internal/skill/skill.go` — Store 新增 `Inject()` 和 `Remove()` 方法
 
 **变更内容**：
 
@@ -544,7 +544,7 @@ type Store struct {
 
 func (s *Store) Inject(sk Skill) error {
     // 加入 injected map
-    // 不创建文件，不触及 .reasonix/skills/
+    // 不创建文件，不触及 .maddog/skills/
     // 命名空间与文件 skill 共享，injected 优先（同优先级）
 }
 
@@ -558,7 +558,7 @@ func (s *Store) Remove(name string) {
 - `List()` 需追加 injected skills（在文件 skills + builtins 之后或之前？建议在 custom 之后、builtin 之前——与持久 skill 共享命名空间，注入 skill 覆盖同名持久 skill）
 - `Read()` 优先检查 injected（因为注入的 skill 应在 session 期间可见）
 
-**测试场景**（`DeepSeek-Reasonix/internal/skill/skill_test.go`）：
+**测试场景**（`maddog/internal/skill/skill_test.go`）：
 
 | # | 场景 | 预期 |
 |---|---|---|
@@ -572,7 +572,7 @@ func (s *Store) Remove(name string) {
 
 **文件新增**：
 
-- `DeepSeek-Reasonix/internal/skill/validator.go`（新文件）
+- `maddog/internal/skill/validator.go`（新文件）
 
 **变更内容**：
 
@@ -601,7 +601,7 @@ func (v *Validator) Validate(sk Skill, task string) ValidationResult {
 | 规则 | 实现方式 |
 |---|---|
 | 高风险任务 | 关键词匹配（task 字符串 vs 禁用模式列表） |
-| 覆盖 system prompt | 正则 `(?i)#\s*REASONIX`、`system_prompt`、`override` |
+| 覆盖 system prompt | 正则 `(?i)#\s*MADDOG`、`system_prompt`、`override` |
 | 覆盖 memory | 检查 `allowed-tools` 不包含 `remember`/`forget` |
 | Body 长度 | `len(sk.Body) > 2000` |
 | Frontmatter 完整性 | `sk.Name == ""` 或 `sk.Description == ""` |
@@ -621,9 +621,9 @@ func (v *Validator) Validate(sk Skill, task string) ValidationResult {
 
 **文件新增/修改**：
 
-- `DeepSeek-Reasonix/internal/skill/matcher.go`（新文件：Skill Matcher）
-- `DeepSeek-Reasonix/internal/skill/generator.go`（新文件：Dynamic Skill Generator）
-- `DeepSeek-Reasonix/internal/control/controller.go` 或 `internal/boot/boot.go` — 编排管线入口
+- `maddog/internal/skill/matcher.go`（新文件：Skill Matcher）
+- `maddog/internal/skill/generator.go`（新文件：Dynamic Skill Generator）
+- `maddog/internal/control/controller.go` 或 `internal/boot/boot.go` — 编排管线入口
 
 **Skill Matcher**：
 
@@ -707,7 +707,7 @@ func orchestrateSkills(ctx context.Context, task string, store *skill.Store, gen
 
 **文件修改**：
 
-- `DeepSeek-Reasonix/internal/control/controller.go` — 在 `Submit()` 或类似入口方法中插入编排管线
+- `maddog/internal/control/controller.go` — 在 `Submit()` 或类似入口方法中插入编排管线
 
 **变更内容**：
 
@@ -766,7 +766,7 @@ C1-B (validator) ────────┘
 
 **文件新增**：
 
-- `DeepSeek-Reasonix/internal/eval/replay.go`（新包 `internal/eval/`）
+- `maddog/internal/eval/replay.go`（新包 `internal/eval/`）
 
 **变更内容**：
 
@@ -805,7 +805,7 @@ func Capture(session *agent.Session, evidence *evidence.Ledger, skillName string
 
 **文件新增**：
 
-- `DeepSeek-Reasonix/internal/eval/runner.go`
+- `maddog/internal/eval/runner.go`
 
 **变更内容**：
 
@@ -835,7 +835,7 @@ func (r *ReplayRunner) Run(ctx context.Context, bundle ReplayBundle, skill skill
 
 **文件新增**：
 
-- `DeepSeek-Reasonix/internal/eval/scorer.go`
+- `maddog/internal/eval/scorer.go`
 
 **变更内容**：
 
@@ -857,8 +857,8 @@ func Score(ctx context.Context, frontier provider.Provider, original, replayed O
 
 **文件新增**：
 
-- `DeepSeek-Reasonix/internal/eval/guardrail.go`
-- `DeepSeek-Reasonix/internal/eval/promote.go`
+- `maddog/internal/eval/guardrail.go`
+- `maddog/internal/eval/promote.go`
 
 **变更内容**：
 
@@ -876,7 +876,7 @@ func CheckGuardrail(bundles []ReplayBundle, oldResults, newResults []OutcomeInfo
 }
 ```
 
-**晋升动作**：将新版本 skill 写入 `.reasonix/skills/<name>.md`（使用 `Store.CreateWithContent()`）。
+**晋升动作**：将新版本 skill 写入 `.maddog/skills/<name>.md`（使用 `Store.CreateWithContent()`）。
 
 **测试场景**：
 
@@ -967,29 +967,29 @@ flowchart TB
 
 | 文件路径 | 阶段 | 内容 |
 |---|---|---|
-| `DeepSeek-Reasonix/internal/agent/upgrade.go` | B | UpgradePolicy interface + ThresholdUpgradePolicy |
-| `DeepSeek-Reasonix/internal/provider/costwrap/costwrap.go` | B | CostTrackingProvider wrapper |
-| `DeepSeek-Reasonix/internal/skill/builtin_advisor.go` | B | 内置 advisor skill 注册 |
-| `DeepSeek-Reasonix/internal/skill/validator.go` | C1 | Dynamic Skill Validator |
-| `DeepSeek-Reasonix/internal/skill/matcher.go` | C1 | Skill Matcher |
-| `DeepSeek-Reasonix/internal/skill/generator.go` | C1 | Dynamic Skill Generator |
-| `DeepSeek-Reasonix/internal/eval/replay.go` | C2 | ReplayBundle 格式与 Capture |
-| `DeepSeek-Reasonix/internal/eval/runner.go` | C2 | Replay Runner |
-| `DeepSeek-Reasonix/internal/eval/scorer.go` | C2 | Frontier Scorer |
-| `DeepSeek-Reasonix/internal/eval/guardrail.go` | C2 | Guardrail 检查 |
-| `DeepSeek-Reasonix/internal/eval/promote.go` | C2 | Skill 版本晋升 |
+| `maddog/internal/agent/upgrade.go` | B | UpgradePolicy interface + ThresholdUpgradePolicy |
+| `maddog/internal/provider/costwrap/costwrap.go` | B | CostTrackingProvider wrapper |
+| `maddog/internal/skill/builtin_advisor.go` | B | 内置 advisor skill 注册 |
+| `maddog/internal/skill/validator.go` | C1 | Dynamic Skill Validator |
+| `maddog/internal/skill/matcher.go` | C1 | Skill Matcher |
+| `maddog/internal/skill/generator.go` | C1 | Dynamic Skill Generator |
+| `maddog/internal/eval/replay.go` | C2 | ReplayBundle 格式与 Capture |
+| `maddog/internal/eval/runner.go` | C2 | Replay Runner |
+| `maddog/internal/eval/scorer.go` | C2 | Frontier Scorer |
+| `maddog/internal/eval/guardrail.go` | C2 | Guardrail 检查 |
+| `maddog/internal/eval/promote.go` | C2 | Skill 版本晋升 |
 
 ### 修改文件
 
 | 文件路径 | 阶段 | 变更内容 |
 |---|---|---|
-| `DeepSeek-Reasonix/internal/evidence/evidence.go` | B | 新增 `FailureSignal()` 方法 |
-| `DeepSeek-Reasonix/internal/agent/agent.go` | B | Agent struct 新增字段 + New() + Run() loop 修改 + switchToFrontier() |
-| `DeepSeek-Reasonix/internal/config/config.go` | B | AgentConfig 新增 FrontierModel/UpgradeThreshold/FrontierBudget/UpgradeEnabled |
-| `DeepSeek-Reasonix/internal/boot/boot.go` | B, C1 | 装配 UpgradePolicy + FrontierProvider + skill 编排管线 |
-| `DeepSeek-Reasonix/internal/event/event.go` | B | Kind 新增 Upgrade（可能还有 SkillGenerated/SkillPromoted/BudgetExceeded） |
-| `DeepSeek-Reasonix/internal/skill/skill.go` | C1 | Store 新增 injected map + Inject()/Remove()；List()/Read() 追加注入 skill |
-| `DeepSeek-Reasonix/internal/control/controller.go` | C1 | 在 Submit() 插入编排管线 |
+| `maddog/internal/evidence/evidence.go` | B | 新增 `FailureSignal()` 方法 |
+| `maddog/internal/agent/agent.go` | B | Agent struct 新增字段 + New() + Run() loop 修改 + switchToFrontier() |
+| `maddog/internal/config/config.go` | B | AgentConfig 新增 FrontierModel/UpgradeThreshold/FrontierBudget/UpgradeEnabled |
+| `maddog/internal/boot/boot.go` | B, C1 | 装配 UpgradePolicy + FrontierProvider + skill 编排管线 |
+| `maddog/internal/event/event.go` | B | Kind 新增 Upgrade（可能还有 SkillGenerated/SkillPromoted/BudgetExceeded） |
+| `maddog/internal/skill/skill.go` | C1 | Store 新增 injected map + Inject()/Remove()；List()/Read() 追加注入 skill |
+| `maddog/internal/control/controller.go` | C1 | 在 Submit() 插入编排管线 |
 
 ---
 
@@ -1049,7 +1049,7 @@ flowchart TB
 ### 待确认
 
 - **桌面 UI binding**：Wails desktop 是否已有通用事件→JS 转发机制，还是需要为 Upgrade event 单独写 Go↔JS binding？
-- **Import path 确认**：仓库 module path（`go.mod`）是 `reasonix` 还是 `DeepSeek-Reasonix`？
+- **Import path 确认**：仓库 module path（`go.mod`）是 `maddog` 还是 `maddog`？
 - **Matcher 阈值**：v1 关键词匹配阈值——≥2 个共同关键词匹配 skill description vs task，或匹配度 ≥ 50%？实施时由实现者选择更合适的。
 - **Outcome 定义**（C2）：ReplayBundle.Success 判定规则为「Agent.Run 返回 nil + ≥1 个 tool call 执行 + finalReadiness 通过」——C2 实施时可根据实际数据精调。
 - **Frontier budget 作用域**：500000 tokens 是 output-only。input 消耗不在 budget 内，需在实施时评估是否需要 input+output 的成本模式。

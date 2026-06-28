@@ -21,10 +21,10 @@ candidates:
 优先级排序：
 
 1. `microsoft/fastcontext` - 最高价值，进入 code intelligence / context roadmap。
-2. `alibaba/zvec` - 有价值，但先做本地 vector/hybrid store benchmark，不作为 v1 硬依赖。
+2. `alibaba/zvec` - 有价值，v1 默认暴露本地 vector/hybrid store assessment，但不作为硬依赖。
 3. `PabloNAX/ultracode-skill` - 参考 workflow packet 与 delegation artifact，不复制 skill prompt 或运行时。
 4. `pat-jj/harness-1` - 参考 long-horizon eval harness，不引入训练、vLLM、CUDA 或模型栈。
-5. `Iterative-Contextual-Refinements` - 参考 post-v1 deep refinement / maker-checker 模式，默认关闭。
+5. `Iterative-Contextual-Refinements` - 参考 deep refinement / maker-checker 模式，v1 默认启用策略元数据但保留预算、kill switch 和人工审批 gate。
 
 ## 当前元信息确认
 
@@ -58,7 +58,7 @@ candidates:
 
 - ultracode-skill 的有价值部分是 task packet、bounded fan-out、integration checklist、final verification artifact，可映射到 `L5` workflow artifact review。
 - ICR 的 BFS/DFS、hypothesis、critique/correction、final judge isolation 可映射到 `L3b` iterative refinement templates。
-- ICR 类 deep refinement 必须受 budget ledger、kill switch、human gate 控制，默认 off，不作为普通 coding-task 的默认行为。
+- ICR 类 deep refinement 必须受 budget ledger、kill switch、human gate 控制，v1 默认启用策略元数据但不绕过 gate。
 - 不复制外部 skill 的 prompt 文本、`.workflow` 约定或专用 runtime。
 
 ### 产品 / 交付组
@@ -108,9 +108,9 @@ candidates:
 
 ### L3b iterative refinement strategy metadata
 
-`Iterative-Contextual-Refinements` 的 BFS/DFS、hypothesis、critique/correction、final judge isolation 思路映射为 Maddog 模板上的 `refinementStrategy` 元数据，并保持默认关闭：
+`Iterative-Contextual-Refinements` 的 BFS/DFS、hypothesis、critique/correction、final judge isolation 思路映射为 Maddog 模板上的 `refinementStrategy` 元数据，并在 v1 默认启用：
 
-- `enabled=false`：普通 `coding-task` 不自动进入 ICR-style 搜索。
+- `enabled=true`：普通 `coding-task` 默认展示并启用 ICR-style 搜索策略。
 - `searchModes`：可审计地声明 `bfs_hypothesis` 与 `dfs_correction`，不绑定外部实现。
 - `critiqueRounds` / `correctionRounds`：限制 critique/correction 轮次。
 - `finalJudgeIsolation`：声明最终 judge 隔离强度。
@@ -118,15 +118,15 @@ candidates:
 - `killSwitchRequired`：没有 kill switch 不允许启动。
 - `humanApprovalRequired`：启动前必须有人工批准，避免隐藏消耗。
 
-`EvaluateRefinementStrategy` 只在策略启用、预算足够、kill switch 可用且人工批准后返回 ready；否则保持 off、blocked 或 needs_human。因此该能力可展示、可审计、可停止，但不会成为标准 coding loop 的默认行为。
+`EvaluateRefinementStrategy` 只在策略启用、预算足够、kill switch 可用且人工批准后返回 ready；否则保持 blocked 或 needs_human。因此该能力默认可见、可审计、可停止，但不会绕过标准 coding loop 的安全 gate。
 
 ## 不集成项
 
 - 不把 FastContext Python runner 放入主请求路径。
-- 不把 zvec 设为默认或必需 vector store。
+- 不把 zvec 设为必需 vector store；v1 只默认启用 assessment/GUI/doctor 可见性。
 - 不安装或复制 ultracode-skill 到 Maddog 内置 skill 集合。
 - 不引入 harness-1 的训练、vLLM、CUDA、checkpoint 或模型服务栈。
-- 不把 ICR 的 BFS/DFS deep refinement 设为默认 agent loop。
+- 不让 ICR 的 BFS/DFS deep refinement 绕过预算、kill switch 或人工审批 gate。
 
 ## 开发准入
 
