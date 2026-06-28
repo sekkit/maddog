@@ -13,9 +13,9 @@ concerns: [api-contract, data-model, security, observability-performance, migrat
 
 ### 1.1 背景描述
 
-maddog 要将 **Reasonix**（Go agent 运行时 + Wails 桌面 app）与 **tinyctx**（Python "智能层"）融合为单一可分发产物。经代码核实，两者在三层存在硬冲突（线协议 / 上下文哲学 / 宿主循环），故采用**以 Reasonix 为基座、移植 tinyctx 机制**的单体方案。
+maddog 要将 **Maddog**（Go agent 运行时 + Wails 桌面 app）与 **tinyctx**（Python "智能层"）融合为单一可分发产物。经代码核实，两者在三层存在硬冲突（线协议 / 上下文哲学 / 宿主循环），故采用**以 Maddog 为基座、移植 tinyctx 机制**的单体方案。
 
-Reasonix 现有架构已具备多 provider（openai + anthropic）、skill 系统（inline / subagent）、双模型 Coordinator（planner + executor）、evidence ledger（per-turn tool receipt）、hook 系统（PreToolUse / PostLLMCall 等 shell hook），以及 Wails desktop shell。**缺失**的能力正是 tinyctx "半 B" 要移植的三项智能：失败信号升级、advisor 二次意见、运行时 skill 编排 + 离线自改进。
+Maddog 现有架构已具备多 provider（openai + anthropic）、skill 系统（inline / subagent）、双模型 Coordinator（planner + executor）、evidence ledger（per-turn tool receipt）、hook 系统（PreToolUse / PostLLMCall 等 shell hook），以及 Wails desktop shell。**缺失**的能力正是 tinyctx "半 B" 要移植的三项智能：失败信号升级、advisor 二次意见、运行时 skill 编排 + 离线自改进。
 
 ### 1.2 解决的问题
 
@@ -23,7 +23,7 @@ Reasonix 现有架构已具备多 provider（openai + anthropic）、skill 系�
 
 | 能力 | spec 章节 | 技术回应 |
 |---|---|---|
-| **A. 多 provider** | spec §5.A | 已具备，验收即可。Reasonix `provider.New(kind, Config)` 已注册 openai + anthropic |
+| **A. 多 provider** | spec §5.A | 已具备，验收即可。Maddog `provider.New(kind, Config)` 已注册 openai + anthropic |
 | **B. advisor + 失败信号升级** | spec §5.B | 新增 Agent-level `UpgradePolicy` + 内置 advisor subagent skill |
 | **C1. 运行时 skill 编排** | spec §5.C1 | 新增 `Store.Inject()` 内存注入 + DynamicSkill 生成管线 |
 | **C2. 离线自改进** | spec §5.C2 | 新增 session replay 引擎 + held-out eval harness + skill 版本晋升管线 |
@@ -34,9 +34,9 @@ Reasonix 现有架构已具备多 provider（openai + anthropic）、skill 系�
 
 ### 1.4 关联的技术文档
 
-- Reasonix kernel: `DeepSeek-Reasonix/internal/`（agent, control, skill, provider, evidence, checkpoint, boot, event, hook）
-- Desktop shell: `DeepSeek-Reasonix/desktop/`（Wails v2, Go ↔ JS bindings）
-- tinyctx 参考: `docs/reasonix-evaluation.md`（不存在于仓库中——引用自 spec §4）
+- Maddog kernel: `Maddog/internal/`（agent, control, skill, provider, evidence, checkpoint, boot, event, hook）
+- Desktop shell: `Maddog/desktop/`（Wails v2, Go ↔ JS bindings）
+- tinyctx 参考: `docs/maddog-evaluation.md`（不存在于仓库中——引用自 spec §4）
 
 ## 2. 方案收益
 
@@ -44,7 +44,7 @@ Reasonix 现有架构已具备多 provider（openai + anthropic）、skill 系�
 
 - **准确度提升**：失败信号自动升级到 frontier 模型，避免本地模型在复杂任务上反复重试
 - **Skill 自动优化**：运行时自动编排 + 离线自改进闭环，降低人工维护 skill 的成本
-- **单一 app**：消除 Reasonix + tinyctx 双进程维护、调试和配置负担
+- **单一 app**：消除 Maddog + tinyctx 双进程维护、调试和配置负担
 
 ### 2.2 技术收益
 
@@ -87,7 +87,7 @@ Reasonix 现有架构已具备多 provider（openai + anthropic）、skill 系�
 
 ### 4.2 方案 B：PostLLMCall Hook 外部决策
 
-利用 Reasonix 已有的 `PostLLMCall` hook（每次模型调用后触发），通过外部 shell 脚本解析 stdin JSON 中的 turn 信息、读取外部状态文件（记录 error streak），并在 stdout 返回升级指令，然后通过 `/model` runtime switch 完成切换。
+利用 Maddog 已有的 `PostLLMCall` hook（每次模型调用后触发），通过外部 shell 脚本解析 stdin JSON 中的 turn 信息、读取外部状态文件（记录 error streak），并在 stdout 返回升级指令，然后通过 `/model` runtime switch 完成切换。
 
 **优点：**
 - 不改 Agent loop
@@ -103,7 +103,7 @@ Reasonix 现有架构已具备多 provider（openai + anthropic）、skill 系�
 
 **推荐方案 A（Agent-level UpgradePolicy）**。理由：
 
-1. Reasonix 的 Agent loop 是所有执行路径的唯一汇合点——在这里加升级逻辑，自动覆盖 CLI、desktop、headless run、subagent 等所有调用方
+1. Maddog 的 Agent loop 是所有执行路径的唯一汇合点——在这里加升级逻辑，自动覆盖 CLI、desktop、headless run、subagent 等所有调用方
 2. Evidence ledger 已在 Agent 中，升级决策所需数据（tool success/failure、tool name、连续失败次数）全在进程内存中，不需要外部状态
 3. 方案 B 的 shell 开销和状态管理复杂度远超方案 A 的 Agent loop 修改成本
 4. `UpgradePolicy` interface 只暴露一个方法，对 Agent loop 的侵入极小
@@ -119,7 +119,7 @@ flowchart TB
         App["desktop/app.go\nGo ↔ JS bindings"]
     end
 
-    subgraph Kernel["Reasonix Kernel (internal/)"]
+    subgraph Kernel["Maddog Kernel (internal/)"]
         Ctrl["control.Controller\nsession / checkpoint / submit"]
 
         subgraph AgentLoop["Agent Loop"]
@@ -252,7 +252,7 @@ if a.upgradePolicy != nil && !a.upgraded {
 
 **设计：**
 
-Advisor 是一个**内置 skill**（`runAs: subagent`，`model: <frontier_model>`），用 Reasonix 现有 skill + subagent 机制实现，无需新增执行路径。
+Advisor 是一个**内置 skill**（`runAs: subagent`，`model: <frontier_model>`），用 Maddog 现有 skill + subagent 机制实现，无需新增执行路径。
 
 ```
 方向性指引，非实现规格：
@@ -289,7 +289,7 @@ func (s *Store) Inject(sk Skill) error   // 注入到内存索引，不写盘
 func (s *Store) Remove(name string)      // 从内存索引移除
 ```
 
-`Inject()` 将 skill 加入 `Store` 的内部 map（与 `List()` / `Read()` 共享同一个 `byName` 索引）。不创建文件，不触及 `.reasonix/skills/` 目录。`Remove()` 仅在 session 结束时清理，或在 validator 拒绝时立即移除。
+`Inject()` 将 skill 加入 `Store` 的内部 map（与 `List()` / `Read()` 共享同一个 `byName` 索引）。不创建文件，不触及 `.maddog/skills/` 目录。`Remove()` 仅在 session 结束时清理，或在 validator 拒绝时立即移除。
 
 **运行时编排流程：**
 
@@ -298,7 +298,7 @@ flowchart LR
     Task["用户任务"] --> Match["Skill Matcher\n选/组合已有 skill"]
     Match -->|"有匹配"| Inject1["Store.Inject()"]
     Match -->|"无匹配"| Gen["Dynamic Skill 生成\n（prompt → LLM → skill.md）"]
-    Gen --> Val["Validator\n高风险任务禁用\n不覆盖 REASONIX.md\n长度受限"]
+    Gen --> Val["Validator\n高风险任务禁用\n不覆盖 MADDOG.md\n长度受限"]
     Val -->|"通过"| Inject2["Store.Inject()"]
     Val -->|"拒绝"| Fallback["fallback: 无 skill 执行"]
     Inject1 --> Execute["Agent.Run()\nskill 通过 run_skill 工具可见"]
@@ -309,7 +309,7 @@ flowchart LR
 - 高风险任务（定义见 §7.1）不自动生成 dynamic skill
 - 生成的 skill body 长度 ≤ 2000 字符
 - Validator 使用规则引擎（非 LLM——零成本、确定性）检查：
-  - 不包含覆盖 `REASONIX.md` / system prompt / memory 的指令
+  - 不包含覆盖 `MADDOG.md` / system prompt / memory 的指令
   - 不包含 `allowed-tools` 泄露敏感工具
   - frontmatter 必须完整（name, description）
 
@@ -356,7 +356,7 @@ flowchart TB
     Score --> Guard["Guardrail Check\n回归检测\n质量阈值"]
     Guard -->|"通过"| Promote["Promote → Skill 版本晋升"]
     Guard -->|"失败"| Reject["Reject → 保留旧版本"]
-    Promote --> Store2["Store skill 新版本\n(.reasonix/skills/)"]
+    Promote --> Store2["Store skill 新版本\n(.maddog/skills/)"]
 ```
 
 **Replay Runner** 复用现有 `RunSubAgent()` 机制（`internal/agent/task.go:229`）——给定 session messages + skill definition，重新执行并比较 outcome。
@@ -492,7 +492,7 @@ sequenceDiagram
 
 | 规则 | 检测方式 | 拒绝动作 |
 |---|---|---|
-| 不可覆盖 `REASONIX.md` 或 system prompt | 正则匹配 `#\s*REASONIX`、`system_prompt`、`override` 关键词 | 拒绝生成 |
+| 不可覆盖 `MADDOG.md` 或 system prompt | 正则匹配 `#\s*MADDOG`、`system_prompt`、`override` 关键词 | 拒绝生成 |
 | 不可覆盖 memory（`remember` / `forget`） | 检查 frontmatter `allowed-tools` 不包含 `remember`/`forget` | 拒绝生成 |
 | 高风险任务不自动生成 | 任务涉及 `rm -rf`、`DROP TABLE`、`delete` 系统文件 → 硬编码禁用列表匹配 | 不自动生成 |
 | 长度受限 | body ≤ 2000 字符 | 截断并警告 |
@@ -505,13 +505,13 @@ sequenceDiagram
 ### 7.2 合规性要求
 
 maddog 为内部开发者工具，不涉及 PII/PCI/GDPR 合规。但需注意：
-- Frontier provider 的 API key 通过环境变量注入（复用 Reasonix 的 `api_key_env` 机制），不落盘
+- Frontier provider 的 API key 通过环境变量注入（复用 Maddog 的 `api_key_env` 机制），不落盘
 - Skill 版本晋升的历史记录（哪个版本何时被 promot）写入 session 日志，供审计
 
 ### 7.3 敏感数据处理
 
 - Frontier API key：通过 `api_key_env` → `os.Getenv()` 读取，不在 config.toml 或 session 中持久化
-- Replay bundle：存储完整 message log（可能包含代码、文件路径），存储在 `config.SessionDir()` 下，跟随 Reasonix 现有 session 存储权限（0600）
+- Replay bundle：存储完整 message log（可能包含代码、文件路径），存储在 `config.SessionDir()` 下，跟随 Maddog 现有 session 存储权限（0600）
 - Budget 数据：仅 session 内存中的原子计数器，不落盘
 
 ## 8. 性能设计
@@ -531,7 +531,7 @@ maddog 为内部开发者工具，不涉及 PII/PCI/GDPR 合规。但需注意�
 - **UpgradePolicy**：`FailureSignal()` 基于已有 `[]Receipt` 实时遍历计算（典型每 turn < 50 receipts），无需额外持久化或缓存
 - **Skill Matcher**：首次匹配后缓存结果（per-turn 内不变）
 - **Replay bundle**：异步 goroutine 写入，不进入 Agent loop 的关键路径
-- **Frontier provider**：新建实例复用 Reasonix 已有 `provider.New()` 工厂，provider 实例本身无状态（tokens、connection 等由 Stream 调用管理）
+- **Frontier provider**：新建实例复用 Maddog 已有 `provider.New()` 工厂，provider 实例本身无状态（tokens、connection 等由 Stream 调用管理）
 
 ### 8.3 监控与可观测
 
@@ -561,8 +561,8 @@ BudgetExceeded     // 预算超限: Text = detail
 
 | 依赖项 | 版本 | 许可证 | 用途 | 维护状态 | 风险等级 |
 |:---|:---|:---|:---|:---|:---|
-| Reasonix openai provider | 已有 | — | Default provider（DeepSeek/OpenAI 兼容） | 活跃 | 低 |
-| Reasonix anthropic provider | 已有 | — | Frontier provider（Claude） | 活跃 | 低 |
+| Maddog openai provider | 已有 | — | Default provider（DeepSeek/OpenAI 兼容） | 活跃 | 低 |
+| Maddog anthropic provider | 已有 | — | Frontier provider（Claude） | 活跃 | 低 |
 | tinyctx Python 离线工具 | 已有 | — | C2 离线自改进初期可复用部分 eval 脚本 | 需评估 | 中 |
 
 > **tinyctx Python 留存范围**：C2 离线自改进的评测脚本（eval harness）初期可保留 Python，因为：(a) 不在请求路径上，(b) Python 生态中已有成熟的 eval 工具链，(c) 重写成本高且价值低。长期目标是用 Go 重写 eval harness，但 v1 不承诺。
@@ -573,10 +573,10 @@ BudgetExceeded     // 预算超限: Text = detail
 
 | 风险 | 可能性 | 影响 | 缓解措施 |
 |---|---|---|---|
-| Reasonix evidence/agent hook 面不足以支撑 FailureSignal 计算 | 低 | 高 | 代码库已核实：evidence ledger 记录每条 tool call 的 success/failure；`stormSig` 机制已证明同类逻辑可行 |
+| Maddog evidence/agent hook 面不足以支撑 FailureSignal 计算 | 低 | 高 | 代码库已核实：evidence ledger 记录每条 tool call 的 success/failure；`stormSig` 机制已证明同类逻辑可行 |
 | Frontier 模型成本失控 | 中 | 高 | Budget cap + provider wrapper 在请求路径上强制 enforce；Desktop UI 显示实时用量 |
 | Dynamic skill 生成质量差、降低任务成功率 | 中 | 中 | Validator 规则引擎拦截危险 skill；高风险任务禁用 auto-generate；可配置关闭 |
-| 离线自改进的 replay fidelity 不足 | 中 | 高 | Reasonix session message log 已完整记录所有 tool calls + results；evidence ledger 补充 host-level 信息；不足时可追加 snapshot 上下文 |
+| 离线自改进的 replay fidelity 不足 | 中 | 高 | Maddog session message log 已完整记录所有 tool calls + results；evidence ledger 补充 host-level 信息；不足时可追加 snapshot 上下文 |
 | 桌面 UI 工作量被低估 | 中 | 中 | spec §9 已将 UI 标记为"延迟到规划阶段"；v1 最小范围：路由指示器 + advisor 回答展示（均可复用现有 event/notice 渲染） |
 | Python 离线工具维护负担 | 低 | 低 | 仅 C2 离线管线，out-of-band；v1 明确标注为"方向性指引"；长期迁移到 Go |
 
@@ -597,14 +597,14 @@ BudgetExceeded     // 预算超限: Text = detail
 
 ### 10.3 迁移 / 回归策略
 
-**tinyctx → Reasonix 移植策略：**
+**tinyctx → Maddog 移植策略：**
 
 | tinyctx 机制 | 移植目标 | 策略 |
 |---|---|---|
 | `router.py` 升级信号 | Agent-level UpgradePolicy | 设计层面借鉴（阈值、health score），不移植代码 |
-| `ask_advisor` | 内置 advisor subagent skill | 契约移植（≤100 词、enumerated steps、Risks），实现用 Reasonix 原生 skill 系统 |
+| `ask_advisor` | 内置 advisor subagent skill | 契约移植（≤100 词、enumerated steps、Risks），实现用 Maddog 原生 skill 系统 |
 | `orchestration_injector` | Skill Matcher + Dynamic Skill Generator | 架构借鉴（match → generate → validate → inject），Go 重写 |
-| `dynamic_skill` | In-memory Skill via Store.Inject() | 概念移植，实现用 Reasonix skill Store |
+| `dynamic_skill` | In-memory Skill via Store.Inject() | 概念移植，实现用 Maddog skill Store |
 | self-improvement plan | Replay Engine + Eval Harness | 架构借鉴（capture → replay → score → promote），Go 重写核心管线 |
 | `eval_harness` | 复用 `cmd/e2ebench/` + replay runner | 初期可保留 Python eval 脚本作为过渡 |
 
@@ -617,19 +617,19 @@ BudgetExceeded     // 预算超限: Text = detail
 ## 11. 参考资料
 
 - 源 spec：`docs/cc/maddog-fusion--3949/spec.md`
-- Reasonix Agent loop：`DeepSeek-Reasonix/internal/agent/agent.go`（Agent struct, Run, executeBatch, storm breaker）
-- Reasonix Evidence：`DeepSeek-Reasonix/internal/evidence/evidence.go`（Ledger, Receipt, FailureSignal 扩展点）
-- Reasonix Skill Store：`DeepSeek-Reasonix/internal/skill/skill.go`（Skill, Store.List, Store.Read, Inject 扩展点）
-- Reasonix Provider：`DeepSeek-Reasonix/internal/provider/provider.go`（Provider interface, New, Config）
-- Reasonix Config：`DeepSeek-Reasonix/internal/config/config.go`（AgentConfig, ProviderEntry, ResolveModel）
-- Reasonix Boot：`DeepSeek-Reasonix/internal/boot/boot.go`（Build, Options, subagentModelRef, NewProviderWithProxy）
-- Reasonix Coordinator：`DeepSeek-Reasonix/internal/agent/coordinator.go`（Coordinator, plan+execute 两阶段）
-- Reasonix Subagent：`DeepSeek-Reasonix/internal/agent/task.go`（RunSubAgent, NestedSink）
-- Reasonix Hook：`DeepSeek-Reasonix/internal/hook/hook.go`，`internal/hook/runner.go`（Event types, Runner, Payload）
-- Reasonix Event：`DeepSeek-Reasonix/internal/event/event.go`（Kind enum, Event struct, Sink interface）
-- Reasonix Checkpoint：`DeepSeek-Reasonix/internal/checkpoint/checkpoint.go`（Checkpoint struct, file-level snapshots）
-- Reasonix Desktop：`DeepSeek-Reasonix/desktop/main.go`，`desktop/app.go`（Wails v2, Go↔JS bindings）
-- Reasonix Session：`DeepSeek-Reasonix/internal/agent/session.go`（Session struct, Save, LoadSession）
-- E2E bench：`DeepSeek-Reasonix/cmd/e2ebench/main.go`（可复用为离线评测 runner）
-- tinyctx 参考：`docs/reasonix-evaluation.md`（仓库中不存在——引用自 spec §4）
+- Maddog Agent loop：`Maddog/internal/agent/agent.go`（Agent struct, Run, executeBatch, storm breaker）
+- Maddog Evidence：`Maddog/internal/evidence/evidence.go`（Ledger, Receipt, FailureSignal 扩展点）
+- Maddog Skill Store：`Maddog/internal/skill/skill.go`（Skill, Store.List, Store.Read, Inject 扩展点）
+- Maddog Provider：`Maddog/internal/provider/provider.go`（Provider interface, New, Config）
+- Maddog Config：`Maddog/internal/config/config.go`（AgentConfig, ProviderEntry, ResolveModel）
+- Maddog Boot：`Maddog/internal/boot/boot.go`（Build, Options, subagentModelRef, NewProviderWithProxy）
+- Maddog Coordinator：`Maddog/internal/agent/coordinator.go`（Coordinator, plan+execute 两阶段）
+- Maddog Subagent：`Maddog/internal/agent/task.go`（RunSubAgent, NestedSink）
+- Maddog Hook：`Maddog/internal/hook/hook.go`，`internal/hook/runner.go`（Event types, Runner, Payload）
+- Maddog Event：`Maddog/internal/event/event.go`（Kind enum, Event struct, Sink interface）
+- Maddog Checkpoint：`Maddog/internal/checkpoint/checkpoint.go`（Checkpoint struct, file-level snapshots）
+- Maddog Desktop：`Maddog/desktop/main.go`，`desktop/app.go`（Wails v2, Go↔JS bindings）
+- Maddog Session：`Maddog/internal/agent/session.go`（Session struct, Save, LoadSession）
+- E2E bench：`Maddog/cmd/e2ebench/main.go`（可复用为离线评测 runner）
+- tinyctx 参考：`docs/maddog-evaluation.md`（仓库中不存在——引用自 spec §4）
 - 历史 compounds：`docs/cc/compounds/`（空——无相关记录）

@@ -11,7 +11,7 @@ source_research: research/github-stars-sekkit-2026-06-27/analysis.md
 
 ## 概述
 
-本计划把 `research/github-stars-sekkit-2026-06-27/analysis.md` 中筛出的四组方案转成 Maddog 下一轮可执行开发工作。它不是替换 `docs/cc/maddog-fusion--3949/plan.md`，而是在原有 Reasonix × tinyctx 融合基础上继续增强：
+本计划把 `research/github-stars-sekkit-2026-06-27/analysis.md` 中筛出的四组方案转成 Maddog 下一轮可执行开发工作。它不是替换 `docs/cc/maddog-fusion--3949/plan.md`，而是在原有 Maddog × tinyctx 融合基础上继续增强：
 
 1. **Provider/auth/成本组合**：借鉴 LiteLLM、CodexBar、goose，补齐 provider profile、official auth/API key/icodeeasy、中转、预算、状态与成本可见性。
 2. **Context 组合**：借鉴 Headroom、rtk、context-mode、Dirac，补齐 tool output 压缩、shell 输出过滤、raw data 外置、上下文节省指标。
@@ -22,7 +22,7 @@ source_research: research/github-stars-sekkit-2026-06-27/analysis.md
 
 ## 问题框架
 
-原融合方案已经锁定单体架构：以 Reasonix Go kernel + Wails desktop 为基座，移植 tinyctx 的智能机制，不引入 Python proxy 到请求路径。外部星标项目调研进一步说明，Maddog 最缺的不是另一个 agent host，而是四类工程化能力：
+原融合方案已经锁定单体架构：以 Maddog Go kernel + Wails desktop 为基座，移植 tinyctx 的智能机制，不引入 Python proxy 到请求路径。外部星标项目调研进一步说明，Maddog 最缺的不是另一个 agent host，而是四类工程化能力：
 
 - Provider 能力需要完整呈现在 GUI 中，并把 frontier/小模型/官方 auth/API key/中转/预算统一成一个 profile 模型。
 - Context 优化需要进入 agent loop 和 tool result 路径，否则只靠 `/compact` 无法控制长任务中 shell/log/RAG 输出膨胀。
@@ -51,20 +51,20 @@ source_research: research/github-stars-sekkit-2026-06-27/analysis.md
 
 ### 相关代码与模式
 
-- `DeepSeek-Reasonix/internal/config/config.go`：provider、agent、desktop、codegraph、MCP、skills 配置模型。
-- `DeepSeek-Reasonix/internal/provider/provider.go` 与 `DeepSeek-Reasonix/internal/provider/auth.go`：provider abstraction、auth config、request contract。
-- `DeepSeek-Reasonix/internal/provider/openai/` 与 `DeepSeek-Reasonix/internal/provider/anthropic/`：OpenAI-compatible 与 Anthropic native provider。
-- `DeepSeek-Reasonix/internal/agent/agent.go`、`DeepSeek-Reasonix/internal/agent/upgrade.go`：agent loop、frontier/advisor 路由。
-- `DeepSeek-Reasonix/internal/evidence/`：tool receipts、failure signal、readiness。
-- `DeepSeek-Reasonix/internal/control/controller.go`：controller、slash commands、MCP/runtime wiring、tool result query。
-- `DeepSeek-Reasonix/internal/codegraph/`：内置 CodeGraph lifecycle。
-- `DeepSeek-Reasonix/internal/skill/`：dynamic skill generation、validator、store injection。
-- `DeepSeek-Reasonix/internal/serve/wire.go` 与 `DeepSeek-Reasonix/desktop/wire.go`：event 到 GUI 的 wire contract。
-- `DeepSeek-Reasonix/desktop/app.go`：Settings、Capabilities、Models、Balance、ContextUsage、MCP/Skill 管理绑定。
-- `DeepSeek-Reasonix/desktop/frontend/src/components/SettingsPanel.tsx`：模型、provider、auth、官方 provider 的 GUI 主入口。
-- `DeepSeek-Reasonix/desktop/frontend/src/components/CapabilitiesPanel.tsx`：MCP 与 Skills 管理页。
-- `DeepSeek-Reasonix/desktop/frontend/src/components/MemoryPanel.tsx`：memory/skill suggestions 的 GUI 参考。
-- `DeepSeek-Reasonix/desktop/frontend/src/components/StatusBar.tsx`：token/context/cost/status 显示模式。
+- `Maddog/internal/config/config.go`：provider、agent、desktop、codegraph、MCP、skills 配置模型。
+- `Maddog/internal/provider/provider.go` 与 `Maddog/internal/provider/auth.go`：provider abstraction、auth config、request contract。
+- `Maddog/internal/provider/openai/` 与 `Maddog/internal/provider/anthropic/`：OpenAI-compatible 与 Anthropic native provider。
+- `Maddog/internal/agent/agent.go`、`Maddog/internal/agent/upgrade.go`：agent loop、frontier/advisor 路由。
+- `Maddog/internal/evidence/`：tool receipts、failure signal、readiness。
+- `Maddog/internal/control/controller.go`：controller、slash commands、MCP/runtime wiring、tool result query。
+- `Maddog/internal/codegraph/`：内置 CodeGraph lifecycle。
+- `Maddog/internal/skill/`：dynamic skill generation、validator、store injection。
+- `Maddog/internal/serve/wire.go` 与 `Maddog/desktop/wire.go`：event 到 GUI 的 wire contract。
+- `Maddog/desktop/app.go`：Settings、Capabilities、Models、Balance、ContextUsage、MCP/Skill 管理绑定。
+- `Maddog/desktop/frontend/src/components/SettingsPanel.tsx`：模型、provider、auth、官方 provider 的 GUI 主入口。
+- `Maddog/desktop/frontend/src/components/CapabilitiesPanel.tsx`：MCP 与 Skills 管理页。
+- `Maddog/desktop/frontend/src/components/MemoryPanel.tsx`：memory/skill suggestions 的 GUI 参考。
+- `Maddog/desktop/frontend/src/components/StatusBar.tsx`：token/context/cost/status 显示模式。
 
 ### 外部参考资料
 
@@ -130,14 +130,14 @@ flowchart TB
 **依赖：** 无
 
 **文件：**
-- 修改：`DeepSeek-Reasonix/internal/config/config.go`
-- 修改：`DeepSeek-Reasonix/internal/config/edit.go`
-- 修改：`DeepSeek-Reasonix/internal/config/default_test.go`
-- 修改：`DeepSeek-Reasonix/desktop/app.go`
-- 修改：`DeepSeek-Reasonix/desktop/frontend/src/lib/types.ts`
-- 测试：`DeepSeek-Reasonix/internal/config/default_test.go`
-- 测试：`DeepSeek-Reasonix/desktop/settings_app_test.go`
-- 新建测试：`DeepSeek-Reasonix/desktop/frontend/src/__tests__/settings-models.test.ts`
+- 修改：`Maddog/internal/config/config.go`
+- 修改：`Maddog/internal/config/edit.go`
+- 修改：`Maddog/internal/config/default_test.go`
+- 修改：`Maddog/desktop/app.go`
+- 修改：`Maddog/desktop/frontend/src/lib/types.ts`
+- 测试：`Maddog/internal/config/default_test.go`
+- 测试：`Maddog/desktop/settings_app_test.go`
+- 新建测试：`Maddog/desktop/frontend/src/__tests__/settings-models.test.ts`
 
 **方案：**
 - 保留 TOML 的 `[[providers]]` 作为 source of truth，不新建平行 provider store。
@@ -146,8 +146,8 @@ flowchart TB
 - 对 official provider、custom OpenAI-compatible、Anthropic、icodeeasy 中转统一显示 auth mode 与 credential env。
 
 **遵循的模式：**
-- `DeepSeek-Reasonix/desktop/app.go` 的 `Models()`、`Settings()`、`ProviderView` 投影模式。
-- `DeepSeek-Reasonix/desktop/frontend/src/components/SettingsPanel.tsx` 中 `ProviderAccessCard` 的保存/刷新模型。
+- `Maddog/desktop/app.go` 的 `Models()`、`Settings()`、`ProviderView` 投影模式。
+- `Maddog/desktop/frontend/src/components/SettingsPanel.tsx` 中 `ProviderAccessCard` 的保存/刷新模型。
 
 **测试场景：**
 - Happy path：配置 default OpenAI-compatible、frontier Anthropic、small model provider 后，Settings snapshot 返回三个 provider profile，role 标注正确。
@@ -167,18 +167,18 @@ flowchart TB
 **依赖：** 单元 D1
 
 **文件：**
-- 修改：`DeepSeek-Reasonix/internal/provider/auth.go`
-- 修改：`DeepSeek-Reasonix/internal/provider/openai/fetch_models.go`
-- 修改：`DeepSeek-Reasonix/internal/provider/openai/fetch_models_test.go`
-- 修改：`DeepSeek-Reasonix/internal/provider/anthropic/anthropic_test.go`
-- 修改：`DeepSeek-Reasonix/desktop/app.go`
-- 修改：`DeepSeek-Reasonix/desktop/frontend/src/components/SettingsPanel.tsx`
-- 修改：`DeepSeek-Reasonix/desktop/frontend/src/lib/providerModels.ts`
-- 修改：`DeepSeek-Reasonix/desktop/frontend/src/locales/en.ts`
-- 修改：`DeepSeek-Reasonix/desktop/frontend/src/locales/zh.ts`
-- 测试：`DeepSeek-Reasonix/internal/provider/provider_test.go`
-- 测试：`DeepSeek-Reasonix/desktop/settings_app_test.go`
-- 新建测试：`DeepSeek-Reasonix/desktop/frontend/src/__tests__/settings-provider-auth.test.ts`
+- 修改：`Maddog/internal/provider/auth.go`
+- 修改：`Maddog/internal/provider/openai/fetch_models.go`
+- 修改：`Maddog/internal/provider/openai/fetch_models_test.go`
+- 修改：`Maddog/internal/provider/anthropic/anthropic_test.go`
+- 修改：`Maddog/desktop/app.go`
+- 修改：`Maddog/desktop/frontend/src/components/SettingsPanel.tsx`
+- 修改：`Maddog/desktop/frontend/src/lib/providerModels.ts`
+- 修改：`Maddog/desktop/frontend/src/locales/en.ts`
+- 修改：`Maddog/desktop/frontend/src/locales/zh.ts`
+- 测试：`Maddog/internal/provider/provider_test.go`
+- 测试：`Maddog/desktop/settings_app_test.go`
+- 新建测试：`Maddog/desktop/frontend/src/__tests__/settings-provider-auth.test.ts`
 
 **方案：**
 - 继续使用 `AuthConfig` 支持 `api_key`、`bearer`、`workload_identity`，GUI 明确显示三种模式。
@@ -205,19 +205,19 @@ flowchart TB
 **依赖：** 单元 D1
 
 **文件：**
-- 修改：`DeepSeek-Reasonix/internal/provider/costwrap/costwrap.go`
-- 修改：`DeepSeek-Reasonix/internal/agent/agent.go`
-- 修改：`DeepSeek-Reasonix/internal/event/event.go`
-- 修改：`DeepSeek-Reasonix/internal/serve/wire.go`
-- 修改：`DeepSeek-Reasonix/desktop/wire.go`
-- 修改：`DeepSeek-Reasonix/desktop/app.go`
-- 修改：`DeepSeek-Reasonix/desktop/frontend/src/lib/types.ts`
-- 修改：`DeepSeek-Reasonix/desktop/frontend/src/components/StatusBar.tsx`
-- 测试：`DeepSeek-Reasonix/internal/provider/costwrap/costwrap_test.go`
-- 测试：`DeepSeek-Reasonix/internal/agent/upgrade_test.go`
-- 测试：`DeepSeek-Reasonix/internal/serve/wire_test.go`
-- 测试：`DeepSeek-Reasonix/desktop/wire_test.go`
-- 新建测试：`DeepSeek-Reasonix/desktop/frontend/src/__tests__/status-bar.test.ts`
+- 修改：`Maddog/internal/provider/costwrap/costwrap.go`
+- 修改：`Maddog/internal/agent/agent.go`
+- 修改：`Maddog/internal/event/event.go`
+- 修改：`Maddog/internal/serve/wire.go`
+- 修改：`Maddog/desktop/wire.go`
+- 修改：`Maddog/desktop/app.go`
+- 修改：`Maddog/desktop/frontend/src/lib/types.ts`
+- 修改：`Maddog/desktop/frontend/src/components/StatusBar.tsx`
+- 测试：`Maddog/internal/provider/costwrap/costwrap_test.go`
+- 测试：`Maddog/internal/agent/upgrade_test.go`
+- 测试：`Maddog/internal/serve/wire_test.go`
+- 测试：`Maddog/desktop/wire_test.go`
+- 新建测试：`Maddog/desktop/frontend/src/__tests__/status-bar.test.ts`
 
 **方案：**
 - 新增 provider runtime snapshot：last usage、session usage、frontier budget remaining、last status check、last auth error。
@@ -242,14 +242,14 @@ flowchart TB
 **依赖：** 无
 
 **文件：**
-- 新建：`DeepSeek-Reasonix/internal/contextpack/compressor.go`
-- 新建：`DeepSeek-Reasonix/internal/contextpack/compressor_test.go`
-- 修改：`DeepSeek-Reasonix/internal/config/config.go`
-- 修改：`DeepSeek-Reasonix/internal/config/default_test.go`
-- 修改：`DeepSeek-Reasonix/internal/agent/agent.go`
-- 修改：`DeepSeek-Reasonix/internal/evidence/evidence.go`
-- 测试：`DeepSeek-Reasonix/internal/contextpack/compressor_test.go`
-- 测试：`DeepSeek-Reasonix/internal/agent/evidence_flow_test.go`
+- 新建：`Maddog/internal/contextpack/compressor.go`
+- 新建：`Maddog/internal/contextpack/compressor_test.go`
+- 修改：`Maddog/internal/config/config.go`
+- 修改：`Maddog/internal/config/default_test.go`
+- 修改：`Maddog/internal/agent/agent.go`
+- 修改：`Maddog/internal/evidence/evidence.go`
+- 测试：`Maddog/internal/contextpack/compressor_test.go`
+- 测试：`Maddog/internal/agent/evidence_flow_test.go`
 
 **方案：**
 - 增加 `ToolOutputCompressor` interface，输入 tool name、args subject、raw output、error、readOnly、budget hint，输出 model-visible content、summary、raw ref、delta metrics。
@@ -281,18 +281,18 @@ flowchart TB
 **依赖：** 单元 E1
 
 **文件：**
-- 修改：`DeepSeek-Reasonix/internal/contextpack/compressor.go`
-- 新建：`DeepSeek-Reasonix/internal/contextpack/shell.go`
-- 新建：`DeepSeek-Reasonix/internal/contextpack/shell_test.go`
-- 修改：`DeepSeek-Reasonix/internal/control/controller.go`
-- 修改：`DeepSeek-Reasonix/internal/event/event.go`
-- 修改：`DeepSeek-Reasonix/internal/serve/wire.go`
-- 修改：`DeepSeek-Reasonix/desktop/frontend/src/components/ToolCard.tsx`
-- 修改：`DeepSeek-Reasonix/desktop/frontend/src/components/ContextPanel.tsx`
-- 修改：`DeepSeek-Reasonix/desktop/frontend/src/lib/types.ts`
-- 测试：`DeepSeek-Reasonix/internal/contextpack/shell_test.go`
-- 测试：`DeepSeek-Reasonix/internal/serve/wire_test.go`
-- 测试：`DeepSeek-Reasonix/desktop/frontend/src/__tests__/context-panel-breakdown.test.ts`
+- 修改：`Maddog/internal/contextpack/compressor.go`
+- 新建：`Maddog/internal/contextpack/shell.go`
+- 新建：`Maddog/internal/contextpack/shell_test.go`
+- 修改：`Maddog/internal/control/controller.go`
+- 修改：`Maddog/internal/event/event.go`
+- 修改：`Maddog/internal/serve/wire.go`
+- 修改：`Maddog/desktop/frontend/src/components/ToolCard.tsx`
+- 修改：`Maddog/desktop/frontend/src/components/ContextPanel.tsx`
+- 修改：`Maddog/desktop/frontend/src/lib/types.ts`
+- 测试：`Maddog/internal/contextpack/shell_test.go`
+- 测试：`Maddog/internal/serve/wire_test.go`
+- 测试：`Maddog/desktop/frontend/src/__tests__/context-panel-breakdown.test.ts`
 
 **方案：**
 - 对 `go test`、`npm test`、`npm run build`、`rg`、`git diff/status`、server log 做命令识别。
@@ -319,18 +319,18 @@ flowchart TB
 **依赖：** 单元 E1, E2
 
 **文件：**
-- 修改：`DeepSeek-Reasonix/internal/config/config.go`
-- 修改：`DeepSeek-Reasonix/internal/config/edit.go`
-- 修改：`DeepSeek-Reasonix/internal/control/controller.go`
-- 修改：`DeepSeek-Reasonix/internal/control/controller_test.go`
-- 修改：`DeepSeek-Reasonix/internal/cli/run_metrics.go`
-- 修改：`DeepSeek-Reasonix/desktop/app.go`
-- 修改：`DeepSeek-Reasonix/desktop/frontend/src/components/SettingsPanel.tsx`
-- 修改：`DeepSeek-Reasonix/desktop/frontend/src/locales/en.ts`
-- 修改：`DeepSeek-Reasonix/desktop/frontend/src/locales/zh.ts`
-- 测试：`DeepSeek-Reasonix/internal/control/controller_test.go`
-- 测试：`DeepSeek-Reasonix/internal/cli/run_metrics_test.go`
-- 测试：`DeepSeek-Reasonix/desktop/settings_app_test.go`
+- 修改：`Maddog/internal/config/config.go`
+- 修改：`Maddog/internal/config/edit.go`
+- 修改：`Maddog/internal/control/controller.go`
+- 修改：`Maddog/internal/control/controller_test.go`
+- 修改：`Maddog/internal/cli/run_metrics.go`
+- 修改：`Maddog/desktop/app.go`
+- 修改：`Maddog/desktop/frontend/src/components/SettingsPanel.tsx`
+- 修改：`Maddog/desktop/frontend/src/locales/en.ts`
+- 修改：`Maddog/desktop/frontend/src/locales/zh.ts`
+- 测试：`Maddog/internal/control/controller_test.go`
+- 测试：`Maddog/internal/cli/run_metrics_test.go`
+- 测试：`Maddog/desktop/settings_app_test.go`
 
 **方案：**
 - 增加 policy：off、auto、aggressive；默认 auto。
@@ -356,16 +356,16 @@ flowchart TB
 **依赖：** 无
 
 **文件：**
-- 新建：`DeepSeek-Reasonix/internal/codegraph/backend.go`
-- 新建：`DeepSeek-Reasonix/internal/codegraph/backend_test.go`
-- 修改：`DeepSeek-Reasonix/internal/codegraph/codegraph.go`
-- 修改：`DeepSeek-Reasonix/internal/config/config.go`
-- 修改：`DeepSeek-Reasonix/internal/control/codegraph_mcp_test.go`
-- 修改：`DeepSeek-Reasonix/desktop/app.go`
-- 修改：`DeepSeek-Reasonix/desktop/frontend/src/lib/types.ts`
-- 测试：`DeepSeek-Reasonix/internal/codegraph/backend_test.go`
-- 测试：`DeepSeek-Reasonix/internal/control/codegraph_mcp_test.go`
-- 新建测试：`DeepSeek-Reasonix/desktop/capabilities_app_test.go`
+- 新建：`Maddog/internal/codegraph/backend.go`
+- 新建：`Maddog/internal/codegraph/backend_test.go`
+- 修改：`Maddog/internal/codegraph/codegraph.go`
+- 修改：`Maddog/internal/config/config.go`
+- 修改：`Maddog/internal/control/codegraph_mcp_test.go`
+- 修改：`Maddog/desktop/app.go`
+- 修改：`Maddog/desktop/frontend/src/lib/types.ts`
+- 测试：`Maddog/internal/codegraph/backend_test.go`
+- 测试：`Maddog/internal/control/codegraph_mcp_test.go`
+- 新建测试：`Maddog/desktop/capabilities_app_test.go`
 
 **方案：**
 - 定义 backend capability：symbol search、semantic search、context pack、graph trace、edit/refactor support、health。
@@ -391,13 +391,13 @@ flowchart TB
 **依赖：** 单元 F1
 
 **文件：**
-- 新建：`DeepSeek-Reasonix/internal/codegraph/bench.go`
-- 新建：`DeepSeek-Reasonix/internal/codegraph/bench_test.go`
-- 新建：`DeepSeek-Reasonix/cmd/codeintelbench/main.go`
-- 修改：`DeepSeek-Reasonix/internal/doctor/report.go`
-- 修改：`DeepSeek-Reasonix/internal/doctor/report_test.go`
-- 测试：`DeepSeek-Reasonix/internal/codegraph/bench_test.go`
-- 测试：`DeepSeek-Reasonix/internal/doctor/report_test.go`
+- 新建：`Maddog/internal/codegraph/bench.go`
+- 新建：`Maddog/internal/codegraph/bench_test.go`
+- 新建：`Maddog/cmd/codeintelbench/main.go`
+- 修改：`Maddog/internal/doctor/report.go`
+- 修改：`Maddog/internal/doctor/report_test.go`
+- 测试：`Maddog/internal/codegraph/bench_test.go`
+- 测试：`Maddog/internal/doctor/report_test.go`
 
 **方案：**
 - Benchmark 维度：index build time、incremental update time、query latency、top-k relevance fixture、token chars returned、tool failures。
@@ -421,14 +421,14 @@ flowchart TB
 **依赖：** 单元 F1, F2
 
 **文件：**
-- 修改：`DeepSeek-Reasonix/desktop/app.go`
-- 修改：`DeepSeek-Reasonix/desktop/frontend/src/components/CapabilitiesPanel.tsx`
-- 修改：`DeepSeek-Reasonix/desktop/frontend/src/lib/bridge.ts`
-- 修改：`DeepSeek-Reasonix/desktop/frontend/src/lib/types.ts`
-- 修改：`DeepSeek-Reasonix/desktop/frontend/src/locales/en.ts`
-- 修改：`DeepSeek-Reasonix/desktop/frontend/src/locales/zh.ts`
-- 新建测试：`DeepSeek-Reasonix/desktop/capabilities_app_test.go`
-- 新建测试：`DeepSeek-Reasonix/desktop/frontend/src/__tests__/capabilities-panel.test.ts`
+- 修改：`Maddog/desktop/app.go`
+- 修改：`Maddog/desktop/frontend/src/components/CapabilitiesPanel.tsx`
+- 修改：`Maddog/desktop/frontend/src/lib/bridge.ts`
+- 修改：`Maddog/desktop/frontend/src/lib/types.ts`
+- 修改：`Maddog/desktop/frontend/src/locales/en.ts`
+- 修改：`Maddog/desktop/frontend/src/locales/zh.ts`
+- 新建测试：`Maddog/desktop/capabilities_app_test.go`
+- 新建测试：`Maddog/desktop/frontend/src/__tests__/capabilities-panel.test.ts`
 
 **方案：**
 - CapabilitiesPanel 增加 Code Intelligence 分组，列出 built-in 和 external backend。
@@ -453,16 +453,16 @@ flowchart TB
 **依赖：** 单元 E1 可选；没有 E1 时仍记录 raw output metadata 为空。
 
 **文件：**
-- 新建：`DeepSeek-Reasonix/internal/skilleval/bundle.go`
-- 新建：`DeepSeek-Reasonix/internal/skilleval/bundle_test.go`
-- 新建：`DeepSeek-Reasonix/internal/skilleval/candidate.go`
-- 新建：`DeepSeek-Reasonix/internal/skilleval/candidate_test.go`
-- 修改：`DeepSeek-Reasonix/internal/control/controller.go`
-- 修改：`DeepSeek-Reasonix/internal/skill/skill.go`
-- 修改：`DeepSeek-Reasonix/internal/event/event.go`
-- 测试：`DeepSeek-Reasonix/internal/skilleval/bundle_test.go`
-- 测试：`DeepSeek-Reasonix/internal/skilleval/candidate_test.go`
-- 测试：`DeepSeek-Reasonix/internal/control/input_test.go`
+- 新建：`Maddog/internal/skilleval/bundle.go`
+- 新建：`Maddog/internal/skilleval/bundle_test.go`
+- 新建：`Maddog/internal/skilleval/candidate.go`
+- 新建：`Maddog/internal/skilleval/candidate_test.go`
+- 修改：`Maddog/internal/control/controller.go`
+- 修改：`Maddog/internal/skill/skill.go`
+- 修改：`Maddog/internal/event/event.go`
+- 测试：`Maddog/internal/skilleval/bundle_test.go`
+- 测试：`Maddog/internal/skilleval/candidate_test.go`
+- 测试：`Maddog/internal/control/input_test.go`
 
 **方案：**
 - Bundle 包含 task prompt、selected skills、dynamic skill body、tool receipts、compressed metrics、outcome signals、human approval/denial。
@@ -491,18 +491,18 @@ flowchart TB
 **依赖：** 单元 G1
 
 **文件：**
-- 新建：`DeepSeek-Reasonix/internal/skilleval/runner.go`
-- 新建：`DeepSeek-Reasonix/internal/skilleval/runner_test.go`
-- 新建：`DeepSeek-Reasonix/internal/skilleval/scorer.go`
-- 新建：`DeepSeek-Reasonix/internal/skilleval/scorer_test.go`
-- 新建：`DeepSeek-Reasonix/internal/skilleval/guardrail.go`
-- 新建：`DeepSeek-Reasonix/internal/skilleval/guardrail_test.go`
-- 新建：`DeepSeek-Reasonix/internal/cli/skilleval.go`
-- 新建：`DeepSeek-Reasonix/internal/cli/skilleval_test.go`
-- 测试：`DeepSeek-Reasonix/internal/skilleval/runner_test.go`
-- 测试：`DeepSeek-Reasonix/internal/skilleval/scorer_test.go`
-- 测试：`DeepSeek-Reasonix/internal/skilleval/guardrail_test.go`
-- 测试：`DeepSeek-Reasonix/internal/cli/skilleval_test.go`
+- 新建：`Maddog/internal/skilleval/runner.go`
+- 新建：`Maddog/internal/skilleval/runner_test.go`
+- 新建：`Maddog/internal/skilleval/scorer.go`
+- 新建：`Maddog/internal/skilleval/scorer_test.go`
+- 新建：`Maddog/internal/skilleval/guardrail.go`
+- 新建：`Maddog/internal/skilleval/guardrail_test.go`
+- 新建：`Maddog/internal/cli/skilleval.go`
+- 新建：`Maddog/internal/cli/skilleval_test.go`
+- 测试：`Maddog/internal/skilleval/runner_test.go`
+- 测试：`Maddog/internal/skilleval/scorer_test.go`
+- 测试：`Maddog/internal/skilleval/guardrail_test.go`
+- 测试：`Maddog/internal/cli/skilleval_test.go`
 
 **方案：**
 - Runner 对 held-out bundle 重放 candidate skill 的 injected prompt，不调用真实 destructive tools。
@@ -529,17 +529,17 @@ flowchart TB
 **依赖：** 单元 G1, G2
 
 **文件：**
-- 修改：`DeepSeek-Reasonix/desktop/app.go`
-- 修改：`DeepSeek-Reasonix/desktop/frontend/src/components/CapabilitiesPanel.tsx`
-- 修改：`DeepSeek-Reasonix/desktop/frontend/src/components/MemoryPanel.tsx`
-- 修改：`DeepSeek-Reasonix/desktop/frontend/src/lib/bridge.ts`
-- 修改：`DeepSeek-Reasonix/desktop/frontend/src/lib/types.ts`
-- 修改：`DeepSeek-Reasonix/desktop/frontend/src/locales/en.ts`
-- 修改：`DeepSeek-Reasonix/desktop/frontend/src/locales/zh.ts`
-- 修改：`DeepSeek-Reasonix/desktop/frontend/src/styles.css`
-- 测试：`DeepSeek-Reasonix/desktop/skills_app_test.go`
-- 新建测试：`DeepSeek-Reasonix/desktop/frontend/src/__tests__/skills-panel.test.ts`
-- 新建测试：`DeepSeek-Reasonix/desktop/frontend/src/__tests__/memory-suggestions.test.ts`
+- 修改：`Maddog/desktop/app.go`
+- 修改：`Maddog/desktop/frontend/src/components/CapabilitiesPanel.tsx`
+- 修改：`Maddog/desktop/frontend/src/components/MemoryPanel.tsx`
+- 修改：`Maddog/desktop/frontend/src/lib/bridge.ts`
+- 修改：`Maddog/desktop/frontend/src/lib/types.ts`
+- 修改：`Maddog/desktop/frontend/src/locales/en.ts`
+- 修改：`Maddog/desktop/frontend/src/locales/zh.ts`
+- 修改：`Maddog/desktop/frontend/src/styles.css`
+- 测试：`Maddog/desktop/skills_app_test.go`
+- 新建测试：`Maddog/desktop/frontend/src/__tests__/skills-panel.test.ts`
+- 新建测试：`Maddog/desktop/frontend/src/__tests__/memory-suggestions.test.ts`
 
 **方案：**
 - SkillsSettingsPage 增加 status filters：active、disabled、dynamic、pending candidate、promoted、rejected。
@@ -565,15 +565,15 @@ flowchart TB
 **依赖：** 单元 F1；单元 G1 可选用于保存 review bundle。
 
 **文件：**
-- 新建：`DeepSeek-Reasonix/internal/review/rules.go`
-- 新建：`DeepSeek-Reasonix/internal/review/rules_test.go`
-- 新建：`DeepSeek-Reasonix/internal/review/report.go`
-- 新建：`DeepSeek-Reasonix/internal/review/report_test.go`
-- 修改：`DeepSeek-Reasonix/internal/skill/builtins.go`
-- 修改：`DeepSeek-Reasonix/internal/skill/skill_test.go`
-- 测试：`DeepSeek-Reasonix/internal/review/rules_test.go`
-- 测试：`DeepSeek-Reasonix/internal/review/report_test.go`
-- 测试：`DeepSeek-Reasonix/internal/skill/skill_test.go`
+- 新建：`Maddog/internal/review/rules.go`
+- 新建：`Maddog/internal/review/rules_test.go`
+- 新建：`Maddog/internal/review/report.go`
+- 新建：`Maddog/internal/review/report_test.go`
+- 修改：`Maddog/internal/skill/builtins.go`
+- 修改：`Maddog/internal/skill/skill_test.go`
+- 测试：`Maddog/internal/review/rules_test.go`
+- 测试：`Maddog/internal/review/report_test.go`
+- 测试：`Maddog/internal/skill/skill_test.go`
 
 **方案：**
 - Rules v1 聚焦高置信模式：secret-like strings、unsafe shell in scripts、SQL destructive operations、missing error handling hints、large diff risk markers。
@@ -651,9 +651,9 @@ flowchart TB
 
 ## 文档 / 运维说明
 
-- 更新 `DeepSeek-Reasonix/maddog.example.toml`，展示 provider profile、context compression、code intelligence backend、skilleval 配置。
-- 更新 `DeepSeek-Reasonix/MADDOG.md`，说明 provider/auth/frontier/small model GUI 配置方式。
-- 更新 `DeepSeek-Reasonix/docs/GUIDE.md` 与 `DeepSeek-Reasonix/docs/GUIDE.zh-CN.md` 中的 desktop Settings、MCP/Skills、Context/Cost 章节。
+- 更新 `Maddog/maddog.example.toml`，展示 provider profile、context compression、code intelligence backend、skilleval 配置。
+- 更新 `Maddog/MADDOG.md`，说明 provider/auth/frontier/small model GUI 配置方式。
+- 更新 `Maddog/docs/GUIDE.md` 与 `Maddog/docs/GUIDE.zh-CN.md` 中的 desktop Settings、MCP/Skills、Context/Cost 章节。
 - 对新增 raw output store、candidate bundle、benchmark report 的存储路径写入 doctor report，便于排障。
 
 ## 来源与参考资料

@@ -1,0 +1,11 @@
+default_model = "maddog-legacy"
+
+[agent]
+frontier_model = "maddog-frontier"
+
+[[providers]]
+name = "maddog-legacy"
+kind = "openai"
+base_url = "https://maddog.example.invalid/v1"
+model = "maddog-legacy-model"
+api_key_env = "MADDOG_SHOULD_NOT_BE_USED"
