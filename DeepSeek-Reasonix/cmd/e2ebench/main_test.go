@@ -106,7 +106,7 @@ func TestFilterTasksByIDAndTags(t *testing.T) {
 		{ID: "skill", Tags: []string{"skill", "dynamic"}},
 	}
 
-	got, err := filterTasks(tasks, "provider-auth", "dynamic")
+	got, err := filterTasks(tasks, "provider-auth", "dynamic", "")
 	if err != nil {
 		t.Fatalf("filterTasks: %v", err)
 	}
@@ -117,7 +117,7 @@ func TestFilterTasksByIDAndTags(t *testing.T) {
 		t.Fatalf("filtered order = %s, %s", got[0].ID, got[1].ID)
 	}
 
-	got, err = filterTasks(tasks, "", "frontier,tinyctx")
+	got, err = filterTasks(tasks, "", "frontier,tinyctx", "")
 	if err != nil {
 		t.Fatalf("filterTasks tags only: %v", err)
 	}
@@ -126,8 +126,33 @@ func TestFilterTasksByIDAndTags(t *testing.T) {
 	}
 }
 
+func TestFilterTasksExcludesTagsAfterIncludes(t *testing.T) {
+	tasks := []task{
+		{ID: "local-provider-tool-loop", Tags: []string{"local-fixture", "provider"}},
+		{ID: "provider-auth", Tags: []string{"provider", "auth", "frontier"}},
+		{ID: "local-frontier-upgrade", Tags: []string{"local-fixture", "frontier"}},
+		{ID: "compaction", Tags: []string{"tinyctx"}},
+	}
+
+	got, err := filterTasks(tasks, "", "", "local-fixture")
+	if err != nil {
+		t.Fatalf("filterTasks exclude only: %v", err)
+	}
+	if len(got) != 2 || got[0].ID != "provider-auth" || got[1].ID != "compaction" {
+		t.Fatalf("exclude filtered tasks = %#v", got)
+	}
+
+	got, err = filterTasks(tasks, "", "provider,frontier", "local-fixture")
+	if err != nil {
+		t.Fatalf("filterTasks include and exclude: %v", err)
+	}
+	if len(got) != 1 || got[0].ID != "provider-auth" {
+		t.Fatalf("include/exclude filtered tasks = %#v", got)
+	}
+}
+
 func TestFilterTasksRejectsUnknownTag(t *testing.T) {
-	_, err := filterTasks([]task{{ID: "one", Tags: []string{"core"}}}, "", "desktop")
+	_, err := filterTasks([]task{{ID: "one", Tags: []string{"core"}}}, "", "desktop", "")
 	if err == nil {
 		t.Fatal("filterTasks should reject filters that match no tasks")
 	}
@@ -136,8 +161,18 @@ func TestFilterTasksRejectsUnknownTag(t *testing.T) {
 	}
 }
 
+func TestFilterTasksRejectsUnknownExcludeTag(t *testing.T) {
+	_, err := filterTasks([]task{{ID: "one", Tags: []string{"core"}}}, "", "", "desktop")
+	if err == nil {
+		t.Fatal("filterTasks should reject exclude filters that match no known tags")
+	}
+	if !strings.Contains(err.Error(), `unknown exclude tag "desktop"`) {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestFilterTasksRejectsUnknownID(t *testing.T) {
-	_, err := filterTasks([]task{{ID: "one", Tags: []string{"core"}}}, "missing", "")
+	_, err := filterTasks([]task{{ID: "one", Tags: []string{"core"}}}, "missing", "", "")
 	if err == nil {
 		t.Fatal("filterTasks should reject unknown task IDs")
 	}

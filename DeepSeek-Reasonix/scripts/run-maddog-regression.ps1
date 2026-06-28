@@ -443,7 +443,7 @@ Invoke-Step `
   }
 
 if ($IncludeE2E) {
-  $e2eArgs = @("run", "./cmd/e2ebench", "-bin", $MaddogBin, "-budget", "$E2EBudget", "-out", ".benchmark/regression/e2e.md", "-json", ".benchmark/regression/e2e.json")
+  $e2eArgs = @("run", "./cmd/e2ebench", "-bin", $MaddogBin, "-budget", "$E2EBudget", "-exclude-tags", "local-fixture", "-out", ".benchmark/regression/e2e.md", "-json", ".benchmark/regression/e2e.json")
   if ($Model -ne "") {
     $e2eArgs += @("-model", $Model)
   }

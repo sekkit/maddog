@@ -335,6 +335,8 @@ func TestMaddogBenchmarkCoverageAudit(t *testing.T) {
 		"frontier-smoke",
 		"frontier-scorer-live",
 		"anthropic-advisor-live",
+		"exclude-tags",
+		`"-exclude-tags", "local-fixture"`,
 		"partial-live-pending",
 		"verified-offline",
 		"official_auth_e2e_ready",

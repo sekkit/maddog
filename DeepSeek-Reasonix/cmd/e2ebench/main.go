@@ -102,6 +102,7 @@ func main() {
 	frontierTimeoutSec := flag.Int("frontier-timeout", 60, "frontier smoke timeout in seconds")
 	taskFilter := flag.String("tasks", "", "comma-separated task IDs to run or include in the manifest")
 	tagFilter := flag.String("tags", "", "comma-separated tags to run or include in the manifest")
+	excludeTagFilter := flag.String("exclude-tags", "", "comma-separated task tags to exclude after include filters")
 	outMD := flag.String("out", "", "write the markdown report here (default: stdout)")
 	outJSON := flag.String("json", "", "write the JSON report here (optional)")
 	budget := flag.Int("budget", 400_000, "abort once total tokens cross this (0 = no cap)")
@@ -189,7 +190,7 @@ func main() {
 		}
 		os.Exit(1)
 	}
-	tasks, err = filterTasks(tasks, *taskFilter, *tagFilter)
+	tasks, err = filterTasks(tasks, *taskFilter, *tagFilter, *excludeTagFilter)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "filter suite:", err)
 		os.Exit(1)
@@ -332,16 +333,20 @@ func loadTasks(suite string) ([]task, error) {
 	return tasks, nil
 }
 
-func filterTasks(tasks []task, ids, tags string) ([]task, error) {
+func filterTasks(tasks []task, ids, tags, excludeTags string) ([]task, error) {
 	wantIDs := csvSet(ids)
 	wantTags := csvSet(tags)
-	if len(wantIDs) == 0 && len(wantTags) == 0 {
-		return tasks, nil
+	blockTags := csvSet(excludeTags)
+	for tag := range blockTags {
+		if !taskTagExists(tasks, tag) {
+			return nil, fmt.Errorf("unknown exclude tag %q", tag)
+		}
 	}
 	var out []task
 	seen := map[string]bool{}
+	includeAll := len(wantIDs) == 0 && len(wantTags) == 0
 	for _, t := range tasks {
-		if matchesTaskFilter(t, wantIDs, wantTags) {
+		if (includeAll || matchesTaskFilter(t, wantIDs, wantTags)) && !matchesExcludedTag(t, blockTags) {
 			out = append(out, t)
 			seen[t.ID] = true
 		}
@@ -352,7 +357,7 @@ func filterTasks(tasks []task, ids, tags string) ([]task, error) {
 		}
 	}
 	if len(out) == 0 {
-		return nil, fmt.Errorf("no tasks matched -tasks=%q -tags=%q", ids, tags)
+		return nil, fmt.Errorf("no tasks matched -tasks=%q -tags=%q -exclude-tags=%q", ids, tags, excludeTags)
 	}
 	return out, nil
 }
@@ -372,10 +377,33 @@ func matchesTaskFilter(t task, wantIDs, wantTags map[string]bool) bool {
 	return false
 }
 
+func matchesExcludedTag(t task, blockTags map[string]bool) bool {
+	if len(blockTags) == 0 {
+		return false
+	}
+	for _, tag := range t.Tags {
+		if blockTags[strings.ToLower(strings.TrimSpace(tag))] {
+			return true
+		}
+	}
+	return false
+}
+
 func taskIDExists(tasks []task, id string) bool {
 	for _, t := range tasks {
 		if strings.EqualFold(t.ID, id) {
 			return true
+		}
+	}
+	return false
+}
+
+func taskTagExists(tasks []task, tag string) bool {
+	for _, t := range tasks {
+		for _, taskTag := range t.Tags {
+			if strings.EqualFold(strings.TrimSpace(taskTag), tag) {
+				return true
+			}
 		}
 	}
 	return false
