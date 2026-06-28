@@ -12,6 +12,7 @@ param(
   [switch]$UseProxy,
   [switch]$SkipFrontend,
   [switch]$SkipFrontendBuild,
+  [switch]$AuditOnly,
   [switch]$RequireComplete
 )
 
@@ -26,6 +27,38 @@ $MaddogBin = Join-Path $RepoRoot "bin\maddog.exe"
 
 New-Item -ItemType Directory -Force -Path $ReportDir, $LogDir | Out-Null
 Set-Location $RepoRoot
+
+if ($AuditOnly) {
+  if (!(Test-Path $SummaryJson)) {
+    Write-Error "No regression summary found at $SummaryJson. Run scripts/run-maddog-regression.ps1 first."
+    exit 1
+  }
+  $latest = Get-Content -Raw $SummaryJson | ConvertFrom-Json
+  $audit = $latest.completion_audit
+  if ($null -eq $audit) {
+    Write-Error "Regression summary does not contain completion_audit: $SummaryJson"
+    exit 1
+  }
+  Write-Host "Completion audit: complete=$($audit.complete)"
+  if ($audit.failed_required_steps.Count -gt 0) {
+    foreach ($s in $audit.failed_required_steps) {
+      Write-Host "Failed required step: $($s.name) ($($s.status)) $($s.reason)"
+    }
+  } else {
+    Write-Host "Failed required steps: none"
+  }
+  if ($audit.pending.Count -gt 0) {
+    foreach ($p in $audit.pending) {
+      Write-Host "Pending: $($p.capability) - $($p.remaining -join '; ')"
+    }
+  } else {
+    Write-Host "Pending: none"
+  }
+  if ($RequireComplete -and -not $audit.complete) {
+    exit 1
+  }
+  exit 0
+}
 
 if ($UseProxy) {
   $env:HTTP_PROXY = "http://127.0.0.1:10809"

@@ -312,6 +312,7 @@ func TestMaddogBenchmarkCoverageAudit(t *testing.T) {
 		"completion_audit",
 		"failed_required_steps",
 		"RequireComplete",
+		"AuditOnly",
 		"partial-live-pending",
 		"verified-offline",
 		"official_auth_e2e_ready",
