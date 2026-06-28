@@ -11,7 +11,8 @@ param(
   [string]$BenchmarkDir = "C:\Dev2\research\coding-agent-benchmark",
   [switch]$UseProxy,
   [switch]$SkipFrontend,
-  [switch]$SkipFrontendBuild
+  [switch]$SkipFrontendBuild,
+  [switch]$RequireComplete
 )
 
 $ErrorActionPreference = "Continue"
@@ -631,5 +632,9 @@ Write-Host "Wrote $SummaryJson"
 Write-Host "Wrote $SummaryMd"
 
 if ($HadFailure) {
+  exit 1
+}
+if ($RequireComplete -and -not $CompletionAudit.complete) {
+  Write-Error "Completion audit is not complete. See $SummaryMd and $SummaryJson."
   exit 1
 }
