@@ -95,7 +95,7 @@ func main() {
 	bin := flag.String("bin", "maddog", "path to the maddog binary")
 	model := flag.String("model", "", "provider/model name (default: config default)")
 	openAIModel := flag.String("openai-model", "gpt-4.1-mini", "official auth smoke OpenAI model")
-	openAIBaseURL := flag.String("openai-base-url", "https://api.openai.com/v1", "official auth smoke OpenAI-compatible base URL")
+	openAIBaseURL := flag.String("openai-base-url", "", "OpenAI-compatible base URL for smoke modes (mode-specific default)")
 	anthropicModel := flag.String("anthropic-model", "claude-sonnet-4-6", "official auth smoke Anthropic model")
 	anthropicBaseURL := flag.String("anthropic-base-url", "https://api.anthropic.com", "official auth smoke Anthropic base URL")
 	officialAuthTimeoutSec := flag.Int("official-auth-timeout", 60, "official auth smoke timeout in seconds")

@@ -97,6 +97,8 @@ func runFrontierSmoke(cfg frontierSmokeConfig) frontierSmokeResult {
 		Extra: map[string]any{
 			"proxy_spec":  netclient.ProxySpec{Mode: netclient.ModeEnv},
 			"api_key_env": apiKeyEnv,
+			"wire_api":    "responses",
+			"effort":      "high",
 		},
 	})
 	if err != nil {

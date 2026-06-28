@@ -16,7 +16,7 @@ func TestRunFrontierSmokeCoversProviderScorerCostAndAdvisor(t *testing.T) {
 	var openAIAuth string
 	var sawScorer bool
 	openAIServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/chat/completions" {
+		if r.URL.Path != "/responses" {
 			t.Fatalf("unexpected OpenAI path %s", r.URL.Path)
 		}
 		openAIAuth = r.Header.Get("Authorization")
@@ -24,20 +24,20 @@ func TestRunFrontierSmokeCoversProviderScorerCostAndAdvisor(t *testing.T) {
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			t.Fatalf("decode OpenAI body: %v", err)
 		}
-		messages, _ := body["messages"].([]any)
-		for _, raw := range messages {
-			msg, _ := raw.(map[string]any)
-			if strings.Contains(strings.ToLower(toString(msg["content"])), "score the replayed outcome") {
-				sawScorer = true
-			}
+		if got := body["reasoning"].(map[string]any)["effort"]; got != "high" {
+			t.Fatalf("reasoning effort = %v, want high", got)
+		}
+		if strings.Contains(strings.ToLower(toString(body)), "score the replayed outcome") {
+			sawScorer = true
 		}
 		w.Header().Set("Content-Type", "text/event-stream")
 		if sawScorer {
-			_, _ = io.WriteString(w, "data: {\"choices\":[{\"delta\":{\"content\":\"0.91 strong replay\"}}],\"usage\":{\"prompt_tokens\":7,\"completion_tokens\":5,\"total_tokens\":12}}\n\n")
+			_, _ = io.WriteString(w, "data: {\"type\":\"response.output_text.delta\",\"delta\":\"0.91 strong replay\"}\n\n")
+			_, _ = io.WriteString(w, "data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"usage\":{\"input_tokens\":7,\"output_tokens\":5,\"total_tokens\":12}}}\n\n")
 		} else {
-			_, _ = io.WriteString(w, "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}],\"usage\":{\"prompt_tokens\":3,\"completion_tokens\":4,\"total_tokens\":7}}\n\n")
+			_, _ = io.WriteString(w, "data: {\"type\":\"response.output_text.delta\",\"delta\":\"ok\"}\n\n")
+			_, _ = io.WriteString(w, "data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"usage\":{\"input_tokens\":3,\"output_tokens\":4,\"total_tokens\":7}}}\n\n")
 		}
-		_, _ = io.WriteString(w, "data: [DONE]\n\n")
 	}))
 	defer openAIServer.Close()
 
@@ -88,6 +88,18 @@ func TestRunFrontierSmokeCoversProviderScorerCostAndAdvisor(t *testing.T) {
 	}
 }
 
+func TestFrontierAndOfficialAuthSmokeUseModeSpecificOpenAIBaseDefaults(t *testing.T) {
+	frontier := normalizeFrontierSmokeConfig(frontierSmokeConfig{})
+	if frontier.OpenAIBaseURL != defaultIcodeEasyURL {
+		t.Fatalf("frontier OpenAI base URL = %q, want %q", frontier.OpenAIBaseURL, defaultIcodeEasyURL)
+	}
+
+	official := normalizeOfficialAuthSmokeConfig(officialAuthSmokeConfig{})
+	if official.OpenAIBaseURL != defaultOpenAIURL {
+		t.Fatalf("official auth OpenAI base URL = %q, want %q", official.OpenAIBaseURL, defaultOpenAIURL)
+	}
+}
+
 func toString(v any) string {
 	switch x := v.(type) {
 	case string:
@@ -102,6 +114,14 @@ func toString(v any) string {
 		if s, ok := x["text"].(string); ok {
 			return s
 		}
+		if s, ok := x["content"].(string); ok {
+			return s
+		}
+		var b strings.Builder
+		for _, part := range x {
+			b.WriteString(toString(part))
+		}
+		return b.String()
 	}
 	return ""
 }

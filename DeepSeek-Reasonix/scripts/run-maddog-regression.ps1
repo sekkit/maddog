@@ -6,7 +6,9 @@ param(
   [string]$E2ETags = "",
   [int]$E2EBudget = 400000,
   [switch]$IncludeFrontierSmoke,
+  [string]$FrontierOpenAIBaseURL = "",
   [string]$FrontierOpenAIModel = "gpt-5.5",
+  [string]$FrontierAnthropicBaseURL = "",
   [string]$FrontierAnthropicModel = "claude-sonnet-4-6",
   [switch]$IncludeOfficialAuthSmoke,
   [string]$OfficialOpenAIModel = "gpt-4.1-mini",
@@ -551,20 +553,27 @@ if ($IncludeFrontierSmoke) {
   if (!$AnyFrontierCredential -or !$AnthropicLiveReady) {
     Add-SkipStep -Name "frontier-smoke" -Reason "ICODEEASY_API_KEY or OPENAI_API_KEY plus ANTHROPIC_API_KEY are required for live frontier/advisor/scorer validation." -Coverage @("frontier-real-call", "anthropic-advisor-live", "frontier-scorer-live")
   } else {
+    $frontierArgs = @(
+      "run", "./cmd/e2ebench",
+      "-mode", "frontier-smoke",
+      "-openai-model", $FrontierOpenAIModel,
+      "-anthropic-model", $FrontierAnthropicModel,
+      "-out", ".benchmark/regression/frontier.md",
+      "-json", ".benchmark/regression/frontier.json"
+    )
+    if ($FrontierOpenAIBaseURL -ne "") {
+      $frontierArgs += @("-openai-base-url", $FrontierOpenAIBaseURL)
+    }
+    if ($FrontierAnthropicBaseURL -ne "") {
+      $frontierArgs += @("-anthropic-base-url", $FrontierAnthropicBaseURL)
+    }
     Invoke-Step `
       -Name "frontier-smoke" `
-      -Command "$GoExe run ./cmd/e2ebench -mode frontier-smoke -openai-model $FrontierOpenAIModel -anthropic-model $FrontierAnthropicModel -out .benchmark/regression/frontier.md -json .benchmark/regression/frontier.json" `
+      -Command "$GoExe $($frontierArgs -join ' ')" `
       -Coverage @("frontier-real-call", "frontier-costwrap-live", "frontier-scorer-live", "anthropic-advisor-live") `
       -Required $true `
       -Action {
-        Invoke-Native $GoExe @(
-          "run", "./cmd/e2ebench",
-          "-mode", "frontier-smoke",
-          "-openai-model", $FrontierOpenAIModel,
-          "-anthropic-model", $FrontierAnthropicModel,
-          "-out", ".benchmark/regression/frontier.md",
-          "-json", ".benchmark/regression/frontier.json"
-        )
+        Invoke-Native $GoExe $frontierArgs
       }
   }
 } else {
