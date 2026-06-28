@@ -239,11 +239,35 @@ $FrontierSmokeReady = [bool]($AnyFrontierCredential -and $AnthropicLiveReady)
 $OpenAIOfficialReady = [bool](($LiveCredentials | Where-Object { $_.name -eq "OPENAI_OFFICIAL_TOKEN" -and $_.set } | Select-Object -First 1))
 $AnthropicOfficialReady = [bool](($LiveCredentials | Where-Object { $_.name -eq "ANTHROPIC_IDENTITY_TOKEN" -and $_.set } | Select-Object -First 1))
 $OfficialAuthReady = [bool]($OpenAIOfficialReady -and $AnthropicOfficialReady)
+$LiveRequirements = @(
+  [ordered]@{
+    gate = "maddog-e2e"
+    ready = [bool]$AnyProviderCredential
+    command = "powershell -ExecutionPolicy Bypass -File scripts/run-maddog-regression.ps1 -IncludeE2E"
+    any_of = @("DEEPSEEK_API_KEY", "ICODEEASY_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY")
+    all_of = @()
+  },
+  [ordered]@{
+    gate = "official-auth-smoke"
+    ready = [bool]$OfficialAuthReady
+    command = "powershell -ExecutionPolicy Bypass -File scripts/run-maddog-regression.ps1 -IncludeOfficialAuthSmoke"
+    any_of = @()
+    all_of = @("OPENAI_OFFICIAL_TOKEN", "ANTHROPIC_IDENTITY_TOKEN")
+  },
+  [ordered]@{
+    gate = "frontier-smoke"
+    ready = [bool]$FrontierSmokeReady
+    command = "powershell -ExecutionPolicy Bypass -File scripts/run-maddog-regression.ps1 -IncludeFrontierSmoke"
+    any_of = @("ICODEEASY_API_KEY", "OPENAI_API_KEY")
+    all_of = @("ANTHROPIC_API_KEY")
+  }
+)
 $LiveReadiness = [ordered]@{
-  provider_e2e_ready = [bool]($AnyProviderCredential -and $OfficialAuthReady)
+  provider_e2e_ready = $AnyProviderCredential
   provider_api_key_e2e_ready = $AnyProviderCredential
   official_auth_e2e_ready = $OfficialAuthReady
   frontier_smoke_ready = $FrontierSmokeReady
+  live_requirements = $LiveRequirements
   credentials = @(
     foreach ($c in $LiveCredentials) {
       [ordered]@{
@@ -745,6 +769,12 @@ if ($missingLiveCredentials.Count -gt 0) {
 $md.Add("- Live commands:") | Out-Null
 foreach ($cmd in $LiveReadiness.commands) {
   $md.Add("  - ``$cmd``") | Out-Null
+}
+$md.Add("- Live requirements:") | Out-Null
+foreach ($req in $LiveReadiness.live_requirements) {
+  $any = if (@($req.any_of).Count -gt 0) { @($req.any_of) -join " or " } else { "none" }
+  $all = if (@($req.all_of).Count -gt 0) { @($req.all_of) -join " and " } else { "none" }
+  $md.Add("  - $($req.gate): ready=$($req.ready); any_of=$any; all_of=$all; command=``$($req.command)``") | Out-Null
 }
 $md.Add("") | Out-Null
 $md.Add("## Steps") | Out-Null
