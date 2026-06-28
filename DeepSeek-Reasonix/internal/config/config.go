@@ -896,27 +896,30 @@ type AgentConfig struct {
 // token budget; the harness compacts older history as a turn's prompt approaches
 // it (see agent compaction). 0 disables compaction for the instance.
 type ProviderEntry struct {
-	Name          string            `toml:"name"`
-	Kind          string            `toml:"kind"`
-	BaseURL       string            `toml:"base_url"`
-	Model         string            `toml:"model"`      // a single model (back-compat)
-	Models        []string          `toml:"models"`     // a vendor's model list (one base_url/key, many models)
-	ModelsURL     string            `toml:"models_url"` // auto-fetch models from this URL on startup
-	Default       string            `toml:"default"`    // default model when Models is set (else Models[0])
-	APIKeyEnv     string            `toml:"api_key_env"`
-	AuthType      string            `toml:"auth_type"`      // api_key (default), bearer, or workload_identity
-	AuthTokenEnv  string            `toml:"auth_token_env"` // bearer/access-token env var; API key auth falls back to api_key_env
-	AuthHeader    string            `toml:"auth_header"`    // optional override; defaults to provider-specific header
-	AuthScheme    string            `toml:"auth_scheme"`    // optional override; bearer modes default to Bearer
-	IdentityEnv   string            `toml:"identity_env"`   // WIF OIDC/JWT assertion env var
-	IdentityFile  string            `toml:"identity_file"`  // WIF OIDC/JWT assertion file
-	FederationID  string            `toml:"federation_rule_id"`
-	Organization  string            `toml:"organization_id"`
-	ServiceAcctID string            `toml:"service_account_id"`
-	WorkspaceID   string            `toml:"workspace_id"`
-	BalanceURL    string            `toml:"balance_url"` // optional; a provider-specific wallet-balance endpoint (DeepSeek: https://api.deepseek.com/user/balance). Empty = no balance readout.
-	ContextWindow int               `toml:"context_window"`
-	Price         *provider.Pricing `toml:"price"`
+	Name               string            `toml:"name"`
+	Kind               string            `toml:"kind"`
+	BaseURL            string            `toml:"base_url"`
+	Model              string            `toml:"model"`      // a single model (back-compat)
+	Models             []string          `toml:"models"`     // a vendor's model list (one base_url/key, many models)
+	ModelsURL          string            `toml:"models_url"` // auto-fetch models from this URL on startup
+	Default            string            `toml:"default"`    // default model when Models is set (else Models[0])
+	APIKeyEnv          string            `toml:"api_key_env"`
+	AuthType           string            `toml:"auth_type"`            // api_key (default), bearer, or workload_identity
+	AuthTokenEnv       string            `toml:"auth_token_env"`       // bearer/access-token env var; API key auth falls back to api_key_env
+	AuthHeader         string            `toml:"auth_header"`          // optional override; defaults to provider-specific header
+	AuthScheme         string            `toml:"auth_scheme"`          // optional override; bearer modes default to Bearer
+	IdentityEnv        string            `toml:"identity_env"`         // WIF OIDC/JWT assertion env var
+	IdentityFile       string            `toml:"identity_file"`        // WIF OIDC/JWT assertion file
+	IdentityProviderID string            `toml:"identity_provider_id"` // OpenAI WIF provider ID
+	SubjectTokenType   string            `toml:"subject_token_type"`   // OpenAI WIF subject token type; defaults to JWT
+	TokenURL           string            `toml:"token_url"`            // optional WIF token endpoint override
+	FederationID       string            `toml:"federation_rule_id"`
+	Organization       string            `toml:"organization_id"`
+	ServiceAcctID      string            `toml:"service_account_id"`
+	WorkspaceID        string            `toml:"workspace_id"`
+	BalanceURL         string            `toml:"balance_url"` // optional; a provider-specific wallet-balance endpoint (DeepSeek: https://api.deepseek.com/user/balance). Empty = no balance readout.
+	ContextWindow      int               `toml:"context_window"`
+	Price              *provider.Pricing `toml:"price"`
 	// Thinking / Effort are provider-kind-specific knobs forwarded to the provider
 	// via Config.Extra. The anthropic provider reads Thinking="adaptive" to enable
 	// extended thinking and Effort ("low".."max") to tune depth. The
@@ -2264,10 +2267,13 @@ func (e *ProviderEntry) AuthConfig() provider.AuthConfig {
 		IdentityToken: e.IdentityToken(),
 		IdentityEnv:   strings.TrimSpace(e.IdentityEnv),
 		Extra: map[string]string{
-			"federation_rule_id": strings.TrimSpace(e.FederationID),
-			"organization_id":    strings.TrimSpace(e.Organization),
-			"service_account_id": strings.TrimSpace(e.ServiceAcctID),
-			"workspace_id":       strings.TrimSpace(e.WorkspaceID),
+			"federation_rule_id":   strings.TrimSpace(e.FederationID),
+			"organization_id":      strings.TrimSpace(e.Organization),
+			"service_account_id":   strings.TrimSpace(e.ServiceAcctID),
+			"workspace_id":         strings.TrimSpace(e.WorkspaceID),
+			"identity_provider_id": strings.TrimSpace(e.IdentityProviderID),
+			"subject_token_type":   strings.TrimSpace(e.SubjectTokenType),
+			"token_url":            strings.TrimSpace(e.TokenURL),
 		},
 	}
 }

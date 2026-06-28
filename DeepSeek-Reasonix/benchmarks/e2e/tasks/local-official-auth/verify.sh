@@ -6,6 +6,13 @@ from pathlib import Path
 obs_path = Path("auth-fixture-observations.json")
 assert obs_path.exists(), "auth-fixture-observations.json missing"
 obs = json.loads(obs_path.read_text(encoding="utf-8"))
+assert obs["openai_exchange_seen"] is True, obs
+openai_exchange = obs["openai_exchange_body"]
+assert openai_exchange["grant_type"] == "urn:ietf:params:oauth:grant-type:token-exchange", openai_exchange
+assert openai_exchange["subject_token_type"] == "urn:ietf:params:oauth:token-type:jwt", openai_exchange
+assert openai_exchange["subject_token"] == "openai-local-identity-jwt", openai_exchange
+assert openai_exchange["identity_provider_id"] == "wip_local", openai_exchange
+assert openai_exchange["service_account_id"] == "svc_openai_local", openai_exchange
 assert obs["openai_authorization"] == "Bearer openai-official-access-token", obs
 assert obs["exchange_seen"] is True, obs
 exchange = obs["exchange_body"]

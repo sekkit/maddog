@@ -644,6 +644,9 @@ export interface ProviderView {
   authScheme: string;
   identityEnv: string;
   identityFile: string;
+  identityProviderId: string;
+  subjectTokenType: string;
+  tokenUrl: string;
   federationRuleId: string;
   organizationId: string;
   serviceAccountId: string;

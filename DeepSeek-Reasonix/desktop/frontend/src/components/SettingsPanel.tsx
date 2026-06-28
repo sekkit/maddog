@@ -532,6 +532,9 @@ function normalizeProviderView(p: ProviderView): ProviderView {
     authScheme: p.authScheme ?? "",
     identityEnv: p.identityEnv ?? "",
     identityFile: p.identityFile ?? "",
+    identityProviderId: p.identityProviderId ?? "",
+    subjectTokenType: p.subjectTokenType ?? "",
+    tokenUrl: p.tokenUrl ?? "",
     federationRuleId: p.federationRuleId ?? "",
     organizationId: p.organizationId ?? "",
     serviceAccountId: p.serviceAccountId ?? "",
@@ -4147,6 +4150,9 @@ function ProviderEditor({
   const [authScheme, setAuthScheme] = useState(initial?.authScheme ?? "");
   const [identityEnv, setIdentityEnv] = useState(initial?.identityEnv ?? "");
   const [identityFile, setIdentityFile] = useState(initial?.identityFile ?? "");
+  const [identityProviderId, setIdentityProviderId] = useState(initial?.identityProviderId ?? "");
+  const [subjectTokenType, setSubjectTokenType] = useState(initial?.subjectTokenType ?? "");
+  const [tokenUrl, setTokenUrl] = useState(initial?.tokenUrl ?? "");
   const [federationRuleId, setFederationRuleId] = useState(initial?.federationRuleId ?? "");
   const [organizationId, setOrganizationId] = useState(initial?.organizationId ?? "");
   const [serviceAccountId, setServiceAccountId] = useState(initial?.serviceAccountId ?? "");
@@ -4227,6 +4233,9 @@ function ProviderEditor({
         authScheme: authScheme.trim(),
         identityEnv: identityEnv.trim(),
         identityFile: identityFile.trim(),
+        identityProviderId: identityProviderId.trim(),
+        subjectTokenType: subjectTokenType.trim(),
+        tokenUrl: tokenUrl.trim(),
         federationRuleId: federationRuleId.trim(),
         organizationId: organizationId.trim(),
         serviceAccountId: serviceAccountId.trim(),
@@ -4274,6 +4283,9 @@ function ProviderEditor({
       authScheme: authScheme.trim(),
       identityEnv: identityEnv.trim(),
       identityFile: identityFile.trim(),
+      identityProviderId: identityProviderId.trim(),
+      subjectTokenType: subjectTokenType.trim(),
+      tokenUrl: tokenUrl.trim(),
       federationRuleId: federationRuleId.trim(),
       organizationId: organizationId.trim(),
       serviceAccountId: serviceAccountId.trim(),
@@ -4378,6 +4390,12 @@ function ProviderEditor({
             <div className="mem-hint">{t("settings.identityEnvHint")}</div>
             <label className="set-label">{t("settings.identityFile")}</label>
             <input className="mem-input" placeholder="/var/run/secrets/anthropic.com/token" value={identityFile} onChange={(e) => setIdentityFile(e.target.value)} />
+            <label className="set-label">{t("settings.identityProviderId")}</label>
+            <input className="mem-input" placeholder="wip_..." value={identityProviderId} onChange={(e) => setIdentityProviderId(e.target.value)} />
+            <label className="set-label">{t("settings.subjectTokenType")}</label>
+            <input className="mem-input" placeholder="urn:ietf:params:oauth:token-type:jwt" value={subjectTokenType} onChange={(e) => setSubjectTokenType(e.target.value)} />
+            <label className="set-label">{t("settings.tokenUrl")}</label>
+            <input className="mem-input" placeholder="https://auth.openai.com/oauth/token" value={tokenUrl} onChange={(e) => setTokenUrl(e.target.value)} />
             <label className="set-label">{t("settings.federationRuleId")}</label>
             <input className="mem-input" placeholder="fdrl_..." value={federationRuleId} onChange={(e) => setFederationRuleId(e.target.value)} />
             <label className="set-label">{t("settings.organizationId")}</label>

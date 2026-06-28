@@ -26,31 +26,34 @@ import (
 // --- read ---
 
 type ProviderView struct {
-	Name              string   `json:"name"`
-	BuiltIn           bool     `json:"builtIn"`
-	Added             bool     `json:"added"`
-	Kind              string   `json:"kind"`
-	BaseURL           string   `json:"baseUrl"`
-	Models            []string `json:"models"`
-	ModelsURL         string   `json:"modelsUrl"`
-	Default           string   `json:"default"`
-	APIKeyEnv         string   `json:"apiKeyEnv"`
-	AuthType          string   `json:"authType"`
-	AuthTokenEnv      string   `json:"authTokenEnv"`
-	AuthHeader        string   `json:"authHeader"`
-	AuthScheme        string   `json:"authScheme"`
-	IdentityEnv       string   `json:"identityEnv"`
-	IdentityFile      string   `json:"identityFile"`
-	FederationID      string   `json:"federationRuleId"`
-	Organization      string   `json:"organizationId"`
-	ServiceAcctID     string   `json:"serviceAccountId"`
-	WorkspaceID       string   `json:"workspaceId"`
-	KeySet            bool     `json:"keySet"` // the env var currently resolves to a non-empty value
-	BalanceURL        string   `json:"balanceUrl"`
-	ContextWindow     int      `json:"contextWindow"`
-	ReasoningProtocol string   `json:"reasoningProtocol"`
-	SupportedEfforts  []string `json:"supportedEfforts"`
-	DefaultEffort     string   `json:"defaultEffort"`
+	Name               string   `json:"name"`
+	BuiltIn            bool     `json:"builtIn"`
+	Added              bool     `json:"added"`
+	Kind               string   `json:"kind"`
+	BaseURL            string   `json:"baseUrl"`
+	Models             []string `json:"models"`
+	ModelsURL          string   `json:"modelsUrl"`
+	Default            string   `json:"default"`
+	APIKeyEnv          string   `json:"apiKeyEnv"`
+	AuthType           string   `json:"authType"`
+	AuthTokenEnv       string   `json:"authTokenEnv"`
+	AuthHeader         string   `json:"authHeader"`
+	AuthScheme         string   `json:"authScheme"`
+	IdentityEnv        string   `json:"identityEnv"`
+	IdentityFile       string   `json:"identityFile"`
+	IdentityProviderID string   `json:"identityProviderId"`
+	SubjectTokenType   string   `json:"subjectTokenType"`
+	TokenURL           string   `json:"tokenUrl"`
+	FederationID       string   `json:"federationRuleId"`
+	Organization       string   `json:"organizationId"`
+	ServiceAcctID      string   `json:"serviceAccountId"`
+	WorkspaceID        string   `json:"workspaceId"`
+	KeySet             bool     `json:"keySet"` // the env var currently resolves to a non-empty value
+	BalanceURL         string   `json:"balanceUrl"`
+	ContextWindow      int      `json:"contextWindow"`
+	ReasoningProtocol  string   `json:"reasoningProtocol"`
+	SupportedEfforts   []string `json:"supportedEfforts"`
+	DefaultEffort      string   `json:"defaultEffort"`
 }
 
 type PermissionsView struct {
@@ -287,23 +290,26 @@ func providerViewFromEntry(p config.ProviderEntry, builtIn, added bool) Provider
 	return ProviderView{
 		Name: p.Name, BuiltIn: builtIn, Added: added, Kind: p.Kind, BaseURL: p.BaseURL,
 		Models: nonNil(p.ChatModelList()), ModelsURL: p.ModelsURL, Default: p.DefaultModel(),
-		APIKeyEnv:         p.APIKeyEnv,
-		AuthType:          p.AuthType,
-		AuthTokenEnv:      p.AuthTokenEnv,
-		AuthHeader:        p.AuthHeader,
-		AuthScheme:        p.AuthScheme,
-		IdentityEnv:       p.IdentityEnv,
-		IdentityFile:      p.IdentityFile,
-		FederationID:      p.FederationID,
-		Organization:      p.Organization,
-		ServiceAcctID:     p.ServiceAcctID,
-		WorkspaceID:       p.WorkspaceID,
-		KeySet:            p.Configured(),
-		BalanceURL:        p.BalanceURL,
-		ContextWindow:     p.ContextWindow,
-		ReasoningProtocol: p.ReasoningProtocol,
-		SupportedEfforts:  nonNil(p.SupportedEfforts),
-		DefaultEffort:     p.DefaultEffort,
+		APIKeyEnv:          p.APIKeyEnv,
+		AuthType:           p.AuthType,
+		AuthTokenEnv:       p.AuthTokenEnv,
+		AuthHeader:         p.AuthHeader,
+		AuthScheme:         p.AuthScheme,
+		IdentityEnv:        p.IdentityEnv,
+		IdentityFile:       p.IdentityFile,
+		IdentityProviderID: p.IdentityProviderID,
+		SubjectTokenType:   p.SubjectTokenType,
+		TokenURL:           p.TokenURL,
+		FederationID:       p.FederationID,
+		Organization:       p.Organization,
+		ServiceAcctID:      p.ServiceAcctID,
+		WorkspaceID:        p.WorkspaceID,
+		KeySet:             p.Configured(),
+		BalanceURL:         p.BalanceURL,
+		ContextWindow:      p.ContextWindow,
+		ReasoningProtocol:  p.ReasoningProtocol,
+		SupportedEfforts:   nonNil(p.SupportedEfforts),
+		DefaultEffort:      p.DefaultEffort,
 	}
 }
 
@@ -1008,6 +1014,9 @@ func (a *App) SaveProvider(p ProviderView) error {
 		e.AuthScheme = p.AuthScheme
 		e.IdentityEnv = p.IdentityEnv
 		e.IdentityFile = p.IdentityFile
+		e.IdentityProviderID = p.IdentityProviderID
+		e.SubjectTokenType = p.SubjectTokenType
+		e.TokenURL = p.TokenURL
 		e.FederationID = p.FederationID
 		e.Organization = p.Organization
 		e.ServiceAcctID = p.ServiceAcctID
@@ -1067,16 +1076,19 @@ func (a *App) AddOfficialProviderAccess(kind, key string) error {
 // it never touches chat request serialization or provider-visible prompt data.
 func (a *App) FetchProviderModels(p ProviderView) ([]string, error) {
 	e := config.ProviderEntry{
-		Name:         p.Name,
-		BaseURL:      p.BaseURL,
-		ModelsURL:    p.ModelsURL,
-		APIKeyEnv:    p.APIKeyEnv,
-		AuthType:     p.AuthType,
-		AuthTokenEnv: p.AuthTokenEnv,
-		AuthHeader:   p.AuthHeader,
-		AuthScheme:   p.AuthScheme,
-		IdentityEnv:  p.IdentityEnv,
-		IdentityFile: p.IdentityFile,
+		Name:               p.Name,
+		BaseURL:            p.BaseURL,
+		ModelsURL:          p.ModelsURL,
+		APIKeyEnv:          p.APIKeyEnv,
+		AuthType:           p.AuthType,
+		AuthTokenEnv:       p.AuthTokenEnv,
+		AuthHeader:         p.AuthHeader,
+		AuthScheme:         p.AuthScheme,
+		IdentityEnv:        p.IdentityEnv,
+		IdentityFile:       p.IdentityFile,
+		IdentityProviderID: p.IdentityProviderID,
+		SubjectTokenType:   p.SubjectTokenType,
+		TokenURL:           p.TokenURL,
 	}
 	ctx, cancel := context.WithTimeout(a.reqCtx(), 15*time.Second)
 	defer cancel()

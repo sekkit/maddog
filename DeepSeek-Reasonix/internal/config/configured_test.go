@@ -62,4 +62,24 @@ func TestProviderAuthMaterial(t *testing.T) {
 	if !wifAssertion.Configured() {
 		t.Fatal("workload identity assertion-only provider should be configured")
 	}
+
+	openAIWIF := ProviderEntry{
+		AuthType:           "workload_identity",
+		IdentityEnv:        "REASONIX_TEST_TOKEN",
+		IdentityProviderID: "wip_openai",
+		ServiceAcctID:      "svc_openai",
+		SubjectTokenType:   "urn:ietf:params:oauth:token-type:id_token",
+		TokenURL:           "http://127.0.0.1/oauth/token",
+	}
+	auth := openAIWIF.AuthConfig()
+	for key, want := range map[string]string{
+		"identity_provider_id": "wip_openai",
+		"service_account_id":   "svc_openai",
+		"subject_token_type":   "urn:ietf:params:oauth:token-type:id_token",
+		"token_url":            "http://127.0.0.1/oauth/token",
+	} {
+		if got := auth.Extra[key]; got != want {
+			t.Fatalf("AuthConfig.Extra[%q] = %q, want %q", key, got, want)
+		}
+	}
 }

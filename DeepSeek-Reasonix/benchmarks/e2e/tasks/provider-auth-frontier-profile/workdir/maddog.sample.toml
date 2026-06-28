@@ -40,8 +40,10 @@ name = "official-openai"
 kind = "openai"
 base_url = "https://api.openai.com/v1"
 model = "gpt-official"
-auth_type = "bearer"
-auth_token_env = "OPENAI_OFFICIAL_TOKEN"
+auth_type = "workload_identity"
+identity_env = "OPENAI_IDENTITY_TOKEN"
+identity_provider_id = "wip_openai"
+service_account_id = "svc_openai"
 
 [[providers]]
 name = "official-anthropic"

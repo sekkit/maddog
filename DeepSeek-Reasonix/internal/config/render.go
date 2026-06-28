@@ -268,6 +268,15 @@ func RenderTOMLForScope(c *Config, scope RenderScope) string {
 			if p.IdentityFile != "" {
 				fmt.Fprintf(&b, "identity_file = %q   # workload identity JWT/OIDC assertion file\n", p.IdentityFile)
 			}
+			if p.IdentityProviderID != "" {
+				fmt.Fprintf(&b, "identity_provider_id = %q\n", p.IdentityProviderID)
+			}
+			if p.SubjectTokenType != "" {
+				fmt.Fprintf(&b, "subject_token_type = %q\n", p.SubjectTokenType)
+			}
+			if p.TokenURL != "" {
+				fmt.Fprintf(&b, "token_url = %q\n", p.TokenURL)
+			}
 			if p.FederationID != "" {
 				fmt.Fprintf(&b, "federation_rule_id = %q\n", p.FederationID)
 			}

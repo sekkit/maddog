@@ -130,6 +130,48 @@ func TestSaveProviderFiltersNonChatModels(t *testing.T) {
 	}
 }
 
+func TestSaveProviderPreservesOpenAIWorkloadIdentityFields(t *testing.T) {
+	isolateDesktopUserDirs(t)
+	t.Setenv("OPENAI_IDENTITY_TOKEN", "external-oidc-jwt")
+
+	app := NewApp()
+	if err := app.SaveProvider(ProviderView{
+		Name:               "official-openai",
+		Kind:               "openai",
+		BaseURL:            "https://api.openai.com/v1",
+		Models:             []string{"gpt-4.1-mini"},
+		Default:            "gpt-4.1-mini",
+		AuthType:           "workload_identity",
+		IdentityEnv:        "OPENAI_IDENTITY_TOKEN",
+		IdentityProviderID: "wip_openai",
+		ServiceAcctID:      "svc_openai",
+		SubjectTokenType:   "urn:ietf:params:oauth:token-type:id_token",
+		TokenURL:           "https://auth.openai.com/oauth/token",
+	}); err != nil {
+		t.Fatalf("SaveProvider: %v", err)
+	}
+
+	cfg := config.LoadForEdit(config.UserConfigPath())
+	got, ok := cfg.Provider("official-openai")
+	if !ok {
+		t.Fatal("saved provider not found")
+	}
+	if got.IdentityProviderID != "wip_openai" || got.ServiceAcctID != "svc_openai" || got.SubjectTokenType != "urn:ietf:params:oauth:token-type:id_token" || got.TokenURL != "https://auth.openai.com/oauth/token" {
+		t.Fatalf("saved OpenAI WIF fields = %+v", got)
+	}
+
+	view := app.Settings()
+	for _, p := range view.Providers {
+		if p.Name == "official-openai" {
+			if p.IdentityProviderID != "wip_openai" || p.ServiceAcctID != "svc_openai" || p.SubjectTokenType != "urn:ietf:params:oauth:token-type:id_token" || p.TokenURL != "https://auth.openai.com/oauth/token" {
+				t.Fatalf("settings OpenAI WIF fields = %+v", p)
+			}
+			return
+		}
+	}
+	t.Fatalf("Settings() missing saved provider: %+v", view.Providers)
+}
+
 func TestOfficialMimoAPITemplateIncludesVisionModels(t *testing.T) {
 	entries, keyEnv, err := officialProviderTemplate("mimo-api")
 	if err != nil {

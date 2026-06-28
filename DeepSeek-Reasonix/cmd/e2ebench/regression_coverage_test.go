@@ -63,9 +63,9 @@ func TestMaddogBenchmarkCoverageAudit(t *testing.T) {
 		`api_key_env = "ICODEEASY_API_KEY"`,
 		`kind = "openai"`,
 		`kind = "anthropic"`,
-		`auth_type = "bearer"`,
 		`auth_type = "workload_identity"`,
-		`auth_token_env = "OPENAI_OFFICIAL_TOKEN"`,
+		`identity_env = "OPENAI_IDENTITY_TOKEN"`,
+		`identity_provider_id = "wip_openai"`,
 		`identity_env = "ANTHROPIC_IDENTITY_TOKEN"`,
 		`advisor_max_uses_per_turn = 1`,
 		`advisor_max_context_messages = 6`,
@@ -78,7 +78,7 @@ func TestMaddogBenchmarkCoverageAudit(t *testing.T) {
 	for _, want := range []string{
 		`providers["small"]["token_env"] == "ICODEEASY_API_KEY"`,
 		`providers["frontier"]["kind"] == "anthropic"`,
-		`providers["official-openai"]["auth_type"] == "bearer"`,
+		`providers["official-openai"]["auth_type"] == "workload_identity"`,
 		`providers["official-anthropic"]["auth_type"] == "workload_identity"`,
 		`data["upgrade_enabled"] is True`,
 		`data["advisor"]["max_uses_per_turn"] == 1`,
@@ -187,6 +187,7 @@ func TestMaddogBenchmarkCoverageAudit(t *testing.T) {
 	officialAuthVerify := readRepoFile(t, root, "benchmarks", "e2e", "tasks", "local-official-auth", "verify.sh")
 	for _, want := range []string{
 		"auth-fixture-observations.json",
+		`openai_exchange["subject_token"] == "openai-local-identity-jwt"`,
 		`obs["openai_authorization"] == "Bearer openai-official-access-token"`,
 		`exchange["assertion"] == "anthropic-local-identity-jwt"`,
 		`obs["anthropic_authorization"] == "Bearer anthropic-minted-local-token"`,
@@ -198,8 +199,9 @@ func TestMaddogBenchmarkCoverageAudit(t *testing.T) {
 	}
 
 	testEvidence := map[string][]string{
-		"OpenAI API-key and official bearer auth": {
+		"OpenAI API-key and official workload identity auth": {
 			"internal/provider/openai/openai_test.go:oauth-access-token",
+			"internal/provider/openai/openai_test.go:identity_provider_id",
 			"internal/provider/openai/openai_test.go:ICODEEASY_API_KEY",
 		},
 		"Anthropic official workload identity auth": {
@@ -284,6 +286,7 @@ func TestMaddogBenchmarkCoverageAudit(t *testing.T) {
 		"Offline official auth provider paths": {
 			"cmd/e2ebench/local_fixture.go:local-official-auth",
 			"cmd/e2ebench/local_fixture.go:openai-official-access-token",
+			"cmd/e2ebench/local_fixture.go:/oauth/token",
 			"cmd/e2ebench/local_fixture.go:/v1/oauth/token",
 			"cmd/e2ebench/local_fixture.go:anthropic-minted-local-token",
 			"internal/config/config.go:workload identity reads a pre-minted access token when present",
@@ -292,10 +295,12 @@ func TestMaddogBenchmarkCoverageAudit(t *testing.T) {
 		"Live official auth smoke gate": {
 			"cmd/e2ebench/official_auth_smoke.go:official-auth-smoke",
 			"cmd/e2ebench/official_auth_smoke.go:OPENAI_OFFICIAL_TOKEN",
+			"cmd/e2ebench/official_auth_smoke.go:OPENAI_IDENTITY_TOKEN",
+			"cmd/e2ebench/official_auth_smoke.go:OPENAI_IDENTITY_PROVIDER_ID",
 			"cmd/e2ebench/official_auth_smoke.go:ANTHROPIC_IDENTITY_TOKEN",
 			"cmd/e2ebench/official_auth_smoke.go:ANTHROPIC_FEDERATION_RULE_ID",
 			"cmd/e2ebench/official_auth_smoke.go:workload_identity",
-			"cmd/e2ebench/live_official_auth_test.go:TestRunOfficialAuthSmokeUsesBearerAndWorkloadIdentity",
+			"cmd/e2ebench/live_official_auth_test.go:TestRunOfficialAuthSmokeUsesWorkloadIdentityForOpenAIAndAnthropic",
 		},
 		"Live frontier provider, advisor, cost, and scorer smoke gate": {
 			"cmd/e2ebench/frontier_smoke.go:frontier-smoke",
@@ -359,6 +364,8 @@ func TestMaddogBenchmarkCoverageAudit(t *testing.T) {
 		"Provider e2e ready",
 		"Frontier smoke ready",
 		"OPENAI_OFFICIAL_TOKEN",
+		"OPENAI_IDENTITY_TOKEN",
+		"OPENAI_IDENTITY_PROVIDER_ID",
 		"ANTHROPIC_IDENTITY_TOKEN",
 		"DEEPSEEK_API_KEY",
 		"local-provider-e2e",

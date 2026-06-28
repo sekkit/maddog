@@ -61,7 +61,7 @@ func AuthConfigFromExtra(extra map[string]any, fallbackToken, fallbackEnv string
 	if auth.Extra == nil {
 		auth.Extra = map[string]string{}
 	}
-	for _, key := range []string{"federation_rule_id", "organization_id", "service_account_id", "workspace_id"} {
+	for _, key := range []string{"federation_rule_id", "organization_id", "service_account_id", "workspace_id", "identity_provider_id", "subject_token_type", "token_url"} {
 		if auth.Extra[key] == "" {
 			auth.Extra[key] = read(key)
 		}

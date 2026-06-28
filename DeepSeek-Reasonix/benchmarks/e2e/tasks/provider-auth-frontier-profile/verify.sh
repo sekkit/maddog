@@ -24,7 +24,7 @@ assert providers["small"]["models"] == ["gpt-small-a", "gpt-small-b"]
 assert providers["frontier"]["kind"] == "anthropic"
 assert providers["frontier"]["auth_type"] == "bearer"
 assert providers["frontier"]["token_env"] == "ANTHROPIC_AUTH_TOKEN"
-assert providers["official-openai"]["auth_type"] == "bearer"
+assert providers["official-openai"]["auth_type"] == "workload_identity"
 assert providers["official-anthropic"]["auth_type"] == "workload_identity"
 assert data["desktop_provider_access"] == ["official-openai", "official-anthropic"], data
 serialized = json.dumps(data)

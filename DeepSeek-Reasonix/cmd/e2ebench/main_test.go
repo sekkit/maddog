@@ -399,8 +399,10 @@ max_tool_errors = 0
 	}
 	for _, want := range []string{
 		`default_model = "local-openai-official/local-openai-official-model"`,
-		`auth_type = "bearer"`,
-		`auth_token_env = "MADDOG_LOCAL_OPENAI_OFFICIAL_TOKEN"`,
+		`identity_env = "MADDOG_LOCAL_OPENAI_IDENTITY_TOKEN"`,
+		`identity_provider_id = "wip_local"`,
+		`subject_token_type = "urn:ietf:params:oauth:token-type:jwt"`,
+		`service_account_id = "svc_openai_local"`,
 		`auth_type = "workload_identity"`,
 		`identity_env = "MADDOG_LOCAL_ANTHROPIC_IDENTITY_TOKEN"`,
 		`federation_rule_id = "fdrl_local"`,

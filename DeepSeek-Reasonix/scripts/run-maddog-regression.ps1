@@ -224,6 +224,11 @@ $LiveCredentialNames = @(
   "OPENAI_API_KEY",
   "ANTHROPIC_API_KEY",
   "OPENAI_OFFICIAL_TOKEN",
+  "OPENAI_IDENTITY_TOKEN",
+  "OPENAI_IDENTITY_PROVIDER_ID",
+  "OPENAI_SERVICE_ACCOUNT_ID",
+  "OPENAI_SUBJECT_TOKEN_TYPE",
+  "OPENAI_WORKLOAD_TOKEN_URL",
   "ANTHROPIC_IDENTITY_TOKEN"
 )
 $LiveCredentials = @(
@@ -238,7 +243,13 @@ $AnyProviderCredential = [bool](($LiveCredentials | Where-Object { $_.set -and $
 $AnyFrontierCredential = [bool](($LiveCredentials | Where-Object { $_.set -and $_.name -in @("ICODEEASY_API_KEY", "OPENAI_API_KEY") } | Select-Object -First 1))
 $AnthropicLiveReady = [bool](($LiveCredentials | Where-Object { $_.name -eq "ANTHROPIC_API_KEY" -and $_.set } | Select-Object -First 1))
 $FrontierSmokeReady = [bool]($AnyFrontierCredential -and $AnthropicLiveReady)
-$OpenAIOfficialReady = [bool](($LiveCredentials | Where-Object { $_.name -eq "OPENAI_OFFICIAL_TOKEN" -and $_.set } | Select-Object -First 1))
+$OpenAIOfficialBearerReady = [bool](($LiveCredentials | Where-Object { $_.name -eq "OPENAI_OFFICIAL_TOKEN" -and $_.set } | Select-Object -First 1))
+$OpenAIOfficialWorkloadReady = [bool](
+  ($LiveCredentials | Where-Object { $_.name -eq "OPENAI_IDENTITY_TOKEN" -and $_.set } | Select-Object -First 1) -and
+  ($LiveCredentials | Where-Object { $_.name -eq "OPENAI_IDENTITY_PROVIDER_ID" -and $_.set } | Select-Object -First 1) -and
+  ($LiveCredentials | Where-Object { $_.name -eq "OPENAI_SERVICE_ACCOUNT_ID" -and $_.set } | Select-Object -First 1)
+)
+$OpenAIOfficialReady = [bool]($OpenAIOfficialBearerReady -or $OpenAIOfficialWorkloadReady)
 $AnthropicOfficialReady = [bool](($LiveCredentials | Where-Object { $_.name -eq "ANTHROPIC_IDENTITY_TOKEN" -and $_.set } | Select-Object -First 1))
 $OfficialAuthReady = [bool]($OpenAIOfficialReady -and $AnthropicOfficialReady)
 $LiveRequirements = @(
@@ -253,8 +264,8 @@ $LiveRequirements = @(
     gate = "official-auth-smoke"
     ready = [bool]$OfficialAuthReady
     command = "powershell -ExecutionPolicy Bypass -File scripts/run-maddog-regression.ps1 -IncludeOfficialAuthSmoke"
-    any_of = @()
-    all_of = @("OPENAI_OFFICIAL_TOKEN", "ANTHROPIC_IDENTITY_TOKEN")
+    any_of = @("OPENAI_OFFICIAL_TOKEN", "OPENAI_IDENTITY_TOKEN + OPENAI_IDENTITY_PROVIDER_ID + OPENAI_SERVICE_ACCOUNT_ID")
+    all_of = @("ANTHROPIC_IDENTITY_TOKEN")
   },
   [ordered]@{
     gate = "frontier-smoke"
@@ -284,7 +295,7 @@ $LiveReadiness = [ordered]@{
     "powershell -ExecutionPolicy Bypass -File scripts/run-maddog-regression.ps1 -IncludeFrontierSmoke",
     "powershell -ExecutionPolicy Bypass -File scripts/run-maddog-regression.ps1 -IncludeDesktopBuildSmoke",
     "powershell -ExecutionPolicy Bypass -File scripts/run-maddog-regression.ps1 -IncludeE2E -IncludeOfficialAuthSmoke -IncludeFrontierSmoke -IncludeExternal -IncludeDesktopBuildSmoke",
-    "Set OPENAI_OFFICIAL_TOKEN and ANTHROPIC_IDENTITY_TOKEN before claiming official auth live coverage"
+    "Set ANTHROPIC_IDENTITY_TOKEN plus OPENAI_OFFICIAL_TOKEN, or OpenAI WIF envs OPENAI_IDENTITY_TOKEN + OPENAI_IDENTITY_PROVIDER_ID + OPENAI_SERVICE_ACCOUNT_ID, before claiming official auth live coverage"
   )
 }
 
@@ -296,8 +307,8 @@ $CoverageMatrix = @(
     status = "partial-live-pending"
     remaining = @(
       if (-not $LiveReadiness.provider_api_key_e2e_ready) { "Run real-provider Maddog e2e with at least one API-key provider credential." }
-      if (-not $LiveReadiness.official_auth_e2e_ready) { "Set OPENAI_OFFICIAL_TOKEN and ANTHROPIC_IDENTITY_TOKEN, then run -IncludeOfficialAuthSmoke." }
-      elseif (-not $IncludeOfficialAuthSmoke) { "Run official OpenAI bearer and Anthropic workload-identity live auth checks with -IncludeOfficialAuthSmoke." }
+      if (-not $LiveReadiness.official_auth_e2e_ready) { "Set ANTHROPIC_IDENTITY_TOKEN plus OPENAI_OFFICIAL_TOKEN or OpenAI WIF envs, then run -IncludeOfficialAuthSmoke." }
+      elseif (-not $IncludeOfficialAuthSmoke) { "Run official OpenAI workload-identity or bearer fallback plus Anthropic workload-identity live auth checks with -IncludeOfficialAuthSmoke." }
     )
     optional_remaining = @()
   },
@@ -582,12 +593,12 @@ if ($IncludeFrontierSmoke) {
 
 if ($IncludeOfficialAuthSmoke) {
   if (!$OfficialAuthReady) {
-    Add-SkipStep -Name "official-auth-smoke" -Reason "OPENAI_OFFICIAL_TOKEN and ANTHROPIC_IDENTITY_TOKEN must both be set." -Coverage @("official-auth-live", "openai-bearer", "anthropic-workload-identity")
+    Add-SkipStep -Name "official-auth-smoke" -Reason "ANTHROPIC_IDENTITY_TOKEN plus OPENAI_OFFICIAL_TOKEN, or OpenAI WIF envs OPENAI_IDENTITY_TOKEN + OPENAI_IDENTITY_PROVIDER_ID + OPENAI_SERVICE_ACCOUNT_ID, must be set." -Coverage @("official-auth-live", "openai-workload-identity", "openai-bearer-fallback", "anthropic-workload-identity")
   } else {
     Invoke-Step `
       -Name "official-auth-smoke" `
       -Command "$GoExe run ./cmd/e2ebench -mode official-auth-smoke -openai-model $OfficialOpenAIModel -anthropic-model $OfficialAnthropicModel -out .benchmark/regression/official-auth.md -json .benchmark/regression/official-auth.json" `
-      -Coverage @("official-auth-live", "openai-bearer", "anthropic-workload-identity") `
+      -Coverage @("official-auth-live", "openai-workload-identity", "openai-bearer-fallback", "anthropic-workload-identity") `
       -Required $true `
       -Action {
         Invoke-Native $GoExe @(
@@ -601,7 +612,7 @@ if ($IncludeOfficialAuthSmoke) {
       }
   }
 } else {
-  Add-SkipStep -Name "official-auth-smoke" -Reason "Skipped by default. Use -IncludeOfficialAuthSmoke with OPENAI_OFFICIAL_TOKEN and ANTHROPIC_IDENTITY_TOKEN for live official auth validation." -Coverage @("official-auth-live")
+  Add-SkipStep -Name "official-auth-smoke" -Reason "Skipped by default. Use -IncludeOfficialAuthSmoke with ANTHROPIC_IDENTITY_TOKEN plus OPENAI_OFFICIAL_TOKEN or OpenAI WIF envs for live official auth validation." -Coverage @("official-auth-live")
 }
 
 if ($IncludeExternal) {
@@ -675,9 +686,9 @@ $CoverageMatrix[0].remaining = @(
   }
   if (-not $OfficialAuthLiveVerified) {
     if ($LiveReadiness.official_auth_e2e_ready) {
-      "Run official OpenAI bearer and Anthropic workload-identity live auth checks with -IncludeOfficialAuthSmoke."
+      "Run official OpenAI workload-identity or bearer fallback plus Anthropic workload-identity live auth checks with -IncludeOfficialAuthSmoke."
     } else {
-      "Set OPENAI_OFFICIAL_TOKEN and ANTHROPIC_IDENTITY_TOKEN, then run -IncludeOfficialAuthSmoke."
+      "Set ANTHROPIC_IDENTITY_TOKEN plus OPENAI_OFFICIAL_TOKEN or OpenAI WIF envs, then run -IncludeOfficialAuthSmoke."
     }
   }
 )

@@ -47,7 +47,7 @@ const (
 	localOfficialAnthropicProvider = "local-anthropic-official"
 	localOfficialAnthropicModel    = "claude-local-official"
 	localOfficialAnthropicModelRef = localOfficialAnthropicProvider + "/" + localOfficialAnthropicModel
-	localOfficialOpenAITokenEnv    = "MADDOG_LOCAL_OPENAI_OFFICIAL_TOKEN"
+	localOfficialOpenAIIdentityEnv = "MADDOG_LOCAL_OPENAI_IDENTITY_TOKEN"
 	localOfficialIdentityEnv       = "MADDOG_LOCAL_ANTHROPIC_IDENTITY_TOKEN"
 )
 
@@ -219,7 +219,7 @@ func localFixtureSpecFor(kind localFixtureKind) (localFixtureSpec, error) {
 			model:    localOfficialOpenAIModel,
 			modelRef: localOfficialOpenAIModelRef,
 			envs: []localFixtureEnvValue{
-				{key: localOfficialOpenAITokenEnv, value: "openai-official-access-token"},
+				{key: localOfficialOpenAIIdentityEnv, value: "openai-local-identity-jwt"},
 				{key: localOfficialIdentityEnv, value: "anthropic-local-identity-jwt"},
 			},
 			kind:        "openai",
@@ -307,8 +307,12 @@ name = %q
 kind = "openai"
 base_url = %q
 model = %q
-auth_type = "bearer"
-auth_token_env = %q
+auth_type = "workload_identity"
+identity_env = %q
+identity_provider_id = "wip_local"
+subject_token_type = "urn:ietf:params:oauth:token-type:jwt"
+service_account_id = "svc_openai_local"
+token_url = %q
 no_proxy = true
 
 [[providers]]
@@ -323,7 +327,7 @@ organization_id = "org_local"
 service_account_id = "svac_local"
 no_proxy = true
 `, localOfficialOpenAIModelRef, localOfficialAnthropicModelRef,
-		localOfficialOpenAIProvider, baseURL, localOfficialOpenAIModel, localOfficialOpenAITokenEnv,
+		localOfficialOpenAIProvider, baseURL, localOfficialOpenAIModel, localOfficialOpenAIIdentityEnv, baseURL+"/oauth/token",
 		localOfficialAnthropicProvider, baseURL, localOfficialAnthropicModel, localOfficialIdentityEnv)
 	return os.WriteFile(filepath.Join(workDir, "maddog.toml"), []byte(body), 0o644)
 }
@@ -334,12 +338,14 @@ type localProviderFixture struct {
 }
 
 type localOfficialAuthFixture struct {
-	mu                sync.Mutex
-	openAIAuth        string
-	exchangeSeen      bool
-	exchangeBody      map[string]string
-	anthropicAuth     string
-	anthropicRequests int
+	mu                 sync.Mutex
+	openAIAuth         string
+	openAIExchangeSeen bool
+	openAIExchangeBody map[string]string
+	exchangeSeen       bool
+	exchangeBody       map[string]string
+	anthropicAuth      string
+	anthropicRequests  int
 }
 
 type localOpenAIRequest struct {
@@ -384,6 +390,7 @@ func newLocalOfficialAuthFixture(_ string) *httptest.Server {
 	fixture := &localOfficialAuthFixture{}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/chat/completions", fixture.openAIChatCompletions)
+	mux.HandleFunc("/oauth/token", fixture.openAITokenExchange)
 	mux.HandleFunc("/v1/messages", fixture.anthropicMessages)
 	mux.HandleFunc("/v1/oauth/token", fixture.anthropicTokenExchange)
 	mux.HandleFunc("/models", localOfficialAuthModels)
@@ -584,6 +591,21 @@ func (f *localOfficialAuthFixture) openAIChatCompletions(w http.ResponseWriter, 
 	_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
 }
 
+func (f *localOfficialAuthFixture) openAITokenExchange(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	body := map[string]string{}
+	_ = json.NewDecoder(r.Body).Decode(&body)
+	f.mu.Lock()
+	f.openAIExchangeSeen = true
+	f.openAIExchangeBody = body
+	f.mu.Unlock()
+	w.Header().Set("Content-Type", "application/json")
+	_, _ = io.WriteString(w, `{"access_token":"openai-official-access-token","token_type":"bearer","expires_in":3600}`)
+}
+
 func (f *localOfficialAuthFixture) anthropicTokenExchange(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -673,6 +695,8 @@ func (f *localOfficialAuthFixture) observationsJSON() string {
 	f.mu.Lock()
 	data := map[string]any{
 		"openai_authorization":    f.openAIAuth,
+		"openai_exchange_seen":    f.openAIExchangeSeen,
+		"openai_exchange_body":    f.openAIExchangeBody,
 		"anthropic_authorization": f.anthropicAuth,
 		"exchange_seen":           f.exchangeSeen,
 		"exchange_body":           f.exchangeBody,

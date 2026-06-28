@@ -9,7 +9,9 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+	"sync"
 	"sync/atomic"
+	"time"
 
 	"reasonix/internal/provider"
 )
@@ -41,6 +43,8 @@ type responsesClient struct {
 	effort  string
 	http    *http.Client
 	authed  atomic.Bool
+	authMu  sync.Mutex
+	authExp time.Time
 }
 
 func (c *responsesClient) Name() string { return c.name }
@@ -66,13 +70,17 @@ func (c *responsesClient) Stream(ctx context.Context, req provider.Request) (<-c
 	bufPool.Put(buf)
 
 	newReq := func(ctx context.Context) (*http.Request, error) {
+		auth, err := c.requestAuth(ctx)
+		if err != nil {
+			return nil, err
+		}
 		httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/responses", bytes.NewReader(body))
 		if err != nil {
 			return nil, err
 		}
 		httpReq.Header.Set("Content-Type", "application/json")
 		httpReq.Header.Set("Accept", "text/event-stream")
-		c.auth.Header(httpReq, "Authorization")
+		auth.Header(httpReq, "Authorization")
 		return httpReq, nil
 	}
 	resp, err := provider.SendWithRetry(ctx, c.http, c.sendOpts(), newReq)
@@ -83,6 +91,37 @@ func (c *responsesClient) Stream(ctx context.Context, req provider.Request) (<-c
 	out := make(chan provider.Chunk)
 	go c.readStream(ctx, resp, out)
 	return out, nil
+}
+
+func (c *responsesClient) requestAuth(ctx context.Context) (provider.AuthConfig, error) {
+	auth := c.auth
+	if auth.TokenEnv == "" {
+		auth.TokenEnv = c.keyEnv
+	}
+	if auth.NormalizedType() != provider.AuthTypeWorkloadIdentity || auth.Token != "" {
+		return auth, nil
+	}
+	token, exp, err := c.exchangeWorkloadIdentity(ctx, auth)
+	if err != nil {
+		return auth, err
+	}
+	auth.Token = token
+	c.authMu.Lock()
+	c.auth.Token = token
+	c.authExp = exp
+	c.authMu.Unlock()
+	return auth, nil
+}
+
+func (c *responsesClient) exchangeWorkloadIdentity(ctx context.Context, auth provider.AuthConfig) (string, time.Time, error) {
+	c.authMu.Lock()
+	if c.auth.Token != "" && (c.authExp.IsZero() || time.Until(c.authExp) > time.Minute) {
+		token, exp := c.auth.Token, c.authExp
+		c.authMu.Unlock()
+		return token, exp, nil
+	}
+	c.authMu.Unlock()
+	return exchangeOpenAIWorkloadIdentity(ctx, c.http, c.name, auth)
 }
 
 func (c *responsesClient) buildRequest(req provider.Request) responsesRequest {

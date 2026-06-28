@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -163,6 +164,69 @@ func TestStreamUsesBearerTokenAuthEnv(t *testing.T) {
 	}
 }
 
+func TestStreamExchangesOpenAIWorkloadIdentity(t *testing.T) {
+	var gotTokenBody map[string]string
+	var gotAuth string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/oauth/token":
+			if err := json.NewDecoder(r.Body).Decode(&gotTokenBody); err != nil {
+				t.Fatalf("decode token request: %v", err)
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"access_token": "openai-wif-access-token",
+				"token_type":   "bearer",
+				"expires_in":   3600,
+			})
+		case "/chat/completions":
+			gotAuth = r.Header.Get("Authorization")
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = io.WriteString(w, "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\n")
+			_, _ = io.WriteString(w, "data: [DONE]\n\n")
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	p, err := New(testProviderConfig("official-openai", srv.URL, "gpt-4.1-mini", "", map[string]any{
+		"auth_type":            "workload_identity",
+		"identity_token":       "external-oidc-jwt",
+		"identity_env":         "OPENAI_IDENTITY_TOKEN",
+		"identity_provider_id": "wip_openai",
+		"service_account_id":   "svc_openai",
+		"subject_token_type":   "urn:ietf:params:oauth:token-type:id_token",
+		"token_url":            srv.URL + "/oauth/token",
+	}))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	ch, err := p.Stream(context.Background(), provider.Request{Messages: []provider.Message{{Role: provider.RoleUser, Content: "hi"}}})
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	for ck := range ch {
+		if ck.Type == provider.ChunkError {
+			t.Fatalf("stream error: %v", ck.Err)
+		}
+	}
+	want := map[string]string{
+		"grant_type":           "urn:ietf:params:oauth:grant-type:token-exchange",
+		"subject_token_type":   "urn:ietf:params:oauth:token-type:id_token",
+		"subject_token":        "external-oidc-jwt",
+		"identity_provider_id": "wip_openai",
+		"service_account_id":   "svc_openai",
+	}
+	if !reflect.DeepEqual(gotTokenBody, want) {
+		t.Fatalf("token request = %#v, want %#v", gotTokenBody, want)
+	}
+	if gotAuth != "Bearer openai-wif-access-token" {
+		t.Fatalf("Authorization = %q, want exchanged bearer", gotAuth)
+	}
+}
+
 func TestResponsesWireStreamsTextAndUsage(t *testing.T) {
 	var gotPath, gotAuth string
 	var gotBody map[string]any
@@ -231,6 +295,60 @@ func TestResponsesWireStreamsTextAndUsage(t *testing.T) {
 	}
 	if usage.PromptTokens != 11 || usage.CompletionTokens != 7 || usage.TotalTokens != 18 || usage.CacheHitTokens != 3 || usage.CacheMissTokens != 8 || usage.ReasoningTokens != 2 {
 		t.Fatalf("usage = %+v", usage)
+	}
+}
+
+func TestResponsesWireExchangesOpenAIWorkloadIdentity(t *testing.T) {
+	var gotTokenBody map[string]string
+	var gotAuth string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/oauth/token":
+			if err := json.NewDecoder(r.Body).Decode(&gotTokenBody); err != nil {
+				t.Fatalf("decode token request: %v", err)
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"access_token": "openai-responses-wif-token",
+				"token_type":   "bearer",
+				"expires_in":   3600,
+			})
+		case "/responses":
+			gotAuth = r.Header.Get("Authorization")
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = io.WriteString(w, `data: {"type":"response.output_text.delta","delta":"OK"}`+"\n\n")
+			_, _ = io.WriteString(w, `data: {"type":"response.completed","response":{"status":"completed"}}`+"\n\n")
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	p, err := New(testProviderConfig("official-openai", srv.URL, "gpt-5.5", "", map[string]any{
+		"wire_api":             "responses",
+		"auth_type":            "workload_identity",
+		"identity_token":       "external-oidc-jwt",
+		"identity_provider_id": "wip_openai",
+		"service_account_id":   "svc_openai",
+		"token_url":            srv.URL + "/oauth/token",
+	}))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	ch, err := p.Stream(context.Background(), provider.Request{Messages: []provider.Message{{Role: provider.RoleUser, Content: "hi"}}})
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	for ck := range ch {
+		if ck.Type == provider.ChunkError {
+			t.Fatalf("stream error: %v", ck.Err)
+		}
+	}
+	if gotTokenBody["subject_token_type"] != "urn:ietf:params:oauth:token-type:jwt" {
+		t.Fatalf("default subject_token_type = %q, want jwt", gotTokenBody["subject_token_type"])
+	}
+	if gotAuth != "Bearer openai-responses-wif-token" {
+		t.Fatalf("Authorization = %q, want exchanged bearer", gotAuth)
 	}
 }
 

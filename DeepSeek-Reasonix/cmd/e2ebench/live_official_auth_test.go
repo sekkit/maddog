@@ -9,8 +9,11 @@ import (
 	"testing"
 )
 
-func TestRunOfficialAuthSmokeUsesBearerAndWorkloadIdentity(t *testing.T) {
-	t.Setenv("OPENAI_OFFICIAL_TOKEN", "openai-live-token")
+func TestRunOfficialAuthSmokeUsesWorkloadIdentityForOpenAIAndAnthropic(t *testing.T) {
+	t.Setenv("OPENAI_IDENTITY_TOKEN", "openai-identity-jwt")
+	t.Setenv("OPENAI_IDENTITY_PROVIDER_ID", "wip_live")
+	t.Setenv("OPENAI_SERVICE_ACCOUNT_ID", "svc_live")
+	t.Setenv("OPENAI_SUBJECT_TOKEN_TYPE", "urn:ietf:params:oauth:token-type:id_token")
 	t.Setenv("ANTHROPIC_IDENTITY_TOKEN", "anthropic-identity-jwt")
 	t.Setenv("ANTHROPIC_FEDERATION_RULE_ID", "fdrl_live")
 	t.Setenv("ANTHROPIC_ORGANIZATION_ID", "org_live")
@@ -18,10 +21,26 @@ func TestRunOfficialAuthSmokeUsesBearerAndWorkloadIdentity(t *testing.T) {
 	t.Setenv("ANTHROPIC_WORKSPACE_ID", "wsp_live")
 
 	var gotOpenAIAuth string
+	var sawOpenAIExchange bool
 	var sawAnthropicExchange bool
 	var gotAnthropicAuth string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
+		case "/oauth/token":
+			sawOpenAIExchange = true
+			var body map[string]string
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Fatalf("decode OpenAI token exchange: %v", err)
+			}
+			if body["grant_type"] != "urn:ietf:params:oauth:grant-type:token-exchange" ||
+				body["subject_token_type"] != "urn:ietf:params:oauth:token-type:id_token" ||
+				body["subject_token"] != "openai-identity-jwt" ||
+				body["identity_provider_id"] != "wip_live" ||
+				body["service_account_id"] != "svc_live" {
+				t.Fatalf("OpenAI exchange body = %+v", body)
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, `{"access_token":"openai-live-token","token_type":"bearer","expires_in":3600}`)
 		case "/chat/completions":
 			gotOpenAIAuth = r.Header.Get("Authorization")
 			w.Header().Set("Content-Type", "text/event-stream")
@@ -56,6 +75,7 @@ func TestRunOfficialAuthSmokeUsesBearerAndWorkloadIdentity(t *testing.T) {
 		}
 	}))
 	defer srv.Close()
+	t.Setenv("OPENAI_WORKLOAD_TOKEN_URL", srv.URL+"/oauth/token")
 
 	result := runOfficialAuthSmoke(officialAuthSmokeConfig{
 		OpenAIBaseURL:    srv.URL,
@@ -67,6 +87,9 @@ func TestRunOfficialAuthSmokeUsesBearerAndWorkloadIdentity(t *testing.T) {
 
 	if !result.Passed {
 		t.Fatalf("official auth smoke failed: %+v", result)
+	}
+	if !sawOpenAIExchange {
+		t.Fatal("expected OpenAI workload identity exchange")
 	}
 	if gotOpenAIAuth != "Bearer openai-live-token" {
 		t.Fatalf("OpenAI Authorization = %q", gotOpenAIAuth)

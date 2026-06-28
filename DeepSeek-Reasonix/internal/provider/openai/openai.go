@@ -37,6 +37,12 @@ import (
 // would race other streams' watchdogs.
 const defaultStreamIdleTimeout = 120 * time.Second
 
+const (
+	openAIWorkloadTokenURL           = "https://auth.openai.com/oauth/token"
+	openAIWorkloadGrantType          = "urn:ietf:params:oauth:grant-type:token-exchange"
+	openAIWorkloadDefaultSubjectType = "urn:ietf:params:oauth:token-type:jwt"
+)
+
 func init() {
 	provider.Register("openai", New)
 }
@@ -149,6 +155,8 @@ type client struct {
 	model        string
 	http         *http.Client
 	authed       atomic.Bool
+	authMu       sync.Mutex
+	authExp      time.Time
 	deepseek     bool
 	minimax      bool
 	effort       string // reasoning_effort forwarded to thinking-capable models; "" = omit
@@ -206,12 +214,16 @@ func (c *client) Stream(ctx context.Context, req provider.Request) (<-chan provi
 	bufPool.Put(buf)
 
 	newReq := func(ctx context.Context) (*http.Request, error) {
+		auth, err := c.requestAuth(ctx)
+		if err != nil {
+			return nil, err
+		}
 		httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/chat/completions", bytes.NewReader(body))
 		if err != nil {
 			return nil, err
 		}
 		httpReq.Header.Set("Content-Type", "application/json")
-		c.auth.Header(httpReq, "Authorization")
+		auth.Header(httpReq, "Authorization")
 		httpReq.Header.Set("Accept", "text/event-stream")
 		return httpReq, nil
 	}
@@ -224,6 +236,109 @@ func (c *client) Stream(ctx context.Context, req provider.Request) (<-chan provi
 	out := make(chan provider.Chunk)
 	go c.streamWithReconnect(ctx, resp, newReq, out)
 	return out, nil
+}
+
+func (c *client) requestAuth(ctx context.Context) (provider.AuthConfig, error) {
+	auth := c.auth
+	if auth.Token == "" {
+		auth.Token = c.apiKey
+	}
+	if auth.TokenEnv == "" {
+		auth.TokenEnv = c.keyEnv
+	}
+	if auth.NormalizedType() != provider.AuthTypeWorkloadIdentity || auth.Token != "" {
+		return auth, nil
+	}
+	token, exp, err := c.exchangeWorkloadIdentity(ctx, auth)
+	if err != nil {
+		return auth, err
+	}
+	auth.Token = token
+	c.authMu.Lock()
+	c.auth.Token = token
+	c.authExp = exp
+	c.authMu.Unlock()
+	return auth, nil
+}
+
+func (c *client) exchangeWorkloadIdentity(ctx context.Context, auth provider.AuthConfig) (string, time.Time, error) {
+	c.authMu.Lock()
+	if c.auth.Token != "" && (c.authExp.IsZero() || time.Until(c.authExp) > time.Minute) {
+		token, exp := c.auth.Token, c.authExp
+		c.authMu.Unlock()
+		return token, exp, nil
+	}
+	c.authMu.Unlock()
+	return exchangeOpenAIWorkloadIdentity(ctx, c.http, c.name, auth)
+}
+
+func exchangeOpenAIWorkloadIdentity(ctx context.Context, httpClient *http.Client, providerName string, auth provider.AuthConfig) (string, time.Time, error) {
+	assertion := strings.TrimSpace(auth.IdentityToken)
+	if assertion == "" {
+		return "", time.Time{}, fmt.Errorf("%s: workload identity auth requires identity token", providerName)
+	}
+	identityProviderID := strings.TrimSpace(auth.Extra["identity_provider_id"])
+	if identityProviderID == "" {
+		return "", time.Time{}, fmt.Errorf("%s: workload identity auth requires identity_provider_id", providerName)
+	}
+	serviceAccountID := strings.TrimSpace(auth.Extra["service_account_id"])
+	if serviceAccountID == "" {
+		return "", time.Time{}, fmt.Errorf("%s: workload identity auth requires service_account_id", providerName)
+	}
+	subjectTokenType := strings.TrimSpace(auth.Extra["subject_token_type"])
+	if subjectTokenType == "" {
+		subjectTokenType = openAIWorkloadDefaultSubjectType
+	}
+	body := map[string]string{
+		"grant_type":           openAIWorkloadGrantType,
+		"subject_token_type":   subjectTokenType,
+		"subject_token":        assertion,
+		"identity_provider_id": identityProviderID,
+		"service_account_id":   serviceAccountID,
+	}
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(body); err != nil {
+		return "", time.Time{}, fmt.Errorf("%s: workload identity auth: marshal token request: %w", providerName, err)
+	}
+	tokenURL := strings.TrimSpace(auth.Extra["token_url"])
+	if tokenURL == "" {
+		tokenURL = openAIWorkloadTokenURL
+	}
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, tokenURL, &buf)
+	if err != nil {
+		return "", time.Time{}, err
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Accept", "application/json")
+	resp, err := httpClient.Do(httpReq)
+	if err != nil {
+		return "", time.Time{}, fmt.Errorf("%s: workload identity auth: token exchange failed: %w", providerName, err)
+	}
+	defer resp.Body.Close()
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, 256*1024))
+	if err != nil {
+		return "", time.Time{}, fmt.Errorf("%s: workload identity auth: read token response: %w", providerName, err)
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "", time.Time{}, fmt.Errorf("%s: workload identity auth: token exchange status %d: %s", providerName, resp.StatusCode, strings.TrimSpace(string(respBody)))
+	}
+	var decoded struct {
+		AccessToken string `json:"access_token"`
+		ExpiresIn   int64  `json:"expires_in"`
+		TokenType   string `json:"token_type"`
+	}
+	if err := json.Unmarshal(respBody, &decoded); err != nil {
+		return "", time.Time{}, fmt.Errorf("%s: workload identity auth: decode token response: %w", providerName, err)
+	}
+	token := strings.TrimSpace(decoded.AccessToken)
+	if token == "" {
+		return "", time.Time{}, fmt.Errorf("%s: workload identity auth: token response missing access_token", providerName)
+	}
+	var exp time.Time
+	if decoded.ExpiresIn > 0 {
+		exp = time.Now().Add(time.Duration(decoded.ExpiresIn) * time.Second)
+	}
+	return token, exp, nil
 }
 
 // maxStreamReconnects bounds how many times a mid-stream connection drop is

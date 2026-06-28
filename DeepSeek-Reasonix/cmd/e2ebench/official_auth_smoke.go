@@ -16,6 +16,11 @@ import (
 const (
 	officialAuthSmokeMode     = "official-auth-smoke"
 	openAIOfficialTokenEnv    = "OPENAI_OFFICIAL_TOKEN"
+	openAIIdentityTokenEnv    = "OPENAI_IDENTITY_TOKEN"
+	openAIIdentityProviderEnv = "OPENAI_IDENTITY_PROVIDER_ID"
+	openAIServiceAcctEnv      = "OPENAI_SERVICE_ACCOUNT_ID"
+	openAISubjectTypeEnv      = "OPENAI_SUBJECT_TOKEN_TYPE"
+	openAITokenURLEnv         = "OPENAI_WORKLOAD_TOKEN_URL"
 	anthropicIdentityTokenEnv = "ANTHROPIC_IDENTITY_TOKEN"
 	anthropicFederationEnv    = "ANTHROPIC_FEDERATION_RULE_ID"
 	anthropicOrganizationEnv  = "ANTHROPIC_ORGANIZATION_ID"
@@ -53,10 +58,15 @@ func runOfficialAuthSmoke(cfg officialAuthSmokeConfig) officialAuthSmokeResult {
 		OpenAI:    officialProviderSmoke{Model: cfg.OpenAIModel},
 		Anthropic: officialProviderSmoke{Model: cfg.AnthropicModel},
 	}
-	for _, name := range []string{openAIOfficialTokenEnv, anthropicIdentityTokenEnv} {
-		if strings.TrimSpace(os.Getenv(name)) == "" {
-			result.MissingCredential = append(result.MissingCredential, name)
+	if strings.TrimSpace(os.Getenv(openAIOfficialTokenEnv)) == "" {
+		for _, name := range []string{openAIIdentityTokenEnv, openAIIdentityProviderEnv, openAIServiceAcctEnv} {
+			if strings.TrimSpace(os.Getenv(name)) == "" {
+				result.MissingCredential = append(result.MissingCredential, name)
+			}
 		}
+	}
+	if strings.TrimSpace(os.Getenv(anthropicIdentityTokenEnv)) == "" {
+		result.MissingCredential = append(result.MissingCredential, anthropicIdentityTokenEnv)
 	}
 	if len(result.MissingCredential) > 0 {
 		result.Note = "missing credentials: " + strings.Join(result.MissingCredential, ", ")
@@ -98,17 +108,31 @@ func normalizeOfficialAuthSmokeConfig(cfg officialAuthSmokeConfig) officialAuthS
 
 func smokeOfficialOpenAI(ctx context.Context, cfg officialAuthSmokeConfig) officialProviderSmoke {
 	smoke := officialProviderSmoke{Model: cfg.OpenAIModel}
+	extra := map[string]any{
+		"proxy_spec":  netclient.ProxySpec{Mode: netclient.ModeEnv},
+		"auth_type":   "workload_identity",
+		"auth_header": "Authorization",
+	}
+	if token := strings.TrimSpace(os.Getenv(openAIOfficialTokenEnv)); token != "" {
+		extra["auth_token"] = token
+		extra["auth_token_env"] = openAIOfficialTokenEnv
+	} else {
+		extra["identity_token"] = strings.TrimSpace(os.Getenv(openAIIdentityTokenEnv))
+		extra["identity_env"] = openAIIdentityTokenEnv
+		extra["identity_provider_id"] = strings.TrimSpace(os.Getenv(openAIIdentityProviderEnv))
+		extra["service_account_id"] = strings.TrimSpace(os.Getenv(openAIServiceAcctEnv))
+		if value := strings.TrimSpace(os.Getenv(openAISubjectTypeEnv)); value != "" {
+			extra["subject_token_type"] = value
+		}
+		if value := strings.TrimSpace(os.Getenv(openAITokenURLEnv)); value != "" {
+			extra["token_url"] = value
+		}
+	}
 	prov, err := provider.New("openai", provider.Config{
 		Name:    "official-openai",
 		BaseURL: cfg.OpenAIBaseURL,
 		Model:   cfg.OpenAIModel,
-		Extra: map[string]any{
-			"proxy_spec":     netclient.ProxySpec{Mode: netclient.ModeEnv},
-			"auth_type":      "bearer",
-			"auth_token":     strings.TrimSpace(os.Getenv(openAIOfficialTokenEnv)),
-			"auth_token_env": openAIOfficialTokenEnv,
-			"auth_header":    "Authorization",
-		},
+		Extra:   extra,
 	})
 	if err != nil {
 		smoke.Error = err.Error()
