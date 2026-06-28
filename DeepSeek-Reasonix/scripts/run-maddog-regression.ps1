@@ -6,6 +6,8 @@ param(
   [string]$E2ETags = "",
   [int]$E2EBudget = 400000,
   [switch]$IncludeFrontierSmoke,
+  [string]$FrontierOpenAIModel = "gpt-5.5",
+  [string]$FrontierAnthropicModel = "claude-sonnet-4-6",
   [switch]$IncludeOfficialAuthSmoke,
   [string]$OfficialOpenAIModel = "gpt-4.1-mini",
   [string]$OfficialAnthropicModel = "claude-sonnet-4-6",
@@ -210,8 +212,9 @@ $LiveCredentials = @(
   }
 )
 $AnyProviderCredential = [bool](($LiveCredentials | Where-Object { $_.set -and $_.name -in @("DEEPSEEK_API_KEY", "ICODEEASY_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY") } | Select-Object -First 1))
-$AnyFrontierCredential = [bool](($LiveCredentials | Where-Object { $_.set -and $_.name -in @("ICODEEASY_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY") } | Select-Object -First 1))
+$AnyFrontierCredential = [bool](($LiveCredentials | Where-Object { $_.set -and $_.name -in @("ICODEEASY_API_KEY", "OPENAI_API_KEY") } | Select-Object -First 1))
 $AnthropicLiveReady = [bool](($LiveCredentials | Where-Object { $_.name -eq "ANTHROPIC_API_KEY" -and $_.set } | Select-Object -First 1))
+$FrontierSmokeReady = [bool]($AnyFrontierCredential -and $AnthropicLiveReady)
 $OpenAIOfficialReady = [bool](($LiveCredentials | Where-Object { $_.name -eq "OPENAI_OFFICIAL_TOKEN" -and $_.set } | Select-Object -First 1))
 $AnthropicOfficialReady = [bool](($LiveCredentials | Where-Object { $_.name -eq "ANTHROPIC_IDENTITY_TOKEN" -and $_.set } | Select-Object -First 1))
 $OfficialAuthReady = [bool]($OpenAIOfficialReady -and $AnthropicOfficialReady)
@@ -219,7 +222,7 @@ $LiveReadiness = [ordered]@{
   provider_e2e_ready = [bool]($AnyProviderCredential -and $OfficialAuthReady)
   provider_api_key_e2e_ready = $AnyProviderCredential
   official_auth_e2e_ready = $OfficialAuthReady
-  frontier_smoke_ready = $AnyFrontierCredential
+  frontier_smoke_ready = $FrontierSmokeReady
   credentials = @(
     foreach ($c in $LiveCredentials) {
       [ordered]@{
@@ -255,7 +258,7 @@ $CoverageMatrix = @(
     evidence = @("core-go", "local-provider-e2e", "e2e optional", "frontier smoke optional")
     notes = "The local fixture requires a small-model failure path to upgrade to frontier and record upgrade metrics; live frontier calls are skipped unless -IncludeFrontierSmoke is used and credentials are present."
     status = if ($LiveReadiness.frontier_smoke_ready) { "verified" } else { "partial-live-pending" }
-    remaining = if ($LiveReadiness.frontier_smoke_ready) { @() } else { @("Run live frontier smoke with ICODEEASY_API_KEY, OPENAI_API_KEY, or ANTHROPIC_API_KEY.") }
+    remaining = if ($LiveReadiness.frontier_smoke_ready) { @() } else { @("Run live frontier/advisor/scorer smoke with ICODEEASY_API_KEY or OPENAI_API_KEY plus ANTHROPIC_API_KEY.") }
     optional_remaining = @()
   },
   [pscustomobject]@{
@@ -463,24 +466,27 @@ if ($IncludeE2E) {
 }
 
 if ($IncludeFrontierSmoke) {
-  if (!$AnyFrontierCredential) {
-    Add-SkipStep -Name "frontier-smoke" -Reason "No ICODEEASY_API_KEY, OPENAI_API_KEY, or ANTHROPIC_API_KEY is set." -Coverage @("frontier-real-call")
+  if (!$AnyFrontierCredential -or !$AnthropicLiveReady) {
+    Add-SkipStep -Name "frontier-smoke" -Reason "ICODEEASY_API_KEY or OPENAI_API_KEY plus ANTHROPIC_API_KEY are required for live frontier/advisor/scorer validation." -Coverage @("frontier-real-call", "anthropic-advisor-live", "frontier-scorer-live")
   } else {
     Invoke-Step `
       -Name "frontier-smoke" `
-      -Command "$GoExe run ./cmd/e2ebench -bin $MaddogBin -tags frontier -budget $E2EBudget -out .benchmark/regression/frontier.md -json .benchmark/regression/frontier.json" `
-      -Coverage @("frontier-real-call", "provider-auth-frontier-profile", "project-config-isolation") `
+      -Command "$GoExe run ./cmd/e2ebench -mode frontier-smoke -openai-model $FrontierOpenAIModel -anthropic-model $FrontierAnthropicModel -out .benchmark/regression/frontier.md -json .benchmark/regression/frontier.json" `
+      -Coverage @("frontier-real-call", "frontier-costwrap-live", "frontier-scorer-live", "anthropic-advisor-live") `
       -Required $true `
       -Action {
-        $frontierArgs = @("run", "./cmd/e2ebench", "-bin", $MaddogBin, "-tags", "frontier", "-budget", "$E2EBudget", "-out", ".benchmark/regression/frontier.md", "-json", ".benchmark/regression/frontier.json")
-        if ($Model -ne "") {
-          $frontierArgs += @("-model", $Model)
-        }
-        Invoke-Native $GoExe $frontierArgs
+        Invoke-Native $GoExe @(
+          "run", "./cmd/e2ebench",
+          "-mode", "frontier-smoke",
+          "-openai-model", $FrontierOpenAIModel,
+          "-anthropic-model", $FrontierAnthropicModel,
+          "-out", ".benchmark/regression/frontier.md",
+          "-json", ".benchmark/regression/frontier.json"
+        )
       }
   }
 } else {
-  Add-SkipStep -Name "frontier-smoke" -Reason "Skipped by default. Use -IncludeFrontierSmoke with provider credentials for live frontier validation." -Coverage @("frontier-real-call")
+  Add-SkipStep -Name "frontier-smoke" -Reason "Skipped by default. Use -IncludeFrontierSmoke with provider credentials for live frontier/advisor/scorer validation." -Coverage @("frontier-real-call")
 }
 
 if ($IncludeOfficialAuthSmoke) {
@@ -586,15 +592,15 @@ $CoverageMatrix[0].remaining = @(
 )
 $CoverageMatrix[1].status = if ($FrontierSmokeVerified) { "verified" } else { "partial-live-pending" }
 $CoverageMatrix[1].remaining = if ($FrontierSmokeVerified) { @() } else {
-  if ($LiveReadiness.frontier_smoke_ready) { @("Run live frontier smoke with -IncludeFrontierSmoke.") } else { @("Set ICODEEASY_API_KEY, OPENAI_API_KEY, or ANTHROPIC_API_KEY, then run -IncludeFrontierSmoke.") }
+  if ($LiveReadiness.frontier_smoke_ready -and $AnthropicLiveReady) { @("Run live frontier/advisor/scorer smoke with -IncludeFrontierSmoke.") } else { @("Set ICODEEASY_API_KEY or OPENAI_API_KEY plus ANTHROPIC_API_KEY, then run -IncludeFrontierSmoke.") }
 }
 $CoverageMatrix[2].status = if ($AnthropicAdvisorVerified) { "verified" } else { "partial-live-pending" }
 $CoverageMatrix[2].remaining = if ($AnthropicAdvisorVerified) { @() } else {
-  if ($AnthropicLiveReady) { @("Run live Anthropic advisor/provider smoke with -IncludeFrontierSmoke.") } else { @("Set ANTHROPIC_API_KEY, then run live Anthropic advisor/provider smoke.") }
+  if ($AnthropicLiveReady -and $LiveReadiness.frontier_smoke_ready) { @("Run live Anthropic advisor/provider smoke with -IncludeFrontierSmoke.") } else { @("Set ANTHROPIC_API_KEY plus ICODEEASY_API_KEY or OPENAI_API_KEY, then run -IncludeFrontierSmoke.") }
 }
 $CoverageMatrix[4].status = if ($FrontierSmokeVerified) { "verified" } else { "partial-live-pending" }
 $CoverageMatrix[4].remaining = if ($FrontierSmokeVerified) { @() } else {
-  if ($LiveReadiness.frontier_smoke_ready) { @("Run live frontier scoring path with -IncludeFrontierSmoke.") } else { @("Set frontier provider credentials, then run live frontier scoring path.") }
+  if ($LiveReadiness.frontier_smoke_ready) { @("Run live frontier scoring path with -IncludeFrontierSmoke.") } else { @("Set ICODEEASY_API_KEY or OPENAI_API_KEY, then run live frontier scoring path.") }
 }
 
 $CoverageSummaries = @(

@@ -288,6 +288,15 @@ func TestMaddogBenchmarkCoverageAudit(t *testing.T) {
 			"cmd/e2ebench/official_auth_smoke.go:workload_identity",
 			"cmd/e2ebench/live_official_auth_test.go:TestRunOfficialAuthSmokeUsesBearerAndWorkloadIdentity",
 		},
+		"Live frontier provider, advisor, cost, and scorer smoke gate": {
+			"cmd/e2ebench/frontier_smoke.go:frontier-smoke",
+			"cmd/e2ebench/frontier_smoke.go:ICODEEASY_API_KEY",
+			"cmd/e2ebench/frontier_smoke.go:ANTHROPIC_API_KEY",
+			"cmd/e2ebench/frontier_smoke.go:costwrap.New",
+			"cmd/e2ebench/frontier_smoke.go:eval.Score",
+			"cmd/e2ebench/frontier_smoke.go:NativeAdvisor",
+			"cmd/e2ebench/frontier_smoke_test.go:TestRunFrontierSmokeCoversProviderScorerCostAndAdvisor",
+		},
 	}
 	for capability, evidences := range testEvidence {
 		for _, evidence := range evidences {
@@ -323,6 +332,9 @@ func TestMaddogBenchmarkCoverageAudit(t *testing.T) {
 		"AuditOnly",
 		"IncludeOfficialAuthSmoke",
 		"official-auth-smoke",
+		"frontier-smoke",
+		"frontier-scorer-live",
+		"anthropic-advisor-live",
 		"partial-live-pending",
 		"verified-offline",
 		"official_auth_e2e_ready",
