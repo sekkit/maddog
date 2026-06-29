@@ -142,7 +142,7 @@ plan: docs/cc/maddog-fusion--3949/plan.md
 - **Depends on**: Unit B2, Unit B5, Unit B6
 - **Started-at-commit**: a5844225
 - **Result**: Automatic upgrade decisions now trigger a Go-native advisor consultation before frontier routing, with per-turn/session budgets, curated failure context, structured `event.Advisor`, and frontier-visible guidance. Verified by `go test ./internal/agent ./internal/config ./internal/provider/anthropic ./internal/boot ./internal/serve ./internal/cli -count=1` and full `go test ./... -count=1`.
-- **Commit**: pending
+- **Commit**: e76f7059
 
 ## Unit B8: Anthropic native advisor tool support
 - **Status**: completed
