@@ -50,6 +50,7 @@ import type {
   ServerView,
   SessionMeta,
   SettingsView,
+  SkillCandidateView,
   SkillRootView,
   SkillSuggestion,
   SkillView,
@@ -180,6 +181,9 @@ export interface AppBindings {
   RemoveSkillPath(path: string): Promise<void>;
   RefreshSkills(): Promise<void>;
   SetSkillEnabled(name: string, enabled: boolean): Promise<void>;
+  PromoteSkillCandidate(hash: string): Promise<string>;
+  RollbackSkillCandidate(hash: string, reason: string): Promise<void>;
+  RejectSkillCandidate(hash: string, reason: string): Promise<void>;
   SetMCPServerEnabled(name: string, enabled: boolean): Promise<void>;
   SetMCPServerTier(name: string, tier: string): Promise<void>;
   SlashArgs(input: string): Promise<SlashArgsResult>;
@@ -451,7 +455,7 @@ function bridgeBreadcrumb(method: string): string {
   if (/^(CheckUpdate|ApplyUpdate|OpenDownloadPage)/.test(method)) return `update ${method}`;
   if (/^(AddMCPServer|UpdateMCPServer|RemoveMCPServer|ReconnectMCPServer|UpdateBuiltInMCPServer|BuiltInMCPUpdateStatuses|ClearMCPServerAuthentication|SetMCPServer|SetCodeIntelligenceBackendEnabled|RetryCodeIntelligenceBackend|RunCodeIntelligenceBenchmark|setCodeIntelligenceBackendEnabled|retryCodeIntelligenceBackend|runCodeIntelligenceBenchmark)/.test(method))
     return `mcp ${method}`;
-  if (/^(AddSkillPath|RemoveSkillPath|RefreshSkills|SetSkillEnabled|AcceptSkillSuggestion)/.test(method))
+  if (/^(AddSkillPath|RemoveSkillPath|RefreshSkills|SetSkillEnabled|PromoteSkillCandidate|RollbackSkillCandidate|RejectSkillCandidate|AcceptSkillSuggestion)/.test(method))
     return `skill ${method}`;
   if (/^(OpenProjectTab|OpenGlobalTab|EnsureBlankTab|SetActiveTab|CloseTab|ReorderTabs|CreateTopic|RenameTopic|DeleteTopic|TrashTopic|RenameProject|RemoveWorkspace|SwitchWorkspace|PickWorkspace)/.test(method))
     return `nav ${method}`;
@@ -711,6 +715,37 @@ function makeMockApp(): AppBindings {
     { name: "explore", description: "Investigate the codebase in an isolated subagent", scope: "builtin", runAs: "subagent", enabled: true },
     { name: "review", description: "Review the staged diff", scope: "project", runAs: "inline", enabled: false },
     { name: "init", description: "Scaffold a MADDOG.md for this repo", scope: "builtin", runAs: "inline", enabled: true },
+  ];
+  let capSkillCandidates: SkillCandidateView[] = [
+    {
+      hash: "skill-candidate-local-dev",
+      name: "local-dev",
+      description: "Local custom development workflow",
+      status: "pending",
+      sourceTask: "Improve local development flow",
+      sourceBundleId: "replay-demo",
+      sourceBundlePath: ".maddog/skilleval/replay-demo.json",
+      targetRoot: "~/projects/maddog/.maddog/skills",
+      score: 0.91,
+      scoreReason: "Replay checks passed",
+      guardrailPass: true,
+      guardrailReason: "No blocked patterns",
+      updatedAt: new Date().toISOString(),
+    },
+    {
+      hash: "skill-candidate-docs-helper",
+      name: "docs-helper",
+      description: "Adds documentation review reminders",
+      status: "pending",
+      sourceTask: "Review docs",
+      sourceBundleId: "replay-regression",
+      targetRoot: "~/projects/maddog/.maddog/skills",
+      score: 0.84,
+      scoreReason: "Replay was mixed",
+      guardrailPass: false,
+      guardrailReason: "Regression on held-out bundle",
+      updatedAt: new Date().toISOString(),
+    },
   ];
   let capSkillRoots: SkillRootView[] = [
     { dir: "~/projects/maddog/.maddog/skills", scope: "project", priority: 1, status: "missing", configured: false, removable: true, skills: 0 },
@@ -1900,6 +1935,7 @@ function makeMockApp(): AppBindings {
         servers: capServers.map((s) => ({ ...s })),
         skills: capSkills.map((s) => ({ ...s })),
         skillRoots: capSkillRoots.map((s) => ({ ...s })),
+        skillCandidates: capSkillCandidates.map((s) => ({ ...s })),
         codeIntelligenceBackends: capCodeIntelligenceBackends.map((s) => ({
           ...s,
           capabilities: { ...s.capabilities },
@@ -2085,6 +2121,33 @@ function makeMockApp(): AppBindings {
     async SetSkillEnabled(name: string, enabled: boolean) {
       const skill = capSkills.find((s) => s.name === name);
       if (skill) skill.enabled = enabled;
+    },
+    async PromoteSkillCandidate(hash: string) {
+      const candidate = capSkillCandidates.find((s) => s.hash === hash);
+      if (!candidate) throw new Error(`unknown skill candidate: ${hash}`);
+      candidate.status = "promoted";
+      candidate.promotedPath = `~/projects/maddog/.maddog/skills/${candidate.name}/SKILL.md`;
+      candidate.updatedAt = new Date().toISOString();
+      if (!capSkills.some((s) => s.name === candidate.name)) {
+        capSkills.push({ name: candidate.name, description: candidate.description, scope: "project", runAs: "inline", enabled: true });
+      }
+      return candidate.promotedPath;
+    },
+    async RollbackSkillCandidate(hash: string, reason: string) {
+      const candidate = capSkillCandidates.find((s) => s.hash === hash);
+      if (!candidate) throw new Error(`unknown skill candidate: ${hash}`);
+      candidate.status = "rolled_back";
+      candidate.validationReason = reason || "rolled back from desktop";
+      candidate.updatedAt = new Date().toISOString();
+      const idx = capSkills.findIndex((s) => s.name === candidate.name && s.scope === "project");
+      if (idx >= 0) capSkills.splice(idx, 1);
+    },
+    async RejectSkillCandidate(hash: string, reason: string) {
+      const candidate = capSkillCandidates.find((s) => s.hash === hash);
+      if (!candidate) throw new Error(`unknown skill candidate: ${hash}`);
+      candidate.status = "rejected";
+      candidate.validationReason = reason || "rejected from desktop";
+      candidate.updatedAt = new Date().toISOString();
     },
     async SetMCPServerEnabled(name: string, enabled: boolean) {
       capServers = capServers.map((s) =>

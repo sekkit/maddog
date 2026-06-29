@@ -44,6 +44,7 @@ import (
 	"maddog/internal/plugin"
 	"maddog/internal/provider"
 	"maddog/internal/skill"
+	"maddog/internal/skilleval"
 )
 
 // eventChannel is the Wails runtime event name the frontend subscribes to for the
@@ -2677,6 +2678,7 @@ type CapabilitiesView struct {
 	Servers                  []ServerView                  `json:"servers"`
 	Skills                   []SkillView                   `json:"skills"`
 	SkillRoots               []SkillRootView               `json:"skillRoots"`
+	SkillCandidates          []SkillCandidateView          `json:"skillCandidates"`
 	CodeIntelligenceBackends []CodeIntelligenceBackendView `json:"codeIntelligenceBackends"`
 }
 
@@ -2761,6 +2763,24 @@ type SkillView struct {
 	Enabled     bool   `json:"enabled"`
 }
 
+type SkillCandidateView struct {
+	Hash             string   `json:"hash"`
+	Name             string   `json:"name"`
+	Description      string   `json:"description"`
+	Status           string   `json:"status"`
+	SourceTask       string   `json:"sourceTask,omitempty"`
+	SourceBundleID   string   `json:"sourceBundleId,omitempty"`
+	SourceBundlePath string   `json:"sourceBundlePath,omitempty"`
+	ValidationReason string   `json:"validationReason,omitempty"`
+	PromotedPath     string   `json:"promotedPath,omitempty"`
+	TargetRoot       string   `json:"targetRoot,omitempty"`
+	Score            *float64 `json:"score,omitempty"`
+	ScoreReason      string   `json:"scoreReason,omitempty"`
+	GuardrailPass    *bool    `json:"guardrailPass,omitempty"`
+	GuardrailReason  string   `json:"guardrailReason,omitempty"`
+	UpdatedAt        string   `json:"updatedAt,omitempty"`
+}
+
 type SkillRootSkillView struct {
 	Name        string `json:"name"`
 	Description string `json:"description"`
@@ -2784,7 +2804,7 @@ type SkillRootView struct {
 // Capabilities projects the session's MCP servers (connected + failed) and skills
 // for the MCP & Skills drawer. Non-nil slices so the frontend can map over them.
 func (a *App) Capabilities() CapabilitiesView {
-	out := CapabilitiesView{Servers: []ServerView{}, Skills: []SkillView{}, SkillRoots: []SkillRootView{}, CodeIntelligenceBackends: []CodeIntelligenceBackendView{}}
+	out := CapabilitiesView{Servers: []ServerView{}, Skills: []SkillView{}, SkillRoots: []SkillRootView{}, SkillCandidates: []SkillCandidateView{}, CodeIntelligenceBackends: []CodeIntelligenceBackendView{}}
 	a.mu.RLock()
 	tab := a.activeTabLocked()
 	a.mu.RUnlock()
@@ -2946,7 +2966,56 @@ func (a *App) Capabilities() CapabilitiesView {
 		})
 	}
 	out.SkillRoots = skillRootsView()
+	out.SkillCandidates = skillCandidateViews(tab.WorkspaceRoot)
 	return out
+}
+
+func skillCandidateViews(workspaceRoot string) []SkillCandidateView {
+	candidates, err := skilleval.NewCandidateStore(skillCandidateStoreDir(workspaceRoot)).List()
+	if err != nil {
+		return []SkillCandidateView{}
+	}
+	out := make([]SkillCandidateView, 0, len(candidates))
+	for _, c := range candidates {
+		view := SkillCandidateView{
+			Hash:             c.Hash,
+			Name:             c.Skill.Name,
+			Description:      c.Skill.Description,
+			Status:           string(c.Status),
+			SourceTask:       c.SourceTask,
+			SourceBundleID:   c.SourceBundleID,
+			SourceBundlePath: c.SourceBundlePath,
+			ValidationReason: c.ValidationReason,
+			PromotedPath:     c.PromotedPath,
+			GuardrailReason:  c.GuardrailReason,
+		}
+		targetRoot := filepath.Join(strings.TrimSpace(workspaceRoot), config.ProjectConventionDir, skill.SkillsDirname)
+		if strings.TrimSpace(workspaceRoot) != "" {
+			view.TargetRoot = targetRoot
+		}
+		if c.EvalScore != nil {
+			score := c.EvalScore.Score
+			view.Score = &score
+			view.ScoreReason = c.EvalScore.Reason
+			guardrailPass := c.GuardrailPass
+			view.GuardrailPass = &guardrailPass
+		}
+		if !c.UpdatedAt.IsZero() {
+			view.UpdatedAt = c.UpdatedAt.Format(time.RFC3339)
+		}
+		out = append(out, view)
+	}
+	return out
+}
+
+func skillCandidateStoreDir(workspaceRoot string) string {
+	root := strings.TrimSpace(workspaceRoot)
+	if root == "" {
+		if wd, err := os.Getwd(); err == nil {
+			root = wd
+		}
+	}
+	return filepath.Join(root, config.ProjectConventionDir, "skilleval")
 }
 
 func codeIntelligenceBackendViews(reg codegraph.BackendRegistry, workspaceRoot string, connected map[string]plugin.ServerStatus, failed map[string]plugin.Failure, benchmark CodeIntelligenceBenchmarkView, running map[string]bool) []CodeIntelligenceBackendView {
@@ -3285,6 +3354,53 @@ func (a *App) SetSkillEnabled(name string, enabled bool) error {
 	return a.applyConfigChange(func(c *config.Config) error {
 		return c.SetSkillEnabled(name, enabled)
 	})
+}
+
+func (a *App) PromoteSkillCandidate(hash string) (string, error) {
+	root := a.activeWorkspaceRoot()
+	if strings.TrimSpace(root) == "" {
+		return "", fmt.Errorf("no active workspace")
+	}
+	store := skilleval.NewCandidateStore(skillCandidateStoreDir(root))
+	home, _ := os.UserHomeDir()
+	activeStore := skill.New(skill.Options{HomeDir: home, ProjectRoot: root})
+	_, path, err := store.Promote(strings.TrimSpace(hash), activeStore, skill.ScopeProject)
+	if err != nil {
+		return "", err
+	}
+	if tabID := a.activeTabIDSnapshot(); tabID != "" {
+		a.noticeForTab(tabID, fmt.Sprintf("promoted skill candidate to %s", path))
+	}
+	if err := a.rebuild(); err != nil {
+		return "", err
+	}
+	return path, nil
+}
+
+func (a *App) RollbackSkillCandidate(hash, reason string) error {
+	root := a.activeWorkspaceRoot()
+	if strings.TrimSpace(root) == "" {
+		return fmt.Errorf("no active workspace")
+	}
+	store := skilleval.NewCandidateStore(skillCandidateStoreDir(root))
+	home, _ := os.UserHomeDir()
+	activeStore := skill.New(skill.Options{HomeDir: home, ProjectRoot: root})
+	if _, err := store.Rollback(strings.TrimSpace(hash), activeStore, reason); err != nil {
+		return err
+	}
+	if tabID := a.activeTabIDSnapshot(); tabID != "" {
+		a.noticeForTab(tabID, "rolled back promoted skill candidate")
+	}
+	return a.rebuild()
+}
+
+func (a *App) RejectSkillCandidate(hash, reason string) error {
+	root := a.activeWorkspaceRoot()
+	if strings.TrimSpace(root) == "" {
+		return fmt.Errorf("no active workspace")
+	}
+	_, err := skilleval.NewCandidateStore(skillCandidateStoreDir(root)).Reject(strings.TrimSpace(hash), reason)
+	return err
 }
 
 func normalizeSkillPath(path string) string {

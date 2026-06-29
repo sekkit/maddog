@@ -552,7 +552,7 @@ flowchart TB
 
 **执行记录（2026-06-30）：** 已通过 test-first 落地 `internal/skilleval` replay runner、deterministic dry-run replay、rule/frontier scorer、promotion guardrail、candidate evaluation persistence 和 `maddog skilleval` CLI/headless eval。CLI 支持 `--bundle`/`--candidate`/`--json`/`--dry-run`/`--model`，非 dry-run 会按 `default_model` 或 `--model` 解析 provider 并运行真实 replay；dry-run 也会使用 candidate body 生成 replay outcome，不再自评分。`skilleval list --dir` 可列出 pending/rejected/promoted candidate state。`CandidateStore.Promote` 现在要求 `RecordEvaluation` 写入 score 与 passing guardrail 后才允许写入 active skill。Guardrail 覆盖 held-out bundle 数、missing results、candidate validation/status、task-dependent validator recheck、高风险 allowed-tool expansion、success regression、token cost spike、low score。Scorer 在 frontier 不可用或输出不可解析时返回 deterministic fallback，不把 optional scorer outage 变成 hard fail。验证命令：`go test ./internal/skilleval -count=1`、`go test ./internal/cli -run TestSkillEval -count=1`、`go test ./... -count=1`。
 
-- [ ] **单元 G3：Skill 管理 GUI 与 promotion 审计**
+- [x] **单元 G3：Skill 管理 GUI 与 promotion 审计**
 
 **目标：** 在 desktop 中显示 built-in/project/custom/dynamic/pending/promoted skill，支持查看证据、接受/拒绝/回滚。
 
@@ -587,6 +587,8 @@ flowchart TB
 - Integration：接受 candidate 后 controller rebuild，新 skill 在 slash menu 可见。
 
 **验证：** 用户能在 GUI 中完成 skill 自进化的审核闭环，且所有操作可追溯。
+
+**执行记录（2026-06-30）：** 已通过 test-first 落地 desktop skill candidate 管理和 promotion audit 闭环。`Capabilities()` 现在从项目 `.maddog/skilleval` 投影 pending/promoted/rejected/rolled_back candidates，包含 source task、source bundle/path、target skill root、eval score、guardrail verdict、promoted path、validation/audit reason 和更新时间；`GuardrailPass` 使用可空布尔，确保 GUI 能区分“未评估”和“评估失败”。Skills drawer 与 Settings/Skills 页面增加候选队列、状态过滤、证据/目标详情、Promote、Reject、Rollback 操作；Promote/Rollback 后会 rebuild controller，让 slash menu 与 skill store 立即同步。`CandidateStore` 补强了 hash path validation、tampered list entry 跳过、promotion 失败恢复 pending、promotion/reject/rollback audit JSONL、以及只删除未被用户修改的 candidate-created promoted skill 的安全 rollback。多专家 review 后补齐了 failed-promotion recoverability、rollback/audit、guardrail false serialization、zh/zh-TW/en 文案和 frontend contract test。验证命令：`go test ./internal/skilleval -run 'TestListSkipsInvalidOrTamperedCandidateFiles|TestFailedPromotionRestoresPending|TestRollbackPromotedCandidateRemovesOnlyMatchingSkill|TestRollbackRefusesModifiedPromotedSkill|TestPromoteCandidateWritesActiveSkillAndTransitions' -count=1`、`go test . -run 'TestCapabilitiesProjectsSkillCandidates|TestPromoteAndRejectSkillCandidateFromDesktop|TestRollbackSkillCandidateFromDesktop|TestCapabilitiesProjectsFailedGuardrailExplicitly' -count=1`（`Maddog/desktop`）、`npm run test:all`、`npm run build`、`go test ./... -count=1`、`go test . -count=1`（`Maddog/desktop`）、`git diff --check`。
 
 - [ ] **单元 G4：规则/LLM 混合 code review skill**
 

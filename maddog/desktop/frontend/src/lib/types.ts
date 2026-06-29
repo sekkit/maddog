@@ -565,6 +565,23 @@ export interface SkillView {
   runAs: string;
   enabled: boolean;
 }
+export interface SkillCandidateView {
+  hash: string;
+  name: string;
+  description: string;
+  status: "pending" | "promoting" | "rejected" | "promoted" | "rolled_back" | string;
+  sourceTask?: string;
+  sourceBundleId?: string;
+  sourceBundlePath?: string;
+  validationReason?: string;
+  promotedPath?: string;
+  targetRoot?: string;
+  score?: number;
+  scoreReason?: string;
+  guardrailPass?: boolean;
+  guardrailReason?: string;
+  updatedAt?: string;
+}
 export interface SkillRootSkillView {
   name: string;
   description: string;
@@ -586,6 +603,7 @@ export interface CapabilitiesView {
   servers: ServerView[];
   skills: SkillView[];
   skillRoots: SkillRootView[];
+  skillCandidates?: SkillCandidateView[];
   codeIntelligenceBackends?: CodeIntelligenceBackendView[];
 }
 export interface BuiltInMCPUpdateResult {

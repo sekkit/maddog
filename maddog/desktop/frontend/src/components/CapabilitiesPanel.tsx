@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { asArray } from "../lib/array";
 import { app, onBuiltInMCPUpdate, openExternal } from "../lib/bridge";
 import { useT } from "../lib/i18n";
-import type { BuiltInMCPUpdateStatus, CapabilitiesView, CodeIntelligenceBackendCapabilities, CodeIntelligenceBackendView, MCPServerInput, ServerView, SkillRootSkillView, SkillRootView, SkillView } from "../lib/types";
+import type { BuiltInMCPUpdateStatus, CapabilitiesView, CodeIntelligenceBackendCapabilities, CodeIntelligenceBackendView, MCPServerInput, ServerView, SkillCandidateView, SkillRootSkillView, SkillRootView, SkillView } from "../lib/types";
 import { InlineConfirmButton } from "./InlineConfirmButton";
 import { ResizableDrawer } from "./ResizableDrawer";
 import { Tooltip } from "./Tooltip";
@@ -13,6 +13,7 @@ import { ModalCloseButton } from "./ModalCloseButton";
 // each server shows a connected/failed dot, transport, and tool/prompt/resource
 // counts, with add / remove / retry; skills list their scope and run mode.
 type CapTab = "servers" | "skills";
+type SkillCandidateFilter = "all" | "pending" | "promoted" | "rejected" | "rolled_back";
 
 export function CapabilitiesPanel({
   onClose,
@@ -292,6 +293,13 @@ export function CapabilitiesPanel({
                   onRefresh={() => mutate(() => app.RefreshSkills())}
                   onRemove={(path) => mutate(() => app.RemoveSkillPath(path))}
                 />
+                <SkillCandidatesSection
+                  candidates={view.skillCandidates ?? []}
+                  busy={busy}
+                  onPromote={(hash) => mutate(() => app.PromoteSkillCandidate(hash))}
+                  onRollback={(hash) => mutate(() => app.RollbackSkillCandidate(hash, t("caps.skillCandidateRollbackReason")))}
+                  onReject={(hash) => mutate(() => app.RejectSkillCandidate(hash, t("caps.skillCandidateRejectReason")))}
+                />
                 <div className="cap-skills-head">
                   <div className="cap-skills-head__copy">
                     <div className="cap-skills-head__title">{t("caps.skills")}</div>
@@ -335,6 +343,7 @@ function normalizeCapabilitiesView(view: CapabilitiesView | null | undefined): C
       })),
     ),
     skills: asArray(view?.skills),
+    skillCandidates: asArray(view?.skillCandidates),
     skillRoots: asArray(view?.skillRoots).map((root) => ({
       ...root,
       removable: Boolean(root.removable),
@@ -430,6 +439,169 @@ function CodeIntelligenceSection({
       </div>
     </div>
   );
+}
+
+function SkillCandidatesSection({
+  candidates,
+  busy,
+  onPromote,
+  onRollback,
+  onReject,
+}: {
+  candidates: SkillCandidateView[];
+  busy: boolean;
+  onPromote: (hash: string) => void;
+  onRollback: (hash: string) => void;
+  onReject: (hash: string) => void;
+}) {
+  const t = useT();
+  const [filter, setFilter] = useState<SkillCandidateFilter>("all");
+  if (candidates.length === 0) return null;
+  const pending = candidates.filter((candidate) => candidate.status === "pending").length;
+  const filtered = filter === "all" ? candidates : candidates.filter((candidate) => candidate.status === filter);
+  const filters: SkillCandidateFilter[] = ["all", "pending", "promoted", "rejected", "rolled_back"];
+  return (
+    <div className="cap-codeintel cap-skill-candidates">
+      <div className="cap-codeintel__head">
+        <div>
+          <div className="cap-codeintel__title">{t("caps.skillCandidates")}</div>
+          <div className="cap-codeintel__summary">{t("caps.skillCandidatesSummary", { pending, total: candidates.length })}</div>
+        </div>
+      </div>
+      <div className="cap-skill-candidates__filters" role="tablist" aria-label={t("caps.skillCandidates")}>
+        {filters.map((item) => (
+          <button
+            key={item}
+            className={`btn btn--tiny${filter === item ? " btn--active" : ""}`}
+            type="button"
+            onClick={() => setFilter(item)}
+            aria-pressed={filter === item}
+          >
+            {skillCandidateFilterLabel(item, t)}
+          </button>
+        ))}
+      </div>
+      <div className="cap-codeintel__list">
+        {filtered.map((candidate) => (
+          <SkillCandidateRow
+            key={candidate.hash}
+            candidate={candidate}
+            busy={busy}
+            onPromote={() => onPromote(candidate.hash)}
+            onRollback={() => onRollback(candidate.hash)}
+            onReject={() => onReject(candidate.hash)}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function SkillCandidateRow({
+  candidate,
+  busy,
+  onPromote,
+  onRollback,
+  onReject,
+}: {
+  candidate: SkillCandidateView;
+  busy: boolean;
+  onPromote: () => void;
+  onRollback: () => void;
+  onReject: () => void;
+}) {
+  const t = useT();
+  const canPromote = candidate.status === "pending" && candidate.guardrailPass === true && typeof candidate.score === "number";
+  const canReject = candidate.status === "pending";
+  const canRollback = candidate.status === "promoted";
+  return (
+    <div className={`cap-codeintel-row cap-codeintel-row--${skillCandidateTone(candidate.status)}`}>
+      <div className="cap-codeintel-row__top">
+        <span className={`cap-dot cap-dot--${skillCandidateTone(candidate.status)}`} />
+        <span className="cap-codeintel-row__name">{candidate.name || candidate.hash}</span>
+        <span className="cap-codeintel-row__kind">{t("caps.skillCandidateStatus", { status: skillCandidateStatusLabel(candidate.status, t) })}</span>
+        {typeof candidate.score === "number" && <span className="cap-codeintel-row__status">{t("caps.skillCandidateScore", { score: candidate.score.toFixed(2) })}</span>}
+      </div>
+      <div className="cap-codeintel-row__meta">
+        {candidate.sourceTask && <span>{t("caps.skillCandidateTask", { task: candidate.sourceTask })}</span>}
+        {candidate.sourceBundleId && <span>{candidate.sourceBundleId}</span>}
+        {candidate.sourceBundlePath && <span>{candidate.sourceBundlePath}</span>}
+        {candidate.targetRoot && <span>{candidate.targetRoot}</span>}
+        {candidate.promotedPath && <span>{candidate.promotedPath}</span>}
+        {candidate.updatedAt && <span>{formatSkillCandidateDate(candidate.updatedAt)}</span>}
+      </div>
+      <div className="cap-codeintel-row__actions">
+        <button className="btn btn--tiny" disabled={busy || !canPromote} onClick={onPromote}>
+          {t("caps.skillCandidatePromote")}
+        </button>
+        <button className="btn btn--tiny" disabled={busy || !canReject} onClick={onReject}>
+          {t("caps.skillCandidateReject")}
+        </button>
+        <button className="btn btn--tiny" disabled={busy || !canRollback} onClick={onRollback}>
+          {t("caps.skillCandidateRollback")}
+        </button>
+      </div>
+      <div className="cap-codeintel-row__caps">
+        {candidate.guardrailPass !== undefined && <span className="cap-codeintel-cap">{candidate.guardrailPass ? t("caps.skillCandidateGuardrailPass") : t("caps.skillCandidateGuardrailFail")}</span>}
+        {candidate.scoreReason && <span className="cap-codeintel-cap">{candidate.scoreReason}</span>}
+        {candidate.guardrailReason && <span className="cap-codeintel-cap">{candidate.guardrailReason}</span>}
+      </div>
+      {candidate.validationReason && <div className="cap-codeintel-row__error">{candidate.validationReason}</div>}
+      {candidate.description && <div className="cap-skill-card__desc cap-skill-card__desc--candidate">{candidate.description}</div>}
+    </div>
+  );
+}
+
+function skillCandidateTone(status: string): "ready" | "degraded" | "disabled" | "unknown" {
+  switch (status) {
+    case "promoted":
+      return "ready";
+    case "rejected":
+    case "rolled_back":
+      return "disabled";
+    case "promoting":
+      return "degraded";
+    default:
+      return "unknown";
+  }
+}
+
+function skillCandidateStatusLabel(status: string, t: ReturnType<typeof useT>): string {
+  switch (status) {
+    case "pending":
+      return t("caps.skillCandidateStatus.pending");
+    case "promoting":
+      return t("caps.skillCandidateStatus.promoting");
+    case "rejected":
+      return t("caps.skillCandidateStatus.rejected");
+    case "promoted":
+      return t("caps.skillCandidateStatus.promoted");
+    case "rolled_back":
+      return t("caps.skillCandidateStatus.rolledBack");
+    default:
+      return status || t("caps.codeIntelligenceStatus.unknown");
+  }
+}
+
+function skillCandidateFilterLabel(filter: SkillCandidateFilter, t: ReturnType<typeof useT>): string {
+  switch (filter) {
+    case "pending":
+      return t("caps.skillCandidateStatus.pending");
+    case "promoted":
+      return t("caps.skillCandidateStatus.promoted");
+    case "rejected":
+      return t("caps.skillCandidateStatus.rejected");
+    case "rolled_back":
+      return t("caps.skillCandidateStatus.rolledBack");
+    default:
+      return t("caps.skillCandidateFilterAll");
+  }
+}
+
+function formatSkillCandidateDate(value: string): string {
+  const time = Date.parse(value);
+  if (!Number.isFinite(time)) return value;
+  return new Date(time).toLocaleString();
 }
 
 function codeIntelBackendKey(backend: CodeIntelligenceBackendView, index: number): string {
@@ -2079,6 +2251,13 @@ export function SkillsSettingsPage() {
 				})}
 				onRefresh={() => mutate(() => app.RefreshSkills())}
 				onRemove={(path) => mutate(() => app.RemoveSkillPath(path))}
+			/>
+			<SkillCandidatesSection
+				candidates={view.skillCandidates ?? []}
+				busy={busy}
+				onPromote={(hash) => mutate(() => app.PromoteSkillCandidate(hash))}
+				onRollback={(hash) => mutate(() => app.RollbackSkillCandidate(hash, t("caps.skillCandidateRollbackReason")))}
+				onReject={(hash) => mutate(() => app.RejectSkillCandidate(hash, t("caps.skillCandidateRejectReason")))}
 			/>
 			<div className="cap-skills-head">
 				<div className="cap-skills-head__copy">

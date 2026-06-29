@@ -8739,6 +8739,17 @@ a[href] {
   display: grid;
   gap: 6px;
 }
+.cap-skill-candidates__filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0 0 8px;
+}
+.btn--active {
+  border-color: color-mix(in srgb, var(--accent) 42%, var(--border));
+  background: color-mix(in srgb, var(--accent) 10%, var(--bg-elev));
+  color: var(--accent);
+}
 .cap-codeintel-row {
   padding: 8px;
   border: 1px solid var(--border-soft);
@@ -9409,6 +9420,9 @@ a[href] {
   display: -webkit-box;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 3;
+}
+.cap-skill-card__desc--candidate {
+  margin-left: 0;
 }
 .cap-skill-card--expanded .cap-skill-card__desc {
   display: block;

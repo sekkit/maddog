@@ -159,6 +159,116 @@ func TestPromoteCandidateWritesActiveSkillAndTransitions(t *testing.T) {
 	}
 }
 
+func TestListSkipsInvalidOrTamperedCandidateFiles(t *testing.T) {
+	store := NewCandidateStore(t.TempDir())
+	candidate, err := store.Create(validSkill("parser-helper"), BundleV2{ID: "bundle-a"}, "fix parser")
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(store.Dir, "candidates", "not-a-hash.json"), []byte(`{}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(filepath.Join(store.Dir, "candidates", candidate.Hash+".json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var tampered Candidate
+	if err := json.Unmarshal(raw, &tampered); err != nil {
+		t.Fatal(err)
+	}
+	tampered.Skill.Body = "tampered body"
+	if err := writeJSON(filepath.Join(store.Dir, "candidates", candidate.Hash+".json"), tampered); err != nil {
+		t.Fatal(err)
+	}
+	got, err := store.List()
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("List returned tampered candidates: %+v", got)
+	}
+	if _, err := store.Reject("../"+candidate.Hash, "bad"); err == nil {
+		t.Fatal("Reject accepted traversal hash")
+	}
+}
+
+func TestFailedPromotionRestoresPending(t *testing.T) {
+	candidateStore := NewCandidateStore(t.TempDir())
+	candidate, err := candidateStore.Create(validSkill("parser-helper"), BundleV2{ID: "bundle-a"}, "fix parser")
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if _, err := candidateStore.RecordEvaluation(candidate.Hash, ScoreResult{Score: 0.9, Reason: "ok"}, GuardrailResult{Pass: true, Reason: "passed"}); err != nil {
+		t.Fatalf("RecordEvaluation: %v", err)
+	}
+	projectRoot := t.TempDir()
+	activeStore := skill.New(skill.Options{HomeDir: t.TempDir(), ProjectRoot: projectRoot, DisableBuiltins: true})
+	if _, err := activeStore.CreateWithContent("parser-helper", skill.ScopeProject, "---\nname: parser-helper\ndescription: different\n---\n\ndifferent\n"); err != nil {
+		t.Fatalf("precreate conflicting skill: %v", err)
+	}
+	if _, _, err := candidateStore.Promote(candidate.Hash, activeStore, skill.ScopeProject); err == nil {
+		t.Fatal("Promote succeeded despite conflicting active skill")
+	}
+	loaded, err := candidateStore.load(candidate.Hash)
+	if err != nil {
+		t.Fatalf("load after failed promote: %v", err)
+	}
+	if loaded.Status != CandidatePending {
+		t.Fatalf("candidate status = %s, want pending after failed promote", loaded.Status)
+	}
+}
+
+func TestRollbackPromotedCandidateRemovesOnlyMatchingSkill(t *testing.T) {
+	candidateStore := NewCandidateStore(t.TempDir())
+	candidate, err := candidateStore.Create(validSkill("parser-helper"), BundleV2{ID: "bundle-a"}, "fix parser")
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if _, err := candidateStore.RecordEvaluation(candidate.Hash, ScoreResult{Score: 0.9, Reason: "ok"}, GuardrailResult{Pass: true, Reason: "passed"}); err != nil {
+		t.Fatalf("RecordEvaluation: %v", err)
+	}
+	activeStore := skill.New(skill.Options{HomeDir: t.TempDir(), ProjectRoot: t.TempDir(), DisableBuiltins: true})
+	updated, path, err := candidateStore.Promote(candidate.Hash, activeStore, skill.ScopeProject)
+	if err != nil {
+		t.Fatalf("Promote: %v", err)
+	}
+	if updated.Status != CandidatePromoted {
+		t.Fatalf("status = %s, want promoted", updated.Status)
+	}
+	rolledBack, err := candidateStore.Rollback(candidate.Hash, activeStore, "not useful after review")
+	if err != nil {
+		t.Fatalf("Rollback: %v", err)
+	}
+	if rolledBack.Status != CandidateRolledBack || !strings.Contains(rolledBack.ValidationReason, "not useful") {
+		t.Fatalf("rolled back candidate = %+v", rolledBack)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("promoted skill still exists err=%v", err)
+	}
+}
+
+func TestRollbackRefusesModifiedPromotedSkill(t *testing.T) {
+	candidateStore := NewCandidateStore(t.TempDir())
+	candidate, err := candidateStore.Create(validSkill("parser-helper"), BundleV2{ID: "bundle-a"}, "fix parser")
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if _, err := candidateStore.RecordEvaluation(candidate.Hash, ScoreResult{Score: 0.9, Reason: "ok"}, GuardrailResult{Pass: true, Reason: "passed"}); err != nil {
+		t.Fatalf("RecordEvaluation: %v", err)
+	}
+	activeStore := skill.New(skill.Options{HomeDir: t.TempDir(), ProjectRoot: t.TempDir(), DisableBuiltins: true})
+	_, path, err := candidateStore.Promote(candidate.Hash, activeStore, skill.ScopeProject)
+	if err != nil {
+		t.Fatalf("Promote: %v", err)
+	}
+	if err := os.WriteFile(path, []byte("---\nname: parser-helper\ndescription: changed\n---\n\nchanged\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := candidateStore.Rollback(candidate.Hash, activeStore, "rollback"); err == nil {
+		t.Fatal("Rollback removed modified skill, want refusal")
+	}
+}
+
 func validSkill(name string) skill.Skill {
 	return skill.Skill{
 		Name:        name,

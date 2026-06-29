@@ -824,6 +824,12 @@ func (a *App) activeWorkspaceRoot() string {
 	return "."
 }
 
+func (a *App) activeTabIDSnapshot() string {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.activeTabID
+}
+
 func projectConfigPathForRoot(root string) string {
 	return config.ProjectConfigPathForRoot(root)
 }

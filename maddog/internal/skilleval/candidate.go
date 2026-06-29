@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -18,10 +19,11 @@ import (
 type CandidateStatus string
 
 const (
-	CandidatePending   CandidateStatus = "pending"
-	CandidatePromoting CandidateStatus = "promoting"
-	CandidateRejected  CandidateStatus = "rejected"
-	CandidatePromoted  CandidateStatus = "promoted"
+	CandidatePending    CandidateStatus = "pending"
+	CandidatePromoting  CandidateStatus = "promoting"
+	CandidateRejected   CandidateStatus = "rejected"
+	CandidatePromoted   CandidateStatus = "promoted"
+	CandidateRolledBack CandidateStatus = "rolled_back"
 )
 
 type CandidateStore struct {
@@ -47,6 +49,16 @@ type Candidate struct {
 	UpdatedAt        time.Time       `json:"updated_at"`
 }
 
+type AuditRecord struct {
+	Time   time.Time       `json:"time"`
+	Action string          `json:"action"`
+	Hash   string          `json:"hash"`
+	Name   string          `json:"name"`
+	Status CandidateStatus `json:"status"`
+	Path   string          `json:"path,omitempty"`
+	Reason string          `json:"reason,omitempty"`
+}
+
 type ValidationInfo struct {
 	Valid  bool   `json:"valid"`
 	Reason string `json:"reason,omitempty"`
@@ -54,6 +66,42 @@ type ValidationInfo struct {
 
 func NewCandidateStore(dir string) *CandidateStore {
 	return &CandidateStore{Dir: dir, Now: time.Now}
+}
+
+func (s *CandidateStore) List() ([]Candidate, error) {
+	if s == nil {
+		return nil, fmt.Errorf("candidate store is nil")
+	}
+	dir := filepath.Join(s.Dir, "candidates")
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return []Candidate{}, nil
+		}
+		return nil, err
+	}
+	out := make([]Candidate, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
+			continue
+		}
+		hash := strings.TrimSuffix(entry.Name(), filepath.Ext(entry.Name()))
+		if !isCandidateHash(hash) {
+			continue
+		}
+		c, err := s.load(hash)
+		if err != nil {
+			continue
+		}
+		out = append(out, c)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].UpdatedAt.Equal(out[j].UpdatedAt) {
+			return out[i].Hash < out[j].Hash
+		}
+		return out[i].UpdatedAt.After(out[j].UpdatedAt)
+	})
+	return out, nil
 }
 
 func (s *CandidateStore) Create(sk skill.Skill, bundle BundleV2, task string) (Candidate, error) {
@@ -116,6 +164,32 @@ func (s *CandidateStore) Create(sk skill.Skill, bundle BundleV2, task string) (C
 	return c, nil
 }
 
+func (s *CandidateStore) Reject(hash, reason string) (Candidate, error) {
+	if s == nil {
+		return Candidate{}, fmt.Errorf("candidate store is nil")
+	}
+	c, err := s.load(hash)
+	if err != nil {
+		return Candidate{}, err
+	}
+	if err := c.verifyHash(hash); err != nil {
+		return Candidate{}, err
+	}
+	if c.Status == CandidatePromoted {
+		return Candidate{}, fmt.Errorf("candidate %s is already promoted", c.Hash)
+	}
+	c.Status = CandidateRejected
+	c.Validation.Valid = false
+	c.Validation.Reason = strings.TrimSpace(reason)
+	c.ValidationReason = strings.TrimSpace(reason)
+	c.UpdatedAt = s.now()
+	if err := writeJSON(s.path(c.Hash), c); err != nil {
+		return Candidate{}, err
+	}
+	_ = s.appendAudit("reject", c, "", c.ValidationReason)
+	return c, nil
+}
+
 func (s *CandidateStore) RecordEvaluation(hash string, score ScoreResult, guardrail GuardrailResult) (Candidate, error) {
 	if s == nil {
 		return Candidate{}, fmt.Errorf("candidate store is nil")
@@ -155,6 +229,8 @@ func (s *CandidateStore) Promote(hash string, activeStore *skill.Store, scope sk
 	switch c.Status {
 	case CandidateRejected:
 		return Candidate{}, "", fmt.Errorf("candidate %s is rejected: %s", c.Hash, c.ValidationReason)
+	case CandidateRolledBack:
+		return Candidate{}, "", fmt.Errorf("candidate %s was rolled back: %s", c.Hash, c.ValidationReason)
 	case CandidatePromoted:
 		return Candidate{}, "", fmt.Errorf("candidate %s is already promoted", c.Hash)
 	case CandidatePending, CandidatePromoting:
@@ -186,7 +262,14 @@ func (s *CandidateStore) Promote(hash string, activeStore *skill.Store, scope sk
 			if writeErr := writeJSON(s.path(c.Hash), c); writeErr != nil {
 				return Candidate{}, "", writeErr
 			}
+			_ = s.appendAudit("promote_recover", c, existing.Path, "active skill already matched candidate")
 			return c, existing.Path, nil
+		}
+		if c.Status == CandidatePromoting {
+			c.Status = CandidatePending
+			c.UpdatedAt = s.now()
+			_ = writeJSON(s.path(c.Hash), c)
+			_ = s.appendAudit("promote_failed", c, "", err.Error())
 		}
 		return Candidate{}, "", err
 	}
@@ -196,16 +279,74 @@ func (s *CandidateStore) Promote(hash string, activeStore *skill.Store, scope sk
 	if err := writeJSON(s.path(c.Hash), c); err != nil {
 		return Candidate{}, "", err
 	}
+	_ = s.appendAudit("promote", c, path, "")
 	return c, path, nil
 }
 
+func (s *CandidateStore) Rollback(hash string, activeStore *skill.Store, reason string) (Candidate, error) {
+	if s == nil {
+		return Candidate{}, fmt.Errorf("candidate store is nil")
+	}
+	if activeStore == nil {
+		return Candidate{}, fmt.Errorf("active skill store is nil")
+	}
+	c, err := s.load(hash)
+	if err != nil {
+		return Candidate{}, err
+	}
+	if err := c.verifyHash(hash); err != nil {
+		return Candidate{}, err
+	}
+	if c.Status != CandidatePromoted {
+		return Candidate{}, fmt.Errorf("candidate %s is not promoted", c.Hash)
+	}
+	promotedPath := strings.TrimSpace(c.PromotedPath)
+	if promotedPath == "" {
+		return Candidate{}, fmt.Errorf("candidate %s has no promoted path", c.Hash)
+	}
+	existing, ok := activeStore.Read(c.Skill.Name)
+	if !ok {
+		return Candidate{}, fmt.Errorf("promoted skill %q is not active", c.Skill.Name)
+	}
+	if filepath.Clean(existing.Path) != filepath.Clean(promotedPath) {
+		return Candidate{}, fmt.Errorf("active skill path %q does not match promoted path %q", existing.Path, promotedPath)
+	}
+	raw, err := os.ReadFile(promotedPath)
+	if err != nil {
+		return Candidate{}, err
+	}
+	if strings.TrimSpace(string(raw)) != strings.TrimSpace(eval.RenderSkillMarkdown(c.Skill)) {
+		return Candidate{}, fmt.Errorf("promoted skill %q changed since promotion", c.Skill.Name)
+	}
+	if err := os.Remove(promotedPath); err != nil {
+		return Candidate{}, err
+	}
+	_ = os.Remove(filepath.Dir(promotedPath))
+	c.Status = CandidateRolledBack
+	c.Validation.Valid = false
+	c.Validation.Reason = strings.TrimSpace(reason)
+	c.ValidationReason = strings.TrimSpace(reason)
+	c.UpdatedAt = s.now()
+	if err := writeJSON(s.path(c.Hash), c); err != nil {
+		return Candidate{}, err
+	}
+	_ = s.appendAudit("rollback", c, promotedPath, c.ValidationReason)
+	return c, nil
+}
+
 func (s *CandidateStore) load(hash string) (Candidate, error) {
+	if !isCandidateHash(hash) {
+		return Candidate{}, fmt.Errorf("invalid candidate hash %q", hash)
+	}
 	data, err := os.ReadFile(s.path(hash))
 	if err != nil {
 		return Candidate{}, err
 	}
 	var c Candidate
 	if err := json.Unmarshal(data, &c); err != nil {
+		return Candidate{}, err
+	}
+	if err := c.verifyHash(hash); err != nil {
 		return Candidate{}, err
 	}
 	return c, nil
@@ -237,6 +378,51 @@ func candidateHash(sk skill.Skill) string {
 	content := eval.RenderSkillMarkdown(sk)
 	sum := sha256.Sum256([]byte(content))
 	return hex.EncodeToString(sum[:])
+}
+
+func isCandidateHash(hash string) bool {
+	hash = strings.TrimSpace(hash)
+	if len(hash) != sha256.Size*2 {
+		return false
+	}
+	for _, r := range hash {
+		if (r >= '0' && r <= '9') || (r >= 'a' && r <= 'f') {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func (s *CandidateStore) appendAudit(action string, c Candidate, path, reason string) error {
+	if s == nil {
+		return fmt.Errorf("candidate store is nil")
+	}
+	record := AuditRecord{
+		Time:   s.now(),
+		Action: strings.TrimSpace(action),
+		Hash:   c.Hash,
+		Name:   c.Skill.Name,
+		Status: c.Status,
+		Path:   strings.TrimSpace(path),
+		Reason: strings.TrimSpace(reason),
+	}
+	data, err := json.Marshal(record)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(s.Dir, 0o755); err != nil {
+		return err
+	}
+	f, err := os.OpenFile(filepath.Join(s.Dir, "audit.jsonl"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	if _, err := f.Write(append(data, '\n')); err != nil {
+		return err
+	}
+	return nil
 }
 
 func sameSkill(want, got skill.Skill) bool {

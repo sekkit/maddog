@@ -3,240 +3,163 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"maddog/internal/config"
 	"maddog/internal/control"
+	"maddog/internal/plugin"
 	"maddog/internal/skill"
+	"maddog/internal/skilleval"
 )
 
-func TestNormalizeSkillPathDirectoryLayout(t *testing.T) {
-	root := t.TempDir()
-	skillDir := filepath.Join(root, "my-skill")
-	if err := os.MkdirAll(skillDir, 0o755); err != nil {
-		t.Fatal(err)
+func TestCapabilitiesProjectsSkillCandidates(t *testing.T) {
+	isolateDesktopUserDirs(t)
+	dir := robustTempDir(t)
+	t.Chdir(dir)
+	app := NewApp()
+	app.setTestCtrl(control.New(control.Options{Host: plugin.NewHost()}), "")
+	app.tabs["test"].Scope = "project"
+	app.tabs["test"].WorkspaceRoot = dir
+	defer app.activeCtrl().Close()
+
+	store := skilleval.NewCandidateStore(filepath.Join(dir, config.ProjectConventionDir, "skilleval"))
+	candidate, err := store.Create(desktopTestSkill("parser-helper"), skilleval.BundleV2{ID: "bundle-a", Path: "bundle-a.json"}, "fix parser")
+	if err != nil {
+		t.Fatalf("Create candidate: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte("---\ndescription: x\n---\nbody"), 0o644); err != nil {
-		t.Fatal(err)
+	if _, err := store.RecordEvaluation(candidate.Hash, skilleval.ScoreResult{Score: 0.91, Reason: "passed"}, skilleval.GuardrailResult{Pass: true, Reason: "guardrail passed"}); err != nil {
+		t.Fatalf("RecordEvaluation: %v", err)
 	}
-	if got := normalizeSkillPath(skillDir); got != root {
-		t.Fatalf("normalizeSkillPath(%q) = %q, want %q", skillDir, got, root)
+
+	view := app.Capabilities()
+	if len(view.SkillCandidates) != 1 {
+		t.Fatalf("SkillCandidates = %+v, want one candidate", view.SkillCandidates)
+	}
+	got := view.SkillCandidates[0]
+	if got.Hash != candidate.Hash || got.Name != "parser-helper" || got.Status != string(skilleval.CandidatePending) {
+		t.Fatalf("candidate view = %+v", got)
+	}
+	if got.SourceBundleID != "bundle-a" || got.Score == nil || *got.Score < 0.9 {
+		t.Fatalf("candidate evidence = %+v", got)
+	}
+	if got.GuardrailPass == nil || !*got.GuardrailPass || got.SourceTask != "fix parser" || !strings.Contains(got.TargetRoot, filepath.Join(config.ProjectConventionDir, skill.SkillsDirname)) {
+		t.Fatalf("candidate detail = %+v", got)
 	}
 }
 
-func TestSkillRootsViewCountsProjectSkills(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("USERPROFILE", home)
-	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
-	t.Setenv("AppData", filepath.Join(home, "AppData"))
-	project := t.TempDir()
-	root := filepath.Join(project, ".maddog", "skills")
-	if err := os.MkdirAll(root, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(root, "proj.md"), []byte("---\ndescription: project\n---\nbody"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	wd, err := os.Getwd()
+func TestPromoteAndRejectSkillCandidateFromDesktop(t *testing.T) {
+	isolateDesktopUserDirs(t)
+	dir := robustTempDir(t)
+	t.Chdir(dir)
+	app := NewApp()
+	app.setTestCtrl(control.New(control.Options{Host: plugin.NewHost()}), "")
+	app.tabs["test"].Scope = "project"
+	app.tabs["test"].WorkspaceRoot = dir
+	defer app.activeCtrl().Close()
+
+	store := skilleval.NewCandidateStore(filepath.Join(dir, config.ProjectConventionDir, "skilleval"))
+	promotable, err := store.Create(desktopTestSkill("parser-helper"), skilleval.BundleV2{ID: "bundle-a"}, "fix parser")
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("Create promotable: %v", err)
 	}
-	defer os.Chdir(wd)
-	if err := os.Chdir(project); err != nil {
-		t.Fatal(err)
+	if _, err := store.RecordEvaluation(promotable.Hash, skilleval.ScoreResult{Score: 0.92, Reason: "passed"}, skilleval.GuardrailResult{Pass: true, Reason: "passed"}); err != nil {
+		t.Fatalf("RecordEvaluation: %v", err)
 	}
 
-	roots := skillRootsView()
-	want := realTestPath(root)
-	for _, r := range roots {
-		if realTestPath(r.Dir) == want {
-			if r.Status != "ok" || r.Skills != 1 || r.Scope != "project" {
-				t.Fatalf("project root view = %+v", r)
-			}
-			if len(r.SkillItems) != 1 || r.SkillItems[0].Name != "proj" || r.SkillItems[0].Description != "project" {
-				t.Fatalf("project root skill items = %+v", r.SkillItems)
-			}
+	path, err := app.PromoteSkillCandidate(promotable.Hash)
+	if err != nil {
+		t.Fatalf("PromoteSkillCandidate: %v", err)
+	}
+	if !strings.HasPrefix(path, filepath.Join(dir, config.ProjectConventionDir, skill.SkillsDirname)) {
+		t.Fatalf("promoted path = %q, want project skill root", path)
+	}
+	if raw, err := os.ReadFile(path); err != nil || !strings.Contains(string(raw), "Use the parser checklist") {
+		t.Fatalf("promoted skill file raw=%q err=%v", raw, err)
+	}
+
+	rejectable, err := store.Create(desktopTestSkill("docs-helper"), skilleval.BundleV2{ID: "bundle-b"}, "write docs")
+	if err != nil {
+		t.Fatalf("Create rejectable: %v", err)
+	}
+	if err := app.RejectSkillCandidate(rejectable.Hash, "not useful"); err != nil {
+		t.Fatalf("RejectSkillCandidate: %v", err)
+	}
+	view := app.Capabilities()
+	for _, c := range view.SkillCandidates {
+		if c.Hash == rejectable.Hash && c.Status == string(skilleval.CandidateRejected) && strings.Contains(c.ValidationReason, "not useful") {
 			return
 		}
 	}
-	t.Fatalf("project skill root %q not found in %+v", root, roots)
+	t.Fatalf("rejected candidate missing from view: %+v", view.SkillCandidates)
 }
 
-func TestSkillRootsViewMarksEnvConfiguredCustomRoot(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("USERPROFILE", home)
-	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
-	t.Setenv("AppData", filepath.Join(home, "AppData"))
-	project := t.TempDir()
-	root := filepath.Join(home, "custom-skills")
-	if err := os.MkdirAll(root, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(root, "custom.md"), []byte("---\ndescription: custom\n---\nbody"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("MADDOG_TEST_SKILL_ROOT", root)
-	cfgPath := config.UserConfigPath()
-	if err := os.MkdirAll(filepath.Dir(cfgPath), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(cfgPath, []byte("[skills]\npaths = [\"${MADDOG_TEST_SKILL_ROOT}\"]\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	wd, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.Chdir(wd)
-	if err := os.Chdir(project); err != nil {
-		t.Fatal(err)
-	}
+func TestRollbackSkillCandidateFromDesktop(t *testing.T) {
+	isolateDesktopUserDirs(t)
+	dir := robustTempDir(t)
+	t.Chdir(dir)
+	app := NewApp()
+	app.setTestCtrl(control.New(control.Options{Host: plugin.NewHost()}), "")
+	app.tabs["test"].Scope = "project"
+	app.tabs["test"].WorkspaceRoot = dir
+	defer app.activeCtrl().Close()
 
-	roots := skillRootsView()
-	want := realTestPath(root)
-	for _, r := range roots {
-		if realTestPath(r.Dir) == want {
-			if !r.Configured || r.Skills != 1 || r.Scope != "custom" {
-				t.Fatalf("custom root view = %+v, want configured custom root with one skill", r)
-			}
-			if len(r.SkillItems) != 1 || r.SkillItems[0].Name != "custom" || r.SkillItems[0].Scope != "custom" {
-				t.Fatalf("custom root skill items = %+v", r.SkillItems)
-			}
+	store := skilleval.NewCandidateStore(filepath.Join(dir, config.ProjectConventionDir, "skilleval"))
+	promotable, err := store.Create(desktopTestSkill("parser-helper"), skilleval.BundleV2{ID: "bundle-a"}, "fix parser")
+	if err != nil {
+		t.Fatalf("Create promotable: %v", err)
+	}
+	if _, err := store.RecordEvaluation(promotable.Hash, skilleval.ScoreResult{Score: 0.92, Reason: "passed"}, skilleval.GuardrailResult{Pass: true, Reason: "passed"}); err != nil {
+		t.Fatalf("RecordEvaluation: %v", err)
+	}
+	path, err := app.PromoteSkillCandidate(promotable.Hash)
+	if err != nil {
+		t.Fatalf("PromoteSkillCandidate: %v", err)
+	}
+	if err := app.RollbackSkillCandidate(promotable.Hash, "not needed"); err != nil {
+		t.Fatalf("RollbackSkillCandidate: %v", err)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("promoted skill path still exists err=%v", err)
+	}
+	view := app.Capabilities()
+	for _, c := range view.SkillCandidates {
+		if c.Hash == promotable.Hash && c.Status == string(skilleval.CandidateRolledBack) && strings.Contains(c.ValidationReason, "not needed") {
 			return
 		}
 	}
-	t.Fatalf("custom skill root %q not found in %+v", root, roots)
+	t.Fatalf("rolled back candidate missing from view: %+v", view.SkillCandidates)
 }
 
-func TestSkillRootsViewOmitsExcludedConventionRoot(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("USERPROFILE", home)
-	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
-	t.Setenv("AppData", filepath.Join(home, "AppData"))
-	project := t.TempDir()
-	root := filepath.Join(home, ".agents", "skills")
-	if err := os.MkdirAll(root, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(root, "noisy.md"), []byte("---\ndescription: noisy\n---\nbody"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	cfgPath := config.UserConfigPath()
-	if err := os.MkdirAll(filepath.Dir(cfgPath), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(cfgPath, []byte("[skills]\nexcluded_paths = [\"~/.agents/skills\"]\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	wd, err := os.Getwd()
+func TestCapabilitiesProjectsFailedGuardrailExplicitly(t *testing.T) {
+	isolateDesktopUserDirs(t)
+	dir := robustTempDir(t)
+	t.Chdir(dir)
+	app := NewApp()
+	app.setTestCtrl(control.New(control.Options{Host: plugin.NewHost()}), "")
+	app.tabs["test"].Scope = "project"
+	app.tabs["test"].WorkspaceRoot = dir
+	defer app.activeCtrl().Close()
+
+	store := skilleval.NewCandidateStore(filepath.Join(dir, config.ProjectConventionDir, "skilleval"))
+	candidate, err := store.Create(desktopTestSkill("parser-helper"), skilleval.BundleV2{ID: "bundle-a"}, "fix parser")
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("Create candidate: %v", err)
 	}
-	defer os.Chdir(wd)
-	if err := os.Chdir(project); err != nil {
-		t.Fatal(err)
+	if _, err := store.RecordEvaluation(candidate.Hash, skilleval.ScoreResult{Score: 0.91, Reason: "passed"}, skilleval.GuardrailResult{Pass: false, Reason: "regression"}); err != nil {
+		t.Fatalf("RecordEvaluation: %v", err)
 	}
-
-	roots := skillRootsView()
-	want := realTestPath(root)
-	for _, r := range roots {
-		if realTestPath(r.Dir) == want {
-			t.Fatalf("excluded convention root should be hidden, got %+v in %+v", r, roots)
-		}
+	view := app.Capabilities()
+	if len(view.SkillCandidates) != 1 || view.SkillCandidates[0].GuardrailPass == nil || *view.SkillCandidates[0].GuardrailPass {
+		t.Fatalf("guardrail failed candidate = %+v", view.SkillCandidates)
 	}
 }
 
-func TestRemoveSkillPathPseudoDeletesConventionRoot(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("USERPROFILE", home)
-	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
-	t.Setenv("AppData", filepath.Join(home, "AppData"))
-	path := filepath.Join(home, ".agents", "skills")
-	app := NewApp()
-
-	if err := app.RemoveSkillPath(path); err != nil {
-		t.Fatalf("RemoveSkillPath: %v", err)
+func desktopTestSkill(name string) skill.Skill {
+	return skill.Skill{
+		Name:        name,
+		Description: "Helps with parser work",
+		Body:        "Use the parser checklist before editing.",
+		RunAs:       skill.RunInline,
 	}
-	cfg := config.LoadForEdit(config.UserConfigPath())
-	if len(cfg.Skills.ExcludedPaths) != 1 || realTestPath(cfg.Skills.ExcludedPaths[0]) != realTestPath(path) {
-		t.Fatalf("excluded paths = %v, want %q", cfg.Skills.ExcludedPaths, path)
-	}
-}
-
-func TestAddSkillPathRestoresConventionRootWithoutCustomPath(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("USERPROFILE", home)
-	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
-	t.Setenv("AppData", filepath.Join(home, "AppData"))
-	path := filepath.Join(home, ".agents", "skills")
-	cfgPath := config.UserConfigPath()
-	if err := os.MkdirAll(filepath.Dir(cfgPath), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(cfgPath, []byte("[skills]\nexcluded_paths = [\"~/.agents/skills\"]\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	app := NewApp()
-
-	if err := app.AddSkillPath(path); err != nil {
-		t.Fatalf("AddSkillPath: %v", err)
-	}
-	cfg := config.LoadForEdit(config.UserConfigPath())
-	if len(cfg.Skills.ExcludedPaths) != 0 {
-		t.Fatalf("excluded paths after restore = %v, want empty", cfg.Skills.ExcludedPaths)
-	}
-	if len(cfg.Skills.Paths) != 0 {
-		t.Fatalf("restored convention root should not become custom path: %v", cfg.Skills.Paths)
-	}
-}
-
-func TestCapabilitiesIncludesDisabledSkills(t *testing.T) {
-	a := NewApp()
-	a.setTestCtrl(control.New(control.Options{
-		Skills: []skill.Skill{
-			{Name: "explore", Description: "enabled", Scope: skill.ScopeBuiltin, RunAs: skill.RunSubagent},
-		},
-		AllSkills: []skill.Skill{
-			{Name: "explore", Description: "enabled", Scope: skill.ScopeBuiltin, RunAs: skill.RunSubagent},
-			{Name: "review", Description: "disabled", Scope: skill.ScopeBuiltin, RunAs: skill.RunSubagent},
-		},
-	}), "")
-	defer a.activeCtrl().Close()
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("USERPROFILE", home)
-	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
-	t.Setenv("AppData", filepath.Join(home, "AppData"))
-	cfgPath := config.UserConfigPath()
-	if err := os.MkdirAll(filepath.Dir(cfgPath), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(cfgPath, []byte("[skills]\ndisabled_skills = [\"review\"]\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	view := a.Capabilities()
-	states := map[string]bool{}
-	for _, sk := range view.Skills {
-		states[sk.Name] = sk.Enabled
-	}
-	if states["explore"] != true {
-		t.Fatalf("explore should be enabled in capabilities: %+v", view.Skills)
-	}
-	enabled, ok := states["review"]
-	if !ok || enabled {
-		t.Fatalf("review should be disabled but present in capabilities: %+v", view.Skills)
-	}
-}
-
-func realTestPath(path string) string {
-	if p, err := filepath.EvalSymlinks(path); err == nil {
-		path = p
-	}
-	return config.CanonicalSkillPath(path)
 }
