@@ -24,7 +24,8 @@ export type EventKind =
   | "budget_exceeded"
   | "skill_promoted"
   | "steer"
-  | "advisor";
+  | "advisor"
+  | "provider_status";
 
 export interface WireCompaction {
   trigger?: string; // "auto" | "manual"
@@ -34,8 +35,23 @@ export interface WireCompaction {
 }
 
 export interface WireProfile {
+  role?: string;
   model?: string;
   effort?: string;
+  budgetUsed?: number;
+  budgetLimit?: number;
+  budgetRemaining?: number;
+}
+
+export interface WireProviderStatus {
+  role?: string;
+  health?: string;
+  authStatus?: string;
+  rateLimit?: string;
+  balanceStatus?: string;
+  lastError?: string;
+  balanceAvailable?: boolean;
+  balanceDisplay?: string;
 }
 
 export interface WireCompression {
@@ -72,6 +88,8 @@ export interface WireUsage {
   cacheHitTokens: number;
   cacheMissTokens: number;
   reasoningTokens?: number;
+  profile?: WireProfile;
+  providerStatus?: WireProviderStatus;
   // Session-cumulative cache tokens — the status bar shows the aggregate
   // hit-rate (Σhit/Σ(hit+miss)), steadier than the single-turn cacheHitTokens.
   sessionCacheHitTokens: number;
@@ -131,6 +149,7 @@ export interface WireEvent {
   level?: "info" | "warn";
   tool?: WireTool;
   usage?: WireUsage;
+  providerStatus?: WireProviderStatus;
   advisor?: WireAdvisor;
   approval?: WireApproval;
   ask?: WireAsk;

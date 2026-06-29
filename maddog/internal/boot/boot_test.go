@@ -38,6 +38,29 @@ import (
 	_ "maddog/internal/provider/openai"
 )
 
+type recordSink struct {
+	mu  sync.Mutex
+	evs []event.Event
+}
+
+func (s *recordSink) Emit(e event.Event) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.evs = append(s.evs, e)
+}
+
+func (s *recordSink) kinds(k event.Kind) []event.Event {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []event.Event
+	for _, e := range s.evs {
+		if e.Kind == k {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
 // TestBuildFoldsProjectMemoryIntoSystemPrompt is the end-to-end proof of the
 // cache-first wiring: a project MADDOG.md is discovered at boot and folded
 // into the session's system message (the cached prefix), and the `remember`
@@ -320,6 +343,55 @@ func firstTokenProfileRequest(t *testing.T, tokenMode string) provider.Request {
 	return reqs[0]
 }
 
+func TestBuildUsageProfileUsesResolvedDefaultModelAndEffort(t *testing.T) {
+	isolateConfigHome(t)
+	dir := robustTempDir(t)
+	t.Chdir(dir)
+
+	registerBootTokenProfileTestProvider()
+	prov := testutil.NewMock("runtime-instance", testutil.Turn{
+		Text:  "done",
+		Usage: &provider.Usage{PromptTokens: 8, CompletionTokens: 3, TotalTokens: 11},
+	})
+	setBootTokenProfileTestProvider(t, prov)
+	sink := &recordSink{}
+
+	writeFile(t, dir, "maddog.toml", `
+default_model = "default-provider/chosen-model"
+
+[codegraph]
+enabled = false
+
+[[providers]]
+name = "default-provider"
+kind = "boot-token-profile-test"
+models = ["chosen-model", "other-model"]
+default = "chosen-model"
+supported_efforts = ["low", "high"]
+default_effort = "high"
+`)
+
+	ctrl, err := Build(context.Background(), Options{Sink: sink})
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	defer ctrl.Close()
+	if err := ctrl.Run(context.Background(), "capture usage profile"); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	usages := sink.kinds(event.Usage)
+	if len(usages) != 1 {
+		t.Fatalf("usage events = %d, want 1", len(usages))
+	}
+	profile := usages[0].Profile
+	if profile == nil {
+		t.Fatal("usage profile = nil")
+	}
+	if profile.Role != "default" || profile.Model != "default-provider/chosen-model" || profile.Effort != "high" {
+		t.Fatalf("usage profile = %+v, want default default-provider/chosen-model/high", profile)
+	}
+}
+
 func TestBuildSubagentSkillFailedContinuationPersistsTranscript(t *testing.T) {
 	isolateConfigHome(t)
 	dir := robustTempDir(t)
@@ -477,6 +549,106 @@ model = "x"
 	}
 }
 
+func TestBuildSubagentSkillForwardsUsageAsSmallProvider(t *testing.T) {
+	isolateConfigHome(t)
+	dir := robustTempDir(t)
+	t.Chdir(dir)
+
+	registerBootSubagentTestProvider()
+	prov := &bootSubagentTestProvider{}
+	setBootSubagentTestProvider(t, prov)
+	sink := &recordSink{}
+	writeFile(t, dir, "maddog.toml", `
+default_model = "test-model"
+
+[codegraph]
+enabled = false
+
+[agent]
+system_prompt = "BASE"
+
+[[providers]]
+name = "test-model"
+kind = "boot-subagent-test"
+model = "x"
+`)
+
+	ctrl, err := Build(context.Background(), Options{Sink: sink})
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	defer ctrl.Close()
+
+	if err := ctrl.Run(context.Background(), "first review"); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	usages := sink.kinds(event.Usage)
+	if len(usages) != 1 {
+		t.Fatalf("usage events = %d, want skill subagent usage only", len(usages))
+	}
+	profile := usages[0].Profile
+	if profile == nil || profile.Role != "small" || profile.Model != "test-model/x" {
+		t.Fatalf("skill subagent usage profile = %+v, want small test-model/x", profile)
+	}
+	status := usages[0].ProviderStatus
+	if status == nil || status.Role != "small" || status.Health != "ok" {
+		t.Fatalf("skill subagent usage provider status = %+v, want small ok", status)
+	}
+}
+
+func TestBuildSubagentSkillForwardsProviderStatusError(t *testing.T) {
+	isolateConfigHome(t)
+	dir := robustTempDir(t)
+	t.Chdir(dir)
+
+	registerBootSubagentTestProvider()
+	prov := &bootSubagentTestProvider{}
+	setBootSubagentTestProvider(t, prov)
+	sink := &recordSink{}
+	writeFile(t, dir, "maddog.toml", `
+default_model = "test-model"
+
+[codegraph]
+enabled = false
+
+[agent]
+system_prompt = "BASE"
+
+[[providers]]
+name = "test-model"
+kind = "boot-subagent-test"
+model = "x"
+`)
+
+	ctrl, err := Build(context.Background(), Options{Sink: sink})
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	defer ctrl.Close()
+	sessionPath := agent.NewSessionPath(ctrl.SessionDir(), ctrl.Label())
+	ctrl.SetSessionPath(sessionPath)
+
+	if err := ctrl.Run(context.Background(), "first review"); err != nil {
+		t.Fatalf("first Run: %v", err)
+	}
+	ref := subagentRefFromHistory(t, ctrl.History())
+	prov.setContinueRef(ref)
+
+	if err := ctrl.Run(context.Background(), "continue review"); err != nil {
+		t.Fatalf("second Run: %v", err)
+	}
+
+	statuses := sink.kinds(event.ProviderStatusUpdate)
+	if len(statuses) != 1 {
+		t.Fatalf("provider status events = %d, want failed skill subagent status", len(statuses))
+	}
+	status := statuses[0].ProviderStatus
+	if status == nil || status.Role != "small" || status.Health != "error" || status.LastError == "" {
+		t.Fatalf("skill subagent provider status = %+v, want small error with last error", status)
+	}
+}
+
 const bootSubagentTestProviderKind = "boot-subagent-test"
 
 var (
@@ -540,7 +712,11 @@ func (p *bootSubagentTestProvider) Stream(_ context.Context, req provider.Reques
 	case 0:
 		chunks = []provider.Chunk{{Type: provider.ChunkToolCall, ToolCall: &provider.ToolCall{ID: "review-1", Name: "review", Arguments: `{"task":"first skill task"}`}}}
 	case 1:
-		chunks = []provider.Chunk{{Type: provider.ChunkText, Text: "first skill answer"}, {Type: provider.ChunkDone}}
+		chunks = []provider.Chunk{
+			{Type: provider.ChunkText, Text: "first skill answer"},
+			{Type: provider.ChunkUsage, Usage: &provider.Usage{PromptTokens: 11, CompletionTokens: 4, TotalTokens: 15}},
+			{Type: provider.ChunkDone},
+		}
 	case 2:
 		chunks = []provider.Chunk{{Type: provider.ChunkText, Text: "parent first done"}, {Type: provider.ChunkDone}}
 	case 3:

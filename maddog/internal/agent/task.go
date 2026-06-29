@@ -163,7 +163,8 @@ func (t *TaskTool) ResolveProfile(args json.RawMessage) *event.Profile {
 	if model == "" && effort == "" {
 		return nil
 	}
-	return &event.Profile{Model: model, Effort: effort}
+	model, effort = t.effectiveIdentity(model, effort)
+	return &event.Profile{Role: "small", Model: model, Effort: effort}
 }
 
 func (t *TaskTool) effectiveProfile(model, effort string) (string, string) {
@@ -250,7 +251,7 @@ func (t *TaskTool) Execute(ctx context.Context, args json.RawMessage) (string, e
 		}
 		job := jm.StartForSession(jobs.SessionFromContext(ctx), "task", label, func(jobCtx context.Context, _ io.Writer) (string, error) {
 			defer run.Release()
-			answer, err := t.runSubSession(jobCtx, p.Prompt, subReg, nested, maxSteps, prov, pricing, ctxWin, run.Session)
+			answer, err := t.runSubSession(jobCtx, p.Prompt, subReg, nested, maxSteps, prov, pricing, ctxWin, run.Session, modelRef, effortRef)
 			if err != nil {
 				return FormatSubagentResult("", run.Ref, true), errors.Join(err, t.transcripts.SaveFailed(run))
 			}
@@ -267,7 +268,7 @@ func (t *TaskTool) Execute(ctx context.Context, args json.RawMessage) (string, e
 
 	// Foreground: run synchronously, nesting events under this call.
 	defer run.Release()
-	answer, err := t.runSubSession(ctx, p.Prompt, subReg, subSink(ctx), maxSteps, prov, pricing, ctxWin, run.Session)
+	answer, err := t.runSubSession(ctx, p.Prompt, subReg, subSink(ctx), maxSteps, prov, pricing, ctxWin, run.Session, modelRef, effortRef)
 	if err != nil {
 		return "", errors.Join(err, t.transcripts.SaveFailed(run))
 	}
@@ -429,7 +430,8 @@ func (t *TaskTool) resolveSubSessionRuntime(modelRef, effort string) (provider.P
 	return prov, pricing, ctxWin, nil
 }
 
-func (t *TaskTool) runSubSession(ctx context.Context, prompt string, subReg *tool.Registry, sink event.Sink, maxSteps int, prov provider.Provider, pricing *provider.Pricing, ctxWin int, sess *Session) (string, error) {
+func (t *TaskTool) runSubSession(ctx context.Context, prompt string, subReg *tool.Registry, sink event.Sink, maxSteps int, prov provider.Provider, pricing *provider.Pricing, ctxWin int, sess *Session, modelRef, effortRef string) (string, error) {
+	usageModel, usageEffort := t.effectiveIdentity(modelRef, effortRef)
 	return RunSubAgentWithSession(ctx, prov, subReg, sess, prompt, Options{
 		MaxSteps:          maxSteps,
 		Temperature:       t.temperature,
@@ -441,6 +443,9 @@ func (t *TaskTool) runSubSession(ctx context.Context, prompt string, subReg *too
 		CompactForceRatio: t.compactForceRatio,
 		ArchiveDir:        t.archiveDir,
 		ReasoningLanguage: ReasoningLanguageFromContext(ctx),
+		UsageRole:         "small",
+		UsageModel:        usageModel,
+		UsageEffort:       usageEffort,
 	}, sink)
 }
 
@@ -520,6 +525,10 @@ func subSinkFor(parentID string, parent event.Sink) event.Sink {
 		case event.ToolDispatch, event.ToolResult:
 			e.Tool.ParentID = parentID
 			e.Tool.ID = parentID + "/" + e.Tool.ID
+			parent.Emit(e)
+		case event.Usage:
+			parent.Emit(e)
+		case event.ProviderStatusUpdate:
 			parent.Emit(e)
 		}
 	})

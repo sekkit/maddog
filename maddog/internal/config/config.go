@@ -264,17 +264,21 @@ var defaultDesktopStatusBarItems = []string{
 }
 
 var knownDesktopStatusBarItems = map[string]bool{
-	"model":          true,
-	"cache":          true,
-	"cache_avg":      true,
-	"session_tokens": true,
-	"turn_tokens":    true,
-	"turn_cost":      true,
-	"session_turns":  true,
-	"context":        true,
-	"compact":        true,
-	"cost":           true,
-	"balance":        true,
+	"model":           true,
+	"cache":           true,
+	"cache_avg":       true,
+	"session_tokens":  true,
+	"turn_tokens":     true,
+	"turn_cost":       true,
+	"session_turns":   true,
+	"context":         true,
+	"compact":         true,
+	"cost":            true,
+	"balance":         true,
+	"provider":        true,
+	"frontier_budget": true,
+	"provider_health": true,
+	"rate_limit":      true,
 }
 
 // DefaultDesktopStatusBarItems returns the default ordered visible desktop

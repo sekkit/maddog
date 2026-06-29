@@ -49,6 +49,7 @@ type Coordinator struct {
 	plannerSess    *Session
 	plannerPricing *provider.Pricing
 	plannerAgent   *Agent
+	plannerProfile *event.Profile
 	executor       *Agent
 	temperature    float64
 	sink           event.Sink
@@ -72,6 +73,7 @@ func NewCoordinator(planner provider.Provider, plannerSession *Session, plannerP
 		plannerOptions.Pricing = plannerPricing
 		plannerAgent = New(planner, plannerTools, plannerSession, plannerOptions, plannerSink(sink))
 	}
+	plannerProfile := plannerUsageProfile(planner, plannerOptions)
 	if executor != nil {
 		executor.executorHandoffGuard = true
 	}
@@ -80,6 +82,7 @@ func NewCoordinator(planner provider.Provider, plannerSession *Session, plannerP
 		plannerSess:    plannerSession,
 		plannerPricing: plannerPricing,
 		plannerAgent:   plannerAgent,
+		plannerProfile: plannerProfile,
 		executor:       executor,
 		temperature:    temperature,
 		sink:           sink,
@@ -131,6 +134,7 @@ func (c *Coordinator) plan(ctx context.Context, input string) (string, error) {
 		Temperature: c.temperature,
 	})
 	if err != nil {
+		c.emitPlannerProviderStatus(err)
 		return "", err
 	}
 
@@ -144,16 +148,38 @@ func (c *Coordinator) plan(ctx context.Context, input string) (string, error) {
 		case provider.ChunkUsage:
 			usage = chunk.Usage
 		case provider.ChunkError:
+			c.emitPlannerProviderStatus(chunk.Err)
 			return "", chunk.Err
 		}
 	}
 	// Closes the planner's raw text block (no markdown redraw) and prints its
 	// usage line, mirroring the old Fprintln + printUsage tail.
-	c.sink.Emit(event.Event{Kind: event.Usage, Usage: usage, Pricing: c.plannerPricing})
+	c.sink.Emit(event.Event{Kind: event.Usage, Usage: usage, Pricing: c.plannerPricing,
+		Profile: c.plannerProfile, ProviderStatus: providerStatusForProfile(c.plannerProfile, nil)})
 
 	plan := text.String()
 	c.plannerSess.Add(provider.Message{Role: provider.RoleAssistant, Content: plan})
 	return plan, nil
+}
+
+func plannerUsageProfile(planner provider.Provider, opts Options) *event.Profile {
+	role := strings.TrimSpace(opts.UsageRole)
+	if role == "" {
+		role = "planner"
+	}
+	model := strings.TrimSpace(opts.UsageModel)
+	if model == "" && planner != nil {
+		model = strings.TrimSpace(planner.Name())
+	}
+	return &event.Profile{Role: role, Model: model, Effort: strings.TrimSpace(opts.UsageEffort)}
+}
+
+func (c *Coordinator) emitPlannerProviderStatus(err error) {
+	status := providerStatusForProfile(c.plannerProfile, err)
+	if status == nil {
+		return
+	}
+	c.sink.Emit(event.Event{Kind: event.ProviderStatusUpdate, ProviderStatus: status})
 }
 
 // planWithTools runs the planner through the normal Agent loop over a filtered

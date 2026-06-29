@@ -212,6 +212,11 @@ func TestDesktopStatusBarItemsNormalizeAndValidate(t *testing.T) {
 	if got, want := Default().DesktopStatusBarItems(), DefaultDesktopStatusBarItems(); !reflect.DeepEqual(got, want) {
 		t.Fatalf("default desktop status bar items = %v, want %v", got, want)
 	}
+	for _, id := range []string{"provider", "frontier_budget", "provider_health", "rate_limit"} {
+		if stringSliceContains(DefaultDesktopStatusBarItems(), id) {
+			t.Fatalf("%q should be configurable but not visible by default", id)
+		}
+	}
 
 	c := Default()
 	c.Desktop.StatusBarItems = []string{" balance ", "cache", "cache", "unknown", "model"}
@@ -227,6 +232,13 @@ func TestDesktopStatusBarItemsNormalizeAndValidate(t *testing.T) {
 		t.Fatalf("saved desktop status bar items = %v, want %v", got, want)
 	}
 
+	if err := c.SetDesktopStatusBarItems([]string{"provider", "frontier_budget", "provider_health", "rate_limit"}); err != nil {
+		t.Fatalf("SetDesktopStatusBarItems D3 provider items: %v", err)
+	}
+	if got, want := c.DesktopStatusBarItems(), []string{"provider", "frontier_budget", "provider_health", "rate_limit"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("saved D3 desktop status bar items = %v, want %v", got, want)
+	}
+
 	if err := c.SetDesktopStatusBarItems(nil); err != nil {
 		t.Fatalf("SetDesktopStatusBarItems nil: %v", err)
 	}
@@ -237,6 +249,15 @@ func TestDesktopStatusBarItemsNormalizeAndValidate(t *testing.T) {
 	if err := c.SetDesktopStatusBarItems([]string{"ghost"}); err == nil {
 		t.Fatal("expected error for unknown status bar item")
 	}
+}
+
+func stringSliceContains(items []string, want string) bool {
+	for _, item := range items {
+		if item == want {
+			return true
+		}
+	}
+	return false
 }
 
 func TestDesktopCloseBehaviorFallsBackToLegacyUI(t *testing.T) {

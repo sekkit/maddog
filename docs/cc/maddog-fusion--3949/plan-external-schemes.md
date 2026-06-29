@@ -210,7 +210,12 @@ flowchart TB
 
 **文件：**
 - 修改：`Maddog/internal/provider/costwrap/costwrap.go`
+- 修改：`Maddog/internal/provider/retry.go`
+- 修改：`Maddog/internal/provider/openai/responses.go`
+- 修改：`Maddog/internal/provider/anthropic/anthropic.go`
 - 修改：`Maddog/internal/agent/agent.go`
+- 修改：`Maddog/internal/agent/coordinator.go`
+- 修改：`Maddog/internal/agent/task.go`
 - 修改：`Maddog/internal/event/event.go`
 - 修改：`Maddog/internal/serve/wire.go`
 - 修改：`Maddog/desktop/wire.go`
@@ -218,9 +223,16 @@ flowchart TB
 - 修改：`Maddog/desktop/frontend/src/lib/types.ts`
 - 修改：`Maddog/desktop/frontend/src/components/StatusBar.tsx`
 - 测试：`Maddog/internal/provider/costwrap/costwrap_test.go`
+- 测试：`Maddog/internal/provider/openai/openai_test.go`
+- 测试：`Maddog/internal/provider/anthropic/anthropic_test.go`
 - 测试：`Maddog/internal/agent/upgrade_test.go`
+- 测试：`Maddog/internal/agent/usage_profile_test.go`
+- 测试：`Maddog/internal/agent/coordinator_test.go`
+- 测试：`Maddog/internal/agent/task_test.go`
+- 测试：`Maddog/internal/boot/boot_test.go`
 - 测试：`Maddog/internal/serve/wire_test.go`
 - 测试：`Maddog/desktop/wire_test.go`
+- 测试：`Maddog/desktop/frontend/src/__tests__/use-controller-meta.test.ts`
 - 新建测试：`Maddog/desktop/frontend/src/__tests__/status-bar.test.ts`
 
 **方案：**

@@ -2973,6 +2973,7 @@ export default function App() {
             <StatusBar
               context={state.context}
               usage={state.usage}
+              providerStatus={state.providerStatus}
               balance={state.balance}
               jobs={state.jobs}
               running={state.running}

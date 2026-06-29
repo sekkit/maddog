@@ -32,7 +32,7 @@ import {
 } from "../lib/fontFamily";
 import { getAvailableFontFamilies, getAvailableMonoFontFamilies } from "../lib/fontAvailability";
 import { getDisplayMode, onDisplayModeChange, setDisplayMode as setLocalDisplayMode } from "../lib/displayMode";
-import { DEFAULT_STATUS_BAR_ITEMS, normalizeStatusBarItems, type StatusBarItemId } from "../lib/statusBarItems";
+import { ALL_STATUS_BAR_ITEMS, normalizeStatusBarItems, type StatusBarItemId } from "../lib/statusBarItems";
 import type { BotAllowlistView, BotConnectionDiagnostic, BotConnectionView, BotInstallStartResult, BotSettingsView, HookConfigView, HooksSettingsView, NetworkView, ProviderView, SettingsTab, SettingsView } from "../lib/types";
 import { InlineConfirmButton } from "./InlineConfirmButton";
 import { Tooltip } from "./Tooltip";
@@ -764,6 +764,14 @@ function statusBarItemLabel(id: StatusBarItemId, t: ReturnType<typeof useT>): st
   switch (id) {
     case "model":
       return t("settings.statusBarItem.model");
+    case "provider":
+      return t("status.providerLabel");
+    case "frontier_budget":
+      return t("status.frontierBudgetLabel");
+    case "provider_health":
+      return t("status.providerHealthLabel");
+    case "rate_limit":
+      return t("status.rateLimitLabel");
     case "cache":
       return t("status.cacheLabel");
     case "cache_avg":
@@ -857,7 +865,7 @@ function GeneralSection({ s, busy, apply, agentRunning }: SectionProps & { agent
   const visibleStatusItems = new Set<StatusBarItemId>(statusBarItems);
   const orderedStatusItems = [
     ...statusBarItems,
-    ...DEFAULT_STATUS_BAR_ITEMS.filter((id) => !visibleStatusItems.has(id)),
+    ...ALL_STATUS_BAR_ITEMS.filter((id) => !visibleStatusItems.has(id)),
   ];
   const applyStatusBarItems = (items: StatusBarItemId[]) => {
     const contentScrollTop = document.querySelector<HTMLElement>(".settings-center__content")?.scrollTop ?? 0;
@@ -1167,7 +1175,7 @@ function GeneralSection({ s, busy, apply, agentRunning }: SectionProps & { agent
         <div className={`status-bar-items-editor${statusBarItemsExpanded ? " status-bar-items-editor--expanded" : ""}`}>
           <div className="status-bar-items-editor__summary">
             <span className="status-bar-items-editor__summary-text">
-              {t("settings.statusBarItemsSummary", { visible: statusBarItems.length, total: DEFAULT_STATUS_BAR_ITEMS.length })}
+              {t("settings.statusBarItemsSummary", { visible: statusBarItems.length, total: ALL_STATUS_BAR_ITEMS.length })}
             </span>
             <Tooltip label={t(statusBarItemsExpanded ? "settings.statusBarItemsCollapse" : "settings.statusBarItemsExpand")}>
               <button

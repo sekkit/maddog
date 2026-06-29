@@ -51,5 +51,99 @@ console.log("\nuse controller meta");
   eq(shouldReconcileStaleTurn({ ...rendered, turnActive: false }, 1_000, 31_000), false, "local pending send before turn_started does not reconcile");
 }
 
+{
+  const next = reducer(initialState, {
+    type: "event",
+    e: {
+      kind: "usage",
+      usage: {
+        promptTokens: 100,
+        completionTokens: 20,
+        totalTokens: 120,
+        cacheHitTokens: 80,
+        cacheMissTokens: 20,
+        sessionCacheHitTokens: 800,
+        sessionCacheMissTokens: 200,
+        cost: 0.125,
+        currency: "$",
+        profile: {
+          role: "frontier",
+          model: "anthropic/claude-3-5-sonnet",
+          budgetUsed: 7,
+          budgetLimit: 10,
+          budgetRemaining: 3,
+        },
+        providerStatus: {
+          role: "frontier",
+          health: "ok",
+          authStatus: "ok",
+          rateLimit: "ok",
+        },
+      },
+    },
+  });
+  eq(next.usage?.profile?.role, "frontier", "usage reducer preserves provider role");
+  eq(next.usage?.profile?.model, "anthropic/claude-3-5-sonnet", "usage reducer preserves provider model");
+  eq(next.usage?.profile?.budgetRemaining, 3, "usage reducer preserves frontier budget snapshot");
+  eq(next.usage?.providerStatus?.health, "ok", "usage reducer preserves provider health snapshot");
+  eq(next.usage?.providerStatus?.rateLimit, "ok", "usage reducer preserves provider rate limit snapshot");
+  eq(next.sessionCost, 0.125, "usage reducer still accumulates cost");
+}
+
+{
+  const next = reducer(initialState, {
+    type: "event",
+    e: {
+      kind: "provider_status",
+      providerStatus: {
+        role: "default",
+        health: "rate_limited",
+        authStatus: "ok",
+        rateLimit: "rate_limited",
+        lastError: "openai: status 429",
+      },
+    },
+  });
+  eq(next.providerStatus?.health, "rate_limited", "provider status event preserves health");
+  eq(next.providerStatus?.rateLimit, "rate_limited", "provider status event preserves rate limit");
+  eq(next.providerStatus?.lastError, "openai: status 429", "provider status event preserves last error");
+}
+
+{
+  const withUsage = reducer(initialState, {
+    type: "event",
+    e: {
+      kind: "usage",
+      usage: {
+        promptTokens: 100,
+        completionTokens: 20,
+        totalTokens: 120,
+        cacheHitTokens: 80,
+        cacheMissTokens: 20,
+        sessionCacheHitTokens: 800,
+        sessionCacheMissTokens: 200,
+        profile: { role: "default", model: "openai/gpt-4o-mini" },
+        providerStatus: { role: "default", health: "ok", authStatus: "ok", rateLimit: "ok" },
+      },
+    },
+  });
+  const next = reducer(withUsage, {
+    type: "event",
+    e: {
+      kind: "provider_status",
+      providerStatus: {
+        role: "default",
+        health: "rate_limited",
+        authStatus: "ok",
+        rateLimit: "rate_limited",
+        lastError: "openai: status 429",
+      },
+    },
+  });
+  eq(next.usage?.providerStatus?.health, "ok", "usage reducer keeps historical usage status");
+  eq(next.providerStatus?.health, "rate_limited", "provider status sequence stores latest status");
+  eq(next.providerStatus?.rateLimit, "rate_limited", "provider status sequence stores latest rate limit");
+}
+
 console.log(`\n${passed} passed, ${failed} failed, ${passed + failed} total`);
 if (failed > 0) process.exit(1);

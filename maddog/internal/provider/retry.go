@@ -78,6 +78,56 @@ func (e *APIError) Error() string {
 	return fmt.Sprintf("%s: status %d: %s", e.Provider, e.Status, e.Body)
 }
 
+// NewStructuredAPIError preserves provider SSE error metadata as an APIError so
+// callers can classify rate-limit, auth, balance, and degraded-provider states
+// without brittle string parsing.
+func NewStructuredAPIError(providerName, errorType, code, message string) *APIError {
+	status := StructuredAPIErrorStatus(errorType, code)
+	bodyParts := make([]string, 0, 3)
+	if errorType = strings.TrimSpace(errorType); errorType != "" {
+		bodyParts = append(bodyParts, "type="+errorType)
+	}
+	if code = strings.TrimSpace(code); code != "" {
+		bodyParts = append(bodyParts, "code="+code)
+	}
+	if message = strings.TrimSpace(message); message != "" {
+		bodyParts = append(bodyParts, message)
+	}
+	return &APIError{Provider: providerName, Status: status, Body: strings.Join(bodyParts, ": ")}
+}
+
+// StructuredAPIErrorStatus maps provider-specific streaming error type/code
+// strings to the closest HTTP status family used by APIError.
+func StructuredAPIErrorStatus(errorType, code string) int {
+	value := strings.ToLower(strings.TrimSpace(errorType + " " + code))
+	switch {
+	case strings.Contains(value, "rate_limit"):
+		return http.StatusTooManyRequests
+	case strings.Contains(value, "insufficient") || strings.Contains(value, "quota") ||
+		strings.Contains(value, "billing") || strings.Contains(value, "payment") ||
+		strings.Contains(value, "balance") || strings.Contains(value, "credit"):
+		return http.StatusPaymentRequired
+	case strings.Contains(value, "authentication") || strings.Contains(value, "invalid_api_key") ||
+		strings.Contains(value, "unauthorized"):
+		return http.StatusUnauthorized
+	case strings.Contains(value, "permission") || strings.Contains(value, "forbidden"):
+		return http.StatusForbidden
+	case strings.Contains(value, "request_too_large"):
+		return http.StatusRequestEntityTooLarge
+	case strings.Contains(value, "not_found"):
+		return http.StatusNotFound
+	case strings.Contains(value, "invalid_request") || strings.Contains(value, "bad_request"):
+		return http.StatusBadRequest
+	case strings.Contains(value, "overloaded"):
+		return 529
+	case strings.Contains(value, "server") || strings.Contains(value, "api_error") ||
+		strings.Contains(value, "internal"):
+		return http.StatusInternalServerError
+	default:
+		return 0
+	}
+}
+
 // RetryableStatus reports whether a backoff can plausibly recover from status s:
 // 408 (request timeout), 429 (rate limit) and 5xx (incl. Anthropic's 529). Other
 // 4xx (400/401/402/422, …) are caller/config problems retrying can't fix.

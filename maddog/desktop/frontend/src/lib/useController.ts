@@ -32,6 +32,8 @@ import type {
   WireAdvisor,
   WireAsk,
   WireEvent,
+  WireProfile,
+  WireProviderStatus,
   WireUsage,
 } from "./types";
 
@@ -72,7 +74,7 @@ export type Item =
       summary?: string; // stable collapsed readout kept even after args/output archive
       isShell?: boolean; // true for !-prefix shell commands (controls default expand)
       parentId?: string; // a sub-agent call nests under the `task` call with this id
-      profile?: { model?: string; effort?: string }; // subagent model/effort from tool event
+      profile?: WireProfile; // subagent provider role/model/effort from tool event
     };
 
 interface State {
@@ -82,6 +84,7 @@ interface State {
   approval?: WireApproval;
   ask?: WireAsk;
   usage?: WireUsage;
+  providerStatus?: WireProviderStatus;
   context: ContextInfo;
   meta?: Meta;
   balance?: BalanceInfo;
@@ -491,8 +494,21 @@ function applyEvent(s: State, e: WireEvent): State {
       const turnCost = s.turnCost + usageCost;
       const sessionCost = s.sessionCost + usageCost;
       const sessionCurrency = e.usage?.currency || s.sessionCurrency || "¥";
-      return { ...s, usage: e.usage, context: { ...s.context, used, sessionTokens }, turnTokens, turnTotalTokens, turnCost, sessionTokens, sessionCost, sessionCurrency };
+      return {
+        ...s,
+        usage: e.usage,
+        providerStatus: e.usage?.providerStatus ?? s.providerStatus,
+        context: { ...s.context, used, sessionTokens },
+        turnTokens,
+        turnTotalTokens,
+        turnCost,
+        sessionTokens,
+        sessionCost,
+        sessionCurrency,
+      };
     }
+    case "provider_status":
+      return { ...s, providerStatus: e.providerStatus ?? s.providerStatus };
     case "notice":
       return { ...s, running: s.turnActive ? s.running : false, seq: s.seq + 1, items: [...s.items, { kind: "notice", id: `n${s.seq}`, level: e.level ?? "info", text: e.text ?? "" }] };
     case "mcp_surface_ready":

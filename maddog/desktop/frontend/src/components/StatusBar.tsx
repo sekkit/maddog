@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { Activity, CircleDollarSign, CircleGauge, Database, Layers, Percent, RefreshCw, Wallet, Zap } from "lucide-react";
+import { Activity, CircleDollarSign, CircleGauge, Database, Layers, Percent, RefreshCw, Server, ShieldCheck, TimerReset, Wallet, Zap } from "lucide-react";
 import { Tooltip } from "./Tooltip";
 import { useI18n, type Translator } from "../lib/i18n";
 import { formatMoney } from "../lib/money";
 import { normalizeStatusBarItems, type StatusBarItemId } from "../lib/statusBarItems";
-import { type BalanceInfo, type CollaborationMode, type ContextInfo, type JobView, type ToolApprovalMode, type WireUsage } from "../lib/types";
+import { type BalanceInfo, type CollaborationMode, type ContextInfo, type JobView, type ToolApprovalMode, type WireProviderStatus, type WireUsage } from "../lib/types";
 
 type StatusBarLabelStyle = "icon" | "text";
 
@@ -97,6 +97,39 @@ function formatTurnCount(turns: number | undefined, t: Translator): string {
   return t(turns === 1 ? "history.turnOne" : "history.turnOther", { n: turns });
 }
 
+function formatProviderProfile(usage: WireUsage | undefined): string {
+  const profile = usage?.profile;
+  if (!profile) return "-";
+  const role = profile.role?.trim();
+  const model = profile.model?.trim();
+  if (role && model) return `${role} · ${model}`;
+  return model || role || "-";
+}
+
+function formatFrontierBudget(usage: WireUsage | undefined): string {
+  const profile = usage?.profile;
+  const limit = profile?.budgetLimit ?? 0;
+  if (profile?.role !== "frontier" || limit <= 0) return "-";
+  const used = Math.max(0, profile.budgetUsed ?? 0);
+  const remaining = Math.max(0, profile.budgetRemaining ?? limit - used);
+  return `${remaining.toLocaleString()} / ${limit.toLocaleString()}`;
+}
+
+function currentProviderStatus(usage: WireUsage | undefined, providerStatus: WireProviderStatus | undefined): WireProviderStatus | undefined {
+  return providerStatus ?? usage?.providerStatus;
+}
+
+function formatProviderHealth(usage: WireUsage | undefined, providerStatus: WireProviderStatus | undefined): string {
+  const status = currentProviderStatus(usage, providerStatus);
+  const health = status?.health?.trim();
+  if (health) return health;
+  return usage?.profile ? "ok" : "-";
+}
+
+function formatRateLimit(usage: WireUsage | undefined, providerStatus: WireProviderStatus | undefined): string {
+  return currentProviderStatus(usage, providerStatus)?.rateLimit?.trim() || "-";
+}
+
 function MetricLabel({ style, icon, label }: { style: StatusBarLabelStyle; icon: ReactNode; label: string }) {
   return (
     <span className={`stat__label stat__label--${style}`} aria-hidden={style === "icon" ? "true" : undefined}>
@@ -108,6 +141,7 @@ function MetricLabel({ style, icon, label }: { style: StatusBarLabelStyle; icon:
 export function StatusBar({
   context,
   usage,
+  providerStatus,
   balance,
   jobs,
   running,
@@ -125,6 +159,7 @@ export function StatusBar({
 }: {
   context: ContextInfo;
   usage?: WireUsage;
+  providerStatus?: WireProviderStatus;
   balance?: BalanceInfo;
   jobs?: JobView[];
   running: boolean;
@@ -154,6 +189,10 @@ export function StatusBar({
   const tokenLabel = formatTokenCount(sessionTokens);
   const turnTokenLabel = formatTokenCount(turnTokens);
   const balanceLabel = balance?.available && balance.display ? balance.display : "-";
+  const providerLabel = formatProviderProfile(usage);
+  const frontierBudgetLabel = formatFrontierBudget(usage);
+  const providerHealthLabel = formatProviderHealth(usage, providerStatus);
+  const rateLimitLabel = formatRateLimit(usage, providerStatus);
   const planMode = collaborationMode === "plan";
   const goalMode = collaborationMode === "goal";
   const metricLabelStyle = labelStyle === "text" ? "text" : "icon";
@@ -164,6 +203,38 @@ export function StatusBar({
         <span className="stat stat--model">
           <span className={`statusbar__dot ${running ? "statusbar__dot--busy" : ""}`} />
           {modelLabel && <span className="statusbar__model">{modelLabel}</span>}
+        </span>
+      </Tooltip>
+    ),
+    provider: (
+      <Tooltip label={t("status.providerTitle")} className="statusbar__metric statusbar__metric--provider">
+        <span className="stat stat--provider statusbar__provider">
+          <MetricLabel style={metricLabelStyle} icon={<Server size={12} />} label={t("status.providerLabel")} />
+          <b className={providerLabel === "-" ? "stat__value--empty" : undefined}>{providerLabel}</b>
+        </span>
+      </Tooltip>
+    ),
+    frontier_budget: (
+      <Tooltip label={t("status.frontierBudgetTitle")} className="statusbar__metric statusbar__metric--frontier-budget">
+        <span className="stat statusbar__frontier-budget">
+          <MetricLabel style={metricLabelStyle} icon={<Wallet size={12} />} label={t("status.frontierBudgetLabel")} />
+          <b className={frontierBudgetLabel === "-" ? "stat__value--empty" : undefined}>{frontierBudgetLabel}</b>
+        </span>
+      </Tooltip>
+    ),
+    provider_health: (
+      <Tooltip label={t("status.providerHealthTitle")} className="statusbar__metric statusbar__metric--provider-health">
+        <span className="stat statusbar__provider-health">
+          <MetricLabel style={metricLabelStyle} icon={<ShieldCheck size={12} />} label={t("status.providerHealthLabel")} />
+          <b className={providerHealthLabel === "-" ? "stat__value--empty" : undefined}>{providerHealthLabel}</b>
+        </span>
+      </Tooltip>
+    ),
+    rate_limit: (
+      <Tooltip label={t("status.rateLimitTitle")} className="statusbar__metric statusbar__metric--rate-limit">
+        <span className="stat statusbar__rate-limit">
+          <MetricLabel style={metricLabelStyle} icon={<TimerReset size={12} />} label={t("status.rateLimitLabel")} />
+          <b className={rateLimitLabel === "-" ? "stat__value--empty" : undefined}>{rateLimitLabel}</b>
         </span>
       </Tooltip>
     ),

@@ -298,6 +298,36 @@ func TestResponsesWireStreamsTextAndUsage(t *testing.T) {
 	}
 }
 
+func TestResponsesWireStructuredErrorIsTypedAPIError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, `data: {"type":"response.failed","error":{"message":"too many requests","type":"rate_limit_error","code":"rate_limit_exceeded"}}`+"\n\n")
+	}))
+	defer srv.Close()
+
+	p, err := New(testProviderConfig("official-openai", srv.URL, "gpt-5.5", "sk-test", map[string]any{"wire_api": "responses"}))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	ch, err := p.Stream(context.Background(), provider.Request{Messages: []provider.Message{{Role: provider.RoleUser, Content: "ping"}}})
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	var gotErr error
+	for ck := range ch {
+		if ck.Type == provider.ChunkError {
+			gotErr = ck.Err
+		}
+	}
+	var apiErr *provider.APIError
+	if !errors.As(gotErr, &apiErr) {
+		t.Fatalf("stream error = %T %[1]v, want *provider.APIError", gotErr)
+	}
+	if apiErr.Provider != "official-openai" || apiErr.Status != http.StatusTooManyRequests || !strings.Contains(apiErr.Body, "rate_limit_error") {
+		t.Fatalf("api error = %+v, want official-openai status 429 with type", apiErr)
+	}
+}
+
 func TestResponsesWireExchangesOpenAIWorkloadIdentity(t *testing.T) {
 	var gotTokenBody map[string]string
 	var gotAuth string

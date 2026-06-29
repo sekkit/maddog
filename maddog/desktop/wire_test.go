@@ -112,8 +112,15 @@ func TestToWireToolProgress(t *testing.T) {
 
 func TestToWireUsage(t *testing.T) {
 	e := event.Event{
-		Kind:        event.Usage,
-		Usage:       &provider.Usage{PromptTokens: 100, CompletionTokens: 50, TotalTokens: 150, CacheHitTokens: 80, CacheMissTokens: 20},
+		Kind:    event.Usage,
+		Usage:   &provider.Usage{PromptTokens: 100, CompletionTokens: 50, TotalTokens: 150, CacheHitTokens: 80, CacheMissTokens: 20},
+		Profile: &event.Profile{Role: "default", Model: "icodeeasy/gpt-4o-mini", BudgetUsed: 2, BudgetLimit: 10, BudgetRemaining: 8},
+		ProviderStatus: &event.ProviderStatus{
+			Role:       "default",
+			Health:     "ok",
+			AuthStatus: "ok",
+			RateLimit:  "ok",
+		},
 		SessionHit:  800,
 		SessionMiss: 200,
 	}
@@ -123,6 +130,33 @@ func TestToWireUsage(t *testing.T) {
 	}
 	if w.Usage.SessionCacheHitTokens != 800 || w.Usage.SessionCacheMissTokens != 200 {
 		t.Errorf("session cache = hit:%d miss:%d", w.Usage.SessionCacheHitTokens, w.Usage.SessionCacheMissTokens)
+	}
+	if w.Usage.Profile == nil || w.Usage.Profile.Role != "default" || w.Usage.Profile.Model != "icodeeasy/gpt-4o-mini" {
+		t.Errorf("usage profile = %+v", w.Usage.Profile)
+	}
+	if w.Usage.Profile == nil || w.Usage.Profile.BudgetUsed != 2 || w.Usage.Profile.BudgetLimit != 10 || w.Usage.Profile.BudgetRemaining != 8 {
+		t.Errorf("usage profile budget = %+v", w.Usage.Profile)
+	}
+	if w.Usage.ProviderStatus == nil || w.Usage.ProviderStatus.Health != "ok" || w.Usage.ProviderStatus.AuthStatus != "ok" || w.Usage.ProviderStatus.RateLimit != "ok" {
+		t.Errorf("usage provider status = %+v", w.Usage.ProviderStatus)
+	}
+}
+
+func TestToWireProviderStatus(t *testing.T) {
+	e := event.Event{Kind: event.ProviderStatusUpdate, ProviderStatus: &event.ProviderStatus{
+		Role:          "default",
+		Health:        "auth_error",
+		AuthStatus:    "auth_error",
+		RateLimit:     "ok",
+		BalanceStatus: "unknown",
+		LastError:     "authentication failed",
+	}}
+	w := toWire(e)
+	if w.Kind != "provider_status" || w.ProviderStatus == nil {
+		t.Fatalf("provider status wire = %+v", w)
+	}
+	if w.ProviderStatus.Health != "auth_error" || w.ProviderStatus.AuthStatus != "auth_error" || w.ProviderStatus.LastError == "" {
+		t.Fatalf("provider status payload = %+v", w.ProviderStatus)
 	}
 }
 
@@ -192,7 +226,7 @@ func TestToWireSteer(t *testing.T) {
 func TestKindNamesComplete(t *testing.T) {
 	// Advisor is the last Kind; every value through it must have a wire name,
 	// or toWire emits kind:"" and the frontend reducer falls through to undefined.
-	for k := event.Kind(0); k <= event.Advisor; k++ {
+	for k := event.Kind(0); k <= event.ProviderStatusUpdate; k++ {
 		if kindNames[k] == "" {
 			t.Errorf("kind %d has no wire name — toWire would emit kind:\"\"", k)
 		}

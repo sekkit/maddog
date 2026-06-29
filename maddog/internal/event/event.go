@@ -99,6 +99,9 @@ const (
 	// Advisor reports an automatic advisor consultation and its guidance. Text is
 	// a compact summary; Advisor carries the structured payload for rich UIs.
 	Advisor
+	// ProviderStatusUpdate reports provider auth/rate/balance health outside
+	// successful usage telemetry, most often after a provider request error.
+	ProviderStatusUpdate
 )
 
 // Level classifies a Notice so sinks can style or filter it.
@@ -109,10 +112,29 @@ const (
 	LevelWarn
 )
 
-// Profile carries the subagent model/effort resolved for this call.
+// Profile carries the provider role/model/effort resolved for a call or usage
+// event.
 type Profile struct {
-	Model  string
-	Effort string
+	Role            string
+	Model           string
+	Effort          string
+	BudgetUsed      int64
+	BudgetLimit     int64
+	BudgetRemaining int64
+}
+
+// ProviderStatus is a runtime snapshot of provider health metadata attached to
+// usage telemetry. It lets rich frontends distinguish a successful request from
+// auth/rate/balance status without re-inferring it from token counts.
+type ProviderStatus struct {
+	Role             string
+	Health           string
+	AuthStatus       string
+	RateLimit        string
+	BalanceStatus    string
+	LastError        string
+	BalanceAvailable bool
+	BalanceDisplay   string
 }
 
 // AdvisorConsultation describes one automatic advisor intervention.
@@ -251,6 +273,8 @@ type Event struct {
 	Reasoning        string            // Message: the full reasoning chain
 	Tool             Tool              // ToolDispatch / ToolResult
 	Usage            *provider.Usage   // Usage
+	Profile          *Profile          // Usage: provider role/model/effort
+	ProviderStatus   *ProviderStatus   // Usage: provider health/auth/rate snapshot
 	Pricing          *provider.Pricing // Usage: for cost display (nil = omit cost)
 	CacheDiagnostics *CacheDiagnostics // Usage: cache-churn attribution (nil = N/A)
 	// SessionHit/SessionMiss carry cumulative cache tokens across the whole

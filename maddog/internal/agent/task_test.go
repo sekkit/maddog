@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"maddog/internal/event"
 	"maddog/internal/provider"
 	"maddog/internal/tool"
 )
@@ -150,6 +151,62 @@ func TestTaskToolUsesConfiguredProfileForExecution(t *testing.T) {
 	}
 	if gotModel != "deepseek-pro" || gotEffort != "max" {
 		t.Fatalf("resolved profile = %q/%q, want deepseek-pro/max", gotModel, gotEffort)
+	}
+}
+
+func TestTaskToolResolveProfileMarksSmallRole(t *testing.T) {
+	task := newTestTaskTool(t, &mockProvider{name: "sub"}, tool.NewRegistry(), "sys", "deepseek-pro", "max", nil)
+
+	profile := task.ResolveProfile([]byte(`{"prompt":"x"}`))
+	if profile == nil {
+		t.Fatal("ResolveProfile = nil, want small profile")
+	}
+	if profile.Role != "small" || profile.Model != "deepseek-pro" || profile.Effort != "max" {
+		t.Fatalf("profile = %+v, want small/deepseek-pro/max", profile)
+	}
+}
+
+func TestTaskToolResolveProfileUsesResolvedIdentity(t *testing.T) {
+	task := newTestTaskTool(t, &mockProvider{name: "sub"}, tool.NewRegistry(), "sys", "deepseek-pro", "max", nil).
+		WithTranscriptIdentityResolver(func(modelRef, effort string) (string, string) {
+			if modelRef != "deepseek-pro" || effort != "max" {
+				t.Fatalf("identity resolver got %q/%q, want deepseek-pro/max", modelRef, effort)
+			}
+			return "small-provider/deepseek-pro", "max"
+		})
+
+	profile := task.ResolveProfile([]byte(`{"prompt":"x"}`))
+	if profile == nil {
+		t.Fatal("ResolveProfile = nil, want resolved small profile")
+	}
+	if profile.Role != "small" || profile.Model != "small-provider/deepseek-pro" || profile.Effort != "max" {
+		t.Fatalf("profile = %+v, want small/small-provider/deepseek-pro/max", profile)
+	}
+}
+
+func TestTaskToolForwardsSubagentUsageAsSmallProvider(t *testing.T) {
+	sub := &mockProvider{name: "deepseek-pro", chunks: []provider.Chunk{
+		{Type: provider.ChunkText, Text: "resolved answer"},
+		{Type: provider.ChunkUsage, Usage: &provider.Usage{PromptTokens: 11, CompletionTokens: 4, TotalTokens: 15}},
+		{Type: provider.ChunkDone},
+	}}
+	task := newTestTaskTool(t, sub, tool.NewRegistry(), "sys", "deepseek-pro", "max", nil)
+	sink := &recordSink{}
+	ctx := withCallContext(testTaskContext(), "call_task", sink, nil, false)
+
+	if _, err := task.Execute(ctx, []byte(`{"prompt":"x"}`)); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+
+	usages := sink.kinds(event.Usage)
+	if len(usages) != 1 {
+		t.Fatalf("usage events = %d, want 1", len(usages))
+	}
+	if usages[0].Profile == nil || usages[0].Profile.Role != "small" || usages[0].Profile.Model != "deepseek-pro" {
+		t.Fatalf("subagent usage profile = %+v, want small/deepseek-pro", usages[0].Profile)
+	}
+	if usages[0].ProviderStatus == nil || usages[0].ProviderStatus.Role != "small" || usages[0].ProviderStatus.Health != "ok" {
+		t.Fatalf("subagent provider status = %+v, want small ok", usages[0].ProviderStatus)
 	}
 }
 

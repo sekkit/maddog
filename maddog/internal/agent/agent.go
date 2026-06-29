@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -172,6 +174,9 @@ type Agent struct {
 	frontierPricing       *provider.Pricing
 	frontierContextWindow int
 	frontierTarget        string
+	usageRole             string
+	usageModel            string
+	usageEffort           string
 	defaultProv           provider.Provider
 	defaultPricing        *provider.Pricing
 	defaultContextWindow  int
@@ -579,6 +584,9 @@ type Options struct {
 	FrontierPricing       *provider.Pricing
 	FrontierContextWindow int
 	FrontierTarget        string
+	UsageRole             string
+	UsageModel            string
+	UsageEffort           string
 	Advisor               AdvisorConfig
 	AdvisorRunner         AdvisorRunner
 	NativeAdvisor         *provider.NativeAdvisorConfig
@@ -633,6 +641,9 @@ func New(prov provider.Provider, tools *tool.Registry, session *Session, opts Op
 		frontierPricing:       opts.FrontierPricing,
 		frontierContextWindow: opts.FrontierContextWindow,
 		frontierTarget:        opts.FrontierTarget,
+		usageRole:             strings.TrimSpace(opts.UsageRole),
+		usageModel:            strings.TrimSpace(opts.UsageModel),
+		usageEffort:           strings.TrimSpace(opts.UsageEffort),
 		advisor:               opts.Advisor,
 		advisorRunner:         opts.AdvisorRunner,
 		nativeAdvisor:         cloneNativeAdvisor(opts.NativeAdvisor),
@@ -698,6 +709,7 @@ func (a *Agent) Run(ctx context.Context, input string) error {
 
 		text, reasoning, signature, nativeBlocks, calls, usage, interrupted, partialToolStarted, err := a.stream(ctx, step+1)
 		if err != nil {
+			a.emitProviderStatus(err)
 			if a.onFrontier {
 				a.downgradeFromFrontier()
 				a.sink.Emit(event.Event{Kind: event.Upgrade, Level: event.LevelWarn, Text: "frontier request failed, switched back to default: " + err.Error()})
@@ -733,16 +745,20 @@ func (a *Agent) Run(ctx context.Context, input string) error {
 		a.haveLastPrefixShape = true
 		if usage != nil && usage.TotalTokens > 0 {
 			pricing := a.pricing
+			profile := a.currentUsageProfile()
 			if a.onFrontier {
 				pricing = a.frontierPricing
 				if _, ok := a.frontierProv.(frontierBudgetTracker); !ok {
 					a.frontierTokens.Add(int64(usage.CompletionTokens))
 				}
+				profile = a.currentUsageProfile()
 				if a.emitFrontierBudgetIfExceeded() {
 					a.downgradeFromFrontier()
 				}
 			}
 			a.sink.Emit(event.Event{Kind: event.Usage, Usage: usage, Pricing: pricing,
+				Profile:          profile,
+				ProviderStatus:   providerStatusForProfile(profile, nil),
 				CacheDiagnostics: &cacheDiagnostics,
 				SessionHit:       int(a.sessCacheHit.Load()), SessionMiss: int(a.sessCacheMiss.Load())})
 		}
@@ -989,6 +1005,109 @@ func (a *Agent) emitFrontierBudgetIfExceeded() bool {
 		}
 	}
 	return false
+}
+
+func (a *Agent) currentUsageProfile() *event.Profile {
+	if a == nil || a.prov == nil {
+		return nil
+	}
+	role := "default"
+	model := a.prov.Name()
+	if a.usageRole != "" {
+		role = a.usageRole
+	}
+	if a.usageModel != "" {
+		model = a.usageModel
+	}
+	if a.onFrontier {
+		role = "frontier"
+		if target := strings.TrimSpace(a.frontierTarget); target != "" {
+			model = target
+		}
+	}
+	profile := &event.Profile{Role: role, Model: strings.TrimSpace(model), Effort: a.usageEffort}
+	if role == "frontier" {
+		used, limit := a.frontierBudgetSnapshot()
+		profile.BudgetUsed = used
+		profile.BudgetLimit = limit
+		if limit > 0 && used < limit {
+			profile.BudgetRemaining = limit - used
+		}
+	}
+	return profile
+}
+
+func (a *Agent) emitProviderStatus(err error) {
+	status := providerStatusForProfile(a.currentUsageProfile(), err)
+	if status == nil {
+		return
+	}
+	a.sink.Emit(event.Event{Kind: event.ProviderStatusUpdate, ProviderStatus: status})
+}
+
+func providerStatusForProfile(profile *event.Profile, err error) *event.ProviderStatus {
+	if profile == nil {
+		return nil
+	}
+	if err != nil && (errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)) {
+		return nil
+	}
+	status := &event.ProviderStatus{
+		Role:          profile.Role,
+		Health:        "ok",
+		AuthStatus:    "ok",
+		RateLimit:     "ok",
+		BalanceStatus: "unknown",
+	}
+	if err == nil {
+		return status
+	}
+	status.LastError = err.Error()
+	var authErr *provider.AuthError
+	if errors.As(err, &authErr) {
+		status.Health = "auth_error"
+		status.AuthStatus = "auth_error"
+		return status
+	}
+	var apiErr *provider.APIError
+	if errors.As(err, &apiErr) {
+		switch apiErr.Status {
+		case http.StatusUnauthorized, http.StatusForbidden:
+			status.Health = "auth_error"
+			status.AuthStatus = "auth_error"
+		case http.StatusTooManyRequests:
+			status.Health = "rate_limited"
+			status.RateLimit = "rate_limited"
+		case http.StatusPaymentRequired:
+			status.Health = "balance_error"
+			status.BalanceStatus = "insufficient"
+		default:
+			if apiErr.Status >= 500 && apiErr.Status <= 599 {
+				status.Health = "degraded"
+			} else {
+				status.Health = "error"
+			}
+		}
+		return status
+	}
+	status.Health = "error"
+	return status
+}
+
+func (a *Agent) frontierBudgetSnapshot() (used int64, limit int64) {
+	if a == nil {
+		return 0, 0
+	}
+	if tracked, ok := a.frontierProv.(frontierBudgetTracker); ok {
+		return tracked.OutputTokens(), tracked.BudgetLimit()
+	}
+	used = a.frontierTokens.Load()
+	if limited, ok := a.upgradePolicy.(interface {
+		FrontierBudgetLimit() int64
+	}); ok {
+		limit = limited.FrontierBudgetLimit()
+	}
+	return used, limit
 }
 
 type frontierBudgetTracker interface {
