@@ -259,6 +259,7 @@ plan: docs/cc/maddog-fusion--3949/plan.md
 - **Scope note**: G1 intentionally stops at bundle/candidate lifecycle. Replay runner, scoring, guardrail policy, CLI wiring, and runtime event integration remain in G2/G3.
 - **Review**: Spec/code-quality review found risks around same-session bundle overwrites, task-dependent validator bypass on duplicate candidate content, candidate promotion desynchronization if active skill write succeeded but candidate persistence failed, shared temp-file races, and missing G1 data-contract placeholders. Fixed with non-overwriting bundle filenames, bundle path/source traceability, skill/metric/review snapshots, duplicate revalidation, a durable `promoting` transition with recovery from already-written active skills, unique temp files, and exclusive first-write candidate persistence.
 - **Verification**: `go test ./internal/skilleval -count=1`; `go test ./... -count=1`.
+- **Commit**: 1e15fcd20
 
 ## Post-v1 Unit G2: Replay runner, guardrail, and promotion scoring
 - **Status**: pending
