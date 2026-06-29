@@ -38,7 +38,10 @@ type Candidate struct {
 	SourceTask       string          `json:"source_task,omitempty"`
 	Validation       ValidationInfo  `json:"validation"`
 	ValidationReason string          `json:"validation_reason,omitempty"`
-	EvalScore        *EvalScore      `json:"eval_score,omitempty"`
+	EvalScore        *ScoreResult    `json:"eval_score,omitempty"`
+	EvaluatedHash    string          `json:"evaluated_hash,omitempty"`
+	GuardrailPass    bool            `json:"guardrail_pass,omitempty"`
+	GuardrailReason  string          `json:"guardrail_reason,omitempty"`
 	PromotedPath     string          `json:"promoted_path,omitempty"`
 	CreatedAt        time.Time       `json:"created_at"`
 	UpdatedAt        time.Time       `json:"updated_at"`
@@ -47,11 +50,6 @@ type Candidate struct {
 type ValidationInfo struct {
 	Valid  bool   `json:"valid"`
 	Reason string `json:"reason,omitempty"`
-}
-
-type EvalScore struct {
-	Score  float64 `json:"score"`
-	Reason string  `json:"reason,omitempty"`
 }
 
 func NewCandidateStore(dir string) *CandidateStore {
@@ -118,6 +116,28 @@ func (s *CandidateStore) Create(sk skill.Skill, bundle BundleV2, task string) (C
 	return c, nil
 }
 
+func (s *CandidateStore) RecordEvaluation(hash string, score ScoreResult, guardrail GuardrailResult) (Candidate, error) {
+	if s == nil {
+		return Candidate{}, fmt.Errorf("candidate store is nil")
+	}
+	c, err := s.load(hash)
+	if err != nil {
+		return Candidate{}, err
+	}
+	if err := c.verifyHash(hash); err != nil {
+		return Candidate{}, err
+	}
+	c.EvalScore = &score
+	c.EvaluatedHash = c.Hash
+	c.GuardrailPass = guardrail.Pass
+	c.GuardrailReason = strings.TrimSpace(guardrail.Reason)
+	c.UpdatedAt = s.now()
+	if err := writeJSON(s.path(c.Hash), c); err != nil {
+		return Candidate{}, err
+	}
+	return c, nil
+}
+
 func (s *CandidateStore) Promote(hash string, activeStore *skill.Store, scope skill.Scope) (Candidate, string, error) {
 	if s == nil {
 		return Candidate{}, "", fmt.Errorf("candidate store is nil")
@@ -129,6 +149,9 @@ func (s *CandidateStore) Promote(hash string, activeStore *skill.Store, scope sk
 	if err != nil {
 		return Candidate{}, "", err
 	}
+	if err := c.verifyHash(hash); err != nil {
+		return Candidate{}, "", err
+	}
 	switch c.Status {
 	case CandidateRejected:
 		return Candidate{}, "", fmt.Errorf("candidate %s is rejected: %s", c.Hash, c.ValidationReason)
@@ -137,6 +160,15 @@ func (s *CandidateStore) Promote(hash string, activeStore *skill.Store, scope sk
 	case CandidatePending, CandidatePromoting:
 	default:
 		return Candidate{}, "", fmt.Errorf("candidate %s has invalid status %q", c.Hash, c.Status)
+	}
+	if c.EvalScore == nil {
+		return Candidate{}, "", fmt.Errorf("candidate %s has no replay evaluation", c.Hash)
+	}
+	if c.EvaluatedHash != c.Hash {
+		return Candidate{}, "", fmt.Errorf("candidate %s evaluation hash mismatch: %s", c.Hash, c.EvaluatedHash)
+	}
+	if !c.GuardrailPass {
+		return Candidate{}, "", fmt.Errorf("candidate %s failed guardrail: %s", c.Hash, c.GuardrailReason)
 	}
 	if c.Status == CandidatePending {
 		c.Status = CandidatePromoting
@@ -177,6 +209,17 @@ func (s *CandidateStore) load(hash string) (Candidate, error) {
 		return Candidate{}, err
 	}
 	return c, nil
+}
+
+func (c Candidate) verifyHash(expected string) error {
+	actual := candidateHash(c.Skill)
+	if strings.TrimSpace(c.Hash) != actual {
+		return fmt.Errorf("candidate hash mismatch: file has %q, content hashes to %q", c.Hash, actual)
+	}
+	if strings.TrimSpace(expected) != "" && strings.TrimSpace(expected) != c.Hash {
+		return fmt.Errorf("candidate hash mismatch: requested %q, file has %q", expected, c.Hash)
+	}
+	return nil
 }
 
 func (s *CandidateStore) path(hash string) string {

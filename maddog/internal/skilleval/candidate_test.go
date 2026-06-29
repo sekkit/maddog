@@ -1,6 +1,7 @@
 package skilleval
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -78,11 +79,60 @@ func TestRejectedCandidateCannotPromote(t *testing.T) {
 	}
 }
 
+func TestPendingCandidateRequiresPassingEvaluationBeforePromote(t *testing.T) {
+	store := NewCandidateStore(t.TempDir())
+	candidate, err := store.Create(validSkill("parser-helper"), BundleV2{ID: "bundle-a"}, "fix parser")
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	activeStore := skill.New(skill.Options{HomeDir: t.TempDir(), ProjectRoot: t.TempDir(), DisableBuiltins: true})
+	if _, _, err := store.Promote(candidate.Hash, activeStore, skill.ScopeProject); err == nil {
+		t.Fatal("Promote unevaluated candidate succeeded, want replay evaluation guard")
+	}
+	if _, err := store.RecordEvaluation(candidate.Hash, ScoreResult{Score: 0.8, Reason: "ok"}, GuardrailResult{Pass: false, Reason: "regression"}); err != nil {
+		t.Fatalf("RecordEvaluation failed guardrail: %v", err)
+	}
+	if _, _, err := store.Promote(candidate.Hash, activeStore, skill.ScopeProject); err == nil {
+		t.Fatal("Promote failed guardrail candidate succeeded")
+	}
+}
+
+func TestPromoteRejectsTamperedCandidateAfterEvaluation(t *testing.T) {
+	store := NewCandidateStore(t.TempDir())
+	candidate, err := store.Create(validSkill("parser-helper"), BundleV2{ID: "bundle-a"}, "fix parser")
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if _, err := store.RecordEvaluation(candidate.Hash, ScoreResult{Score: 0.9, Reason: "ok"}, GuardrailResult{Pass: true, Reason: "passed"}); err != nil {
+		t.Fatalf("RecordEvaluation: %v", err)
+	}
+	raw, err := os.ReadFile(filepath.Join(store.Dir, "candidates", candidate.Hash+".json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var tampered Candidate
+	if err := json.Unmarshal(raw, &tampered); err != nil {
+		t.Fatal(err)
+	}
+	tampered.Skill.Body = "different body after eval"
+	if err := writeJSON(filepath.Join(store.Dir, "candidates", candidate.Hash+".json"), tampered); err != nil {
+		t.Fatal(err)
+	}
+	activeStore := skill.New(skill.Options{HomeDir: t.TempDir(), ProjectRoot: t.TempDir(), DisableBuiltins: true})
+	if _, _, err := store.Promote(candidate.Hash, activeStore, skill.ScopeProject); err == nil || !strings.Contains(err.Error(), "hash mismatch") {
+		t.Fatalf("Promote tampered err = %v, want hash mismatch", err)
+	}
+}
+
 func TestPromoteCandidateWritesActiveSkillAndTransitions(t *testing.T) {
 	candidateStore := NewCandidateStore(t.TempDir())
 	candidate, err := candidateStore.Create(validSkill("parser-helper"), BundleV2{ID: "bundle-a"}, "fix parser")
 	if err != nil {
 		t.Fatalf("Create: %v", err)
+	}
+	candidate, err = candidateStore.RecordEvaluation(candidate.Hash, ScoreResult{Score: 0.9, Reason: "ok"}, GuardrailResult{Pass: true, Reason: "passed"})
+	if err != nil {
+		t.Fatalf("RecordEvaluation: %v", err)
 	}
 	projectRoot := t.TempDir()
 	activeStore := skill.New(skill.Options{HomeDir: t.TempDir(), ProjectRoot: projectRoot, DisableBuiltins: true})

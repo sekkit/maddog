@@ -262,10 +262,13 @@ plan: docs/cc/maddog-fusion--3949/plan.md
 - **Commit**: 1e15fcd20
 
 ## Post-v1 Unit G2: Replay runner, guardrail, and promotion scoring
-- **Status**: pending
+- **Status**: complete
 - **Execution note**: test-first
 - **Files**: `Maddog/internal/skilleval/runner.go`, `Maddog/internal/skilleval/runner_test.go`, `Maddog/internal/skilleval/scorer.go`, `Maddog/internal/skilleval/scorer_test.go`, `Maddog/internal/skilleval/guardrail.go`, `Maddog/internal/skilleval/guardrail_test.go`, `Maddog/internal/cli/skilleval.go`, `Maddog/internal/cli/skilleval_test.go`
 - **Depends on**: Post-v1 Unit G1
+- **Result**: Added replay evaluation for `BundleV2` + `Candidate`, deterministic dry-run replay, configured-provider headless replay via `maddog skilleval`, rule/frontier scoring with deterministic fallback, promotion guardrails, candidate evaluation persistence, and CLI candidate listing. `CandidateStore.Promote` now requires a recorded evaluation and passing guardrail before writing active skills.
+- **Review**: Initial review found that dry-run self-scored without replay, non-dry-run CLI lacked provider replay, promotion was not gated by replay/guardrail, guardrail accepted invalid candidates, scorer fallback returned hard errors, and tool expansion checks were too broad. Fixed by replaying candidate body in dry-run, resolving configured providers for non-dry-run, adding `RecordEvaluation`, gating promotion on score+guardrail, revalidating candidates in guardrail, limiting tool expansion rejection to high-risk tools, checking token cost spikes, and listing candidate states from the CLI.
+- **Verification**: `go test ./internal/skilleval -count=1`; `go test ./internal/cli -run TestSkillEval -count=1`; `go test ./... -count=1`.
 
 ## Post-v1 Unit G3: Skill management GUI and promotion audit
 - **Status**: pending

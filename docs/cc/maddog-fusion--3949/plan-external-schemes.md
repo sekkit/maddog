@@ -512,7 +512,7 @@ flowchart TB
 
 **执行记录（2026-06-30）：** 已通过 test-first 新增 `internal/skilleval` 包，落地 replay bundle v2 捕获/加载和 SkillOpt-style candidate lifecycle。`CaptureBundle` 会保存非 system 的 session snapshot、tool/evidence receipts、history、task/skill metadata、selected/dynamic skill snapshot、compression metrics、human review metadata、derived outcome signals 和 durable bundle path；首次同 session 捕获保留 sanitized filename，后续同 session 捕获自动使用 timestamp/序号避免覆盖历史证据；`LoadBundle` 支持回读。`CandidateStore` 以 skill markdown content hash 去重，保留首次 source bundle/path，记录 validator result 和 eval-score placeholder，使用 `skill.Validator` 将无效候选置为 rejected，重复内容会按当前 task 重新验证以避免高风险任务绕过 gating；默认有效候选为 pending，只有显式 `Promote` 才会通过 active `skill.Store` 写入 `.maddog/skills/<name>/SKILL.md`。Review 后补强：promotion 先持久化 `promoting` 状态，active skill 已写但最终候选状态写入失败时可通过下一次 promote 检测已存在 skill 并恢复为 promoted；candidate JSON 更新使用唯一 temp 文件与 atomic replace，首次写入使用 exclusive create，阻止并发覆盖。G1 暂不接入 runtime event、replay runner、scorer 或 guardrail；这些仍归 G2/G3。验证命令：`go test ./internal/skilleval -count=1`、`go test ./... -count=1`。
 
-- [ ] **单元 G2：Replay runner、guardrail 与 promotion scoring**
+- [x] **单元 G2：Replay runner、guardrail 与 promotion scoring**
 
 **目标：** 建立离线评测管线，对 candidate skill 进行 replay、score、guardrail 和 promotion。
 
@@ -549,6 +549,8 @@ flowchart TB
 - Integration：CLI 能列出 pending/promoted/rejected candidates。
 
 **验证：** 只有通过 replay + guardrail 的 candidate 才可能 promotion。
+
+**执行记录（2026-06-30）：** 已通过 test-first 落地 `internal/skilleval` replay runner、deterministic dry-run replay、rule/frontier scorer、promotion guardrail、candidate evaluation persistence 和 `maddog skilleval` CLI/headless eval。CLI 支持 `--bundle`/`--candidate`/`--json`/`--dry-run`/`--model`，非 dry-run 会按 `default_model` 或 `--model` 解析 provider 并运行真实 replay；dry-run 也会使用 candidate body 生成 replay outcome，不再自评分。`skilleval list --dir` 可列出 pending/rejected/promoted candidate state。`CandidateStore.Promote` 现在要求 `RecordEvaluation` 写入 score 与 passing guardrail 后才允许写入 active skill。Guardrail 覆盖 held-out bundle 数、missing results、candidate validation/status、task-dependent validator recheck、高风险 allowed-tool expansion、success regression、token cost spike、low score。Scorer 在 frontier 不可用或输出不可解析时返回 deterministic fallback，不把 optional scorer outage 变成 hard fail。验证命令：`go test ./internal/skilleval -count=1`、`go test ./internal/cli -run TestSkillEval -count=1`、`go test ./... -count=1`。
 
 - [ ] **单元 G3：Skill 管理 GUI 与 promotion 审计**
 

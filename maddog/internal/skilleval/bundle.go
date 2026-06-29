@@ -70,11 +70,14 @@ type HumanReview struct {
 }
 
 type OutcomeInfo struct {
-	Success     bool   `json:"success"`
-	GoalMet     bool   `json:"goal_met"`
-	FinalAnswer string `json:"final_answer,omitempty"`
-	TotalTurns  int    `json:"total_turns,omitempty"`
-	ToolErrors  int    `json:"tool_errors,omitempty"`
+	Success      bool   `json:"success"`
+	GoalMet      bool   `json:"goal_met"`
+	FinalAnswer  string `json:"final_answer,omitempty"`
+	TotalTurns   int    `json:"total_turns,omitempty"`
+	ToolErrors   int    `json:"tool_errors,omitempty"`
+	Tokens       int    `json:"tokens,omitempty"`
+	AdvisorUses  int    `json:"advisor_uses,omitempty"`
+	HumanReviews int    `json:"human_reviews,omitempty"`
 }
 
 type CaptureOptions struct {
