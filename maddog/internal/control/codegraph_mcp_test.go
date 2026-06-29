@@ -30,6 +30,12 @@ func TestConnectCodegraphMCPServerForRootPinsRootAndStripsPrefix(t *testing.T) {
 	cfg := config.Default()
 	cfg.Codegraph.Enabled = true
 	cfg.Codegraph.Path = os.Args[0]
+	cfg.CodeIntelligence.Backends = []config.CodeIntelligenceBackendConfig{{
+		Name:   "serena",
+		Kind:   "mcp",
+		Server: "serena",
+		Tools:  map[string]string{"context_pack": "mcp__serena__context"},
+	}}
 	reg := tool.NewRegistry()
 	c := New(Options{Host: plugin.NewHost(), Registry: reg})
 	defer c.Close()
@@ -42,6 +48,9 @@ func TestConnectCodegraphMCPServerForRootPinsRootAndStripsPrefix(t *testing.T) {
 	}
 	if _, ok := reg.Get("mcp__codegraph__codegraph_context"); ok {
 		t.Fatalf("raw codegraph prefix leaked into visible tool names; names=%v", reg.Names())
+	}
+	if _, ok := reg.Get("mcp__serena__context"); ok {
+		t.Fatalf("external code intelligence backend should not replace or auto-register built-in codegraph tools; names=%v", reg.Names())
 	}
 	t.Cleanup(func() {
 		c.DisconnectMCPServer("codegraph")

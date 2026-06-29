@@ -518,6 +518,29 @@ export interface MCPToolView {
   name: string;
   description: string;
 }
+export interface CodeIntelligenceBackendCapabilities {
+  SymbolSearch?: boolean;
+  SemanticSearch?: boolean;
+  ContextPack?: boolean;
+  GraphTrace?: boolean;
+  EditRefactor?: boolean;
+  Health?: boolean;
+}
+export interface CodeIntelligenceBackendView {
+  id: string;
+  name: string;
+  kind: "builtin" | "mcp" | string;
+  serverName?: string;
+  status: "ready" | "unknown" | "degraded" | "disabled" | "invalid" | string;
+  lastError?: string;
+  indexStatus?: "initialized" | "not_initialized" | string;
+  enabled: boolean;
+  builtIn?: boolean;
+  configured: boolean;
+  capabilities: CodeIntelligenceBackendCapabilities;
+  toolMapping?: Record<string, string>;
+  toolCount: number;
+}
 export interface SkillView {
   name: string;
   description: string;
@@ -546,6 +569,7 @@ export interface CapabilitiesView {
   servers: ServerView[];
   skills: SkillView[];
   skillRoots: SkillRootView[];
+  codeIntelligenceBackends?: CodeIntelligenceBackendView[];
 }
 export interface BuiltInMCPUpdateResult {
   name: string;

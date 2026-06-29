@@ -2670,9 +2670,10 @@ func (a *App) SlashArgs(input string) SlashArgsResult {
 // CapabilitiesView is the MCP & Skills drawer's data: connected/failed MCP
 // servers and the discoverable skills, the GUI counterpart to `/mcp` + `/skill`.
 type CapabilitiesView struct {
-	Servers    []ServerView    `json:"servers"`
-	Skills     []SkillView     `json:"skills"`
-	SkillRoots []SkillRootView `json:"skillRoots"`
+	Servers                  []ServerView                  `json:"servers"`
+	Skills                   []SkillView                   `json:"skills"`
+	SkillRoots               []SkillRootView               `json:"skillRoots"`
+	CodeIntelligenceBackends []CodeIntelligenceBackendView `json:"codeIntelligenceBackends"`
 }
 
 // ServerView is one MCP server for the drawer. Status is "connected" (with
@@ -2704,6 +2705,22 @@ type ServerView struct {
 type ToolView struct {
 	Name        string `json:"name"`
 	Description string `json:"description"`
+}
+
+type CodeIntelligenceBackendView struct {
+	ID           string                        `json:"id"`
+	Name         string                        `json:"name"`
+	Kind         string                        `json:"kind"`
+	ServerName   string                        `json:"serverName,omitempty"`
+	Status       string                        `json:"status"`
+	LastError    string                        `json:"lastError,omitempty"`
+	IndexStatus  string                        `json:"indexStatus,omitempty"`
+	Enabled      bool                          `json:"enabled"`
+	BuiltIn      bool                          `json:"builtIn,omitempty"`
+	Configured   bool                          `json:"configured"`
+	Capabilities codegraph.BackendCapabilities `json:"capabilities"`
+	ToolMapping  map[string]string             `json:"toolMapping,omitempty"`
+	ToolCount    int                           `json:"toolCount"`
 }
 
 type BuiltInMCPUpdateResult struct {
@@ -2744,7 +2761,7 @@ type SkillRootView struct {
 // Capabilities projects the session's MCP servers (connected + failed) and skills
 // for the MCP & Skills drawer. Non-nil slices so the frontend can map over them.
 func (a *App) Capabilities() CapabilitiesView {
-	out := CapabilitiesView{Servers: []ServerView{}, Skills: []SkillView{}, SkillRoots: []SkillRootView{}}
+	out := CapabilitiesView{Servers: []ServerView{}, Skills: []SkillView{}, SkillRoots: []SkillRootView{}, CodeIntelligenceBackends: []CodeIntelligenceBackendView{}}
 	a.mu.RLock()
 	tab := a.activeTabLocked()
 	a.mu.RUnlock()
@@ -2762,6 +2779,8 @@ func (a *App) Capabilities() CapabilitiesView {
 	}
 	seen := map[string]bool{}
 	connected := map[string]bool{}
+	connectedServers := map[string]plugin.ServerStatus{}
+	failedServers := map[string]plugin.Failure{}
 	retainedDisabled := map[string]ServerView{}
 	var loadedCfg *config.Config
 	configured := map[string]config.PluginEntry{}
@@ -2777,6 +2796,7 @@ func (a *App) Capabilities() CapabilitiesView {
 		for _, s := range h.Servers() {
 			seen[s.Name] = true
 			connected[s.Name] = true
+			connectedServers[s.Name] = s
 			view := ServerView{
 				Name: s.Name, Transport: s.Transport, Status: "connected",
 				Tools: s.Tools, Prompts: s.Prompts, Resources: s.Resources,
@@ -2793,6 +2813,7 @@ func (a *App) Capabilities() CapabilitiesView {
 		}
 		for _, f := range h.Failures() {
 			seen[f.Name] = true
+			failedServers[f.Name] = f
 			view := ServerView{
 				Name: f.Name, Transport: f.Transport, Status: "failed", Error: f.Error,
 			}
@@ -2875,6 +2896,9 @@ func (a *App) Capabilities() CapabilitiesView {
 		}
 	}
 	out.Servers = orderServerViews(out.Servers, order)
+	if loadedCfg != nil {
+		out.CodeIntelligenceBackends = codeIntelligenceBackendViews(codegraph.NewBackendRegistry(loadedCfg), tab.WorkspaceRoot, connectedServers, failedServers)
+	}
 
 	a.mu.Lock()
 	for name := range connected {
@@ -2892,6 +2916,55 @@ func (a *App) Capabilities() CapabilitiesView {
 		})
 	}
 	out.SkillRoots = skillRootsView()
+	return out
+}
+
+func codeIntelligenceBackendViews(reg codegraph.BackendRegistry, workspaceRoot string, connected map[string]plugin.ServerStatus, failed map[string]plugin.Failure) []CodeIntelligenceBackendView {
+	backends := append(reg.Backends(), reg.InvalidBackends()...)
+	out := make([]CodeIntelligenceBackendView, 0, len(backends))
+	for _, backend := range backends {
+		indexStatus := ""
+		if backend.Kind == codegraph.BackendKindBuiltIn {
+			indexStatus = "not_initialized"
+			if codegraph.Initialized(workspaceRoot) {
+				indexStatus = "initialized"
+			}
+		}
+		status := backend.Health.Status
+		lastError := backend.Health.Error
+		toolCount := len(backend.ToolMapping)
+		if backend.Kind == codegraph.BackendKindMCP {
+			if failure, ok := failed[backend.ServerName]; ok {
+				status = codegraph.BackendHealthInvalid
+				lastError = failure.Error
+			} else if server, ok := connected[backend.ServerName]; ok && backend.Health.Status != codegraph.BackendHealthInvalid {
+				status = codegraph.BackendHealthReady
+				lastError = ""
+				toolCount = server.Tools
+			}
+		}
+		out = append(out, CodeIntelligenceBackendView{
+			ID:           backend.ID,
+			Name:         backend.Name,
+			Kind:         backend.Kind,
+			ServerName:   backend.ServerName,
+			Status:       status,
+			LastError:    lastError,
+			IndexStatus:  indexStatus,
+			Enabled:      backend.Enabled,
+			BuiltIn:      backend.Kind == codegraph.BackendKindBuiltIn,
+			Configured:   true,
+			Capabilities: backend.Capabilities,
+			ToolMapping:  backend.ToolMapping,
+			ToolCount:    toolCount,
+		})
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].BuiltIn != out[j].BuiltIn {
+			return out[i].BuiltIn
+		}
+		return out[i].ID < out[j].ID
+	})
 	return out
 }
 

@@ -369,7 +369,7 @@ flowchart TB
 
 **执行记录（2026-06-30）：** 已通过 test-first 落地 context compression policy（`off`/`auto`/`aggressive`）、配置默认值/编辑/渲染、boot 装配、CLI run metrics 聚合、desktop Settings 保存与展示，以及 session-scoped raw tool result 外置存储。Raw result 缺失时 `ToolResult` 返回 compressed fallback 并标记 `rawUnavailable`，ToolCard 展示本地化提示；raw store 写入失败时降级为 compressed-only 并发 warning；`Resume`、新会话、清空会话、初始 session path 均重新绑定 raw store；desktop session trash/restore/purge 会迁移或清理 `raw-tool-results/<branchID>`。验证命令：`go test ./internal/contextpack ./internal/config ./internal/agent ./internal/control ./internal/cli ./internal/boot -count=1`、`go test . -count=1`（`maddog/desktop`）、frontend `npm run test:all`、`npm run build`、`git diff --check`。Spec 与 code-quality subagent 复审均通过。
 
-- [ ] **单元 F1：Code intelligence backend registry**
+- [x] **单元 F1：Code intelligence backend registry**
 
 **目标：** 把内置 CodeGraph 与外部 MCP code intelligence 后端抽象成统一 registry，供 Settings/Capabilities 和 agent tools 使用。
 
@@ -403,6 +403,8 @@ flowchart TB
 - Integration：`mcp__codegraph__context` 命名兼容现有测试。
 
 **验证：** 用户能看见当前 code intelligence 后端，外部后端失败不会拖垮内置能力。
+
+**执行记录（2026-06-30）：** 已通过 test-first 落地 `internal/codegraph` backend registry、`[code_intelligence.backends]` TOML 配置/渲染、desktop `CapabilitiesView.codeIntelligenceBackends` 投影和 CapabilitiesPanel 的 Code Intelligence 分组。内置 CodeGraph 始终作为默认 backend 保留，外部 MCP backend 只能通过 config 声明且不会自动注册或替换 `mcp__codegraph__context`；外部 backend 未连接时显示 degraded，连接/失败时合并 live MCP status/tool count/last error。Invalid mapping（空值、server/tool prefix 不匹配、无 code intelligence capability、reserved `codegraph` ID）会进入 invalid list，不进入 usable registry，并且不会被 live connected 状态覆盖。Built-in backend 显示 `.codegraph` initialized/not initialized index status。验证命令：`go test ./internal/codegraph ./internal/config ./internal/control -count=1`、`go test . -count=1`（`maddog/desktop`）、`go test ./... -count=1`、frontend `npm run test:all`、frontend `npm run build`、`git diff --check`。Spec 与 code-quality subagent 多轮复审均通过。
 
 - [ ] **单元 F2：Code intelligence benchmark harness**
 

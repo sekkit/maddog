@@ -221,10 +221,14 @@ plan: docs/cc/maddog-fusion--3949/plan.md
 - **Commit**: baa752f3
 
 ## Post-v1 Unit F1: Code intelligence backend registry
-- **Status**: pending
+- **Status**: completed
 - **Execution note**: test-first
 - **Files**: `Maddog/internal/codegraph/backend.go`, `Maddog/internal/codegraph/backend_test.go`, `Maddog/internal/codegraph/codegraph.go`, `Maddog/internal/config/config.go`, `Maddog/internal/control/codegraph_mcp_test.go`, `Maddog/desktop/app.go`, `Maddog/desktop/frontend/src/lib/types.ts`, `Maddog/desktop/capabilities_app_test.go`
 - **Depends on**: none
+- **Started-at-commit**: 14281088
+- **Result**: Added a Code Intelligence backend registry with built-in CodeGraph as the preserved default backend and optional external MCP backends declared via `[code_intelligence.backends]`. Capabilities now include symbol/semantic/context/graph/edit/health flags, index status for built-in CodeGraph, live MCP connected/failed status, live tool counts, and last errors. Invalid external mappings, reserved `codegraph` IDs, empty tool names, wrong server prefixes, and mappings without code-intelligence capabilities are marked invalid and excluded from usable registry entries. Desktop Capabilities renders a Code Intelligence section, and frontend contract tests cover wire/types/locales/UI presence. Verified by `go test ./internal/codegraph ./internal/config ./internal/control -count=1`, `go test . -count=1` in `Maddog/desktop`, `go test ./... -count=1`, frontend `npm run test:all`, frontend `npm run build`, and `git diff --check`.
+- **Review**: Spec reviewer initially found empty/malformed mapping acceptance and missing live MCP status projection; both were fixed with failing-then-passing tests. Code-quality reviewer found reserved `codegraph` replacement, unquoted TOML tool keys, and duplicate frontend row keys for invalid collisions; all were fixed and final spec/code-quality re-reviews passed.
+- **Commit**: pending
 
 ## Post-v1 Unit F2: Code intelligence benchmark harness
 - **Status**: pending

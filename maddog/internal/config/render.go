@@ -353,6 +353,8 @@ func RenderTOMLForScope(c *Config, scope RenderScope) string {
 	}
 	b.WriteString("\n")
 
+	renderCodeIntelligenceConfig(&b, c.CodeIntelligence)
+
 	b.WriteString("[builtin_mcp]\n")
 	fmt.Fprintf(&b, "time_enabled = %v   # built-in Time MCP; off until manually enabled\n", c.BuiltInMCP.TimeEnabled)
 	fmt.Fprintf(&b, "context7_enabled = %v   # built-in Context7 MCP; off until manually enabled\n", c.BuiltInMCP.Context7Enabled)
@@ -558,6 +560,41 @@ func RenderTOMLForScope(c *Config, scope RenderScope) string {
 	}
 
 	return b.String()
+}
+
+func renderCodeIntelligenceConfig(b *strings.Builder, c CodeIntelligenceConfig) {
+	if len(c.Backends) == 0 {
+		b.WriteString("# [[code_intelligence.backends]]\n")
+		b.WriteString("# name = \"serena\"\n")
+		b.WriteString("# kind = \"mcp\"\n")
+		b.WriteString("# server = \"serena\"\n")
+		b.WriteString("# enabled = true\n")
+		b.WriteString("# [code_intelligence.backends.tools]\n")
+		b.WriteString("# symbol_search = \"mcp__serena__find_symbol\"\n")
+		b.WriteString("# context_pack = \"mcp__serena__context\"\n")
+		b.WriteString("# health = \"mcp__serena__status\"\n\n")
+		return
+	}
+	for _, backend := range c.Backends {
+		b.WriteString("[[code_intelligence.backends]]\n")
+		fmt.Fprintf(b, "name = %q\n", backend.Name)
+		if backend.Kind != "" {
+			fmt.Fprintf(b, "kind = %q\n", backend.Kind)
+		}
+		if backend.Server != "" {
+			fmt.Fprintf(b, "server = %q\n", backend.Server)
+		}
+		if backend.Enabled != nil {
+			fmt.Fprintf(b, "enabled = %v\n", *backend.Enabled)
+		}
+		if len(backend.Tools) > 0 {
+			b.WriteString("[code_intelligence.backends.tools]\n")
+			for _, key := range sortedMapKeys(backend.Tools) {
+				fmt.Fprintf(b, "%s = %q\n", renderTOMLKey(key), backend.Tools[key])
+			}
+		}
+		b.WriteString("\n")
+	}
 }
 
 func configVersion(c *Config) int {
@@ -773,6 +810,32 @@ func renderRuleList(key string, rules []string, example string) string {
 	}
 	b.WriteString("]\n")
 	return b.String()
+}
+
+func sortedMapKeys(m map[string]string) []string {
+	keys := make([]string, 0, len(m))
+	for key := range m {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+func renderTOMLKey(key string) string {
+	if key != "" && isTOMLBareKey(key) {
+		return key
+	}
+	return strconv.Quote(key)
+}
+
+func isTOMLBareKey(key string) bool {
+	for _, r := range key {
+		if (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '_' || r == '-' {
+			continue
+		}
+		return false
+	}
+	return key != ""
 }
 
 // formatFloat ensures a float renders with a decimal point so TOML types it as a

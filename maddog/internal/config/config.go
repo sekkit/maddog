@@ -62,6 +62,7 @@ type Config struct {
 	Plugins           []PluginEntry           `toml:"plugins"`
 	Skills            SkillsConfig            `toml:"skills"`
 	Codegraph         CodegraphConfig         `toml:"codegraph"`
+	CodeIntelligence  CodeIntelligenceConfig  `toml:"code_intelligence"`
 	BuiltInMCP        BuiltInMCPConfig        `toml:"builtin_mcp"`
 	BuiltInMCPUpdates BuiltInMCPUpdatesConfig `toml:"builtin_mcp_updates"`
 	Statusline        StatuslineConfig        `toml:"statusline"`
@@ -427,6 +428,28 @@ func (c CodegraphConfig) ShouldAutoStart() bool {
 
 func (c CodegraphConfig) ResolvedTier() string {
 	return "background"
+}
+
+// CodeIntelligenceConfig declares optional external code-intelligence backends.
+// The built-in CodeGraph backend remains configured by [codegraph] and is always
+// considered separately so an external MCP cannot silently replace it.
+type CodeIntelligenceConfig struct {
+	Backends []CodeIntelligenceBackendConfig `toml:"backends"`
+}
+
+// CodeIntelligenceBackendConfig maps an MCP server's tools onto Maddog's
+// abstract code-intelligence capabilities. Enabled nil means enabled; false
+// keeps the backend visible to management surfaces but out of the usable set.
+type CodeIntelligenceBackendConfig struct {
+	Name    string            `toml:"name"`
+	Kind    string            `toml:"kind"`
+	Server  string            `toml:"server"`
+	Enabled *bool             `toml:"enabled"`
+	Tools   map[string]string `toml:"tools"`
+}
+
+func (c CodeIntelligenceBackendConfig) IsEnabled() bool {
+	return c.Enabled == nil || *c.Enabled
 }
 
 // BuiltInMCPConfig controls Maddog-shipped MCP servers that require no user

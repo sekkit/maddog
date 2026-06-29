@@ -635,6 +635,27 @@ function makeMockApp(): AppBindings {
     },
     { name: "figma", transport: "http", status: "failed", configured: true, autoStart: true, tier: "background", url: "https://mcp.figma.com/mcp", authStatus: "required", authUrl: "https://mcp.figma.com/mcp", tools: 0, prompts: 0, resources: 0, error: "connect: 401 unauthorized" },
   ];
+  const capCodeIntelligenceBackends = [
+    {
+      id: "codegraph",
+      name: "CodeGraph",
+      kind: "builtin",
+      serverName: "codegraph",
+      status: "disabled",
+      indexStatus: "not_initialized",
+      enabled: false,
+      builtIn: true,
+      configured: true,
+      capabilities: { SymbolSearch: true, ContextPack: true, GraphTrace: true, Health: true },
+      toolMapping: {
+        symbol_search: "mcp__codegraph__search",
+        context_pack: "mcp__codegraph__context",
+        graph_trace: "mcp__codegraph__trace",
+        health: "mcp__codegraph__status",
+      },
+      toolCount: 4,
+    },
+  ];
   let builtInMCPUpdates: BuiltInMCPUpdateStatus[] = [
     {
       name: "codegraph",
@@ -1837,6 +1858,11 @@ function makeMockApp(): AppBindings {
         servers: capServers.map((s) => ({ ...s })),
         skills: capSkills.map((s) => ({ ...s })),
         skillRoots: capSkillRoots.map((s) => ({ ...s })),
+        codeIntelligenceBackends: capCodeIntelligenceBackends.map((s) => ({
+          ...s,
+          capabilities: { ...s.capabilities },
+          toolMapping: { ...s.toolMapping },
+        })),
       };
     },
     async AddMCPServer(input: MCPServerInput) {

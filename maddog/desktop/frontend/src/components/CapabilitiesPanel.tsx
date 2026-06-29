@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { asArray } from "../lib/array";
 import { app, onBuiltInMCPUpdate, openExternal } from "../lib/bridge";
 import { useT } from "../lib/i18n";
-import type { BuiltInMCPUpdateStatus, CapabilitiesView, MCPServerInput, ServerView, SkillRootSkillView, SkillRootView, SkillView } from "../lib/types";
+import type { BuiltInMCPUpdateStatus, CapabilitiesView, CodeIntelligenceBackendCapabilities, CodeIntelligenceBackendView, MCPServerInput, ServerView, SkillRootSkillView, SkillRootView, SkillView } from "../lib/types";
 import { InlineConfirmButton } from "./InlineConfirmButton";
 import { ResizableDrawer } from "./ResizableDrawer";
 import { Tooltip } from "./Tooltip";
@@ -211,6 +211,7 @@ export function CapabilitiesPanel({
                     onUpgrade={(name) => void upgradeBuiltInMCP(name)}
                   />
                 )}
+                <CodeIntelligenceSection codeIntelligenceBackends={view.codeIntelligenceBackends ?? []} />
                 <div className="cap-mcp-toolbar cap-mcp-toolbar--drawer">
                   {!adding && (
                     <button className="btn btn--small" disabled={busy} onClick={() => setAdding(true)}>
@@ -339,6 +340,11 @@ function normalizeCapabilitiesView(view: CapabilitiesView | null | undefined): C
       removable: Boolean(root.removable),
       skillItems: asArray(root.skillItems),
     })),
+    codeIntelligenceBackends: asArray(view?.codeIntelligenceBackends).map((backend) => ({
+      ...backend,
+      capabilities: backend.capabilities ?? {},
+      toolMapping: backend.toolMapping ?? {},
+    })),
   };
 }
 
@@ -390,6 +396,122 @@ function normalizeBuiltInMCPUpdatePhase(phase: string): BuiltInMCPUpdateStatus["
 
 function isVisibleBuiltInMCPUpdateStatus(status: BuiltInMCPUpdateStatus): boolean {
   return status.name === "codegraph" && ["available", "downloaded", "activated", "error"].includes(status.phase);
+}
+
+function CodeIntelligenceSection({ codeIntelligenceBackends }: { codeIntelligenceBackends: CodeIntelligenceBackendView[] }) {
+  const t = useT();
+  if (codeIntelligenceBackends.length === 0) return null;
+  const ready = codeIntelligenceBackends.filter((backend) => backend.status === "ready").length;
+  const degraded = codeIntelligenceBackends.filter((backend) => backend.status === "degraded" || backend.status === "invalid").length;
+  const tools = codeIntelligenceBackends.reduce((total, backend) => total + (backend.toolCount || Object.keys(backend.toolMapping ?? {}).length), 0);
+  return (
+    <div className="cap-codeintel">
+      <div className="cap-codeintel__head">
+        <div>
+          <div className="cap-codeintel__title">{t("caps.codeIntelligence")}</div>
+          <div className="cap-codeintel__summary">
+            {t("caps.codeIntelligenceSummary", { ready, degraded, total: codeIntelligenceBackends.length })}
+          </div>
+        </div>
+        <span className="cap-codeintel__tools">{t("caps.codeIntelligenceTools", { tools })}</span>
+      </div>
+      <div className="cap-codeintel__list">
+        {codeIntelligenceBackends.map((backend, index) => (
+          <CodeIntelligenceBackendRow key={codeIntelBackendKey(backend, index)} backend={backend} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function codeIntelBackendKey(backend: CodeIntelligenceBackendView, index: number): string {
+  return `${backend.id}:${backend.status}:${backend.serverName ?? ""}:${index}`;
+}
+
+function CodeIntelligenceBackendRow({ backend }: { backend: CodeIntelligenceBackendView }) {
+  const t = useT();
+  const capabilities = codeIntelCapabilityLabels(backend.capabilities, t);
+  const toolCount = backend.toolCount || Object.keys(backend.toolMapping ?? {}).length;
+  return (
+    <div className={`cap-codeintel-row cap-codeintel-row--${codeIntelStatusTone(backend.status)}`}>
+      <div className="cap-codeintel-row__top">
+        <span className={`cap-dot cap-dot--${codeIntelStatusTone(backend.status)}`} />
+        <span className="cap-codeintel-row__name">{backend.name || backend.id}</span>
+        <span className="cap-codeintel-row__kind">{backend.builtIn ? t("caps.codeIntelligenceBuiltIn") : backend.kind}</span>
+        <span className="cap-codeintel-row__status">{codeIntelStatusLabel(backend.status, t)}</span>
+      </div>
+      <div className="cap-codeintel-row__meta">
+        {backend.serverName && <span>{backend.serverName}</span>}
+        {backend.indexStatus && <span>{t("caps.codeIntelligenceIndexStatus", { status: codeIntelIndexStatusLabel(backend.indexStatus, t) })}</span>}
+        <span>{t("caps.codeIntelligenceBackendTools", { tools: toolCount })}</span>
+        {!backend.enabled && <span>{t("caps.disabled")}</span>}
+      </div>
+      {capabilities.length > 0 && (
+        <div className="cap-codeintel-row__caps">
+          {capabilities.map((capability) => (
+            <span className="cap-codeintel-cap" key={capability}>{capability}</span>
+          ))}
+        </div>
+      )}
+      {backend.lastError && <div className="cap-codeintel-row__error">{backend.lastError}</div>}
+    </div>
+  );
+}
+
+function codeIntelCapabilityLabels(capabilities: CodeIntelligenceBackendCapabilities, t: ReturnType<typeof useT>): string[] {
+  const pairs: Array<[keyof CodeIntelligenceBackendCapabilities, string]> = [
+    ["SymbolSearch", t("caps.codeIntelligenceCapability.symbolSearch")],
+    ["SemanticSearch", t("caps.codeIntelligenceCapability.semanticSearch")],
+    ["ContextPack", t("caps.codeIntelligenceCapability.contextPack")],
+    ["GraphTrace", t("caps.codeIntelligenceCapability.graphTrace")],
+    ["EditRefactor", t("caps.codeIntelligenceCapability.editRefactor")],
+    ["Health", t("caps.codeIntelligenceCapability.health")],
+  ];
+  return pairs.flatMap(([key, label]) => (capabilities[key] ? [label] : []));
+}
+
+function codeIntelStatusLabel(status: string, t: ReturnType<typeof useT>): string {
+  switch (status) {
+    case "ready":
+      return t("caps.codeIntelligenceStatus.ready");
+    case "degraded":
+      return t("caps.codeIntelligenceStatus.degraded");
+    case "disabled":
+      return t("caps.codeIntelligenceStatus.disabled");
+    case "invalid":
+      return t("caps.codeIntelligenceStatus.invalid");
+    case "unknown":
+      return t("caps.codeIntelligenceStatus.unknown");
+    default:
+      return status;
+  }
+}
+
+function codeIntelStatusTone(status: string): string {
+  switch (status) {
+    case "ready":
+      return "connected";
+    case "degraded":
+    case "unknown":
+      return "deferred";
+    case "disabled":
+      return "disabled";
+    case "invalid":
+      return "failed";
+    default:
+      return "deferred";
+  }
+}
+
+function codeIntelIndexStatusLabel(status: string, t: ReturnType<typeof useT>): string {
+  switch (status) {
+    case "initialized":
+      return t("caps.codeIntelligenceIndex.initialized");
+    case "not_initialized":
+      return t("caps.codeIntelligenceIndex.notInitialized");
+    default:
+      return status;
+  }
 }
 
 function BuiltInMCPUpdateNotice({
