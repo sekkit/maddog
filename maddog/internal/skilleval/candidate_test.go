@@ -1,0 +1,119 @@
+package skilleval
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"maddog/internal/skill"
+)
+
+func TestCandidateStoreCreatesPendingAndDedupesByContent(t *testing.T) {
+	store := NewCandidateStore(t.TempDir())
+	store.Now = func() time.Time { return time.Date(2026, 6, 30, 10, 0, 0, 0, time.UTC) }
+	sk := validSkill("parser-helper")
+
+	first, err := store.Create(sk, BundleV2{ID: "bundle-a"}, "fix parser")
+	if err != nil {
+		t.Fatalf("Create first: %v", err)
+	}
+	second, err := store.Create(sk, BundleV2{ID: "bundle-b"}, "fix parser again")
+	if err != nil {
+		t.Fatalf("Create second: %v", err)
+	}
+	if first.Hash == "" || first.Hash != second.Hash {
+		t.Fatalf("candidate hashes = %q/%q, want content dedupe", first.Hash, second.Hash)
+	}
+	if first.Status != CandidatePending || second.Status != CandidatePending {
+		t.Fatalf("candidate statuses = %s/%s, want pending", first.Status, second.Status)
+	}
+	if second.SourceBundleID != "bundle-a" {
+		t.Fatalf("deduped candidate source bundle = %q, want original bundle", second.SourceBundleID)
+	}
+	if _, err := os.Stat(filepath.Join(store.Dir, "candidates", first.Hash+".json")); err != nil {
+		t.Fatalf("candidate file missing: %v", err)
+	}
+}
+
+func TestDuplicateCandidateRevalidatesTaskRisk(t *testing.T) {
+	store := NewCandidateStore(t.TempDir())
+	sk := validSkill("parser-helper")
+	first, err := store.Create(sk, BundleV2{ID: "bundle-a"}, "fix parser")
+	if err != nil {
+		t.Fatalf("Create first: %v", err)
+	}
+	if first.Status != CandidatePending {
+		t.Fatalf("first status = %s, want pending", first.Status)
+	}
+	duplicate, err := store.Create(sk, BundleV2{ID: "bundle-b"}, "execute DELETE FROM users")
+	if err != nil {
+		t.Fatalf("Create duplicate high-risk: %v", err)
+	}
+	if duplicate.Hash != first.Hash {
+		t.Fatalf("duplicate hash = %q, want original %q", duplicate.Hash, first.Hash)
+	}
+	if duplicate.Status != CandidateRejected || !strings.Contains(duplicate.ValidationReason, "high risk") {
+		t.Fatalf("duplicate candidate = %+v, want high-risk rejection", duplicate)
+	}
+	activeStore := skill.New(skill.Options{HomeDir: t.TempDir(), ProjectRoot: t.TempDir(), DisableBuiltins: true})
+	if _, _, err := store.Promote(first.Hash, activeStore, skill.ScopeProject); err == nil {
+		t.Fatal("Promote after high-risk duplicate succeeded, want lifecycle guard")
+	}
+}
+
+func TestRejectedCandidateCannotPromote(t *testing.T) {
+	store := NewCandidateStore(t.TempDir())
+	candidate, err := store.Create(skill.Skill{Name: "bad", Description: "bad"}, BundleV2{ID: "bundle-a"}, "fix parser")
+	if err != nil {
+		t.Fatalf("Create invalid: %v", err)
+	}
+	if candidate.Status != CandidateRejected || !strings.Contains(candidate.ValidationReason, "missing skill body") {
+		t.Fatalf("invalid candidate = %+v, want rejected with validation reason", candidate)
+	}
+	activeStore := skill.New(skill.Options{HomeDir: t.TempDir(), ProjectRoot: t.TempDir(), DisableBuiltins: true})
+	if _, _, err := store.Promote(candidate.Hash, activeStore, skill.ScopeProject); err == nil {
+		t.Fatal("Promote rejected candidate succeeded, want error")
+	}
+}
+
+func TestPromoteCandidateWritesActiveSkillAndTransitions(t *testing.T) {
+	candidateStore := NewCandidateStore(t.TempDir())
+	candidate, err := candidateStore.Create(validSkill("parser-helper"), BundleV2{ID: "bundle-a"}, "fix parser")
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	projectRoot := t.TempDir()
+	activeStore := skill.New(skill.Options{HomeDir: t.TempDir(), ProjectRoot: projectRoot, DisableBuiltins: true})
+
+	updated, path, err := candidateStore.Promote(candidate.Hash, activeStore, skill.ScopeProject)
+	if err != nil {
+		t.Fatalf("Promote: %v", err)
+	}
+	if updated.Status != CandidatePromoted || updated.PromotedPath != path {
+		t.Fatalf("promoted candidate = %+v path=%q", updated, path)
+	}
+	if !strings.HasPrefix(path, filepath.Join(projectRoot, ".maddog", "skills")) {
+		t.Fatalf("promoted path = %q, want project skill root", path)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), "Use the parser checklist") {
+		t.Fatalf("promoted skill content missing body: %s", raw)
+	}
+	if _, _, err := candidateStore.Promote(candidate.Hash, activeStore, skill.ScopeProject); err == nil {
+		t.Fatal("second promotion succeeded, want lifecycle guard")
+	}
+}
+
+func validSkill(name string) skill.Skill {
+	return skill.Skill{
+		Name:        name,
+		Description: "Helps fix parser bugs",
+		Body:        "Use the parser checklist before editing.",
+		RunAs:       skill.RunInline,
+	}
+}

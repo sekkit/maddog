@@ -251,10 +251,14 @@ plan: docs/cc/maddog-fusion--3949/plan.md
 - **Commit**: abb7606ef
 
 ## Post-v1 Unit G1: Replay eval bundle v2 and SkillOpt-style candidate lifecycle
-- **Status**: pending
+- **Status**: complete
 - **Execution note**: test-first
 - **Files**: `Maddog/internal/skilleval/bundle.go`, `Maddog/internal/skilleval/bundle_test.go`, `Maddog/internal/skilleval/candidate.go`, `Maddog/internal/skilleval/candidate_test.go`, `Maddog/internal/control/controller.go`, `Maddog/internal/skill/skill.go`, `Maddog/internal/event/event.go`, `Maddog/internal/control/input_test.go`
 - **Depends on**: Post-v1 Unit E1
+- **Result**: Added `internal/skilleval` with replay bundle v2 capture/load and a SkillOpt-style candidate store. Bundle capture records non-system session messages, evidence receipts, history items, selected/dynamic skill snapshots, compression metrics, human review metadata, derived outcome signals, durable bundle paths, sanitized stable first filenames, collision-safe follow-up filenames, and deterministic bundle IDs. Candidate creation validates generated skills with `skill.Validator`, persists pending/rejected candidates by content hash, dedupes repeat content to the original source bundle/path, records validation metadata and eval-score placeholder, revalidates duplicate content against task-dependent risk, and only writes active skills through explicit promotion into the configured skill store.
+- **Scope note**: G1 intentionally stops at bundle/candidate lifecycle. Replay runner, scoring, guardrail policy, CLI wiring, and runtime event integration remain in G2/G3.
+- **Review**: Spec/code-quality review found risks around same-session bundle overwrites, task-dependent validator bypass on duplicate candidate content, candidate promotion desynchronization if active skill write succeeded but candidate persistence failed, shared temp-file races, and missing G1 data-contract placeholders. Fixed with non-overwriting bundle filenames, bundle path/source traceability, skill/metric/review snapshots, duplicate revalidation, a durable `promoting` transition with recovery from already-written active skills, unique temp files, and exclusive first-write candidate persistence.
+- **Verification**: `go test ./internal/skilleval -count=1`; `go test ./... -count=1`.
 
 ## Post-v1 Unit G2: Replay runner, guardrail, and promotion scoring
 - **Status**: pending

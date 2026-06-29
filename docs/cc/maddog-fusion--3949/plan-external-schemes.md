@@ -472,7 +472,7 @@ flowchart TB
 
 **执行记录（2026-06-30）：** 已通过 test-first 落地 CapabilitiesPanel 的 Code Intelligence 管理 UI：backend 行支持 enable/disable、retry health check、run benchmark，显示 health、index status、capability chips、tool count、benchmark running、latest JSON/Markdown path、benchmark health/failure summary。Frontend bridge 增加 lowercase GUI wrapper，并映射到真实 Wails App 方法或 browser dev mock；mock 覆盖 running 与 latest report 状态。Desktop App 增加 `SetCodeIntelligenceBackendEnabled`、`RetryCodeIntelligenceBackend`、`RunCodeIntelligenceBenchmark`，benchmark 以后台 goroutine 运行，不阻塞 GUI 调用，并写入共享 `codeintel-bench/latest.json`/`latest.md`，`Capabilities()` 会合并 latest report 与 running 状态。Review 后补强：benchmark running 改为引用计数，latest report 改为 nullable 且只挂到匹配 backend，corrupt/latest read error 会在 GUI 展示，并用 bridge contract test 防止绑定漂移。验证命令：frontend `npm run test:all`、frontend `npm run build`、`go test . -count=1`（`maddog/desktop`）、`go test ./internal/codegraph ./internal/doctor ./cmd/codeintelbench -count=1`、`go test ./... -count=1`、`git diff --check`。
 
-- [ ] **单元 G1：Replay eval bundle v2 与 SkillOpt-style candidate lifecycle**
+- [x] **单元 G1：Replay eval bundle v2 与 SkillOpt-style candidate lifecycle**
 
 **目标：** 把 session/evidence/history 转成可评测 bundle，并为 skill candidate 建立 pending/promoted/rejected 生命周期。
 
@@ -509,6 +509,8 @@ flowchart TB
 - Integration：SkillGenerated event 与 bundle id 可关联。
 
 **验证：** 运行时不会自动覆盖 skill；所有候选都有可追溯证据。
+
+**执行记录（2026-06-30）：** 已通过 test-first 新增 `internal/skilleval` 包，落地 replay bundle v2 捕获/加载和 SkillOpt-style candidate lifecycle。`CaptureBundle` 会保存非 system 的 session snapshot、tool/evidence receipts、history、task/skill metadata、selected/dynamic skill snapshot、compression metrics、human review metadata、derived outcome signals 和 durable bundle path；首次同 session 捕获保留 sanitized filename，后续同 session 捕获自动使用 timestamp/序号避免覆盖历史证据；`LoadBundle` 支持回读。`CandidateStore` 以 skill markdown content hash 去重，保留首次 source bundle/path，记录 validator result 和 eval-score placeholder，使用 `skill.Validator` 将无效候选置为 rejected，重复内容会按当前 task 重新验证以避免高风险任务绕过 gating；默认有效候选为 pending，只有显式 `Promote` 才会通过 active `skill.Store` 写入 `.maddog/skills/<name>/SKILL.md`。Review 后补强：promotion 先持久化 `promoting` 状态，active skill 已写但最终候选状态写入失败时可通过下一次 promote 检测已存在 skill 并恢复为 promoted；candidate JSON 更新使用唯一 temp 文件与 atomic replace，首次写入使用 exclusive create，阻止并发覆盖。G1 暂不接入 runtime event、replay runner、scorer 或 guardrail；这些仍归 G2/G3。验证命令：`go test ./internal/skilleval -count=1`、`go test ./... -count=1`。
 
 - [ ] **单元 G2：Replay runner、guardrail 与 promotion scoring**
 
