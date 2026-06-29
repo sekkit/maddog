@@ -121,7 +121,7 @@ flowchart TB
 
 ## 实现单元
 
-- [ ] **单元 D1：Provider profile 与 role 标注**
+- [x] **单元 D1：Provider profile 与 role 标注**
 
 **目标：** 在现有 `ProviderEntry` 之上建立 GUI 可消费的 provider profile 投影，标注 default/frontier/small/advisor/auth/status/budget 能力。
 
@@ -157,6 +157,8 @@ flowchart TB
 - Integration：desktop 保存 provider access 后，`Models()` 与 Settings 中 profile 的 current/default 标注一致。
 
 **验证：** Settings 模型页能同时看到 default/frontier/small/advisor provider，且不会泄露任何 token。
+
+**执行记录（2026-06-29）：** 已通过 test-first 落地为 desktop `ProviderView` 投影扩展，覆盖 role、gateway、auth mode、credential env/status、frontier budget/eligibility、small-model eligibility 与 dangling model warning。验证命令：`go test . -run TestSettingsProviderProfiles -count=1`（`maddog/desktop`）、`go test . -count=1`（`maddog/desktop`）、frontend `npm run test:all`、`npm run build`。
 
 - [ ] **单元 D2：Official auth + API key + icodeeasy 中转配置闭环**
 
@@ -233,7 +235,7 @@ flowchart TB
 
 **验证：** 一个真实任务运行后，desktop 能解释使用了哪个 provider、为什么升级、花了多少 token/cost、预算还剩多少。
 
-- [ ] **单元 E1：Tool output compressor 接口与 deterministic 策略**
+- [x] **单元 E1：Tool output compressor 接口与 deterministic 策略**
 
 **目标：** 为工具输出进入模型前增加可配置压缩层，保留 raw output，可计算 token/char delta。
 
@@ -271,6 +273,8 @@ flowchart TB
 - Integration：agent history 中 tool message 使用 compressed content，desktop ToolResult 仍可拉取 raw output。
 
 **验证：** 长工具输出不会把完整 raw log 塞进 model context，但用户仍能在 GUI 展开完整输出。
+
+**执行记录（2026-06-29）：** 已通过 test-first 新增 Go-native `internal/contextpack` deterministic compressor，并接入 agent tool result 路径：模型收到压缩内容，controller 保留 raw 查询，compression metadata 经 event/serve/Wails/TypeScript wire 传递。已覆盖 compressor panic fallback warning、UTF-8 safe trimming、Windows path line preservation、raw output lookup 与 final visible metrics。验证命令：`go test ./internal/contextpack -count=1`、`go test ./internal/agent -count=1`、`go test ./internal/control -count=1`、`go test ./internal/serve -count=1`、`go test . -count=1`（`maddog/desktop`）、frontend `npm run test:all`、`npm run build`。
 
 - [ ] **单元 E2：Shell/test/log 专用压缩与 context metrics**
 

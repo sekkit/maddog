@@ -79,10 +79,26 @@ func TestToWireToolDispatchProfile(t *testing.T) {
 }
 
 func TestToWireToolResult(t *testing.T) {
-	e := event.Event{Kind: event.ToolResult, Tool: event.Tool{ID: "1", Output: "ok", Truncated: true, DurationMs: 522}}
+	e := event.Event{Kind: event.ToolResult, Tool: event.Tool{
+		ID: "1", Output: "ok", Truncated: true, DurationMs: 522,
+		Compression: &event.Compression{
+			RawRef:           "raw://tool/1",
+			Strategy:         "shell-error-first",
+			Summary:          "bash output compressed",
+			RawChars:         1000,
+			CompressedChars:  120,
+			SavedChars:       880,
+			RawTokens:        250,
+			CompressedTokens: 30,
+			SavedTokens:      220,
+		},
+	}}
 	w := toWire(e)
 	if w.Tool == nil || w.Tool.Output != "ok" || !w.Tool.Truncated || w.Tool.DurationMs != 522 {
 		t.Errorf("tool result = %+v", w.Tool)
+	}
+	if w.Tool.Compression == nil || w.Tool.Compression.RawRef != "raw://tool/1" || w.Tool.Compression.SavedTokens != 220 {
+		t.Errorf("tool compression = %+v", w.Tool.Compression)
 	}
 }
 

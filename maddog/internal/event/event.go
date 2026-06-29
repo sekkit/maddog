@@ -150,6 +150,23 @@ type Tool struct {
 	ParentID string
 	FileDiff
 	Profile *Profile // ToolDispatch: subagent model/effort (set for task/skill calls)
+	// Compression describes a ToolResult whose model-visible output was reduced
+	// while full raw output remains addressable by RawRef.
+	Compression *Compression
+}
+
+// Compression carries deterministic tool-output compression metadata for rich
+// frontends and diagnostics. Counts are character/token estimates, not raw bytes.
+type Compression struct {
+	RawRef           string
+	Strategy         string
+	Summary          string
+	RawChars         int
+	CompressedChars  int
+	SavedChars       int
+	RawTokens        int
+	CompressedTokens int
+	SavedTokens      int
 }
 
 // FileDiff is a previewed change carried on a writer tool's full ToolDispatch

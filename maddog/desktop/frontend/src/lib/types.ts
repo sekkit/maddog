@@ -38,6 +38,18 @@ export interface WireProfile {
   effort?: string;
 }
 
+export interface WireCompression {
+  rawRef?: string;
+  strategy?: string;
+  summary?: string;
+  rawChars?: number;
+  compressedChars?: number;
+  savedChars?: number;
+  rawTokens?: number;
+  compressedTokens?: number;
+  savedTokens?: number;
+}
+
 export interface WireTool {
   id?: string;
   name: string;
@@ -50,6 +62,7 @@ export interface WireTool {
   partial?: boolean; // an early dispatch (name only) — a full one with args follows
   parentId?: string; // set on a sub-agent's calls — the parent `task` call's id
   profile?: WireProfile; // subagent model/effort resolved for this call
+  compression?: WireCompression;
 }
 
 export interface WireUsage {
@@ -657,6 +670,14 @@ export interface ProviderView {
   reasoningProtocol: string; // auto|deepseek|openai|none; empty = auto/model registry
   supportedEfforts: string[]; // custom /effort levels; empty = use built-in Kind/BaseURL default
   defaultEffort: string; // /effort level when user picks "auto" or unset; "" = supportedEfforts[0]
+  roles?: string[]; // derived profile roles: default|planner|frontier|small
+  gateway?: string; // openai-official|openai-compatible|anthropic-official|...
+  authMode?: string; // normalized auth mode from the provider entry
+  credentialStatus?: "configured" | "missing" | "none" | string;
+  credentialEnv?: string; // env name only; never a token value
+  frontierBudget?: number;
+  frontierEligible?: boolean;
+  smallModelEligible?: boolean;
 }
 
 // BalanceInfo is the wallet-balance readout (desktop/app.go Balance). available
@@ -877,6 +898,7 @@ export interface SettingsView {
   autoPlan: string;
   providers: ProviderView[];
   officialProviders: ProviderView[];
+  providerWarnings?: string[];
   permissions: PermissionsView;
   sandbox: SandboxView;
   network: NetworkView;

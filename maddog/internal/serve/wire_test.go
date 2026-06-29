@@ -27,9 +27,22 @@ func TestToWire(t *testing.T) {
 	})
 
 	t.Run("tool result duration", func(t *testing.T) {
-		w := toWire(event.Event{Kind: event.ToolResult, Tool: event.Tool{Name: "web_fetch", Output: "ok", DurationMs: 522}})
+		w := toWire(event.Event{Kind: event.ToolResult, Tool: event.Tool{
+			Name: "web_fetch", Output: "ok", DurationMs: 522,
+			Compression: &event.Compression{
+				RawRef:          "raw://tool/web",
+				Strategy:        "head-tail",
+				Summary:         "web_fetch output compressed",
+				RawChars:        900,
+				CompressedChars: 200,
+				SavedChars:      700,
+			},
+		}})
 		if w.Tool == nil || w.Tool.Output != "ok" || w.Tool.DurationMs != 522 {
 			t.Errorf("tool result duration = %+v", w.Tool)
+		}
+		if w.Tool.Compression == nil || w.Tool.Compression.RawRef != "raw://tool/web" || w.Tool.Compression.SavedChars != 700 {
+			t.Errorf("tool compression = %+v", w.Tool.Compression)
 		}
 	})
 

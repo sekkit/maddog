@@ -159,3 +159,23 @@ plan: docs/cc/maddog-fusion--3949/plan.md
 - **Depends on**: Unit B7
 - **Result**: Advisor events now serialize through serve and Wails wire contracts, render as a dedicated desktop transcript card with reason/question/advice/budget metadata, export to Markdown, and remain visible in CLI/TUI sinks. Verified by `go test ./internal/serve -count=1`, `go test . -count=1` in `Maddog/desktop`, plus `npm run typecheck`, `npm run check:css`, and `npm run build`.
 - **Commit**: pending
+
+## Post-v1 Unit D1: Provider profile and role projection
+- **Status**: completed
+- **Execution note**: test-first
+- **Files**: `Maddog/desktop/settings_app.go`, `Maddog/desktop/settings_app_test.go`, `Maddog/desktop/frontend/src/lib/types.ts`
+- **Depends on**: none
+- **Started-at-commit**: 616c19179dc7c192afd3fc2a69fa160f9182980c
+- **Result**: Desktop Settings now projects provider profile metadata from existing provider entries and model refs: derived roles (`default`, `planner`, `frontier`, `small`), gateway classification, normalized auth mode, credential env/status, frontier budget/eligibility, small-model eligibility, and dangling provider/model warnings. Token values are not serialized. Verified by `go test . -run "TestSettingsProviderProfiles" -count=1` and `go test . -count=1` in `Maddog/desktop`, plus frontend `npm run test:all` and `npm run build`.
+- **Review**: Included in code-quality reviewer pass after one metadata follow-up on the adjacent E1 wire path.
+- **Commit**: pending
+
+## Post-v1 Unit E1: Tool output compressor and raw-result lookup
+- **Status**: completed
+- **Execution note**: test-first
+- **Files**: `Maddog/internal/contextpack/compressor.go`, `Maddog/internal/contextpack/compressor_test.go`, `Maddog/internal/agent/agent.go`, `Maddog/internal/agent/contextpack_test.go`, `Maddog/internal/control/controller.go`, `Maddog/internal/control/tool_result_test.go`, `Maddog/internal/event/event.go`, `Maddog/internal/serve/wire.go`, `Maddog/internal/serve/wire_test.go`, `Maddog/desktop/wire.go`, `Maddog/desktop/wire_test.go`, `Maddog/desktop/frontend/src/lib/types.ts`
+- **Depends on**: none
+- **Started-at-commit**: 616c19179dc7c192afd3fc2a69fa160f9182980c
+- **Result**: Added deterministic `contextpack` compression with failure-signal preservation, log dedupe, head/tail fallback, UTF-8 safe trimming, Windows path-line preservation, raw refs, and char/token delta estimates. Agent tool results now feed compressed model-visible content while retaining full raw output for `Controller.ToolResult`; compression metadata is emitted through event, serve wire, desktop wire, and TypeScript contracts. Panic/error fallback uses raw truncated output and warns. Verified by `go test ./internal/contextpack -count=1`, `go test ./internal/agent -count=1`, `go test ./internal/control -count=1`, `go test ./internal/serve -count=1`, `go test . -count=1` in `Maddog/desktop`, plus frontend `npm run test:all` and `npm run build`.
+- **Review**: Spec reviewer passed. Code-quality reviewer found one P2 metrics issue; fixed with a failing-then-passing test asserting `ToolResult` compression metrics match final visible output, then reviewer passed.
+- **Commit**: pending

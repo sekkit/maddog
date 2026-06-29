@@ -56,22 +56,35 @@ type wireAsk struct {
 }
 
 type wireTool struct {
-	ID         string       `json:"id,omitempty"`
-	Name       string       `json:"name"`
-	Args       string       `json:"args,omitempty"`
-	Output     string       `json:"output,omitempty"`
-	Err        string       `json:"err,omitempty"`
-	ReadOnly   bool         `json:"readOnly"`
-	Truncated  bool         `json:"truncated,omitempty"`
-	DurationMs int64        `json:"durationMs,omitempty"`
-	Partial    bool         `json:"partial,omitempty"`
-	ParentID   string       `json:"parentId,omitempty"`
-	Profile    *wireProfile `json:"profile,omitempty"`
+	ID          string           `json:"id,omitempty"`
+	Name        string           `json:"name"`
+	Args        string           `json:"args,omitempty"`
+	Output      string           `json:"output,omitempty"`
+	Err         string           `json:"err,omitempty"`
+	ReadOnly    bool             `json:"readOnly"`
+	Truncated   bool             `json:"truncated,omitempty"`
+	DurationMs  int64            `json:"durationMs,omitempty"`
+	Partial     bool             `json:"partial,omitempty"`
+	ParentID    string           `json:"parentId,omitempty"`
+	Profile     *wireProfile     `json:"profile,omitempty"`
+	Compression *wireCompression `json:"compression,omitempty"`
 }
 
 type wireProfile struct {
 	Model  string `json:"model,omitempty"`
 	Effort string `json:"effort,omitempty"`
+}
+
+type wireCompression struct {
+	RawRef           string `json:"rawRef,omitempty"`
+	Strategy         string `json:"strategy,omitempty"`
+	Summary          string `json:"summary,omitempty"`
+	RawChars         int    `json:"rawChars,omitempty"`
+	CompressedChars  int    `json:"compressedChars,omitempty"`
+	SavedChars       int    `json:"savedChars,omitempty"`
+	RawTokens        int    `json:"rawTokens,omitempty"`
+	CompressedTokens int    `json:"compressedTokens,omitempty"`
+	SavedTokens      int    `json:"savedTokens,omitempty"`
 }
 
 type wireUsage struct {
@@ -191,6 +204,9 @@ func toWire(e event.Event) wireEvent {
 		if e.Tool.Profile != nil {
 			wt.Profile = &wireProfile{Model: e.Tool.Profile.Model, Effort: e.Tool.Profile.Effort}
 		}
+		if e.Tool.Compression != nil {
+			wt.Compression = toWireCompression(e.Tool.Compression)
+		}
 		w.Tool = wt
 	case event.Usage:
 		if u := e.Usage; u != nil {
@@ -228,6 +244,23 @@ func toWire(e event.Event) wireEvent {
 		w.RetryMax = e.RetryMax
 	}
 	return w
+}
+
+func toWireCompression(c *event.Compression) *wireCompression {
+	if c == nil {
+		return nil
+	}
+	return &wireCompression{
+		RawRef:           c.RawRef,
+		Strategy:         c.Strategy,
+		Summary:          c.Summary,
+		RawChars:         c.RawChars,
+		CompressedChars:  c.CompressedChars,
+		SavedChars:       c.SavedChars,
+		RawTokens:        c.RawTokens,
+		CompressedTokens: c.CompressedTokens,
+		SavedTokens:      c.SavedTokens,
+	}
 }
 
 func toWireAdvisor(a event.AdvisorConsultation) *wireAdvisor {

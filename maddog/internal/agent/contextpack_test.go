@@ -1,0 +1,223 @@
+package agent
+
+import (
+	"context"
+	"encoding/json"
+	"strings"
+	"testing"
+	"unicode/utf8"
+
+	"maddog/internal/agent/testutil"
+	"maddog/internal/contextpack"
+	"maddog/internal/event"
+	"maddog/internal/provider"
+	"maddog/internal/tool"
+)
+
+type contextpackStaticTool struct {
+	name     string
+	output   string
+	readOnly bool
+}
+
+func (t contextpackStaticTool) Name() string        { return t.name }
+func (t contextpackStaticTool) Description() string { return "static output tool" }
+func (t contextpackStaticTool) ReadOnly() bool      { return t.readOnly }
+func (t contextpackStaticTool) Schema() json.RawMessage {
+	return json.RawMessage(`{"type":"object"}`)
+}
+func (t contextpackStaticTool) Execute(context.Context, json.RawMessage) (string, error) {
+	return t.output, nil
+}
+
+type panicToolOutputCompressor struct{}
+
+func (panicToolOutputCompressor) Compress(contextpack.ToolOutput, contextpack.Options) contextpack.Result {
+	panic("compress boom")
+}
+
+func TestToolOutputCompressionFeedsModelCompressedAndKeepsRaw(t *testing.T) {
+	var raw strings.Builder
+	for i := 0; i < 90; i++ {
+		raw.WriteString("INFO heartbeat ready\n")
+	}
+	raw.WriteString("--- FAIL: TestAddsNumbers (0.01s)\n")
+	raw.WriteString("    math/add_test.go:42: expected 4, got 5\n")
+	raw.WriteString("FAIL\n")
+	raw.WriteString("exit status 1\n")
+	rawOutput := raw.String()
+
+	reg := tool.NewRegistry()
+	reg.Add(contextpackStaticTool{name: "bash", output: rawOutput, readOnly: true})
+	prov := testutil.NewMock("mock",
+		testutil.Turn{ToolCalls: []provider.ToolCall{{ID: "tool-1", Name: "bash", Arguments: `{"command":"go test ./..."}`}}},
+		testutil.Turn{Text: "done"},
+	)
+	a := New(prov, reg, NewSession(""), Options{
+		ToolOutputCompressor:  contextpack.DefaultCompressor{},
+		ToolOutputCompression: contextpack.Options{ThresholdBytes: 128, MaxBytes: 260},
+	}, event.Discard)
+
+	if err := a.Run(context.Background(), "run tests"); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	reqs := prov.Requests()
+	if len(reqs) < 2 {
+		t.Fatalf("provider requests = %d, want tool round plus final round", len(reqs))
+	}
+	var toolMsg provider.Message
+	for _, msg := range reqs[1].Messages {
+		if msg.Role == provider.RoleTool && msg.ToolCallID == "tool-1" {
+			toolMsg = msg
+			break
+		}
+	}
+	if toolMsg.Content == "" {
+		t.Fatalf("second request missing compressed tool message: %+v", reqs[1].Messages)
+	}
+	if len(toolMsg.Content) >= len(rawOutput) {
+		t.Fatalf("tool message was not compressed: got %d raw %d", len(toolMsg.Content), len(rawOutput))
+	}
+	for _, want := range []string{"TestAddsNumbers", "math/add_test.go:42", "expected 4, got 5", "raw://tool/tool-1"} {
+		if !strings.Contains(toolMsg.Content, want) {
+			t.Fatalf("compressed tool message missing %q:\n%s", want, toolMsg.Content)
+		}
+	}
+	if strings.Count(toolMsg.Content, "INFO heartbeat ready") > 1 {
+		t.Fatalf("repeated log line was not deduped:\n%s", toolMsg.Content)
+	}
+
+	gotRaw, ok := a.RawToolResult("tool-1")
+	if !ok || gotRaw != rawOutput {
+		t.Fatalf("RawToolResult = (%q, %v), want full raw output", gotRaw, ok)
+	}
+}
+
+func TestToolOutputCompressionEmitsMetadataOnToolResult(t *testing.T) {
+	rawOutput := strings.Repeat("INFO heartbeat ready\n", 90) +
+		"--- FAIL: TestAddsNumbers (0.01s)\n" +
+		"    math/add_test.go:42: expected 4, got 5\n" +
+		"FAIL\n" +
+		"exit status 1\n"
+
+	reg := tool.NewRegistry()
+	reg.Add(contextpackStaticTool{name: "bash", output: rawOutput, readOnly: true})
+	prov := testutil.NewMock("mock",
+		testutil.Turn{ToolCalls: []provider.ToolCall{{ID: "tool-meta", Name: "bash", Arguments: `{"command":"go test ./..."}`}}},
+		testutil.Turn{Text: "done"},
+	)
+	var got *event.Compression
+	var gotOutput string
+	sink := event.FuncSink(func(e event.Event) {
+		if e.Kind == event.ToolResult && e.Tool.ID == "tool-meta" {
+			got = e.Tool.Compression
+			gotOutput = e.Tool.Output
+		}
+	})
+	a := New(prov, reg, NewSession(""), Options{
+		ToolOutputCompressor:  contextpack.DefaultCompressor{},
+		ToolOutputCompression: contextpack.Options{ThresholdBytes: 128, MaxBytes: 260},
+	}, sink)
+
+	if err := a.Run(context.Background(), "run tests"); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if got == nil {
+		t.Fatal("ToolResult compression metadata = nil, want contextpack metadata")
+	}
+	if got.RawRef != "raw://tool/tool-meta" || got.Strategy == "" || got.Summary == "" {
+		t.Fatalf("ToolResult compression identity metadata = %+v", got)
+	}
+	if got.RawChars <= got.CompressedChars || got.SavedChars <= 0 || got.SavedTokens <= 0 {
+		t.Fatalf("ToolResult compression delta metadata = %+v, want positive savings", got)
+	}
+	if got.CompressedChars != utf8.RuneCountInString(gotOutput) {
+		t.Fatalf("ToolResult compressed chars = %d, want final output rune count %d for output:\n%s", got.CompressedChars, utf8.RuneCountInString(gotOutput), gotOutput)
+	}
+	if got.SavedChars != got.RawChars-got.CompressedChars {
+		t.Fatalf("ToolResult saved chars = %d, want raw-compressed delta %d", got.SavedChars, got.RawChars-got.CompressedChars)
+	}
+	if got.CompressedTokens != estimatedTestTokens(got.CompressedChars) || got.SavedTokens != got.RawTokens-got.CompressedTokens {
+		t.Fatalf("ToolResult token metrics = %+v, want estimates from final output", got)
+	}
+}
+
+func estimatedTestTokens(chars int) int {
+	if chars <= 0 {
+		return 0
+	}
+	return (chars + 3) / 4
+}
+
+func TestToolOutputCompressorPanicFallsBackToTruncatedRawAndWarns(t *testing.T) {
+	line := "middle filler line\n"
+	rawOutput := "HEAD-SENTINEL\n" + strings.Repeat(line, maxToolOutputBytes/len(line)+100) + "TAIL-SENTINEL\n"
+
+	reg := tool.NewRegistry()
+	reg.Add(contextpackStaticTool{name: "bash", output: rawOutput, readOnly: true})
+	prov := testutil.NewMock("mock",
+		testutil.Turn{ToolCalls: []provider.ToolCall{{ID: "tool-panic", Name: "bash", Arguments: `{"command":"go test ./..."}`}}},
+		testutil.Turn{Text: "done"},
+	)
+	var warnings []string
+	sink := event.FuncSink(func(e event.Event) {
+		if e.Kind == event.Notice && e.Level == event.LevelWarn {
+			warnings = append(warnings, e.Text)
+		}
+	})
+	a := New(prov, reg, NewSession(""), Options{
+		ToolOutputCompressor: panicToolOutputCompressor{},
+	}, sink)
+
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("Run panicked: %v", r)
+		}
+	}()
+	if err := a.Run(context.Background(), "run tests"); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	reqs := prov.Requests()
+	if len(reqs) < 2 {
+		t.Fatalf("provider requests = %d, want tool round plus final round", len(reqs))
+	}
+	var toolMsg provider.Message
+	for _, msg := range reqs[1].Messages {
+		if msg.Role == provider.RoleTool && msg.ToolCallID == "tool-panic" {
+			toolMsg = msg
+			break
+		}
+	}
+	if toolMsg.Content == "" {
+		t.Fatalf("second request missing fallback tool message: %+v", reqs[1].Messages)
+	}
+	for _, want := range []string{"HEAD-SENTINEL", "TAIL-SENTINEL", "[truncated"} {
+		if !strings.Contains(toolMsg.Content, want) {
+			t.Fatalf("fallback tool message missing %q:\n%s", want, toolMsg.Content)
+		}
+	}
+	for _, bad := range []string{"raw://tool/tool-panic", "[compressed tool output"} {
+		if strings.Contains(toolMsg.Content, bad) {
+			t.Fatalf("fallback tool message unexpectedly contained %q:\n%s", bad, toolMsg.Content)
+		}
+	}
+	if len(toolMsg.Content) >= len(rawOutput) {
+		t.Fatalf("fallback tool message length = %d, want truncated below raw length %d", len(toolMsg.Content), len(rawOutput))
+	}
+	if gotRaw, ok := a.RawToolResult("tool-panic"); ok {
+		t.Fatalf("RawToolResult stored after compressor panic: %q", gotRaw)
+	}
+	foundWarning := false
+	for _, warning := range warnings {
+		if strings.Contains(warning, "tool output compression failed") && strings.Contains(warning, "compress boom") {
+			foundWarning = true
+			break
+		}
+	}
+	if !foundWarning {
+		t.Fatalf("warning notices = %v, want compressor failure warning", warnings)
+	}
+}

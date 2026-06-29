@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -54,6 +55,14 @@ type ProviderView struct {
 	ReasoningProtocol  string   `json:"reasoningProtocol"`
 	SupportedEfforts   []string `json:"supportedEfforts"`
 	DefaultEffort      string   `json:"defaultEffort"`
+	Roles              []string `json:"roles"`
+	Gateway            string   `json:"gateway"`
+	AuthMode           string   `json:"authMode"`
+	CredentialStatus   string   `json:"credentialStatus"`
+	CredentialEnv      string   `json:"credentialEnv"`
+	FrontierBudget     int64    `json:"frontierBudget"`
+	FrontierEligible   bool     `json:"frontierEligible"`
+	SmallModelEligible bool     `json:"smallModelEligible"`
 }
 
 type PermissionsView struct {
@@ -160,6 +169,7 @@ type SettingsView struct {
 	AutoPlan           string          `json:"autoPlan"`
 	Providers          []ProviderView  `json:"providers"`
 	OfficialProviders  []ProviderView  `json:"officialProviders"`
+	ProviderWarnings   []string        `json:"providerWarnings"`
 	Permissions        PermissionsView `json:"permissions"`
 	Sandbox            SandboxView     `json:"sandbox"`
 	Network            NetworkView     `json:"network"`
@@ -286,6 +296,38 @@ func removeProviderAccess(c *config.Config, names ...string) {
 	c.Desktop.ProviderAccess = out
 }
 
+func providerProfileGateway(p config.ProviderEntry) string {
+	kind := strings.ToLower(strings.TrimSpace(p.Kind))
+	host := officialProviderHost(p.BaseURL)
+	switch kind {
+	case "openai":
+		if host == "api.openai.com" {
+			return "openai-official"
+		}
+		return "openai-compatible"
+	case "anthropic":
+		if host == "api.anthropic.com" {
+			return "anthropic-official"
+		}
+		return "anthropic"
+	default:
+		if kind != "" {
+			return kind
+		}
+		return "custom"
+	}
+}
+
+func providerCredentialStatus(p config.ProviderEntry) string {
+	if p.Configured() {
+		return "configured"
+	}
+	if p.AuthEnvName() != "" || strings.TrimSpace(p.IdentityFile) != "" {
+		return "missing"
+	}
+	return "none"
+}
+
 func providerViewFromEntry(p config.ProviderEntry, builtIn, added bool) ProviderView {
 	return ProviderView{
 		Name: p.Name, BuiltIn: builtIn, Added: added, Kind: p.Kind, BaseURL: p.BaseURL,
@@ -310,7 +352,78 @@ func providerViewFromEntry(p config.ProviderEntry, builtIn, added bool) Provider
 		ReasoningProtocol:  p.ReasoningProtocol,
 		SupportedEfforts:   nonNil(p.SupportedEfforts),
 		DefaultEffort:      p.DefaultEffort,
+		Roles:              []string{},
+		Gateway:            providerProfileGateway(p),
+		AuthMode:           p.NormalizedAuthType(),
+		CredentialStatus:   providerCredentialStatus(p),
+		CredentialEnv:      p.AuthEnvName(),
 	}
+}
+
+func addProviderRole(roles map[string][]string, providerName, role string) {
+	if providerName == "" || role == "" {
+		return
+	}
+	for _, existing := range roles[providerName] {
+		if existing == role {
+			return
+		}
+	}
+	roles[providerName] = append(roles[providerName], role)
+}
+
+func providerProfileRolesAndWarnings(c *config.Config) (map[string][]string, []string) {
+	roles := map[string][]string{}
+	var warnings []string
+	addRef := func(field, ref, role string) {
+		ref = strings.TrimSpace(ref)
+		if ref == "" {
+			return
+		}
+		entry, ok := c.ResolveModel(ref)
+		if !ok {
+			warnings = append(warnings, fmt.Sprintf("%s %s cannot resolve to a provider/model", field, ref))
+			return
+		}
+		addProviderRole(roles, entry.Name, role)
+	}
+
+	addRef("default_model", c.DefaultModel, "default")
+	addRef("planner_model", c.Agent.PlannerModel, "planner")
+	addRef("frontier_model", c.Agent.FrontierModel, "frontier")
+	addRef("subagent_model", c.Agent.SubagentModel, "small")
+
+	var skills []string
+	for skill := range c.Agent.SubagentModels {
+		skills = append(skills, skill)
+	}
+	sort.Strings(skills)
+	for _, skill := range skills {
+		addRef("subagent_models."+skill, c.Agent.SubagentModels[skill], "small")
+	}
+	return roles, warnings
+}
+
+func providerHasRole(roles []string, role string) bool {
+	for _, existing := range roles {
+		if existing == role {
+			return true
+		}
+	}
+	return false
+}
+
+func annotateProviderProfile(view ProviderView, p config.ProviderEntry, roles []string, frontierBudget int64) ProviderView {
+	view.Roles = nonNil(roles)
+	configured := p.Configured()
+	if providerHasRole(view.Roles, "frontier") {
+		view.FrontierBudget = frontierBudget
+		view.FrontierEligible = configured
+	}
+	if providerHasRole(view.Roles, "small") {
+		view.SmallModelEligible = configured
+	}
+	return view
 }
 
 func officialProviderViews(added map[string]bool) []ProviderView {
@@ -352,6 +465,7 @@ func (a *App) Settings() SettingsView {
 		return SettingsView{
 			Providers:         []ProviderView{},
 			OfficialProviders: officialProviderViews(map[string]bool{}),
+			ProviderWarnings:  []string{},
 			ProviderKinds:     nonNil(provider.Kinds()),
 			Permissions: PermissionsView{
 				Mode:  "ask",
@@ -397,6 +511,7 @@ func (a *App) Settings() SettingsView {
 		AutoPlan:          desktopAutoPlanMode(cfg.Agent.AutoPlan),
 		Providers:         []ProviderView{},
 		OfficialProviders: []ProviderView{},
+		ProviderWarnings:  []string{},
 		Permissions: PermissionsView{
 			Mode:  orDefault(cfg.Permissions.Mode, "ask"),
 			Allow: nonNil(cfg.Permissions.Allow),
@@ -440,10 +555,13 @@ func (a *App) Settings() SettingsView {
 		Bypass:             ctrl != nil && ctrl.AutoApproveTools(),
 	}
 	added := providerAccessSet(cfg.Desktop.ProviderAccess)
+	providerRoles, providerWarnings := providerProfileRolesAndWarnings(cfg)
+	v.ProviderWarnings = nonNil(providerWarnings)
 	v.OfficialProviders = officialProviderViews(officialProviderAddedSet(cfg))
 	for i := range cfg.Providers {
 		p := &cfg.Providers[i]
-		v.Providers = append(v.Providers, providerViewFromEntry(*p, isOfficialBuiltInProvider(*p), added[p.Name]))
+		view := providerViewFromEntry(*p, isOfficialBuiltInProvider(*p), added[p.Name])
+		v.Providers = append(v.Providers, annotateProviderProfile(view, *p, providerRoles[p.Name], cfg.Agent.FrontierBudget))
 	}
 	return v
 }

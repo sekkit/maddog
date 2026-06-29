@@ -2209,6 +2209,9 @@ func (c *Controller) ToolResult(toolID string) *ToolResultData {
 			Args:   "",
 			Output: msgs[i].Content,
 		}
+		if raw, ok := c.executor.RawToolResult(toolID); ok {
+			out.Output = raw
+		}
 		// Walk back to find the assistant turn that issued this call.
 		for j := i; j >= 0; j-- {
 			if msgs[j].Role != provider.RoleAssistant {
