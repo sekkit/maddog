@@ -269,6 +269,7 @@ plan: docs/cc/maddog-fusion--3949/plan.md
 - **Result**: Added replay evaluation for `BundleV2` + `Candidate`, deterministic dry-run replay, configured-provider headless replay via `maddog skilleval`, rule/frontier scoring with deterministic fallback, promotion guardrails, candidate evaluation persistence, and CLI candidate listing. `CandidateStore.Promote` now requires a recorded evaluation and passing guardrail before writing active skills.
 - **Review**: Initial review found that dry-run self-scored without replay, non-dry-run CLI lacked provider replay, promotion was not gated by replay/guardrail, guardrail accepted invalid candidates, scorer fallback returned hard errors, and tool expansion checks were too broad. Fixed by replaying candidate body in dry-run, resolving configured providers for non-dry-run, adding `RecordEvaluation`, gating promotion on score+guardrail, revalidating candidates in guardrail, limiting tool expansion rejection to high-risk tools, checking token cost spikes, and listing candidate states from the CLI.
 - **Verification**: `go test ./internal/skilleval -count=1`; `go test ./internal/cli -run TestSkillEval -count=1`; `go test ./... -count=1`.
+- **Commit**: 9a74a19ed
 
 ## Post-v1 Unit G3: Skill management GUI and promotion audit
 - **Status**: pending
