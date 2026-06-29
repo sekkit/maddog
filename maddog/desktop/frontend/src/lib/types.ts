@@ -235,6 +235,13 @@ export interface ContextPanelInfo {
   sessionCurrency?: string;
   // Deprecated compatibility alias. Prefer sessionCost + sessionCurrency.
   sessionCostUsd?: number;
+  compressionEvents?: number;
+  compressionRawChars?: number;
+  compressionCompressedChars?: number;
+  compressionSavedChars?: number;
+  compressionRawTokens?: number;
+  compressionCompressedTokens?: number;
+  compressionSavedTokens?: number;
   mock?: boolean;
   readFiles: ReadFileRecord[];
   changedFiles: ChangedFileInfo[];

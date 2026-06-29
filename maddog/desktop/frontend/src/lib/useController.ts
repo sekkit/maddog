@@ -31,6 +31,7 @@ import type {
   WireApproval,
   WireAdvisor,
   WireAsk,
+  WireCompression,
   WireEvent,
   WireProfile,
   WireProviderStatus,
@@ -75,6 +76,7 @@ export type Item =
       isShell?: boolean; // true for !-prefix shell commands (controls default expand)
       parentId?: string; // a sub-agent call nests under the `task` call with this id
       profile?: WireProfile; // subagent provider role/model/effort from tool event
+      compression?: WireCompression; // tool-output compression metadata for badges and context metrics
     };
 
 interface State {
@@ -469,7 +471,7 @@ function applyEvent(s: State, e: WireEvent): State {
           const existing = it;
           const shortArgs = existing.args && existing.args.length > 200 ? existing.args.slice(0, 200) + "…" : existing.args;
           const summary = t.err ? undefined : existing.summary || summarize(existing.name, existing.args, t.output);
-          next[idx] = { ...existing, status: t.err ? "error" : "done", args: shortArgs, output: undefined, error: t.err, truncated: t.truncated, durationMs: t.durationMs, dataArchived: true, summary };
+          next[idx] = { ...existing, status: t.err ? "error" : "done", args: shortArgs, output: undefined, error: t.err, truncated: t.truncated, durationMs: t.durationMs, dataArchived: true, summary, compression: t.compression ?? existing.compression };
         }
       }
       return { ...s, items: next };

@@ -77,7 +77,14 @@ func (DefaultCompressor) Compress(output ToolOutput, opts Options) Result {
 	}
 
 	maxBytes := effectiveMax(opts.MaxBytes)
-	content := compressText(output, raw, maxBytes)
+	var strategy string
+	content := ""
+	if shellResult, ok := compressShellOutput(output, raw, maxBytes); ok {
+		content = shellResult.content
+		strategy = shellResult.strategy
+	} else {
+		content = compressText(output, raw, maxBytes)
+	}
 	if content == "" {
 		content = headTail(raw, maxBytes)
 	}
@@ -98,10 +105,13 @@ func (DefaultCompressor) Compress(output ToolOutput, opts Options) Result {
 		Content:         content,
 		Compressed:      true,
 		RawRef:          opts.RawRef,
-		Strategy:        strategyFor(output, raw),
+		Strategy:        strategy,
 		Summary:         summaryFor(output, raw, content),
 		RawChars:        rawChars,
 		CompressedChars: compressedChars,
+	}
+	if result.Strategy == "" {
+		result.Strategy = strategyFor(output, raw)
 	}
 	result.SavedChars = result.RawChars - result.CompressedChars
 	if result.SavedChars < 0 {

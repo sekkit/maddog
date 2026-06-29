@@ -1440,6 +1440,8 @@ export const en = {
   "tool.editOther": "{n} edits",
   "tool.replacementOne": "{n} replacement",
   "tool.replacementOther": "{n} replacements",
+  "tool.compressedTokens": "-{tokens} tok",
+  "tool.compressedTitle": "{strategy}: saved about {tokens} tokens",
   "tool.emptyFile": "empty file",
   "tool.noOutput": "no output",
 
@@ -1523,6 +1525,10 @@ export const en = {
   "context.requests": "Requests",
   "context.time": "Time",
   "context.compaction": "Compaction",
+  "context.compressionSaved": "Output saved",
+  "context.compressionSavedValue": "{tokens} · {pct}%",
+  "context.compressionVisible": "Output visible",
+  "context.compressionVisibleValue": "{compressed} / {raw}",
   "context.durationSeconds": "{seconds}s",
   "context.durationMinutesSeconds": "{minutes}m {seconds}s",
 

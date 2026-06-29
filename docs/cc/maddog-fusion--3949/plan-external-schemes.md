@@ -290,7 +290,7 @@ flowchart TB
 
 **执行记录（2026-06-29）：** 已通过 test-first 新增 Go-native `internal/contextpack` deterministic compressor，并接入 agent tool result 路径：模型收到压缩内容，controller 保留 raw 查询，compression metadata 经 event/serve/Wails/TypeScript wire 传递。已覆盖 compressor panic fallback warning、UTF-8 safe trimming、Windows path line preservation、raw output lookup 与 final visible metrics。验证命令：`go test ./internal/contextpack -count=1`、`go test ./internal/agent -count=1`、`go test ./internal/control -count=1`、`go test ./internal/serve -count=1`、`go test . -count=1`（`maddog/desktop`）、frontend `npm run test:all`、`npm run build`。
 
-- [ ] **单元 E2：Shell/test/log 专用压缩与 context metrics**
+- [x] **单元 E2：Shell/test/log 专用压缩与 context metrics**
 
 **目标：** 针对常见开发命令输出提供高信号压缩，并在 UI 显示节省效果。
 
@@ -327,6 +327,8 @@ flowchart TB
 - Integration：ToolCard 显示 compression badge，点击仍能查看 full output。
 
 **验证：** 真实测试失败任务中，模型收到的是高信号摘要，UI 能展示节省比例和 raw output。
+
+**执行记录（2026-06-30）：** 已通过 test-first 新增 shell/test/log 专用 deterministic 压缩策略：识别 `go test`、`npm test`、`npm run build`、`rg`、`git status`、`git diff` 与重复 server log，保留失败测试名、file:line、expected/actual、panic/error、代表性匹配、重复次数和末尾行；tight budget 下优先保留真实信号而不是标题。Desktop 侧记录 latest-turn compression raw/compressed/saved char/token metrics，ContextPanel 显示 saved 与 compressed/raw breakdown，ToolCard 显示压缩 badge 且保留 full raw lookup。验证命令：`go test ./internal/contextpack ./internal/agent ./internal/control ./internal/serve -count=1`、`go test . -count=1`（`maddog/desktop`）、frontend `npm run test:all`、`npm run check:css`、`npm run build`、`git diff --check`。Spec 与 code-quality subagent 复审均通过。
 
 - [ ] **单元 E3：Context policy、raw-data 外置与可关闭开关**
 

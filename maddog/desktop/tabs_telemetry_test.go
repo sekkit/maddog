@@ -43,6 +43,17 @@ func TestTelemetryLoadsLegacyReadFileArray(t *testing.T) {
 	}
 }
 
+func TestTelemetrySnapshotHasDataForCompressionOnlySnapshot(t *testing.T) {
+	snapshot := tabTelemetrySnapshot{Version: 2, Usage: sessionUsageStats{
+		CompressionEvents:      1,
+		CompressionRawTokens:   1000,
+		CompressionSavedTokens: 750,
+	}}
+	if !telemetrySnapshotHasData(snapshot) {
+		t.Fatal("compression-only telemetry snapshot should be restored")
+	}
+}
+
 func TestWorkspaceTabAggregatesSessionUsageTelemetry(t *testing.T) {
 	tab := &WorkspaceTab{}
 	start := time.Now().Add(-2 * time.Second).UnixMilli()
@@ -75,6 +86,71 @@ func TestWorkspaceTabAggregatesSessionUsageTelemetry(t *testing.T) {
 	}
 	if panel := app.ContextPanel("tab"); panel.TotalTokens != 140 {
 		t.Fatalf("context panel total tokens = %d, want 140", panel.TotalTokens)
+	}
+}
+
+func TestContextPanelIncludesToolCompressionTelemetry(t *testing.T) {
+	tab := &WorkspaceTab{ID: "tab"}
+	app := &App{tabs: map[string]*WorkspaceTab{"tab": tab}}
+	sink := &tabEventSink{tabID: "tab", app: app}
+
+	sink.Emit(event.Event{Kind: event.ToolResult, Tool: event.Tool{
+		ID:   "tool-1",
+		Name: "bash",
+		Compression: &event.Compression{
+			Strategy:         "go-test-failure",
+			RawChars:         4000,
+			CompressedChars:  900,
+			SavedChars:       3100,
+			RawTokens:        1000,
+			CompressedTokens: 225,
+			SavedTokens:      775,
+		},
+	}})
+
+	panel := app.ContextPanel("tab")
+	if panel.CompressionEvents != 1 {
+		t.Fatalf("compression events = %d, want 1", panel.CompressionEvents)
+	}
+	if panel.CompressionRawTokens != 1000 || panel.CompressionCompressedTokens != 225 || panel.CompressionSavedTokens != 775 {
+		t.Fatalf("compression token metrics = raw:%d compressed:%d saved:%d, want 1000/225/775",
+			panel.CompressionRawTokens, panel.CompressionCompressedTokens, panel.CompressionSavedTokens)
+	}
+	if panel.CompressionRawChars != 4000 || panel.CompressionCompressedChars != 900 || panel.CompressionSavedChars != 3100 {
+		t.Fatalf("compression char metrics = raw:%d compressed:%d saved:%d, want 4000/900/3100",
+			panel.CompressionRawChars, panel.CompressionCompressedChars, panel.CompressionSavedChars)
+	}
+}
+
+func TestContextPanelCompressionTelemetryResetsPerTurn(t *testing.T) {
+	tab := &WorkspaceTab{ID: "tab"}
+	app := &App{tabs: map[string]*WorkspaceTab{"tab": tab}}
+	sink := &tabEventSink{tabID: "tab", app: app}
+
+	sink.Emit(event.Event{Kind: event.TurnStarted})
+	sink.Emit(event.Event{Kind: event.ToolResult, Tool: event.Tool{
+		ID: "tool-1", Name: "bash",
+		Compression: &event.Compression{RawTokens: 1000, CompressedTokens: 250, SavedTokens: 750},
+	}})
+	sink.Emit(event.Event{Kind: event.TurnDone})
+
+	first := app.ContextPanel("tab")
+	if first.CompressionEvents != 1 || first.CompressionRawTokens != 1000 || first.CompressionSavedTokens != 750 {
+		t.Fatalf("first turn compression = events:%d raw:%d saved:%d, want 1/1000/750",
+			first.CompressionEvents, first.CompressionRawTokens, first.CompressionSavedTokens)
+	}
+
+	sink.Emit(event.Event{Kind: event.TurnStarted})
+	sink.Emit(event.Event{Kind: event.ToolResult, Tool: event.Tool{
+		ID: "tool-2", Name: "bash",
+		Compression: &event.Compression{RawTokens: 200, CompressedTokens: 50, SavedTokens: 150},
+	}})
+	sink.Emit(event.Event{Kind: event.TurnDone})
+
+	second := app.ContextPanel("tab")
+	if second.CompressionEvents != 1 || second.CompressionRawTokens != 200 || second.CompressionCompressedTokens != 50 || second.CompressionSavedTokens != 150 {
+		t.Fatalf("second turn compression = events:%d raw:%d compressed:%d saved:%d, want latest turn 1/200/50/150",
+			second.CompressionEvents, second.CompressionRawTokens, second.CompressionCompressedTokens, second.CompressionSavedTokens)
 	}
 }
 

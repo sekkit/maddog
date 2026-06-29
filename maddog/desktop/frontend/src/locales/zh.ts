@@ -1442,6 +1442,8 @@ export const zh: Record<DictKey, string> = {
   "tool.editOther": "{n} 处编辑",
   "tool.replacementOne": "{n} 处替换",
   "tool.replacementOther": "{n} 处替换",
+  "tool.compressedTokens": "-{tokens} tok",
+  "tool.compressedTitle": "{strategy}：约节省 {tokens} tokens",
   "tool.emptyFile": "空文件",
   "tool.noOutput": "无输出",
 
@@ -1525,6 +1527,10 @@ export const zh: Record<DictKey, string> = {
   "context.requests": "请求数",
   "context.time": "耗时",
   "context.compaction": "压缩状态",
+  "context.compressionSaved": "输出节省",
+  "context.compressionSavedValue": "{tokens} · {pct}%",
+  "context.compressionVisible": "可见输出",
+  "context.compressionVisibleValue": "{compressed} / {raw}",
   "context.durationSeconds": "{seconds}秒",
   "context.durationMinutesSeconds": "{minutes}分{seconds}秒",
 

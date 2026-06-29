@@ -86,17 +86,24 @@ type readFileRecord struct {
 }
 
 type sessionUsageStats struct {
-	PromptTokens     int     `json:"promptTokens"`
-	CompletionTokens int     `json:"completionTokens"`
-	TotalTokens      int     `json:"totalTokens"`
-	ReasoningTokens  int     `json:"reasoningTokens"`
-	CacheHitTokens   int     `json:"cacheHitTokens"`
-	CacheMissTokens  int     `json:"cacheMissTokens"`
-	RequestCount     int     `json:"requestCount"`
-	ElapsedMs        int64   `json:"elapsedMs"`
-	SessionCost      float64 `json:"sessionCost,omitempty"`
-	SessionCurrency  string  `json:"sessionCurrency,omitempty"`
-	SessionCostUsd   float64 `json:"sessionCostUsd,omitempty"`
+	PromptTokens                int     `json:"promptTokens"`
+	CompletionTokens            int     `json:"completionTokens"`
+	TotalTokens                 int     `json:"totalTokens"`
+	ReasoningTokens             int     `json:"reasoningTokens"`
+	CacheHitTokens              int     `json:"cacheHitTokens"`
+	CacheMissTokens             int     `json:"cacheMissTokens"`
+	RequestCount                int     `json:"requestCount"`
+	ElapsedMs                   int64   `json:"elapsedMs"`
+	SessionCost                 float64 `json:"sessionCost,omitempty"`
+	SessionCurrency             string  `json:"sessionCurrency,omitempty"`
+	SessionCostUsd              float64 `json:"sessionCostUsd,omitempty"`
+	CompressionEvents           int     `json:"compressionEvents,omitempty"`
+	CompressionRawChars         int     `json:"compressionRawChars,omitempty"`
+	CompressionCompressedChars  int     `json:"compressionCompressedChars,omitempty"`
+	CompressionSavedChars       int     `json:"compressionSavedChars,omitempty"`
+	CompressionRawTokens        int     `json:"compressionRawTokens,omitempty"`
+	CompressionCompressedTokens int     `json:"compressionCompressedTokens,omitempty"`
+	CompressionSavedTokens      int     `json:"compressionSavedTokens,omitempty"`
 
 	activeTurnStartedAt int64
 }
@@ -357,6 +364,7 @@ func (t *WorkspaceTab) recordReadFile(rec readFileRecord) {
 
 func (t *WorkspaceTab) recordTurnStarted(now int64) {
 	t.telemMu.Lock()
+	resetTurnCompressionTelemetry(&t.usageTelemetry)
 	if t.usageTelemetry.activeTurnStartedAt == 0 {
 		t.usageTelemetry.activeTurnStartedAt = now
 	}
@@ -399,6 +407,34 @@ func (t *WorkspaceTab) recordUsage(e event.Event) {
 	t.telemMu.Unlock()
 }
 
+func (t *WorkspaceTab) recordToolCompression(c *event.Compression) {
+	if c == nil {
+		return
+	}
+	t.telemMu.Lock()
+	t.usageTelemetry.CompressionEvents++
+	t.usageTelemetry.CompressionRawChars += c.RawChars
+	t.usageTelemetry.CompressionCompressedChars += c.CompressedChars
+	t.usageTelemetry.CompressionSavedChars += c.SavedChars
+	t.usageTelemetry.CompressionRawTokens += c.RawTokens
+	t.usageTelemetry.CompressionCompressedTokens += c.CompressedTokens
+	t.usageTelemetry.CompressionSavedTokens += c.SavedTokens
+	t.telemMu.Unlock()
+}
+
+func resetTurnCompressionTelemetry(usage *sessionUsageStats) {
+	if usage == nil {
+		return
+	}
+	usage.CompressionEvents = 0
+	usage.CompressionRawChars = 0
+	usage.CompressionCompressedChars = 0
+	usage.CompressionSavedChars = 0
+	usage.CompressionRawTokens = 0
+	usage.CompressionCompressedTokens = 0
+	usage.CompressionSavedTokens = 0
+}
+
 func (t *WorkspaceTab) telemetrySnapshot() tabTelemetrySnapshot {
 	t.telemMu.Lock()
 	defer t.telemMu.Unlock()
@@ -432,6 +468,8 @@ func (s *tabEventSink) Emit(e event.Event) {
 			s.recordTurnStarted()
 		case event.Usage:
 			s.recordUsageTelemetry(e)
+		case event.ToolResult:
+			s.recordToolCompressionTelemetry(e)
 		case event.TurnDone:
 			s.recordTurnDone()
 		}
@@ -695,6 +733,17 @@ func (s *tabEventSink) recordUsageTelemetry(e event.Event) {
 		return
 	}
 	tab.recordUsage(e)
+	if sp != "" {
+		_ = saveTelemetry(sp+".telemetry.json", tab.telemetrySnapshot())
+	}
+}
+
+func (s *tabEventSink) recordToolCompressionTelemetry(e event.Event) {
+	tab, sp := s.telemetryTab()
+	if tab == nil || e.Tool.Compression == nil {
+		return
+	}
+	tab.recordToolCompression(e.Tool.Compression)
 	if sp != "" {
 		_ = saveTelemetry(sp+".telemetry.json", tab.telemetrySnapshot())
 	}
@@ -1454,7 +1503,7 @@ func (a *App) buildTabController(tab *WorkspaceTab) {
 			}
 			// Restore existing telemetry if resuming a session.
 			telemetryPath := path + ".telemetry.json"
-			if snapshot := loadTelemetry(telemetryPath); len(snapshot.ReadFiles) > 0 || snapshot.Usage.RequestCount > 0 {
+			if snapshot := loadTelemetry(telemetryPath); telemetrySnapshotHasData(snapshot) {
 				tab.telemMu.Lock()
 				tab.readTelemetry = snapshot.ReadFiles
 				tab.usageTelemetry = snapshot.Usage
@@ -2510,6 +2559,34 @@ func loadTelemetry(path string) tabTelemetrySnapshot {
 		records = []readFileRecord{}
 	}
 	return tabTelemetrySnapshot{Version: 1, ReadFiles: records}
+}
+
+func telemetrySnapshotHasData(snapshot tabTelemetrySnapshot) bool {
+	if len(snapshot.ReadFiles) > 0 {
+		return true
+	}
+	return sessionUsageHasData(snapshot.Usage)
+}
+
+func sessionUsageHasData(usage sessionUsageStats) bool {
+	return usage.PromptTokens != 0 ||
+		usage.CompletionTokens != 0 ||
+		usage.TotalTokens != 0 ||
+		usage.ReasoningTokens != 0 ||
+		usage.CacheHitTokens != 0 ||
+		usage.CacheMissTokens != 0 ||
+		usage.RequestCount != 0 ||
+		usage.ElapsedMs != 0 ||
+		usage.SessionCost != 0 ||
+		usage.SessionCostUsd != 0 ||
+		usage.SessionCurrency != "" ||
+		usage.CompressionEvents != 0 ||
+		usage.CompressionRawChars != 0 ||
+		usage.CompressionCompressedChars != 0 ||
+		usage.CompressionSavedChars != 0 ||
+		usage.CompressionRawTokens != 0 ||
+		usage.CompressionCompressedTokens != 0 ||
+		usage.CompressionSavedTokens != 0
 }
 
 // --- project tree -----------------------------------------------------------
@@ -3597,22 +3674,29 @@ func unixMilliOrZero(t time.Time) int64 {
 
 // ContextPanelInfo is the right-side panel's data for one tab.
 type ContextPanelInfo struct {
-	UsedTokens       int               `json:"usedTokens"`
-	WindowTokens     int               `json:"windowTokens"`
-	PromptTokens     int               `json:"promptTokens"`
-	CompletionTokens int               `json:"completionTokens"`
-	TotalTokens      int               `json:"totalTokens"`
-	ReasoningTokens  int               `json:"reasoningTokens"`
-	CacheHitTokens   int               `json:"cacheHitTokens"`
-	CacheMissTokens  int               `json:"cacheMissTokens"`
-	RequestCount     int               `json:"requestCount"`
-	ElapsedMs        int64             `json:"elapsedMs"`
-	SessionCost      float64           `json:"sessionCost"`
-	SessionCurrency  string            `json:"sessionCurrency,omitempty"`
-	SessionCostUsd   float64           `json:"sessionCostUsd,omitempty"`
-	Mock             bool              `json:"mock,omitempty"`
-	ReadFiles        []readFileRecord  `json:"readFiles"`
-	ChangedFiles     []ChangedFileInfo `json:"changedFiles"`
+	UsedTokens                  int               `json:"usedTokens"`
+	WindowTokens                int               `json:"windowTokens"`
+	PromptTokens                int               `json:"promptTokens"`
+	CompletionTokens            int               `json:"completionTokens"`
+	TotalTokens                 int               `json:"totalTokens"`
+	ReasoningTokens             int               `json:"reasoningTokens"`
+	CacheHitTokens              int               `json:"cacheHitTokens"`
+	CacheMissTokens             int               `json:"cacheMissTokens"`
+	RequestCount                int               `json:"requestCount"`
+	ElapsedMs                   int64             `json:"elapsedMs"`
+	SessionCost                 float64           `json:"sessionCost"`
+	SessionCurrency             string            `json:"sessionCurrency,omitempty"`
+	SessionCostUsd              float64           `json:"sessionCostUsd,omitempty"`
+	CompressionEvents           int               `json:"compressionEvents,omitempty"`
+	CompressionRawChars         int               `json:"compressionRawChars,omitempty"`
+	CompressionCompressedChars  int               `json:"compressionCompressedChars,omitempty"`
+	CompressionSavedChars       int               `json:"compressionSavedChars,omitempty"`
+	CompressionRawTokens        int               `json:"compressionRawTokens,omitempty"`
+	CompressionCompressedTokens int               `json:"compressionCompressedTokens,omitempty"`
+	CompressionSavedTokens      int               `json:"compressionSavedTokens,omitempty"`
+	Mock                        bool              `json:"mock,omitempty"`
+	ReadFiles                   []readFileRecord  `json:"readFiles"`
+	ChangedFiles                []ChangedFileInfo `json:"changedFiles"`
 }
 
 type ChangedFileInfo struct {
@@ -3667,6 +3751,13 @@ func (a *App) ContextPanel(tabID string) ContextPanelInfo {
 	info.SessionCost = usage.SessionCost
 	info.SessionCurrency = usage.SessionCurrency
 	info.SessionCostUsd = usage.SessionCostUsd
+	info.CompressionEvents = usage.CompressionEvents
+	info.CompressionRawChars = usage.CompressionRawChars
+	info.CompressionCompressedChars = usage.CompressionCompressedChars
+	info.CompressionSavedChars = usage.CompressionSavedChars
+	info.CompressionRawTokens = usage.CompressionRawTokens
+	info.CompressionCompressedTokens = usage.CompressionCompressedTokens
+	info.CompressionSavedTokens = usage.CompressionSavedTokens
 
 	// Gather workspace changes for this tab's root.
 	if ctrl != nil && tab.WorkspaceRoot != "" {

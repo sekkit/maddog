@@ -19,7 +19,9 @@ function eq<T>(a: T, b: T, label: string) {
     process.stdout.write(`  PASS  ${label}\n`);
     passed += 1;
   } else {
-    process.stdout.write(`  FAIL  ${label}: expected ${JSON.stringify(b).slice(0, 120)}, got ${JSON.stringify(a).slice(0, 120)}\n`);
+    const expected = JSON.stringify(b) ?? String(b);
+    const actual = JSON.stringify(a) ?? String(a);
+    process.stdout.write(`  FAIL  ${label}: expected ${expected.slice(0, 120)}, got ${actual.slice(0, 120)}\n`);
     failed += 1;
   }
 }
@@ -122,6 +124,35 @@ console.log("\ntool data archiving on tool_result");
   const withoutArchive = TOOL_COUNT * (ARGS_SIZE + OUTPUT_SIZE);
   const reduction = (withoutArchive - totalStringBytes) / withoutArchive;
   ok(reduction > 0.95, `archive removed ${(reduction * 100).toFixed(0)}% of tool string data`);
+}
+
+// ── Test 6: Compression metadata survives archiving for badges/metrics ──
+{
+  let s = initialState;
+  s = reducer(s, { type: "event", e: { kind: "turn_started" } });
+  s = reducer(s, { type: "event", e: { kind: "tool_dispatch", tool: { id: "compressed", name: "bash", args: '{"command":"go test ./..."}', readOnly: false } } });
+  s = reducer(s, {
+    type: "event",
+    e: {
+      kind: "tool_result",
+      tool: {
+        id: "compressed",
+        name: "bash",
+        readOnly: false,
+        output: "[compressed]",
+        compression: {
+          strategy: "go-test-failure",
+          rawTokens: 1000,
+          compressedTokens: 240,
+          savedTokens: 760,
+        },
+      },
+    },
+  });
+  const tools = toolItems(s);
+  eq((tools[0] as any).compression?.strategy, "go-test-failure", "tool item keeps compression strategy after archive");
+  eq((tools[0] as any).compression?.savedTokens, 760, "tool item keeps saved token count after archive");
+  eq(tools[0].dataArchived, true, "compressed tool remains archived so expansion fetches full output");
 }
 
 console.log(`\n${passed} passed, ${failed} failed, ${passed + failed} total`);
