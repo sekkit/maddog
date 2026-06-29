@@ -228,13 +228,17 @@ plan: docs/cc/maddog-fusion--3949/plan.md
 - **Started-at-commit**: 14281088
 - **Result**: Added a Code Intelligence backend registry with built-in CodeGraph as the preserved default backend and optional external MCP backends declared via `[code_intelligence.backends]`. Capabilities now include symbol/semantic/context/graph/edit/health flags, index status for built-in CodeGraph, live MCP connected/failed status, live tool counts, and last errors. Invalid external mappings, reserved `codegraph` IDs, empty tool names, wrong server prefixes, and mappings without code-intelligence capabilities are marked invalid and excluded from usable registry entries. Desktop Capabilities renders a Code Intelligence section, and frontend contract tests cover wire/types/locales/UI presence. Verified by `go test ./internal/codegraph ./internal/config ./internal/control -count=1`, `go test . -count=1` in `Maddog/desktop`, `go test ./... -count=1`, frontend `npm run test:all`, frontend `npm run build`, and `git diff --check`.
 - **Review**: Spec reviewer initially found empty/malformed mapping acceptance and missing live MCP status projection; both were fixed with failing-then-passing tests. Code-quality reviewer found reserved `codegraph` replacement, unquoted TOML tool keys, and duplicate frontend row keys for invalid collisions; all were fixed and final spec/code-quality re-reviews passed.
-- **Commit**: pending
+- **Commit**: e76f7059
 
 ## Post-v1 Unit F2: Code intelligence benchmark harness
-- **Status**: pending
+- **Status**: completed
 - **Execution note**: test-first
 - **Files**: `Maddog/internal/codegraph/bench.go`, `Maddog/internal/codegraph/bench_test.go`, `Maddog/cmd/codeintelbench/main.go`, `Maddog/internal/doctor/report.go`, `Maddog/internal/doctor/report_test.go`
 - **Depends on**: Post-v1 Unit F1
+- **Started-at-commit**: 953b3759
+- **Result**: Added a local code intelligence benchmark harness with mock and built-in CodeGraph comparable reports. Reports include index build/update timings, query latency, top-k relevance, returned chars, estimated tokens, result count, unsupported/error status, and failure counts. `cmd/codeintelbench` writes timestamped JSON/Markdown plus `latest.json`/`latest.md`; built-in CodeGraph uses the real MCP adapter when available, waits for fixture expected markers during incremental update, and reports degraded/failure rather than pretending to be ready when unavailable. Doctor now surfaces latest benchmark paths and backend health/failures with redacted errors. Verified by `go test ./internal/codegraph ./internal/doctor ./cmd/codeintelbench -count=1`, `go test ./... -count=1`, and `git diff --check`.
+- **Review**: Spec reviewer found missing token metric, misleading fake CodeGraph backend, non-comparable relevance, and query failures not degrading health; all were fixed with failing-then-passing tests. Code-quality reviewer found timeout cancellation gaps, non-unique/non-atomic report writes, unredacted benchmark errors, and markdown-only archive overwrite risk; all were fixed and revalidated.
+- **Commit**: pending
 
 ## Post-v1 Unit F3: MCP code backend GUI management
 - **Status**: pending

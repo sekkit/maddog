@@ -406,7 +406,7 @@ flowchart TB
 
 **执行记录（2026-06-30）：** 已通过 test-first 落地 `internal/codegraph` backend registry、`[code_intelligence.backends]` TOML 配置/渲染、desktop `CapabilitiesView.codeIntelligenceBackends` 投影和 CapabilitiesPanel 的 Code Intelligence 分组。内置 CodeGraph 始终作为默认 backend 保留，外部 MCP backend 只能通过 config 声明且不会自动注册或替换 `mcp__codegraph__context`；外部 backend 未连接时显示 degraded，连接/失败时合并 live MCP status/tool count/last error。Invalid mapping（空值、server/tool prefix 不匹配、无 code intelligence capability、reserved `codegraph` ID）会进入 invalid list，不进入 usable registry，并且不会被 live connected 状态覆盖。Built-in backend 显示 `.codegraph` initialized/not initialized index status。验证命令：`go test ./internal/codegraph ./internal/config ./internal/control -count=1`、`go test . -count=1`（`maddog/desktop`）、`go test ./... -count=1`、frontend `npm run test:all`、frontend `npm run build`、`git diff --check`。Spec 与 code-quality subagent 多轮复审均通过。
 
-- [ ] **单元 F2：Code intelligence benchmark harness**
+- [x] **单元 F2：Code intelligence benchmark harness**
 
 **目标：** 建立对 CodeGraph、codebase-memory-mcp、Serena、claude-context 类后端的本地评测框架。
 
@@ -435,6 +435,8 @@ flowchart TB
 - Integration：doctor report 显示最近 bench 摘要位置和 backend health。
 
 **验证：** 能对至少一个 mock backend 和内置 backend 生成可比较报告。
+
+**执行记录（2026-06-30）：** 已通过 test-first 落地 `internal/codegraph` benchmark harness、`cmd/codeintelbench` CLI、真实内置 CodeGraph MCP benchmark adapter、mock backend 比较报告，以及 doctor latest benchmark 摘要。Benchmark 报告覆盖 index build time、incremental update time、query latency、top-k relevance、returned chars、estimated tokens、result count、tool/query failures，并输出 timestamped JSON/Markdown 与 `latest.json`/`latest.md`。CLI 默认在本地 repo fixture 上运行 mock + built-in CodeGraph；CodeGraph 未安装或查询失败时报告 degraded/failure，不伪装 ready；CodeGraph 已连接时，incremental update 阶段会等待 fixture expected marker 可查到，避免后台索引未完成导致 relevance 抖动。报告写入使用唯一 archive 文件名和 `fileutil.ReplaceFile` 原子替换 latest 文件；doctor 暴露 latest report path、backend health/failures，并对错误路径做脱敏。验证命令：`go test ./internal/codegraph ./internal/doctor ./cmd/codeintelbench -count=1`、`go test ./... -count=1`、`git diff --check`。Spec 与 code-quality subagent 多轮复审均通过。
 
 - [ ] **单元 F3：MCP code backend GUI 管理**
 
