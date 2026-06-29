@@ -101,6 +101,57 @@ func TestFetchProviderModelsFiltersNonChatModels(t *testing.T) {
 	}
 }
 
+func TestFetchProviderModelsPreservesWorkloadIdentityProbeFields(t *testing.T) {
+	t.Setenv("OPENAI_IDENTITY_TOKEN", "external-oidc-jwt")
+	var gotTokenBody map[string]string
+	var gotAuth string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/oauth/token":
+			if err := json.NewDecoder(r.Body).Decode(&gotTokenBody); err != nil {
+				t.Fatalf("decode token request: %v", err)
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"access_token": "probe-access-token",
+				"token_type":   "bearer",
+			})
+		case "/models":
+			gotAuth = r.Header.Get("Authorization")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": []map[string]string{{"id": "gpt-5.5"}},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	got, err := NewApp().FetchProviderModels(ProviderView{
+		Name:               "official-openai",
+		Kind:               "openai",
+		BaseURL:            srv.URL,
+		AuthType:           "workload_identity",
+		IdentityEnv:        "OPENAI_IDENTITY_TOKEN",
+		IdentityProviderID: "wip_openai",
+		ServiceAcctID:      "svc_openai",
+		SubjectTokenType:   "urn:ietf:params:oauth:token-type:id_token",
+		TokenURL:           srv.URL + "/oauth/token",
+	})
+	if err != nil {
+		t.Fatalf("FetchProviderModels: %v", err)
+	}
+	if gotTokenBody["service_account_id"] != "svc_openai" || gotTokenBody["subject_token_type"] != "urn:ietf:params:oauth:token-type:id_token" {
+		t.Fatalf("token request = %+v", gotTokenBody)
+	}
+	if gotAuth != "Bearer probe-access-token" {
+		t.Fatalf("Authorization = %q, want exchanged token", gotAuth)
+	}
+	if !reflect.DeepEqual(got, []string{"gpt-5.5"}) {
+		t.Fatalf("FetchProviderModels = %v, want [gpt-5.5]", got)
+	}
+}
+
 func TestSaveProviderFiltersNonChatModels(t *testing.T) {
 	isolateDesktopUserDirs(t)
 

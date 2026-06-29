@@ -319,6 +319,14 @@ func exchangeOpenAIWorkloadIdentity(ctx context.Context, httpClient *http.Client
 	if err != nil {
 		return "", time.Time{}, fmt.Errorf("%s: workload identity auth: read token response: %w", providerName, err)
 	}
+	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+		return "", time.Time{}, &provider.AuthError{
+			Provider: providerName,
+			KeyEnv:   auth.EnvName(),
+			Status:   resp.StatusCode,
+			HasKey:   strings.TrimSpace(auth.IdentityToken) != "" || strings.TrimSpace(auth.Token) != "",
+		}
+	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return "", time.Time{}, fmt.Errorf("%s: workload identity auth: token exchange status %d: %s", providerName, resp.StatusCode, strings.TrimSpace(string(respBody)))
 	}

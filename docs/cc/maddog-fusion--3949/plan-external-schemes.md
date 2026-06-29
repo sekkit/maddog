@@ -160,7 +160,7 @@ flowchart TB
 
 **执行记录（2026-06-29）：** 已通过 test-first 落地为 desktop `ProviderView` 投影扩展，覆盖 role、gateway、auth mode、credential env/status、frontier budget/eligibility、small-model eligibility 与 dangling model warning。验证命令：`go test . -run TestSettingsProviderProfiles -count=1`（`maddog/desktop`）、`go test . -count=1`（`maddog/desktop`）、frontend `npm run test:all`、`npm run build`。
 
-- [ ] **单元 D2：Official auth + API key + icodeeasy 中转配置闭环**
+- [x] **单元 D2：Official auth + API key + icodeeasy 中转配置闭环**
 
 **目标：** 在 GUI 中完整配置 API key、bearer/official token、workload identity 与 OpenAI-compatible 中转，并能测试连接与拉取模型。
 
@@ -197,6 +197,8 @@ flowchart TB
 - Security：Settings JSON、错误提示、doctor report 不包含 token 明文。
 
 **验证：** 用户可以在 GUI 中配置 OpenAI/Anthropic official/API key/icodeeasy，保存后实际 provider probe 与当前模型切换可用。
+
+**执行记录（2026-06-29）：** 已通过 test-first 让 Settings/model probe 复用 runtime `AuthConfig`：OpenAI-compatible/API key、official bearer、workload identity exchange、icodeeasy/custom base URL 均走同一 fetch/probe auth 路径。401/403 现在返回 typed `provider.AuthError`，WIF token exchange auth failure 也保留 provider/env/status 元数据且不泄露 token；desktop `FetchProviderModels` 传递完整 WIF 字段；Settings provider card 显示当前 auth mode 的 credential env（含 bearer/WIF fallback）。验证命令：`go test ./internal/provider/openai ./internal/config -count=1`、`go test . -count=1`（`maddog/desktop`）、frontend `npm run test:all`、`npm run build`。
 
 - [ ] **单元 D3：Provider usage、budget 与 status event**
 

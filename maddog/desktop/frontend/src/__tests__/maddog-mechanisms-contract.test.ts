@@ -74,12 +74,24 @@ check(
   "provider access view displays auth mode, credential env, models, and manual refresh controls",
   includesAll(settingsPanel, [
     "authTypeLabel(group.authType, t)",
-    "group.apiKeyEnv || t(\"common.none\")",
+    "credentialEnv: providerCredentialEnv(p)",
+    "group.credentialEnv || t(\"common.none\")",
     "providerCredentialEnv(editableProvider ?? group.providers[0])",
     "settings.fetchModels",
     "ProviderModelDraftPicker",
     "providerModelCandidates(p.models, fetched)",
     "mergedFetchedProviderModels(p.models, fetched, { preserveCurated: true })",
+  ]),
+);
+
+check(
+  "provider credential env display mirrors backend auth fallback",
+  includesAll(settingsPanel, [
+    "if (p.credentialEnv) return p.credentialEnv",
+    'case "bearer":',
+    "return p.authTokenEnv || p.apiKeyEnv",
+    'case "workload_identity":',
+    "return p.authTokenEnv || p.identityEnv || p.apiKeyEnv",
   ]),
 );
 

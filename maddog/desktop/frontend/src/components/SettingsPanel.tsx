@@ -443,7 +443,15 @@ function allRefs(s: SettingsView): string[] {
 
 function providerCredentialEnv(p: ProviderView | undefined): string {
   if (!p) return "";
-  return normalizeAuthType(p.authType) === "api_key" ? p.apiKeyEnv : p.authTokenEnv || p.identityEnv;
+  if (p.credentialEnv) return p.credentialEnv;
+  switch (normalizeAuthType(p.authType)) {
+    case "bearer":
+      return p.authTokenEnv || p.apiKeyEnv;
+    case "workload_identity":
+      return p.authTokenEnv || p.identityEnv || p.apiKeyEnv;
+    default:
+      return p.apiKeyEnv;
+  }
 }
 
 // toRef normalises a stored model id (a provider name, a bare model, or a ref) to
@@ -3587,6 +3595,7 @@ type ProviderAccessGroup = {
   builtIn: boolean;
   providers: ProviderView[];
   apiKeyEnv: string;
+  credentialEnv: string;
   authType: string;
   keySet: boolean;
   baseUrl: string;
@@ -3842,7 +3851,7 @@ function ProviderAccessCard({
         <span>{group.kind}</span>
         <span>{group.baseUrl}</span>
         <span>{authTypeLabel(group.authType, t)}</span>
-        <span>{group.apiKeyEnv || t("common.none")}</span>
+        <span>{group.credentialEnv || t("common.none")}</span>
       </div>
 
       <div className="provider-card-block">
@@ -4009,6 +4018,7 @@ function providerAccessGroups(providers: ProviderView[], t: ReturnType<typeof us
       existing.providers.push(p);
       existing.keySet = existing.keySet || p.keySet;
       existing.models = uniqueStrings([...existing.models, ...p.models]);
+      existing.credentialEnv = existing.credentialEnv || providerCredentialEnv(p);
       continue;
     }
     groups.set(id, {
@@ -4018,6 +4028,7 @@ function providerAccessGroups(providers: ProviderView[], t: ReturnType<typeof us
       builtIn,
       providers: [p],
       apiKeyEnv: p.apiKeyEnv,
+      credentialEnv: providerCredentialEnv(p),
       authType: p.authType,
       keySet: p.keySet,
       baseUrl: p.baseUrl,

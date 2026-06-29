@@ -27,17 +27,17 @@ func (e *ProviderEntry) FetchModels(ctx context.Context) ([]string, error) {
 	if e.BaseURL == "" {
 		return nil, fmt.Errorf("fetch models: provider %q has no base_url", e.Name)
 	}
-	key := e.AuthToken()
-	if key == "" {
+	if !e.Configured() {
 		return nil, fmt.Errorf("fetch models: provider %q has no auth token (set %s in .env)", e.Name, e.AuthEnvName())
 	}
+	auth := e.AuthConfig()
 	candidates, err := BuildModelFetchURLs(e.BaseURL, e.ModelsURL)
 	if err != nil {
 		return nil, err
 	}
 	var lastErr error
 	for _, u := range candidates {
-		models, err := openai.FetchModels(ctx, u, key)
+		models, err := openai.FetchModelsWithAuth(ctx, u, e.Name, auth)
 		if err == nil {
 			return models, nil
 		}

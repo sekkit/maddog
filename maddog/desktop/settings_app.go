@@ -1207,6 +1207,10 @@ func (a *App) FetchProviderModels(p ProviderView) ([]string, error) {
 		IdentityProviderID: p.IdentityProviderID,
 		SubjectTokenType:   p.SubjectTokenType,
 		TokenURL:           p.TokenURL,
+		FederationID:       p.FederationID,
+		Organization:       p.Organization,
+		ServiceAcctID:      p.ServiceAcctID,
+		WorkspaceID:        p.WorkspaceID,
 	}
 	ctx, cancel := context.WithTimeout(a.reqCtx(), 15*time.Second)
 	defer cancel()
