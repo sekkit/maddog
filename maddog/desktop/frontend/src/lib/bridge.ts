@@ -156,7 +156,7 @@ export interface AppBindings {
   BalanceForTab(tabID: string): Promise<BalanceInfo>;
   Jobs(): Promise<JobView[]>;
   JobsForTab(tabID: string): Promise<JobView[]>;
-  ToolResultForTab(tabID: string, toolID: string): Promise<{ args: string; output: string } | null>;
+  ToolResultForTab(tabID: string, toolID: string): Promise<{ args: string; output: string; rawUnavailable?: boolean } | null>;
   Meta(): Promise<Meta>;
   MetaForTab(tabID: string): Promise<Meta>;
   Commands(): Promise<CommandInfo[]>;
@@ -264,6 +264,7 @@ export interface AppBindings {
   MigrateDesktopPreferences(language: string, theme: string, style: string): Promise<void>;
   SetAgentParams(temperature: number, maxSteps: number, plannerMaxSteps: number, systemPrompt: string): Promise<void>;
   SetColdResumePrune(enabled: boolean): Promise<void>;
+  SetContextCompression(policy: string, thresholdBytes: number, maxBytes: number): Promise<void>;
   SetReasoningLanguage(lang: string): Promise<void>;
   SetTrayLocale(locale: "en" | "zh" | "zh-TW"): Promise<void>;
   // SetBypass is the legacy Wails name for YOLO/full-access tool auto-approval
@@ -2509,6 +2510,15 @@ function makeMockApp(): AppBindings {
     },
     async SetColdResumePrune(enabled: boolean) {
       settings.agent = { ...settings.agent, coldResumePrune: enabled };
+    },
+    async SetContextCompression(policy: string, thresholdBytes: number, maxBytes: number) {
+      const normalized = policy === "off" || policy === "aggressive" ? policy : "auto";
+      settings.agent = {
+        ...settings.agent,
+        contextCompressionPolicy: normalized,
+        contextCompressionThresholdBytes: Math.max(0, Math.trunc(thresholdBytes)),
+        contextCompressionMaxBytes: Math.max(0, Math.trunc(maxBytes)),
+      };
     },
     async SetReasoningLanguage(lang: string) {
       const normalized = lang === "zh" || lang === "en" ? lang : "auto";

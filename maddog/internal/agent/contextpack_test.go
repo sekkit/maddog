@@ -3,6 +3,8 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -91,6 +93,112 @@ func TestToolOutputCompressionFeedsModelCompressedAndKeepsRaw(t *testing.T) {
 	gotRaw, ok := a.RawToolResult("tool-1")
 	if !ok || gotRaw != rawOutput {
 		t.Fatalf("RawToolResult = (%q, %v), want full raw output", gotRaw, ok)
+	}
+}
+
+func TestToolOutputCompressionPolicyOffFeedsModelRawAndStoresNoRawRef(t *testing.T) {
+	rawOutput := strings.Repeat("INFO heartbeat ready\n", 90) + "panic: boom\n"
+
+	reg := tool.NewRegistry()
+	reg.Add(contextpackStaticTool{name: "bash", output: rawOutput, readOnly: true})
+	prov := testutil.NewMock("mock",
+		testutil.Turn{ToolCalls: []provider.ToolCall{{ID: "tool-off", Name: "bash", Arguments: `{"command":"go test ./..."}`}}},
+		testutil.Turn{Text: "done"},
+	)
+	a := New(prov, reg, NewSession(""), Options{
+		ToolOutputCompressor:  contextpack.DefaultCompressor{},
+		ToolOutputCompression: contextpack.Options{Policy: "off", ThresholdBytes: 1, MaxBytes: 80},
+	}, event.Discard)
+
+	if err := a.Run(context.Background(), "run tests"); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	reqs := prov.Requests()
+	var toolMsg provider.Message
+	for _, msg := range reqs[1].Messages {
+		if msg.Role == provider.RoleTool && msg.ToolCallID == "tool-off" {
+			toolMsg = msg
+			break
+		}
+	}
+	if toolMsg.Content != rawOutput {
+		t.Fatalf("policy=off tool message length = %d, want raw length %d", len(toolMsg.Content), len(rawOutput))
+	}
+	if _, ok := a.RawToolResult("tool-off"); ok {
+		t.Fatal("policy=off should not externalize or retain a raw result")
+	}
+}
+
+func TestRawToolResultPersistsInSessionScopedStoreAcrossResume(t *testing.T) {
+	rawOutput := strings.Repeat("INFO heartbeat ready\n", 90) +
+		"--- FAIL: TestAddsNumbers (0.01s)\n" +
+		"    math/add_test.go:42: expected 4, got 5\n" +
+		"exit status 1\n"
+	rawDir := filepath.Join(t.TempDir(), "raw")
+
+	reg := tool.NewRegistry()
+	reg.Add(contextpackStaticTool{name: "bash", output: rawOutput, readOnly: true})
+	prov := testutil.NewMock("mock",
+		testutil.Turn{ToolCalls: []provider.ToolCall{{ID: "tool-persist", Name: "bash", Arguments: `{"command":"go test ./..."}`}}},
+		testutil.Turn{Text: "done"},
+	)
+	first := New(prov, reg, NewSession(""), Options{
+		ToolOutputCompressor:  contextpack.DefaultCompressor{},
+		ToolOutputCompression: contextpack.Options{ThresholdBytes: 128, MaxBytes: 260},
+		RawToolResultDir:      rawDir,
+	}, event.Discard)
+	if err := first.Run(context.Background(), "run tests"); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	snapshot := first.Session().Snapshot()
+
+	resumed := New(prov, reg, NewSession(""), Options{RawToolResultDir: rawDir}, event.Discard)
+	resumed.SetSession(&Session{Messages: snapshot})
+	if got, ok := resumed.RawToolResult("tool-persist"); !ok || got != rawOutput {
+		t.Fatalf("resumed RawToolResult = (%q, %v), want full raw output", got, ok)
+	}
+}
+
+func TestRawToolResultStoreWriteFailureKeepsCompressedOnlyAndWarns(t *testing.T) {
+	rawOutput := strings.Repeat("INFO heartbeat ready\n", 90) + "panic: boom\n"
+	rawStorePath := filepath.Join(t.TempDir(), "raw-store-is-file")
+	if err := os.WriteFile(rawStorePath, []byte("not a dir"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	reg := tool.NewRegistry()
+	reg.Add(contextpackStaticTool{name: "bash", output: rawOutput, readOnly: true})
+	prov := testutil.NewMock("mock",
+		testutil.Turn{ToolCalls: []provider.ToolCall{{ID: "tool-store-fail", Name: "bash", Arguments: `{"command":"go test ./..."}`}}},
+		testutil.Turn{Text: "done"},
+	)
+	var warnings []string
+	sink := event.FuncSink(func(e event.Event) {
+		if e.Kind == event.Notice && e.Level == event.LevelWarn {
+			warnings = append(warnings, e.Text)
+		}
+	})
+	a := New(prov, reg, NewSession(""), Options{
+		ToolOutputCompressor:  contextpack.DefaultCompressor{},
+		ToolOutputCompression: contextpack.Options{ThresholdBytes: 128, MaxBytes: 120},
+		RawToolResultDir:      rawStorePath,
+	}, sink)
+	if err := a.Run(context.Background(), "run tests"); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if _, ok := a.RawToolResult("tool-store-fail"); ok {
+		t.Fatal("raw result should be unavailable after store write failure")
+	}
+	found := false
+	for _, warning := range warnings {
+		if strings.Contains(warning, "raw tool result store failed") && strings.Contains(warning, "tool-store-fail") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("warnings = %v, want raw store failure warning", warnings)
 	}
 }
 

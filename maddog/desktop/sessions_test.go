@@ -200,6 +200,34 @@ func TestDeleteSessionFileMovesOwnedSubagentsToTrash(t *testing.T) {
 	}
 }
 
+func TestDeleteSessionFileMovesRawToolResultsToTrash(t *testing.T) {
+	dir := t.TempDir()
+	sessionPath := filepath.Join(dir, "session.jsonl")
+	if err := os.WriteFile(sessionPath, []byte("data"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	branchID := agent.BranchID(sessionPath)
+	rawDir := filepath.Join(dir, "raw-tool-results", branchID)
+	if err := os.MkdirAll(rawDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(rawDir, "tool.txt"), []byte("raw output"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := deleteSessionFile(dir, sessionPath); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+
+	if _, err := os.Stat(rawDir); !os.IsNotExist(err) {
+		t.Fatalf("active raw result dir should be moved out of active dir, stat err = %v", err)
+	}
+	trashRawFile := filepath.Join(dir, sessionTrashDir, "session.jsonl", "raw-tool-results", branchID, "tool.txt")
+	if b, err := os.ReadFile(trashRawFile); err != nil || string(b) != "raw output" {
+		t.Fatalf("raw result should be moved to trash, read = %q err = %v", string(b), err)
+	}
+}
+
 func TestDeleteSessionFileNoTitle(t *testing.T) {
 	dir := t.TempDir()
 	sessionPath := filepath.Join(dir, "no-title.jsonl")
@@ -286,6 +314,37 @@ func TestRestoreTrashedSessionFileRestoresSubagents(t *testing.T) {
 	}
 }
 
+func TestRestoreTrashedSessionFileRestoresRawToolResults(t *testing.T) {
+	dir := t.TempDir()
+	sessionPath := filepath.Join(dir, "session.jsonl")
+	if err := os.WriteFile(sessionPath, []byte("data"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	branchID := agent.BranchID(sessionPath)
+	rawDir := filepath.Join(dir, "raw-tool-results", branchID)
+	if err := os.MkdirAll(rawDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(rawDir, "tool.txt"), []byte("raw output"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := deleteSessionFile(dir, sessionPath); err != nil {
+		t.Fatalf("trash: %v", err)
+	}
+
+	trashPath := filepath.Join(dir, sessionTrashDir, "session.jsonl", "session.jsonl")
+	if err := restoreTrashedSessionFile(dir, trashPath); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+
+	if b, err := os.ReadFile(filepath.Join(rawDir, "tool.txt")); err != nil || string(b) != "raw output" {
+		t.Fatalf("raw result should be restored, read = %q err = %v", string(b), err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, sessionTrashDir, "session.jsonl")); !os.IsNotExist(err) {
+		t.Fatalf("trash item should be removed after restore, stat err = %v", err)
+	}
+}
+
 func TestRestoreTrashedSessionFileRejectsSubagentConflict(t *testing.T) {
 	dir := t.TempDir()
 	sessionPath := filepath.Join(dir, "session.jsonl")
@@ -359,6 +418,37 @@ func TestPurgeTrashedSessionFileRemovesSubagents(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dir, sessionTrashDir, "session.jsonl", "subagents", ref+".jsonl")); !os.IsNotExist(err) {
 		t.Fatalf("trashed subagent should be removed by purge, stat err = %v", err)
+	}
+}
+
+func TestPurgeTrashedSessionFileRemovesRawToolResults(t *testing.T) {
+	dir := t.TempDir()
+	sessionPath := filepath.Join(dir, "session.jsonl")
+	if err := os.WriteFile(sessionPath, []byte("data"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	branchID := agent.BranchID(sessionPath)
+	rawDir := filepath.Join(dir, "raw-tool-results", branchID)
+	if err := os.MkdirAll(rawDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(rawDir, "tool.txt"), []byte("raw output"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := deleteSessionFile(dir, sessionPath); err != nil {
+		t.Fatalf("trash: %v", err)
+	}
+
+	trashPath := filepath.Join(dir, sessionTrashDir, "session.jsonl", "session.jsonl")
+	trashRawDir := filepath.Join(dir, sessionTrashDir, "session.jsonl", "raw-tool-results", branchID)
+	if err := purgeTrashedSessionFile(dir, trashPath); err != nil {
+		t.Fatalf("purge: %v", err)
+	}
+	if _, err := os.Stat(rawDir); !os.IsNotExist(err) {
+		t.Fatalf("active raw result dir should stay absent after purge, stat err = %v", err)
+	}
+	if _, err := os.Stat(trashRawDir); !os.IsNotExist(err) {
+		t.Fatalf("trashed raw result dir should be removed by purge, stat err = %v", err)
 	}
 }
 

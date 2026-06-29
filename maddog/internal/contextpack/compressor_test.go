@@ -38,6 +38,45 @@ func TestCompressLeavesShortOutputUnchanged(t *testing.T) {
 	}
 }
 
+func TestCompressionPolicyOffLeavesLargeOutputUncompressed(t *testing.T) {
+	raw := strings.Repeat("INFO heartbeat ready\n", 120) + "panic: boom\n"
+
+	got := Compress(ToolOutput{
+		ToolName: "bash",
+		Output:   raw,
+		ReadOnly: true,
+	}, Options{Policy: "off", ThresholdBytes: 1, MaxBytes: 80, RawRef: "raw://tool/off"})
+
+	if got.Content != raw {
+		t.Fatalf("policy=off content length = %d, want raw length %d", len(got.Content), len(raw))
+	}
+	if got.Compressed || got.RawRef != "" || got.SavedChars != 0 || got.SavedTokens != 0 {
+		t.Fatalf("policy=off should suppress compression metadata: %+v", got)
+	}
+}
+
+func TestCompressionPolicyAutoHonorsThresholdAndAggressiveBypassesIt(t *testing.T) {
+	raw := strings.Repeat("small but repetitive\n", 8)
+
+	auto := Compress(ToolOutput{
+		ToolName: "bash",
+		Output:   raw,
+		ReadOnly: true,
+	}, Options{Policy: "auto", ThresholdBytes: len(raw) + 1, MaxBytes: 48, RawRef: "raw://tool/auto"})
+	if auto.Content != raw || auto.Compressed {
+		t.Fatalf("policy=auto should leave output below threshold unchanged: %+v", auto)
+	}
+
+	aggressive := Compress(ToolOutput{
+		ToolName: "bash",
+		Output:   raw,
+		ReadOnly: true,
+	}, Options{Policy: "aggressive", ThresholdBytes: len(raw) + 1, MaxBytes: 48, RawRef: "raw://tool/aggressive"})
+	if !aggressive.Compressed {
+		t.Fatalf("policy=aggressive should compress compressible output below auto threshold: %+v", aggressive)
+	}
+}
+
 func TestCompressLongShellOutputPreservesFailuresAndDedupe(t *testing.T) {
 	var b strings.Builder
 	for i := 0; i < 80; i++ {

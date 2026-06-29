@@ -70,6 +70,7 @@ export type Item =
       output?: string;
       error?: string;
       truncated?: boolean;
+      rawUnavailable?: boolean;
       dataArchived?: boolean; // args/output trimmed for memory; full data available via backend
       durationMs?: number;
       summary?: string; // stable collapsed readout kept even after args/output archive

@@ -3,10 +3,14 @@ package agent
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -252,6 +256,7 @@ type Agent struct {
 	// retained only when compression actually saves context.
 	toolOutputCompressor  contextpack.ToolOutputCompressor
 	toolOutputCompression contextpack.Options
+	rawToolResultDir      string
 	rawToolResultsMu      sync.RWMutex
 	rawToolResults        map[string]string
 
@@ -408,21 +413,50 @@ func (a *Agent) RawToolResult(toolID string) (string, bool) {
 		return "", false
 	}
 	a.rawToolResultsMu.RLock()
-	defer a.rawToolResultsMu.RUnlock()
 	raw, ok := a.rawToolResults[toolID]
-	return raw, ok
-}
-
-func (a *Agent) storeRawToolResult(toolID, raw string) {
-	if a == nil || toolID == "" {
-		return
+	a.rawToolResultsMu.RUnlock()
+	if ok {
+		return raw, true
 	}
+	if a.rawToolResultDir == "" {
+		return "", false
+	}
+	b, err := os.ReadFile(a.rawToolResultPath(toolID))
+	if err != nil {
+		return "", false
+	}
+	raw = string(b)
 	a.rawToolResultsMu.Lock()
-	defer a.rawToolResultsMu.Unlock()
 	if a.rawToolResults == nil {
 		a.rawToolResults = make(map[string]string)
 	}
 	a.rawToolResults[toolID] = raw
+	a.rawToolResultsMu.Unlock()
+	return raw, true
+}
+
+func (a *Agent) storeRawToolResult(toolID, raw string) error {
+	if a == nil || toolID == "" {
+		return nil
+	}
+	a.rawToolResultsMu.Lock()
+	if a.rawToolResults == nil {
+		a.rawToolResults = make(map[string]string)
+	}
+	a.rawToolResults[toolID] = raw
+	a.rawToolResultsMu.Unlock()
+	if a.rawToolResultDir == "" {
+		return nil
+	}
+	if err := os.MkdirAll(a.rawToolResultDir, 0o700); err != nil {
+		a.clearRawToolResult(toolID)
+		return err
+	}
+	if err := os.WriteFile(a.rawToolResultPath(toolID), []byte(raw), 0o600); err != nil {
+		a.clearRawToolResult(toolID)
+		return err
+	}
+	return nil
 }
 
 func (a *Agent) clearRawToolResult(toolID string) {
@@ -441,6 +475,21 @@ func (a *Agent) clearRawToolResults() {
 	a.rawToolResultsMu.Lock()
 	defer a.rawToolResultsMu.Unlock()
 	a.rawToolResults = nil
+}
+
+func (a *Agent) SetRawToolResultDir(dir string) {
+	if a == nil {
+		return
+	}
+	a.rawToolResultsMu.Lock()
+	defer a.rawToolResultsMu.Unlock()
+	a.rawToolResultDir = strings.TrimSpace(dir)
+	a.rawToolResults = nil
+}
+
+func (a *Agent) rawToolResultPath(toolID string) string {
+	sum := sha256.Sum256([]byte(toolID))
+	return filepath.Join(a.rawToolResultDir, hex.EncodeToString(sum[:])+".txt")
 }
 
 // LastUsage returns the most recent per-turn token telemetry the provider
@@ -569,6 +618,7 @@ type Options struct {
 	// before they enter session history and the next model request.
 	ToolOutputCompressor  contextpack.ToolOutputCompressor
 	ToolOutputCompression contextpack.Options
+	RawToolResultDir      string
 
 	// ProjectChecks are host-observable structured checks extracted during boot.
 	ProjectChecks []instruction.VerifyCheck
@@ -653,6 +703,7 @@ func New(prov provider.Provider, tools *tool.Registry, session *Session, opts Op
 		jobs:                  opts.Jobs,
 		toolOutputCompressor:  toolOutputCompressor,
 		toolOutputCompression: opts.ToolOutputCompression,
+		rawToolResultDir:      strings.TrimSpace(opts.RawToolResultDir),
 		evidence:              evidence.NewLedger(),
 		projectChecks:         append([]instruction.VerifyCheck(nil), opts.ProjectChecks...),
 		contextWindow:         opts.ContextWindow,
@@ -1946,14 +1997,20 @@ func (a *Agent) compressToolOutput(call provider.ToolCall, t tool.Tool, raw stri
 	if compressed == "" || len(compressed) >= len(raw) {
 		return "", nil, false
 	}
-	a.storeRawToolResult(call.ID, raw)
+	if err := a.storeRawToolResult(call.ID, raw); err != nil {
+		a.sink.Emit(event.Event{Kind: event.Notice, Level: event.LevelWarn, Text: fmt.Sprintf(
+			"raw tool result store failed for %s (%s): %v; full output unavailable",
+			call.Name, call.ID, err)})
+		compressedOnly := formatCompressedToolOutput(result, "")
+		if compressedOnly == "" {
+			compressedOnly = result.Content
+		}
+		return compressedOnly, toolCompressionEvent(result, ""), true
+	}
 	return compressed, toolCompressionEvent(result, rawRef), true
 }
 
 func toolCompressionEvent(result contextpack.Result, rawRef string) *event.Compression {
-	if rawRef == "" {
-		rawRef = result.RawRef
-	}
 	return &event.Compression{
 		RawRef:           rawRef,
 		Strategy:         result.Strategy,

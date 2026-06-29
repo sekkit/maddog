@@ -47,6 +47,10 @@ function splitPreview(text: string, n: number): { preview: string; total: number
   return { preview: lines.slice(0, n).join("\n"), total, hasMore: true };
 }
 
+export function rawToolResultNoteKey(rawUnavailable?: boolean): "tool.rawUnavailable" | "" {
+  return rawUnavailable ? "tool.rawUnavailable" : "";
+}
+
 // ToolCard renders one tool call. `subcalls` are sub-agent calls nested under a
 // `task` card (their ParentID points at this call); they render inline, live, so
 // the sub-agent's work is visible as it happens.
@@ -71,9 +75,10 @@ export const ToolCard = memo(function ToolCard({ item, subcalls }: { item: ToolI
   const [showAll, setShowAll] = useState(false);
   // Lazy-load full tool data from the backend when the card is expanded and
   // the in-memory copy was archived for memory efficiency.
-  const [fullData, setFullData] = useState<{ args: string; output?: string } | null>(null);
+  const [fullData, setFullData] = useState<{ args: string; output?: string; rawUnavailable?: boolean } | null>(null);
   const effectiveArgs = fullData?.args ?? item.args;
   const effectiveOutput = fullData?.output ?? item.output;
+  const rawUnavailableNote = rawToolResultNoteKey(fullData?.rawUnavailable ?? item.rawUnavailable);
   const diffs = diffsFor(item.name, effectiveArgs);
   const subject = subjectOf(item.name, effectiveArgs);
   // Reset cached fullData when the item identity changes (e.g. after rewind).
@@ -198,6 +203,7 @@ export const ToolCard = memo(function ToolCard({ item, subcalls }: { item: ToolI
               </button>
             )}
             {item.truncated && <div className="tool__note">{t("tool.truncated")}</div>}
+            {rawUnavailableNote && <div className="tool__note">{t(rawUnavailableNote)}</div>}
           </>
         )}
 
@@ -208,6 +214,7 @@ export const ToolCard = memo(function ToolCard({ item, subcalls }: { item: ToolI
               <>
                 <CodeViewer value={effectiveOutput} maxHeight={280} />
                 {item.truncated && <div className="tool__note">{t("tool.truncated")}</div>}
+                {rawUnavailableNote && <div className="tool__note">{t(rawUnavailableNote)}</div>}
               </>
             )}
           </>

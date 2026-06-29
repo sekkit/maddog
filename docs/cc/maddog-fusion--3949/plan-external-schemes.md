@@ -200,7 +200,7 @@ flowchart TB
 
 **执行记录（2026-06-29）：** 已通过 test-first 让 Settings/model probe 复用 runtime `AuthConfig`：OpenAI-compatible/API key、official bearer、workload identity exchange、icodeeasy/custom base URL 均走同一 fetch/probe auth 路径。401/403 现在返回 typed `provider.AuthError`，WIF token exchange auth failure 也保留 provider/env/status 元数据且不泄露 token；desktop `FetchProviderModels` 传递完整 WIF 字段；Settings provider card 显示当前 auth mode 的 credential env（含 bearer/WIF fallback）。验证命令：`go test ./internal/provider/openai ./internal/config -count=1`、`go test . -count=1`（`maddog/desktop`）、frontend `npm run test:all`、`npm run build`。
 
-- [ ] **单元 D3：Provider usage、budget 与 status event**
+- [x] **单元 D3：Provider usage、budget 与 status event**
 
 **目标：** 把 frontier/small/default provider 的 usage、预算、rate/status、balance 统一汇总到 runtime event 和 desktop status。
 
@@ -330,7 +330,7 @@ flowchart TB
 
 **执行记录（2026-06-30）：** 已通过 test-first 新增 shell/test/log 专用 deterministic 压缩策略：识别 `go test`、`npm test`、`npm run build`、`rg`、`git status`、`git diff` 与重复 server log，保留失败测试名、file:line、expected/actual、panic/error、代表性匹配、重复次数和末尾行；tight budget 下优先保留真实信号而不是标题。Desktop 侧记录 latest-turn compression raw/compressed/saved char/token metrics，ContextPanel 显示 saved 与 compressed/raw breakdown，ToolCard 显示压缩 badge 且保留 full raw lookup。验证命令：`go test ./internal/contextpack ./internal/agent ./internal/control ./internal/serve -count=1`、`go test . -count=1`（`maddog/desktop`）、frontend `npm run test:all`、`npm run check:css`、`npm run build`、`git diff --check`。Spec 与 code-quality subagent 复审均通过。
 
-- [ ] **单元 E3：Context policy、raw-data 外置与可关闭开关**
+- [x] **单元 E3：Context policy、raw-data 外置与可关闭开关**
 
 **目标：** 让用户可在 CLI/desktop 中控制压缩策略，并保证 raw data 外置不会破坏 replay、export、history。
 
@@ -366,6 +366,8 @@ flowchart TB
 - Integration：session export 包含 compression metadata，不包含无意的大文件 blob。
 
 **验证：** 用户能关闭或调整压缩；长期会话、resume、export 都能保持一致。
+
+**执行记录（2026-06-30）：** 已通过 test-first 落地 context compression policy（`off`/`auto`/`aggressive`）、配置默认值/编辑/渲染、boot 装配、CLI run metrics 聚合、desktop Settings 保存与展示，以及 session-scoped raw tool result 外置存储。Raw result 缺失时 `ToolResult` 返回 compressed fallback 并标记 `rawUnavailable`，ToolCard 展示本地化提示；raw store 写入失败时降级为 compressed-only 并发 warning；`Resume`、新会话、清空会话、初始 session path 均重新绑定 raw store；desktop session trash/restore/purge 会迁移或清理 `raw-tool-results/<branchID>`。验证命令：`go test ./internal/contextpack ./internal/config ./internal/agent ./internal/control ./internal/cli ./internal/boot -count=1`、`go test . -count=1`（`maddog/desktop`）、frontend `npm run test:all`、`npm run build`、`git diff --check`。Spec 与 code-quality subagent 复审均通过。
 
 - [ ] **单元 F1：Code intelligence backend registry**
 

@@ -467,6 +467,7 @@ function toRef(model: string, s: SettingsView): string {
 }
 
 const PROXY_MODES = ["auto", "custom", "off"] as const;
+const CONTEXT_COMPRESSION_POLICIES = ["off", "auto", "aggressive"] as const;
 
 // EFFORT_PRESETS is the canonical union of /effort levels the kernel
 // recognises. The settings UI exposes these as toggleable checkboxes; users
@@ -481,8 +482,12 @@ const AUTO_PLAN_MODES = ["off", "on"] as const;
 const BOT_TOOL_APPROVAL_MODES = ["", "ask", "auto", "yolo"] as const;
 
 type ProxyMode = (typeof PROXY_MODES)[number];
+type ContextCompressionPolicy = (typeof CONTEXT_COMPRESSION_POLICIES)[number];
 type AutoPlanMode = (typeof AUTO_PLAN_MODES)[number];
 type BotConnectionToolApprovalMode = (typeof BOT_TOOL_APPROVAL_MODES)[number];
+type ContextCompressionBridge = {
+  SetContextCompression(policy: string, thresholdBytes: number, maxBytes: number): Promise<void>;
+};
 
 function normalizeProxyMode(mode: string): ProxyMode {
   switch (mode) {
@@ -506,6 +511,30 @@ function normalizeAutoPlan(mode: string | undefined): AutoPlanMode {
 function sanitizeInteger(value: number, min: number): number {
   if (!Number.isFinite(value)) return min;
   return Math.max(min, Math.floor(value));
+}
+
+function normalizeContextCompressionPolicy(policy: unknown): ContextCompressionPolicy {
+  return CONTEXT_COMPRESSION_POLICIES.includes(policy as ContextCompressionPolicy) ? policy as ContextCompressionPolicy : "auto";
+}
+
+function defaultAgentView(): SettingsView["agent"] {
+  return {
+    temperature: 0,
+    maxSteps: 0,
+    plannerMaxSteps: 12,
+    systemPrompt: "",
+    coldResumePrune: true,
+    contextCompressionPolicy: "auto",
+    contextCompressionThresholdBytes: 0,
+    contextCompressionMaxBytes: 0,
+    reasoningLanguage: "auto",
+  };
+}
+
+function setContextCompressionBridge(policy: string, thresholdBytes: number, maxBytes: number): Promise<void> {
+  const contextApp = app as typeof app & Partial<ContextCompressionBridge>;
+  if (!contextApp.SetContextCompression) return Promise.resolve();
+  return contextApp.SetContextCompression(policy, thresholdBytes, maxBytes);
 }
 
 function formatBudgetLabel(value: number | undefined, t: ReturnType<typeof useT>): string {
@@ -684,9 +713,12 @@ function normalizeSettingsView(view: SettingsView | null | undefined): SettingsV
     noProxy: "",
     proxy: { type: "socks5", server: "", port: 0, username: "", password: "" },
   };
-  const agent = view.agent ?? { temperature: 0, maxSteps: 0, plannerMaxSteps: 12, systemPrompt: "", coldResumePrune: true, reasoningLanguage: "auto" };
+  const agent = { ...defaultAgentView(), ...(view.agent ?? {}) };
   agent.plannerMaxSteps = Number.isFinite(agent.plannerMaxSteps) ? Math.max(0, Math.trunc(agent.plannerMaxSteps)) : 12;
   agent.maxSteps = Number.isFinite(agent.maxSteps) ? Math.max(0, Math.trunc(agent.maxSteps)) : 0;
+  agent.contextCompressionPolicy = normalizeContextCompressionPolicy(agent.contextCompressionPolicy);
+  agent.contextCompressionThresholdBytes = sanitizeInteger(agent.contextCompressionThresholdBytes ?? 0, 0);
+  agent.contextCompressionMaxBytes = sanitizeInteger(agent.contextCompressionMaxBytes ?? 0, 0);
   agent.reasoningLanguage = normalizeReasoningLanguage(agent.reasoningLanguage);
   return {
     ...view,
@@ -2874,10 +2906,16 @@ function ModelsSection({ s, busy, apply, backgroundApply }: ModelsSectionProps) 
   const frontierLabel = frontierRef || t("settings.frontierModelNone");
   const upgradeLabel = s.upgradeEnabled && frontierRef ? t("settings.frontierEnabled") : t("settings.frontierDisabled");
   const keyStatusLabel = defaultProviderView?.keySet ? t("settings.keySet") : t("settings.noKey");
-  const agent = s.agent ?? { temperature: 0, maxSteps: 0, plannerMaxSteps: 12, systemPrompt: "", coldResumePrune: true, reasoningLanguage: "auto" };
+  const agent = s.agent ?? defaultAgentView();
   const setAgentSteps = (maxSteps: number, plannerMaxSteps: number) => (
     app.SetAgentParams(agent.temperature, maxSteps, plannerMaxSteps, agent.systemPrompt)
   );
+  const setContextCompression = (next: { policy?: ContextCompressionPolicy; thresholdBytes?: number; maxBytes?: number }) => {
+    const policy = normalizeContextCompressionPolicy(next.policy ?? agent.contextCompressionPolicy);
+    const thresholdBytes = sanitizeInteger(next.thresholdBytes ?? agent.contextCompressionThresholdBytes ?? 0, 0);
+    const maxBytes = sanitizeInteger(next.maxBytes ?? agent.contextCompressionMaxBytes ?? 0, 0);
+    return setContextCompressionBridge(policy, thresholdBytes, maxBytes);
+  };
   const setFrontierRoute = (next: Partial<Pick<SettingsView, "frontierModel" | "upgradeEnabled" | "upgradeThreshold" | "frontierBudget">>) => {
     const model = next.frontierModel !== undefined ? next.frontierModel : s.frontierModel;
     const enabled = next.upgradeEnabled !== undefined ? next.upgradeEnabled : s.upgradeEnabled;
@@ -3037,6 +3075,56 @@ function ModelsSection({ s, busy, apply, backgroundApply }: ModelsSectionProps) 
                 </button>
               ))}
             </div>
+          </SettingsField>
+          <SettingsField label={t("settings.contextCompressionPolicy")} hint={t("settings.contextCompressionPolicyHint")}>
+            <div className="set-seg">
+              {CONTEXT_COMPRESSION_POLICIES.map((policy) => (
+                <button
+                  key={policy}
+                  className={`set-seg__btn${agent.contextCompressionPolicy === policy ? " set-seg__btn--on" : ""}`}
+                  disabled={busy}
+                  onClick={() => void apply(() => setContextCompression({ policy }))}
+                >
+                  {t(`settings.contextCompressionPolicy.${policy}`)}
+                </button>
+              ))}
+            </div>
+          </SettingsField>
+          <SettingsField label={t("settings.contextCompressionThresholdBytes")} hint={t("settings.contextCompressionThresholdBytesHint")}>
+            <input
+              key={`context-compression-threshold-${agent.contextCompressionThresholdBytes ?? 0}`}
+              className="mem-input set-numeric"
+              type="number"
+              min={0}
+              step={1024}
+              defaultValue={String(agent.contextCompressionThresholdBytes ?? 0)}
+              disabled={busy}
+              onBlur={(e) => {
+                const next = sanitizeInteger(Number(e.currentTarget.value), 0);
+                if (next !== sanitizeInteger(agent.contextCompressionThresholdBytes ?? 0, 0)) void apply(() => setContextCompression({ thresholdBytes: next }));
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") e.currentTarget.blur();
+              }}
+            />
+          </SettingsField>
+          <SettingsField label={t("settings.contextCompressionMaxBytes")} hint={t("settings.contextCompressionMaxBytesHint")}>
+            <input
+              key={`context-compression-max-${agent.contextCompressionMaxBytes ?? 0}`}
+              className="mem-input set-numeric"
+              type="number"
+              min={0}
+              step={1024}
+              defaultValue={String(agent.contextCompressionMaxBytes ?? 0)}
+              disabled={busy}
+              onBlur={(e) => {
+                const next = sanitizeInteger(Number(e.currentTarget.value), 0);
+                if (next !== sanitizeInteger(agent.contextCompressionMaxBytes ?? 0, 0)) void apply(() => setContextCompression({ maxBytes: next }));
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") e.currentTarget.blur();
+              }}
+            />
           </SettingsField>
           <SettingsField label={t("settings.reasoningLanguage")} hint={t("settings.reasoningLanguageHint")}>
             <div className="set-seg">

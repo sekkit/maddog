@@ -341,6 +341,30 @@ func TestSetFrontierRoute(t *testing.T) {
 	}
 }
 
+func TestSetContextCompressionRoundTripsPolicyAndThreshold(t *testing.T) {
+	c := Default()
+
+	if err := c.SetContextCompression("aggressive", 512, 256); err != nil {
+		t.Fatalf("SetContextCompression: %v", err)
+	}
+	if got := c.Agent.ContextCompression.Policy; got != "aggressive" {
+		t.Fatalf("context compression policy = %q, want aggressive", got)
+	}
+	if c.Agent.ContextCompression.ThresholdBytes != 512 || c.Agent.ContextCompression.MaxBytes != 256 {
+		t.Fatalf("context compression limits = threshold:%d max:%d", c.Agent.ContextCompression.ThresholdBytes, c.Agent.ContextCompression.MaxBytes)
+	}
+
+	if err := c.SetContextCompression("disabled", 1, 1); err == nil {
+		t.Fatal("expected error for unsupported context compression policy")
+	}
+	if err := c.SetContextCompression("auto", -1, 1); err == nil {
+		t.Fatal("expected error for negative threshold")
+	}
+	if err := c.SetContextCompression("auto", 1, -1); err == nil {
+		t.Fatal("expected error for negative max bytes")
+	}
+}
+
 func TestSetAutoPlan(t *testing.T) {
 	c := Default()
 	for _, mode := range []string{"on", "off"} {

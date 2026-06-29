@@ -74,6 +74,7 @@ export interface WireTool {
   err?: string;
   readOnly: boolean;
   truncated?: boolean;
+  rawUnavailable?: boolean;
   durationMs?: number;
   partial?: boolean; // an early dispatch (name only) — a full one with args follows
   parentId?: string; // set on a sub-agent's calls — the parent `task` call's id
@@ -754,12 +755,17 @@ export interface NetworkView {
   proxy: NetworkProxyView;
 }
 
+export type ContextCompressionPolicy = "off" | "auto" | "aggressive";
+
 export interface AgentView {
   temperature: number;
   maxSteps: number;
   plannerMaxSteps: number;
   systemPrompt: string;
   coldResumePrune: boolean;
+  contextCompressionPolicy?: ContextCompressionPolicy;
+  contextCompressionThresholdBytes?: number;
+  contextCompressionMaxBytes?: number;
   reasoningLanguage: string; // "auto" | "zh" | "en"
 }
 

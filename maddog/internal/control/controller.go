@@ -332,6 +332,9 @@ func New(opts Options) *Controller {
 	// Checkpoints: bind a store to the session and route writer pre-edits into it.
 	c.rebindCheckpoints(opts.SessionPath)
 	c.setActiveJobSession(opts.SessionPath)
+	if opts.SessionPath != "" {
+		c.bindRawToolResultDir(opts.SessionPath)
+	}
 	if c.executor != nil {
 		c.executor.SetPreEditHook(func(ch diff.Change) {
 			if c.cp != nil {
@@ -1495,6 +1498,7 @@ func (c *Controller) NewSession() error {
 		c.mu.Unlock()
 	}
 	c.setActiveJobSession(c.SessionPath())
+	c.bindRawToolResultDir(c.SessionPath())
 	c.executor.SetSession(agent.NewSession(c.systemPrompt))
 	c.rebindCheckpoints(c.SessionPath())
 	c.mu.Lock()
@@ -1532,6 +1536,7 @@ func (c *Controller) ClearSession() error {
 		c.mu.Unlock()
 	}
 	c.setActiveJobSession(c.SessionPath())
+	c.bindRawToolResultDir(c.SessionPath())
 	c.executor.SetSession(agent.NewSession(c.systemPrompt))
 	c.rebindCheckpoints(c.SessionPath())
 	c.mu.Lock()
@@ -1563,6 +1568,11 @@ func removeSessionArtifacts(path string) error {
 		}
 	}
 	if dir := ckptDir(path); dir != "" {
+		if err := os.RemoveAll(dir); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+	}
+	if dir := rawToolResultDir(path); dir != "" {
 		if err := os.RemoveAll(dir); err != nil && !os.IsNotExist(err) {
 			return err
 		}
@@ -1937,6 +1947,7 @@ func (c *Controller) Resume(s *agent.Session, path string) {
 	c.sessionPath = path
 	c.mu.Unlock()
 	c.setActiveJobSession(path)
+	c.bindRawToolResultDir(path)
 	c.rebindCheckpoints(path)
 	c.maybeColdResumePrune(path)
 }
@@ -2068,7 +2079,23 @@ func (c *Controller) SetSessionPath(p string) {
 	c.sessionPath = p
 	c.mu.Unlock()
 	c.setActiveJobSession(p)
+	c.bindRawToolResultDir(p)
 	c.rebindCheckpoints(p)
+}
+
+func (c *Controller) bindRawToolResultDir(sessionPath string) {
+	if c.executor == nil {
+		return
+	}
+	c.executor.SetRawToolResultDir(rawToolResultDir(sessionPath))
+}
+
+func rawToolResultDir(sessionPath string) string {
+	id := agent.BranchID(sessionPath)
+	if id == "" || sessionPath == "" {
+		return ""
+	}
+	return filepath.Join(filepath.Dir(sessionPath), "raw-tool-results", id)
 }
 
 // SessionDestroyHandle separates waiting for cancelled jobs from ending the
@@ -2186,8 +2213,9 @@ func (c *Controller) SessionCache() (hit, miss int) {
 // ToolResultData holds the full arguments and output for one tool call, loaded
 // on demand when a frontend expands a collapsed tool card.
 type ToolResultData struct {
-	Args   string `json:"args"`
-	Output string `json:"output"`
+	Args           string `json:"args"`
+	Output         string `json:"output"`
+	RawUnavailable bool   `json:"rawUnavailable"`
 }
 
 // ToolResult looks up a tool call by its ID in the session history and returns
@@ -2211,6 +2239,8 @@ func (c *Controller) ToolResult(toolID string) *ToolResultData {
 		}
 		if raw, ok := c.executor.RawToolResult(toolID); ok {
 			out.Output = raw
+		} else if compressedToolOutputReferencesRaw(msgs[i].Content) {
+			out.RawUnavailable = true
 		}
 		// Walk back to find the assistant turn that issued this call.
 		for j := i; j >= 0; j-- {
@@ -2227,6 +2257,11 @@ func (c *Controller) ToolResult(toolID string) *ToolResultData {
 		return out
 	}
 	return nil
+}
+
+func compressedToolOutputReferencesRaw(content string) bool {
+	return strings.Contains(content, "[compressed tool output") &&
+		strings.Contains(content, "raw available at raw://tool/")
 }
 
 // Balance queries the active provider's wallet balance, or (nil, nil) when the

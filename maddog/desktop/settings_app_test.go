@@ -65,6 +65,43 @@ func TestProviderViewFromEntry_FiltersNonChatModels(t *testing.T) {
 	}
 }
 
+func TestSettingsSurfacesContextCompressionDefaults(t *testing.T) {
+	got := NewApp().Settings()
+
+	if got.Agent.ContextCompressionPolicy != "auto" {
+		t.Fatalf("context compression policy = %q, want auto", got.Agent.ContextCompressionPolicy)
+	}
+	if got.Agent.ContextCompressionThresholdBytes <= 0 {
+		t.Fatalf("context compression threshold = %d, want positive default", got.Agent.ContextCompressionThresholdBytes)
+	}
+	if got.Agent.ContextCompressionMaxBytes <= 0 {
+		t.Fatalf("context compression max bytes = %d, want positive default", got.Agent.ContextCompressionMaxBytes)
+	}
+}
+
+func TestSetContextCompressionSavesUserConfig(t *testing.T) {
+	cfgDir := t.TempDir()
+	t.Setenv("MADDOG_CONFIG_DIR", cfgDir)
+
+	app := NewApp()
+	if err := app.SetContextCompression("off", 2048, 1024); err != nil {
+		t.Fatalf("SetContextCompression: %v", err)
+	}
+
+	got := app.Settings()
+	if got.Agent.ContextCompressionPolicy != "off" ||
+		got.Agent.ContextCompressionThresholdBytes != 2048 ||
+		got.Agent.ContextCompressionMaxBytes != 1024 {
+		t.Fatalf("settings context compression = policy:%q threshold:%d max:%d", got.Agent.ContextCompressionPolicy, got.Agent.ContextCompressionThresholdBytes, got.Agent.ContextCompressionMaxBytes)
+	}
+	cfg := config.LoadForEdit(config.UserConfigPath())
+	if cfg.Agent.ContextCompression.Policy != "off" ||
+		cfg.Agent.ContextCompression.ThresholdBytes != 2048 ||
+		cfg.Agent.ContextCompression.MaxBytes != 1024 {
+		t.Fatalf("saved config context compression = %+v", cfg.Agent.ContextCompression)
+	}
+}
+
 func TestFetchProviderModelsFiltersNonChatModels(t *testing.T) {
 	t.Setenv("TEST_PROVIDER_KEY", "test-key")
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

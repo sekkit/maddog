@@ -209,3 +209,55 @@ plan: docs/cc/maddog-fusion--3949/plan.md
 - **Result**: Added deterministic shell/test/log compression strategies for Go test, npm test, npm build, ripgrep, git status, git diff, and repeated server logs. Summaries preserve failure names, file:line paths, expected/actual/error details, representative matches, repeated-line counts, and tail lines under tight context budgets. Desktop tab telemetry now tracks latest-turn compression raw/compressed/saved char and token metrics, restores compression-only snapshots, and exposes the breakdown in ContextPanel; ToolCard keeps a compression badge while archived full output remains loadable through raw result lookup. Verified by `go test ./internal/contextpack ./internal/agent ./internal/control ./internal/serve -count=1`, `go test . -count=1` in `Maddog/desktop`, frontend `npm run test:all`, `npm run check:css`, `npm run build`, and `git diff --check`.
 - **Review**: Spec reviewer initially required npm test, git diff/status, tail preservation, per-turn breakdown, and full-output lookup coverage; all were fixed with failing-then-passing tests and spec re-review passed. Code-quality reviewer found tight-budget header priority, greedy rg parsing, and compression-only telemetry restore gaps; all were fixed with tests and final quality re-review passed.
 - **Commit**: pending
+
+## Post-v1 Unit E3: Context policy, raw-data externalization, and disable switch
+- **Status**: completed
+- **Execution note**: test-first
+- **Files**: `Maddog/internal/contextpack/compressor.go`, `Maddog/internal/contextpack/compressor_test.go`, `Maddog/internal/config/config.go`, `Maddog/internal/config/edit.go`, `Maddog/internal/config/render.go`, `Maddog/internal/config/default_test.go`, `Maddog/internal/config/edit_test.go`, `Maddog/internal/boot/boot.go`, `Maddog/internal/agent/agent.go`, `Maddog/internal/agent/contextpack_test.go`, `Maddog/internal/control/controller.go`, `Maddog/internal/control/tool_result_test.go`, `Maddog/internal/cli/run_metrics.go`, `Maddog/internal/cli/run_metrics_test.go`, `Maddog/desktop/sessions.go`, `Maddog/desktop/sessions_test.go`, `Maddog/desktop/settings_app.go`, `Maddog/desktop/settings_app_test.go`, `Maddog/desktop/frontend/package.json`, `Maddog/desktop/frontend/src/components/SettingsPanel.tsx`, `Maddog/desktop/frontend/src/components/ToolCard.tsx`, `Maddog/desktop/frontend/src/lib/bridge.ts`, `Maddog/desktop/frontend/src/lib/types.ts`, `Maddog/desktop/frontend/src/lib/useController.ts`, `Maddog/desktop/frontend/src/locales/en.ts`, `Maddog/desktop/frontend/src/locales/zh.ts`, `Maddog/desktop/frontend/src/__tests__/context-compression-settings.test.ts`, `Maddog/desktop/frontend/src/__tests__/tool-raw-unavailable.test.ts`
+- **Depends on**: Post-v1 Unit E1, Post-v1 Unit E2
+- **Started-at-commit**: b7d7b763
+- **Result**: Added context compression policy controls (`off`, `auto`, `aggressive`) across config defaults, editing, TOML rendering, boot options, desktop Settings, and frontend bridge/types/locales. Raw tool results now persist to a session-scoped `raw-tool-results/<branchID>` store, rebind across initial session paths, `SetSessionPath`, `Resume`, new/clear session flows, and move through desktop trash/restore/purge lifecycle. Missing raw sidecars return compressed fallback plus `rawUnavailable`, which ToolCard renders as a localized note; raw store write failures clear in-memory raw, warn, and keep compressed-only output. CLI run metrics now aggregate compression counts and char/token savings. Verified by `go test ./internal/contextpack ./internal/config ./internal/agent ./internal/control ./internal/cli ./internal/boot -count=1`, `go test . -count=1` in `Maddog/desktop`, frontend `npm run test:all`, frontend `npm run build`, and `git diff --check`.
+- **Review**: Spec reviewer initially required `Controller.Resume` raw-store rebinding, desktop raw sidecar trash/restore/purge lifecycle, and ToolCard raw-unavailable display; all were fixed with failing-then-passing tests and spec re-review passed. Code-quality reviewer found the same raw-unavailable frontend gap; fixed with SSR behavior coverage and quality re-review passed.
+- **Commit**: 76be14cc
+
+## Post-v1 Unit F1: Code intelligence backend registry
+- **Status**: pending
+- **Execution note**: test-first
+- **Files**: `Maddog/internal/codegraph/backend.go`, `Maddog/internal/codegraph/backend_test.go`, `Maddog/internal/codegraph/codegraph.go`, `Maddog/internal/config/config.go`, `Maddog/internal/control/codegraph_mcp_test.go`, `Maddog/desktop/app.go`, `Maddog/desktop/frontend/src/lib/types.ts`, `Maddog/desktop/capabilities_app_test.go`
+- **Depends on**: none
+
+## Post-v1 Unit F2: Code intelligence benchmark harness
+- **Status**: pending
+- **Execution note**: test-first
+- **Files**: `Maddog/internal/codegraph/bench.go`, `Maddog/internal/codegraph/bench_test.go`, `Maddog/cmd/codeintelbench/main.go`, `Maddog/internal/doctor/report.go`, `Maddog/internal/doctor/report_test.go`
+- **Depends on**: Post-v1 Unit F1
+
+## Post-v1 Unit F3: MCP code backend GUI management
+- **Status**: pending
+- **Execution note**: test-first
+- **Files**: `Maddog/desktop/app.go`, `Maddog/desktop/frontend/src/components/CapabilitiesPanel.tsx`, `Maddog/desktop/frontend/src/lib/bridge.ts`, `Maddog/desktop/frontend/src/lib/types.ts`, `Maddog/desktop/frontend/src/locales/en.ts`, `Maddog/desktop/frontend/src/locales/zh.ts`, `Maddog/desktop/capabilities_app_test.go`, `Maddog/desktop/frontend/src/__tests__/capabilities-panel.test.ts`
+- **Depends on**: Post-v1 Unit F1, Post-v1 Unit F2
+
+## Post-v1 Unit G1: Replay eval bundle v2 and SkillOpt-style candidate lifecycle
+- **Status**: pending
+- **Execution note**: test-first
+- **Files**: `Maddog/internal/skilleval/bundle.go`, `Maddog/internal/skilleval/bundle_test.go`, `Maddog/internal/skilleval/candidate.go`, `Maddog/internal/skilleval/candidate_test.go`, `Maddog/internal/control/controller.go`, `Maddog/internal/skill/skill.go`, `Maddog/internal/event/event.go`, `Maddog/internal/control/input_test.go`
+- **Depends on**: Post-v1 Unit E1
+
+## Post-v1 Unit G2: Replay runner, guardrail, and promotion scoring
+- **Status**: pending
+- **Execution note**: test-first
+- **Files**: `Maddog/internal/skilleval/runner.go`, `Maddog/internal/skilleval/runner_test.go`, `Maddog/internal/skilleval/scorer.go`, `Maddog/internal/skilleval/scorer_test.go`, `Maddog/internal/skilleval/guardrail.go`, `Maddog/internal/skilleval/guardrail_test.go`, `Maddog/internal/cli/skilleval.go`, `Maddog/internal/cli/skilleval_test.go`
+- **Depends on**: Post-v1 Unit G1
+
+## Post-v1 Unit G3: Skill management GUI and promotion audit
+- **Status**: pending
+- **Execution note**: test-first
+- **Files**: `Maddog/desktop/app.go`, `Maddog/desktop/frontend/src/components/CapabilitiesPanel.tsx`, `Maddog/desktop/frontend/src/components/MemoryPanel.tsx`, `Maddog/desktop/frontend/src/lib/bridge.ts`, `Maddog/desktop/frontend/src/lib/types.ts`, `Maddog/desktop/frontend/src/locales/en.ts`, `Maddog/desktop/frontend/src/locales/zh.ts`, `Maddog/desktop/frontend/src/styles.css`, `Maddog/desktop/skills_app_test.go`, `Maddog/desktop/frontend/src/__tests__/skills-panel.test.ts`, `Maddog/desktop/frontend/src/__tests__/memory-suggestions.test.ts`
+- **Depends on**: Post-v1 Unit G1, Post-v1 Unit G2
+
+## Post-v1 Unit G4: Rule/LLM hybrid code review skill
+- **Status**: pending
+- **Execution note**: test-first
+- **Files**: `Maddog/internal/review/rules.go`, `Maddog/internal/review/rules_test.go`, `Maddog/internal/review/report.go`, `Maddog/internal/review/report_test.go`, `Maddog/internal/skill/builtins.go`, `Maddog/internal/skill/skill_test.go`
+- **Depends on**: Post-v1 Unit F1, Post-v1 Unit G1

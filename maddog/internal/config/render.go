@@ -228,6 +228,10 @@ func RenderTOMLForScope(c *Config, scope RenderScope) string {
 	} else {
 		b.WriteString("# output_style = \"explanatory\"   # explanatory | learning | concise | custom; empty = default\n")
 	}
+	fmt.Fprintf(&b, "\n[agent.context_compression]\n")
+	fmt.Fprintf(&b, "policy = %q   # off|auto|aggressive\n", c.Agent.ContextCompression.EffectivePolicy())
+	fmt.Fprintf(&b, "threshold_bytes = %d   # auto compresses tool output above this size; 0 = built-in default\n", c.Agent.ContextCompression.EffectiveThresholdBytes())
+	fmt.Fprintf(&b, "max_bytes = %d   # target visible bytes after compression; 0 = built-in default\n", c.Agent.ContextCompression.EffectiveMaxBytes())
 	b.WriteString("\n")
 
 	if shouldRenderProviders(c, defaults, scope) {

@@ -144,6 +144,9 @@ func trashSessionArtifactsBeforeMove(dir, sessionPath, key string, beforeMove fu
 	if err := movePathIfExists(strings.TrimSuffix(sessionPath, ".jsonl")+".ckpt", filepath.Join(itemDir, ckptName)); err != nil {
 		return err
 	}
+	if err := trashRawToolResultArtifacts(dir, sessionPath, itemDir); err != nil {
+		return err
+	}
 	if err := trashSubagentArtifacts(dir, sessionPath, itemDir); err != nil {
 		return err
 	}
@@ -217,6 +220,9 @@ func restoreTrashedSessionFile(dir, path string) error {
 	if err := checkRestoreSubagentConflicts(dir, itemDir); err != nil {
 		return err
 	}
+	if err := checkRestoreRawToolResultConflicts(dir, itemDir); err != nil {
+		return err
+	}
 	if err := movePathIfExists(trashPath, target); err != nil {
 		return err
 	}
@@ -228,6 +234,9 @@ func restoreTrashedSessionFile(dir, path string) error {
 		return err
 	}
 	if err := restoreSubagentArtifacts(dir, itemDir); err != nil {
+		return err
+	}
+	if err := restoreRawToolResultArtifacts(dir, itemDir); err != nil {
 		return err
 	}
 	return os.RemoveAll(itemDir)
@@ -323,6 +332,65 @@ func restoreSubagentArtifacts(dir, itemDir string) error {
 			continue
 		}
 		if err := movePathIfExists(filepath.Join(trashSubagentDir, entry.Name()), filepath.Join(dir, "subagents", entry.Name())); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func sessionRawToolResultDir(dir, sessionPath string) string {
+	branchID := agent.BranchID(sessionPath)
+	if branchID == "" {
+		return ""
+	}
+	return filepath.Join(dir, "raw-tool-results", branchID)
+}
+
+func trashRawToolResultArtifacts(dir, sessionPath, itemDir string) error {
+	src := sessionRawToolResultDir(dir, sessionPath)
+	if src == "" {
+		return nil
+	}
+	return movePathIfExists(src, filepath.Join(itemDir, "raw-tool-results", filepath.Base(src)))
+}
+
+func checkRestoreRawToolResultConflicts(dir, itemDir string) error {
+	trashRawRoot := filepath.Join(itemDir, "raw-tool-results")
+	entries, err := os.ReadDir(trashRawRoot)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		target := filepath.Join(dir, "raw-tool-results", entry.Name())
+		if _, err := os.Stat(target); err == nil {
+			return fmt.Errorf("raw tool result artifact already exists: %s", entry.Name())
+		} else if !os.IsNotExist(err) {
+			return err
+		}
+	}
+	return nil
+}
+
+func restoreRawToolResultArtifacts(dir, itemDir string) error {
+	trashRawRoot := filepath.Join(itemDir, "raw-tool-results")
+	entries, err := os.ReadDir(trashRawRoot)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		if err := movePathIfExists(filepath.Join(trashRawRoot, entry.Name()), filepath.Join(dir, "raw-tool-results", entry.Name())); err != nil {
 			return err
 		}
 	}

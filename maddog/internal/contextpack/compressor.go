@@ -25,6 +25,7 @@ type ToolOutput struct {
 
 // Options controls deterministic tool-output compression.
 type Options struct {
+	Policy         string
 	ThresholdBytes int
 	MaxBytes       int
 	RawRef         string
@@ -72,7 +73,11 @@ func (DefaultCompressor) Compress(output ToolOutput, opts Options) Result {
 	if output.Error != "" {
 		raw = appendError(raw, output.Error)
 	}
-	if len(raw) <= effectiveThreshold(opts.ThresholdBytes) {
+	policy := normalizePolicy(opts.Policy)
+	if policy == "off" {
+		return Result{Content: raw}
+	}
+	if policy != "aggressive" && len(raw) <= effectiveThreshold(opts.ThresholdBytes) {
 		return Result{Content: raw}
 	}
 
@@ -124,6 +129,17 @@ func (DefaultCompressor) Compress(output ToolOutput, opts Options) Result {
 		result.SavedTokens = 0
 	}
 	return result
+}
+
+func normalizePolicy(policy string) string {
+	switch strings.ToLower(strings.TrimSpace(policy)) {
+	case "", "auto":
+		return "auto"
+	case "off", "aggressive":
+		return strings.ToLower(strings.TrimSpace(policy))
+	default:
+		return "auto"
+	}
 }
 
 func appendError(raw, errText string) string {

@@ -25,6 +25,7 @@ import (
 	"maddog/internal/codegraph"
 	"maddog/internal/command"
 	"maddog/internal/config"
+	"maddog/internal/contextpack"
 	"maddog/internal/control"
 	"maddog/internal/event"
 	"maddog/internal/history"
@@ -885,12 +886,19 @@ func Build(ctx context.Context, opts Options) (*control.Controller, error) {
 			MaxContextMessages: cfg.Agent.AdvisorMaxContextMessages,
 			MaxContextChars:    cfg.Agent.AdvisorMaxContextChars,
 		},
-		AdvisorRunner:     advisorRunner,
-		NativeAdvisor:     nativeAdvisor,
-		Gate:              headlessGate,
-		Hooks:             hookRunner,
-		Jobs:              jm,
-		ProjectChecks:     projectChecks,
+		AdvisorRunner:        advisorRunner,
+		NativeAdvisor:        nativeAdvisor,
+		Gate:                 headlessGate,
+		Hooks:                hookRunner,
+		Jobs:                 jm,
+		ProjectChecks:        projectChecks,
+		ToolOutputCompressor: contextpack.DefaultCompressor{},
+		ToolOutputCompression: contextpack.Options{
+			Policy:         cfg.Agent.ContextCompression.EffectivePolicy(),
+			ThresholdBytes: cfg.Agent.ContextCompression.EffectiveThresholdBytes(),
+			MaxBytes:       cfg.Agent.ContextCompression.EffectiveMaxBytes(),
+		},
+		RawToolResultDir:  filepath.Join(sessionDir, "raw-tool-results"),
 		ContextWindow:     entry.ContextWindow,
 		SoftCompactRatio:  cfg.Agent.SoftCompactRatio,
 		CompactRatio:      cfg.Agent.CompactRatio,

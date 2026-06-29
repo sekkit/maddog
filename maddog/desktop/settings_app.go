@@ -96,12 +96,15 @@ type NetworkView struct {
 }
 
 type AgentView struct {
-	Temperature       float64 `json:"temperature"`
-	MaxSteps          int     `json:"maxSteps"`
-	PlannerMaxSteps   int     `json:"plannerMaxSteps"`
-	SystemPrompt      string  `json:"systemPrompt"`
-	ColdResumePrune   bool    `json:"coldResumePrune"`
-	ReasoningLanguage string  `json:"reasoningLanguage"`
+	Temperature                      float64 `json:"temperature"`
+	MaxSteps                         int     `json:"maxSteps"`
+	PlannerMaxSteps                  int     `json:"plannerMaxSteps"`
+	SystemPrompt                     string  `json:"systemPrompt"`
+	ColdResumePrune                  bool    `json:"coldResumePrune"`
+	ReasoningLanguage                string  `json:"reasoningLanguage"`
+	ContextCompressionPolicy         string  `json:"contextCompressionPolicy"`
+	ContextCompressionThresholdBytes int     `json:"contextCompressionThresholdBytes"`
+	ContextCompressionMaxBytes       int     `json:"contextCompressionMaxBytes"`
 }
 
 type BotAllowlistView struct {
@@ -473,8 +476,15 @@ func (a *App) Settings() SettingsView {
 				Ask:   []string{},
 				Deny:  []string{},
 			},
-			Sandbox:            SandboxView{Bash: "enforce", AllowWrite: []string{}, Shell: "auto"},
-			Agent:              AgentView{PlannerMaxSteps: 12, ColdResumePrune: true, ReasoningLanguage: "auto"},
+			Sandbox: SandboxView{Bash: "enforce", AllowWrite: []string{}, Shell: "auto"},
+			Agent: AgentView{
+				PlannerMaxSteps:                  12,
+				ColdResumePrune:                  true,
+				ReasoningLanguage:                "auto",
+				ContextCompressionPolicy:         "auto",
+				ContextCompressionThresholdBytes: config.DefaultContextCompressionThresholdBytes,
+				ContextCompressionMaxBytes:       config.DefaultContextCompressionMaxBytes,
+			},
 			Bot:                botSettingsView(config.BotConfig{}),
 			AutoPlan:           "off",
 			DesktopLayoutStyle: "classic",
@@ -535,7 +545,17 @@ func (a *App) Settings() SettingsView {
 				Password: cfg.Network.Proxy.Password,
 			},
 		},
-		Agent:              AgentView{Temperature: cfg.Agent.Temperature, MaxSteps: cfg.Agent.MaxSteps, PlannerMaxSteps: cfg.Agent.PlannerMaxSteps, SystemPrompt: cfg.Agent.SystemPrompt, ColdResumePrune: cfg.ColdResumePruneEnabled(), ReasoningLanguage: cfg.ReasoningLanguage()},
+		Agent: AgentView{
+			Temperature:                      cfg.Agent.Temperature,
+			MaxSteps:                         cfg.Agent.MaxSteps,
+			PlannerMaxSteps:                  cfg.Agent.PlannerMaxSteps,
+			SystemPrompt:                     cfg.Agent.SystemPrompt,
+			ColdResumePrune:                  cfg.ColdResumePruneEnabled(),
+			ReasoningLanguage:                cfg.ReasoningLanguage(),
+			ContextCompressionPolicy:         cfg.Agent.ContextCompression.EffectivePolicy(),
+			ContextCompressionThresholdBytes: cfg.Agent.ContextCompression.EffectiveThresholdBytes(),
+			ContextCompressionMaxBytes:       cfg.Agent.ContextCompression.EffectiveMaxBytes(),
+		},
 		Bot:                botSettingsView(cfg.Bot),
 		DesktopLanguage:    cfg.DesktopLanguage(),
 		DesktopLayoutStyle: cfg.DesktopLayoutStyle(),
@@ -1714,6 +1734,12 @@ func (a *App) SetAgentParams(temperature float64, maxSteps int, plannerMaxSteps 
 
 func (a *App) SetColdResumePrune(enabled bool) error {
 	return a.applyConfigChange(func(c *config.Config) error { return c.SetColdResumePrune(enabled) })
+}
+
+func (a *App) SetContextCompression(policy string, thresholdBytes int, maxBytes int) error {
+	return a.applyConfigChange(func(c *config.Config) error {
+		return c.SetContextCompression(policy, thresholdBytes, maxBytes)
+	})
 }
 
 func (a *App) SetReasoningLanguage(lang string) error {

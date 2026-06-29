@@ -894,6 +894,48 @@ type AgentConfig struct {
 	// ColdResumePrune elides stale tool results when a session reopens past the
 	// provider cache window. nil = default enabled.
 	ColdResumePrune *bool `toml:"cold_resume_prune"`
+	// ContextCompression controls deterministic compression of high-volume tool
+	// outputs before they enter model context.
+	ContextCompression ContextCompressionConfig `toml:"context_compression"`
+}
+
+type ContextCompressionConfig struct {
+	Policy         string `toml:"policy"`
+	ThresholdBytes int    `toml:"threshold_bytes"`
+	MaxBytes       int    `toml:"max_bytes"`
+}
+
+const (
+	DefaultContextCompressionPolicy         = "auto"
+	DefaultContextCompressionThresholdBytes = 8 * 1024
+	DefaultContextCompressionMaxBytes       = 4 * 1024
+)
+
+func (c ContextCompressionConfig) EffectivePolicy() string {
+	return contextCompressionPolicy(c.Policy)
+}
+
+func (c ContextCompressionConfig) EffectiveThresholdBytes() int {
+	if c.ThresholdBytes > 0 {
+		return c.ThresholdBytes
+	}
+	return DefaultContextCompressionThresholdBytes
+}
+
+func (c ContextCompressionConfig) EffectiveMaxBytes() int {
+	if c.MaxBytes > 0 {
+		return c.MaxBytes
+	}
+	return DefaultContextCompressionMaxBytes
+}
+
+func contextCompressionPolicy(policy string) string {
+	switch strings.ToLower(strings.TrimSpace(policy)) {
+	case "off", "aggressive":
+		return strings.ToLower(strings.TrimSpace(policy))
+	default:
+		return DefaultContextCompressionPolicy
+	}
 }
 
 // ProviderEntry declares a model provider instance. ContextWindow is the model's
@@ -1241,6 +1283,11 @@ func Default() *Config {
 			SoftCompactRatio:          0.5,
 			CompactRatio:              0.8,
 			CompactForceRatio:         0.9,
+			ContextCompression: ContextCompressionConfig{
+				Policy:         DefaultContextCompressionPolicy,
+				ThresholdBytes: DefaultContextCompressionThresholdBytes,
+				MaxBytes:       DefaultContextCompressionMaxBytes,
+			},
 		},
 		Skills: SkillsConfig{
 			RuntimeOrchestration: true,
