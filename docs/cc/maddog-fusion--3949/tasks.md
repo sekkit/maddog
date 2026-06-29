@@ -218,7 +218,7 @@ plan: docs/cc/maddog-fusion--3949/plan.md
 - **Started-at-commit**: b7d7b763
 - **Result**: Added context compression policy controls (`off`, `auto`, `aggressive`) across config defaults, editing, TOML rendering, boot options, desktop Settings, and frontend bridge/types/locales. Raw tool results now persist to a session-scoped `raw-tool-results/<branchID>` store, rebind across initial session paths, `SetSessionPath`, `Resume`, new/clear session flows, and move through desktop trash/restore/purge lifecycle. Missing raw sidecars return compressed fallback plus `rawUnavailable`, which ToolCard renders as a localized note; raw store write failures clear in-memory raw, warn, and keep compressed-only output. CLI run metrics now aggregate compression counts and char/token savings. Verified by `go test ./internal/contextpack ./internal/config ./internal/agent ./internal/control ./internal/cli ./internal/boot -count=1`, `go test . -count=1` in `Maddog/desktop`, frontend `npm run test:all`, frontend `npm run build`, and `git diff --check`.
 - **Review**: Spec reviewer initially required `Controller.Resume` raw-store rebinding, desktop raw sidecar trash/restore/purge lifecycle, and ToolCard raw-unavailable display; all were fixed with failing-then-passing tests and spec re-review passed. Code-quality reviewer found the same raw-unavailable frontend gap; fixed with SSR behavior coverage and quality re-review passed.
-- **Commit**: 76be14cc
+- **Commit**: baa752f3
 
 ## Post-v1 Unit F1: Code intelligence backend registry
 - **Status**: pending
