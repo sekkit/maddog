@@ -438,7 +438,7 @@ flowchart TB
 
 **执行记录（2026-06-30）：** 已通过 test-first 落地 `internal/codegraph` benchmark harness、`cmd/codeintelbench` CLI、真实内置 CodeGraph MCP benchmark adapter、mock backend 比较报告，以及 doctor latest benchmark 摘要。Benchmark 报告覆盖 index build time、incremental update time、query latency、top-k relevance、returned chars、estimated tokens、result count、tool/query failures，并输出 timestamped JSON/Markdown 与 `latest.json`/`latest.md`。CLI 默认在本地 repo fixture 上运行 mock + built-in CodeGraph；CodeGraph 未安装或查询失败时报告 degraded/failure，不伪装 ready；CodeGraph 已连接时，incremental update 阶段会等待 fixture expected marker 可查到，避免后台索引未完成导致 relevance 抖动。报告写入使用唯一 archive 文件名和 `fileutil.ReplaceFile` 原子替换 latest 文件；doctor 暴露 latest report path、backend health/failures，并对错误路径做脱敏。验证命令：`go test ./internal/codegraph ./internal/doctor ./cmd/codeintelbench -count=1`、`go test ./... -count=1`、`git diff --check`。Spec 与 code-quality subagent 多轮复审均通过。
 
-- [ ] **单元 F3：MCP code backend GUI 管理**
+- [x] **单元 F3：MCP code backend GUI 管理**
 
 **目标：** 在 MCP/Skills 管理页中管理 code intelligence 后端，显示健康、工具映射、索引状态和 benchmark 入口。
 
@@ -454,7 +454,7 @@ flowchart TB
 - 修改：`Maddog/desktop/frontend/src/locales/en.ts`
 - 修改：`Maddog/desktop/frontend/src/locales/zh.ts`
 - 新建测试：`Maddog/desktop/capabilities_app_test.go`
-- 新建测试：`Maddog/desktop/frontend/src/__tests__/capabilities-panel.test.ts`
+- 修改测试：`Maddog/desktop/frontend/src/__tests__/capabilities-code-intelligence.test.ts`
 
 **方案：**
 - CapabilitiesPanel 增加 Code Intelligence 分组，列出 built-in 和 external backend。
@@ -469,6 +469,8 @@ flowchart TB
 - Integration：切换 backend enabled 状态后，controller rebuild 不丢失现有 session。
 
 **验证：** 用户可以在 GUI 中理解并管理 code intelligence 能力，而不是只看 MCP 原始 server 列表。
+
+**执行记录（2026-06-30）：** 已通过 test-first 落地 CapabilitiesPanel 的 Code Intelligence 管理 UI：backend 行支持 enable/disable、retry health check、run benchmark，显示 health、index status、capability chips、tool count、benchmark running、latest JSON/Markdown path、benchmark health/failure summary。Frontend bridge 增加 lowercase GUI wrapper，并映射到真实 Wails App 方法或 browser dev mock；mock 覆盖 running 与 latest report 状态。Desktop App 增加 `SetCodeIntelligenceBackendEnabled`、`RetryCodeIntelligenceBackend`、`RunCodeIntelligenceBenchmark`，benchmark 以后台 goroutine 运行，不阻塞 GUI 调用，并写入共享 `codeintel-bench/latest.json`/`latest.md`，`Capabilities()` 会合并 latest report 与 running 状态。Review 后补强：benchmark running 改为引用计数，latest report 改为 nullable 且只挂到匹配 backend，corrupt/latest read error 会在 GUI 展示，并用 bridge contract test 防止绑定漂移。验证命令：frontend `npm run test:all`、frontend `npm run build`、`go test . -count=1`（`maddog/desktop`）、`go test ./internal/codegraph ./internal/doctor ./cmd/codeintelbench -count=1`、`go test ./... -count=1`、`git diff --check`。
 
 - [ ] **单元 G1：Replay eval bundle v2 与 SkillOpt-style candidate lifecycle**
 

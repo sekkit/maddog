@@ -102,7 +102,7 @@ func TestCodeIntelligenceBackendViewsReflectLiveExternalMCPState(t *testing.T) {
 
 	views := codeIntelligenceBackendViews(reg, "", map[string]plugin.ServerStatus{
 		"serena": {Name: "serena", Tools: 9},
-	}, nil)
+	}, nil, CodeIntelligenceBenchmarkView{}, nil)
 	got, ok := findCodeIntelligenceBackend(views, "serena")
 	if !ok {
 		t.Fatalf("serena backend missing: %+v", views)
@@ -113,13 +113,49 @@ func TestCodeIntelligenceBackendViewsReflectLiveExternalMCPState(t *testing.T) {
 
 	views = codeIntelligenceBackendViews(reg, "", nil, map[string]plugin.Failure{
 		"serena": {Name: "serena", Error: "connect refused"},
-	})
+	}, CodeIntelligenceBenchmarkView{}, nil)
 	got, ok = findCodeIntelligenceBackend(views, "serena")
 	if !ok {
 		t.Fatalf("serena backend missing after failure: %+v", views)
 	}
 	if got.Status != codegraph.BackendHealthInvalid || got.LastError != "connect refused" {
 		t.Fatalf("failed external backend = %+v, want invalid with last error", got)
+	}
+}
+
+func TestCodeIntelligenceBackendViewsAttachBenchmarkOnlyToMatchingBackend(t *testing.T) {
+	cfg := codeIntelligenceTestConfig()
+	reg := codegraph.NewBackendRegistry(cfg)
+
+	views := codeIntelligenceBackendViews(reg, "", nil, nil, CodeIntelligenceBenchmarkView{}, nil)
+	if got, ok := findCodeIntelligenceBackend(views, "codegraph"); ok && got.Benchmark != nil {
+		t.Fatalf("empty benchmark should not be attached to codegraph: %+v", got.Benchmark)
+	}
+	if got, ok := findCodeIntelligenceBackend(views, "serena"); ok && got.Benchmark != nil {
+		t.Fatalf("empty benchmark should not be attached to serena: %+v", got.Benchmark)
+	}
+
+	benchmark := CodeIntelligenceBenchmarkView{
+		JSONPath: "latest.json",
+		Backends: []CodeIntelligenceBenchmarkBackendView{{
+			ID:     "serena",
+			Health: codegraph.BackendHealthReady,
+		}},
+	}
+	views = codeIntelligenceBackendViews(reg, "", nil, nil, benchmark, nil)
+	codegraphBackend, ok := findCodeIntelligenceBackend(views, "codegraph")
+	if !ok {
+		t.Fatalf("codegraph backend missing: %+v", views)
+	}
+	if codegraphBackend.Benchmark != nil {
+		t.Fatalf("serena benchmark should not attach to codegraph: %+v", codegraphBackend.Benchmark)
+	}
+	serenaBackend, ok := findCodeIntelligenceBackend(views, "serena")
+	if !ok {
+		t.Fatalf("serena backend missing: %+v", views)
+	}
+	if serenaBackend.Benchmark == nil || serenaBackend.Benchmark.JSONPath != "latest.json" {
+		t.Fatalf("serena benchmark = %+v, want latest report", serenaBackend.Benchmark)
 	}
 }
 
@@ -137,7 +173,7 @@ func TestCodeIntelligenceBackendViewsKeepInvalidBackendInvalidWhenServerConnecte
 
 	views := codeIntelligenceBackendViews(reg, "", map[string]plugin.ServerStatus{
 		"serena": {Name: "serena", Tools: 9},
-	}, nil)
+	}, nil, CodeIntelligenceBenchmarkView{}, nil)
 	got, ok := findCodeIntelligenceBackend(views, "serena")
 	if !ok {
 		t.Fatalf("invalid serena backend missing: %+v", views)

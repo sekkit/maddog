@@ -40,17 +40,28 @@ check(
     'indexStatus?: "initialized" | "not_initialized" | string;',
     "capabilities: CodeIntelligenceBackendCapabilities;",
     "toolMapping?: Record<string, string>;",
+    "benchmark?: CodeIntelligenceBenchmarkView;",
+    "benchmarkRunning?: boolean;",
+    "export interface CodeIntelligenceBenchmarkBackendView",
+    "error?: string;",
+    "backends?: CodeIntelligenceBenchmarkBackendView[];",
     "codeIntelligenceBackends?: CodeIntelligenceBackendView[];",
   ]),
 );
 
 check(
-  "mock bridge returns a representative built-in code intelligence backend",
+  "bridge exposes code intelligence management actions and mock benchmark state",
   includesAll(bridge, [
     "capCodeIntelligenceBackends",
+    "setCodeIntelligenceBackendEnabled",
+    "retryCodeIntelligenceBackend",
+    "runCodeIntelligenceBenchmark",
     'id: "codegraph"',
     'kind: "builtin"',
     'indexStatus: "not_initialized"',
+    "benchmarkRunning: false",
+    "backends: [{ id: \"codegraph\"",
+    'jsonPath: "',
     'context_pack: "mcp__codegraph__context"',
     "codeIntelligenceBackends: capCodeIntelligenceBackends.map",
   ]),
@@ -68,6 +79,14 @@ check(
     "codeIntelIndexStatusLabel(backend.indexStatus, t)",
     "codeIntelCapabilityLabels(backend.capabilities, t)",
     "caps.codeIntelligenceTools",
+    "app.setCodeIntelligenceBackendEnabled",
+    "app.retryCodeIntelligenceBackend",
+    "app.runCodeIntelligenceBenchmark",
+    "caps.codeIntelligenceEnable",
+    "caps.codeIntelligenceRetry",
+    "caps.codeIntelligenceBenchmark",
+    "caps.codeIntelligenceBenchmarkRunning",
+    "caps.codeIntelligenceBenchmarkError",
   ]),
 );
 
@@ -80,6 +99,10 @@ check(
     '"caps.codeIntelligenceStatus.degraded":',
     '"caps.codeIntelligenceIndexStatus":',
     '"caps.codeIntelligenceTools":',
+    '"caps.codeIntelligenceBenchmark":',
+    '"caps.codeIntelligenceRetry":',
+    '"caps.codeIntelligenceEnable":',
+    '"caps.codeIntelligenceBenchmarkError":',
   ]) && includesAll(zh, [
     '"caps.codeIntelligence":',
     '"caps.codeIntelligenceSummary":',
@@ -87,6 +110,10 @@ check(
     '"caps.codeIntelligenceStatus.degraded":',
     '"caps.codeIntelligenceIndexStatus":',
     '"caps.codeIntelligenceTools":',
+    '"caps.codeIntelligenceBenchmark":',
+    '"caps.codeIntelligenceRetry":',
+    '"caps.codeIntelligenceEnable":',
+    '"caps.codeIntelligenceBenchmarkError":',
   ]),
 );
 

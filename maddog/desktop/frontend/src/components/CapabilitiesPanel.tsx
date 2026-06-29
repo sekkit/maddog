@@ -211,7 +211,7 @@ export function CapabilitiesPanel({
                     onUpgrade={(name) => void upgradeBuiltInMCP(name)}
                   />
                 )}
-                <CodeIntelligenceSection codeIntelligenceBackends={view.codeIntelligenceBackends ?? []} />
+                <CodeIntelligenceSection codeIntelligenceBackends={view.codeIntelligenceBackends ?? []} busy={busy} onManage={(fn) => void mutate(fn)} />
                 <div className="cap-mcp-toolbar cap-mcp-toolbar--drawer">
                   {!adding && (
                     <button className="btn btn--small" disabled={busy} onClick={() => setAdding(true)}>
@@ -398,7 +398,15 @@ function isVisibleBuiltInMCPUpdateStatus(status: BuiltInMCPUpdateStatus): boolea
   return status.name === "codegraph" && ["available", "downloaded", "activated", "error"].includes(status.phase);
 }
 
-function CodeIntelligenceSection({ codeIntelligenceBackends }: { codeIntelligenceBackends: CodeIntelligenceBackendView[] }) {
+function CodeIntelligenceSection({
+  codeIntelligenceBackends,
+  busy,
+  onManage,
+}: {
+  codeIntelligenceBackends: CodeIntelligenceBackendView[];
+  busy: boolean;
+  onManage: (fn: () => Promise<unknown>) => void;
+}) {
   const t = useT();
   if (codeIntelligenceBackends.length === 0) return null;
   const ready = codeIntelligenceBackends.filter((backend) => backend.status === "ready").length;
@@ -417,7 +425,7 @@ function CodeIntelligenceSection({ codeIntelligenceBackends }: { codeIntelligenc
       </div>
       <div className="cap-codeintel__list">
         {codeIntelligenceBackends.map((backend, index) => (
-          <CodeIntelligenceBackendRow key={codeIntelBackendKey(backend, index)} backend={backend} />
+          <CodeIntelligenceBackendRow key={codeIntelBackendKey(backend, index)} backend={backend} busy={busy} onManage={onManage} />
         ))}
       </div>
     </div>
@@ -428,10 +436,20 @@ function codeIntelBackendKey(backend: CodeIntelligenceBackendView, index: number
   return `${backend.id}:${backend.status}:${backend.serverName ?? ""}:${index}`;
 }
 
-function CodeIntelligenceBackendRow({ backend }: { backend: CodeIntelligenceBackendView }) {
+function CodeIntelligenceBackendRow({
+  backend,
+  busy,
+  onManage,
+}: {
+  backend: CodeIntelligenceBackendView;
+  busy: boolean;
+  onManage: (fn: () => Promise<unknown>) => void;
+}) {
   const t = useT();
   const capabilities = codeIntelCapabilityLabels(backend.capabilities, t);
   const toolCount = backend.toolCount || Object.keys(backend.toolMapping ?? {}).length;
+  const benchmark = backend.benchmark;
+  const backendID = backend.id || backend.serverName || backend.name;
   return (
     <div className={`cap-codeintel-row cap-codeintel-row--${codeIntelStatusTone(backend.status)}`}>
       <div className="cap-codeintel-row__top">
@@ -446,6 +464,38 @@ function CodeIntelligenceBackendRow({ backend }: { backend: CodeIntelligenceBack
         <span>{t("caps.codeIntelligenceBackendTools", { tools: toolCount })}</span>
         {!backend.enabled && <span>{t("caps.disabled")}</span>}
       </div>
+      <div className="cap-codeintel-row__actions">
+        <button
+          className="btn btn--tiny"
+          disabled={busy}
+          onClick={() => onManage(() => app.setCodeIntelligenceBackendEnabled(backendID, !backend.enabled))}
+        >
+          {t("caps.codeIntelligenceEnable", { state: backend.enabled ? t("common.off") : t("common.on") })}
+        </button>
+        <button className="btn btn--tiny" disabled={busy} onClick={() => onManage(() => app.retryCodeIntelligenceBackend(backendID))}>
+          {t("caps.codeIntelligenceRetry")}
+        </button>
+        <button
+          className="btn btn--tiny"
+          disabled={busy || backend.benchmarkRunning}
+          onClick={() => onManage(() => app.runCodeIntelligenceBenchmark(backendID))}
+        >
+          {backend.benchmarkRunning ? t("caps.codeIntelligenceBenchmarkRunning") : t("caps.codeIntelligenceBenchmark")}
+        </button>
+      </div>
+      {benchmark && (
+        <div className="cap-codeintel-row__benchmark">
+          {benchmark.error ? (
+            <span>{t("caps.codeIntelligenceBenchmarkError", { error: benchmark.error })}</span>
+          ) : (
+            <>
+              <span>{t("caps.codeIntelligenceBenchmarkHealth", { health: benchmark.health || codeIntelStatusLabel(backend.status, t) })}</span>
+              <span>{t("caps.codeIntelligenceBenchmarkFailures", { failures: benchmark.failures ?? 0 })}</span>
+            </>
+          )}
+          {benchmark.jsonPath && <span>{benchmark.jsonPath}</span>}
+        </div>
+      )}
       {capabilities.length > 0 && (
         <div className="cap-codeintel-row__caps">
           {capabilities.map((capability) => (

@@ -526,6 +526,21 @@ export interface CodeIntelligenceBackendCapabilities {
   EditRefactor?: boolean;
   Health?: boolean;
 }
+export interface CodeIntelligenceBenchmarkView {
+  jsonPath?: string;
+  markdownPath?: string;
+  health?: string;
+  failures?: number;
+  updatedAt?: string;
+  error?: string;
+  backends?: CodeIntelligenceBenchmarkBackendView[];
+}
+export interface CodeIntelligenceBenchmarkBackendView {
+  id: string;
+  name?: string;
+  health?: string;
+  failures?: number;
+}
 export interface CodeIntelligenceBackendView {
   id: string;
   name: string;
@@ -540,6 +555,8 @@ export interface CodeIntelligenceBackendView {
   capabilities: CodeIntelligenceBackendCapabilities;
   toolMapping?: Record<string, string>;
   toolCount: number;
+  benchmark?: CodeIntelligenceBenchmarkView;
+  benchmarkRunning?: boolean;
 }
 export interface SkillView {
   name: string;

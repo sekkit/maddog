@@ -241,10 +241,13 @@ plan: docs/cc/maddog-fusion--3949/plan.md
 - **Commit**: a1c3e966
 
 ## Post-v1 Unit F3: MCP code backend GUI management
-- **Status**: pending
+- **Status**: completed
 - **Execution note**: test-first
-- **Files**: `Maddog/desktop/app.go`, `Maddog/desktop/frontend/src/components/CapabilitiesPanel.tsx`, `Maddog/desktop/frontend/src/lib/bridge.ts`, `Maddog/desktop/frontend/src/lib/types.ts`, `Maddog/desktop/frontend/src/locales/en.ts`, `Maddog/desktop/frontend/src/locales/zh.ts`, `Maddog/desktop/capabilities_app_test.go`, `Maddog/desktop/frontend/src/__tests__/capabilities-panel.test.ts`
+- **Files**: `Maddog/desktop/app.go`, `Maddog/desktop/app_test.go`, `Maddog/desktop/capabilities_app_test.go`, `Maddog/desktop/frontend/src/components/CapabilitiesPanel.tsx`, `Maddog/desktop/frontend/src/lib/bridge.ts`, `Maddog/desktop/frontend/src/lib/types.ts`, `Maddog/desktop/frontend/src/locales/en.ts`, `Maddog/desktop/frontend/src/locales/zh.ts`, `Maddog/desktop/frontend/src/__tests__/capabilities-code-intelligence.test.ts`
 - **Depends on**: Post-v1 Unit F1, Post-v1 Unit F2
+- **Started-at-commit**: 03b5a837
+- **Result**: Desktop Capabilities now exposes GUI management for code intelligence backends: enable/disable, retry health, and run benchmark actions are wired through bridge methods and Wails-bound App methods; rows show health, index status, capability chips, tool counts, benchmark running state, latest JSON/Markdown paths, health, and failure summary. `RunCodeIntelligenceBenchmark` starts a background benchmark, preserves a visible non-blocking running state, writes the shared `codeintel-bench/latest.json` and `latest.md` reports, and `Capabilities()` projects latest report data back into the GUI. Verified by frontend `npm run test:all`, frontend `npm run build`, `go test . -count=1` in `Maddog/desktop`, `go test ./internal/codegraph ./internal/doctor ./cmd/codeintelbench -count=1`, `go test ./... -count=1`, and `git diff --check`.
+- **Review**: Code review found three P2 issues: concurrent benchmark runs could clear `benchmarkRunning` too early, empty/corrupt latest reports could render as successful empty benchmark summaries, and global latest reports could be shown on unrelated backend rows. Fixed with running reference counts, nullable/matched benchmark projection, benchmark error display, bridge contract coverage, and additional tests.
 
 ## Post-v1 Unit G1: Replay eval bundle v2 and SkillOpt-style candidate lifecycle
 - **Status**: pending

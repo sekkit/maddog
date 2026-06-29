@@ -23,6 +23,7 @@ import type {
   BuiltInMCPUpdateStatus,
   CapabilitiesView,
   CheckpointMeta,
+  CodeIntelligenceBackendView,
   CommandInfo,
   ContextInfo,
   ContextPanelInfo,
@@ -165,6 +166,12 @@ export interface AppBindings {
   UpdateMCPServer(name: string, input: MCPServerInput): Promise<void>;
   RemoveMCPServer(name: string): Promise<void>;
   ReconnectMCPServer(name: string): Promise<void>;
+  SetCodeIntelligenceBackendEnabled(id: string, enabled: boolean): Promise<void>;
+  RetryCodeIntelligenceBackend(id: string): Promise<void>;
+  RunCodeIntelligenceBenchmark(id: string): Promise<void>;
+  setCodeIntelligenceBackendEnabled(id: string, enabled: boolean): Promise<void>;
+  retryCodeIntelligenceBackend(id: string): Promise<void>;
+  runCodeIntelligenceBenchmark(id: string): Promise<void>;
   UpdateBuiltInMCPServer(name: string): Promise<BuiltInMCPUpdateResult>;
   BuiltInMCPUpdateStatuses(): Promise<BuiltInMCPUpdateStatus[]>;
   ClearMCPServerAuthentication(name: string): Promise<void>;
@@ -442,7 +449,7 @@ function bridgeBreadcrumb(method: string): string {
   if (/^(SaveProvider|AddOfficialProviderAccess|RemoveProviderAccess|DeleteProvider|SetProviderKey|ClearProviderKey|FetchProviderModels|ConnectKey)/.test(method))
     return `provider ${method}`;
   if (/^(CheckUpdate|ApplyUpdate|OpenDownloadPage)/.test(method)) return `update ${method}`;
-  if (/^(AddMCPServer|UpdateMCPServer|RemoveMCPServer|ReconnectMCPServer|UpdateBuiltInMCPServer|BuiltInMCPUpdateStatuses|ClearMCPServerAuthentication|SetMCPServer)/.test(method))
+  if (/^(AddMCPServer|UpdateMCPServer|RemoveMCPServer|ReconnectMCPServer|UpdateBuiltInMCPServer|BuiltInMCPUpdateStatuses|ClearMCPServerAuthentication|SetMCPServer|SetCodeIntelligenceBackendEnabled|RetryCodeIntelligenceBackend|RunCodeIntelligenceBenchmark|setCodeIntelligenceBackendEnabled|retryCodeIntelligenceBackend|runCodeIntelligenceBenchmark)/.test(method))
     return `mcp ${method}`;
   if (/^(AddSkillPath|RemoveSkillPath|RefreshSkills|SetSkillEnabled|AcceptSkillSuggestion)/.test(method))
     return `skill ${method}`;
@@ -454,10 +461,12 @@ function bridgeBreadcrumb(method: string): string {
 export const app: AppBindings = new Proxy({} as AppBindings, {
   get(_t, prop) {
     const target = realApp() ?? getMock();
-    const v = (target as unknown as Record<string, unknown>)[String(prop)];
+    const method = String(prop);
+    const codeIntelMethod = codeIntelligenceBridgeMethod(target, method);
+    if (codeIntelMethod) return codeIntelMethod;
+    const v = (target as unknown as Record<string, unknown>)[method];
     if (typeof v !== "function") return v;
     return (...args: unknown[]) => {
-      const method = String(prop);
       const crumb = bridgeBreadcrumb(method);
       if (crumb) addBreadcrumb("bridge", crumb);
       try {
@@ -476,6 +485,30 @@ export const app: AppBindings = new Proxy({} as AppBindings, {
     };
   },
 });
+
+function codeIntelligenceBridgeMethod(target: AppBindings, method: string): ((...args: unknown[]) => Promise<void>) | null {
+  const methods = target as unknown as Record<string, unknown>;
+  if (method === "setCodeIntelligenceBackendEnabled") {
+    return (id: unknown, enabled: unknown) => {
+      const native = methods.SetCodeIntelligenceBackendEnabled ?? methods.SetMCPServerEnabled;
+      return (native as (name: string, value: boolean) => Promise<void>).call(target, String(id), Boolean(enabled));
+    };
+  }
+  if (method === "retryCodeIntelligenceBackend") {
+    return (id: unknown) => {
+      const native = methods.RetryCodeIntelligenceBackend ?? methods.ReconnectMCPServer;
+      return (native as (name: string) => Promise<void>).call(target, String(id));
+    };
+  }
+  if (method === "runCodeIntelligenceBenchmark") {
+    return (id: unknown) => {
+      const native = methods.RunCodeIntelligenceBenchmark;
+      if (typeof native !== "function") return Promise.reject(new Error("code intelligence benchmark is unavailable"));
+      return (native as (name: string) => Promise<void>).call(target, String(id));
+    };
+  }
+  return null;
+}
 
 // openExternal opens a URL in the system browser (so links in rendered markdown
 // don't navigate the webview away from the app). Falls back to window.open in the
@@ -635,7 +668,7 @@ function makeMockApp(): AppBindings {
     },
     { name: "figma", transport: "http", status: "failed", configured: true, autoStart: true, tier: "background", url: "https://mcp.figma.com/mcp", authStatus: "required", authUrl: "https://mcp.figma.com/mcp", tools: 0, prompts: 0, resources: 0, error: "connect: 401 unauthorized" },
   ];
-  const capCodeIntelligenceBackends = [
+  let capCodeIntelligenceBackends: CodeIntelligenceBackendView[] = [
     {
       id: "codegraph",
       name: "CodeGraph",
@@ -654,6 +687,15 @@ function makeMockApp(): AppBindings {
         health: "mcp__codegraph__status",
       },
       toolCount: 4,
+      benchmarkRunning: false,
+      benchmark: {
+        jsonPath: "/tmp/maddog/codeintel-bench/latest.json",
+        markdownPath: "/tmp/maddog/codeintel-bench/latest.md",
+        health: "ready",
+        failures: 0,
+        updatedAt: new Date(t0 - 30 * 60_000).toISOString(),
+        backends: [{ id: "codegraph", name: "CodeGraph", health: "ready", failures: 0 }],
+      },
     },
   ];
   let builtInMCPUpdates: BuiltInMCPUpdateStatus[] = [
@@ -1862,6 +1904,7 @@ function makeMockApp(): AppBindings {
           ...s,
           capabilities: { ...s.capabilities },
           toolMapping: { ...s.toolMapping },
+          benchmark: s.benchmark ? { ...s.benchmark } : undefined,
         })),
       };
     },
@@ -1921,6 +1964,57 @@ function makeMockApp(): AppBindings {
       capServers = capServers.map((s) =>
         s.name === name ? { ...s, status: "connected", tools: s.tools || 4 } : s,
       );
+    },
+    async SetCodeIntelligenceBackendEnabled(id: string, enabled: boolean) {
+      capCodeIntelligenceBackends = capCodeIntelligenceBackends.map((backend) =>
+        backend.id === id || backend.serverName === id
+          ? { ...backend, enabled, status: enabled ? "ready" : "disabled", benchmarkRunning: false }
+          : backend,
+      );
+      if (id === "codegraph") {
+        capServers = capServers.map((s) =>
+          s.name === "codegraph"
+            ? { ...s, status: enabled ? "connected" : "disabled", autoStart: enabled, tools: enabled ? s.tools || 4 : 0, error: undefined }
+            : s,
+        );
+      }
+    },
+    async RetryCodeIntelligenceBackend(id: string) {
+      capCodeIntelligenceBackends = capCodeIntelligenceBackends.map((backend) =>
+        backend.id === id || backend.serverName === id ? { ...backend, status: "ready", lastError: undefined } : backend,
+      );
+      if (id === "codegraph") await this.ReconnectMCPServer("codegraph").catch(() => undefined);
+    },
+    async RunCodeIntelligenceBenchmark(id: string) {
+      capCodeIntelligenceBackends = capCodeIntelligenceBackends.map((backend) =>
+        backend.id === id || backend.serverName === id ? { ...backend, benchmarkRunning: true } : backend,
+      );
+      await new Promise((r) => setTimeout(r, 300));
+      capCodeIntelligenceBackends = capCodeIntelligenceBackends.map((backend) =>
+        backend.id === id || backend.serverName === id
+          ? {
+              ...backend,
+              benchmarkRunning: false,
+              benchmark: {
+                jsonPath: "/tmp/maddog/codeintel-bench/latest.json",
+                markdownPath: "/tmp/maddog/codeintel-bench/latest.md",
+                health: "ready",
+                failures: 0,
+                updatedAt: new Date().toISOString(),
+                backends: [{ id: backend.id, name: backend.name, health: "ready", failures: 0 }],
+              },
+            }
+          : backend,
+      );
+    },
+    async setCodeIntelligenceBackendEnabled(id: string, enabled: boolean) {
+      return this.SetCodeIntelligenceBackendEnabled(id, enabled);
+    },
+    async retryCodeIntelligenceBackend(id: string) {
+      return this.RetryCodeIntelligenceBackend(id);
+    },
+    async runCodeIntelligenceBenchmark(id: string) {
+      return this.RunCodeIntelligenceBenchmark(id);
     },
     async UpdateBuiltInMCPServer(name: string) {
       if (name !== "codegraph") throw new Error(`${name} is not an updatable built-in MCP server`);
