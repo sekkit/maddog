@@ -270,6 +270,19 @@ func TestBuiltinSubagentSkillsDeclareAllowedTools(t *testing.T) {
 	}
 }
 
+func TestBuiltinReviewMentionsHybridDeterministicRules(t *testing.T) {
+	st := New(Options{HomeDir: t.TempDir(), DisableBuiltins: false})
+	sk, ok := st.Read("review")
+	if !ok {
+		t.Fatal("built-in review skill not found")
+	}
+	for _, want := range []string{"deterministic review rules", "secret-like strings", "unsafe remote shell", "destructive SQL", "code intelligence context"} {
+		if !strings.Contains(sk.Body, want) {
+			t.Fatalf("review skill body missing %q:\n%s", want, sk.Body)
+		}
+	}
+}
+
 func TestBuiltinsPresentAndOverridable(t *testing.T) {
 	st := New(Options{HomeDir: t.TempDir()})
 	if _, ok := find(st.List(), "explore"); !ok {

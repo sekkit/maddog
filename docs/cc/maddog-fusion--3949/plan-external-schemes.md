@@ -590,7 +590,7 @@ flowchart TB
 
 **执行记录（2026-06-30）：** 已通过 test-first 落地 desktop skill candidate 管理和 promotion audit 闭环。`Capabilities()` 现在从项目 `.maddog/skilleval` 投影 pending/promoted/rejected/rolled_back candidates，包含 source task、source bundle/path、target skill root、eval score、guardrail verdict、promoted path、validation/audit reason 和更新时间；`GuardrailPass` 使用可空布尔，确保 GUI 能区分“未评估”和“评估失败”。Skills drawer 与 Settings/Skills 页面增加候选队列、状态过滤、证据/目标详情、Promote、Reject、Rollback 操作；Promote/Rollback 后会 rebuild controller，让 slash menu 与 skill store 立即同步。`CandidateStore` 补强了 hash path validation、tampered list entry 跳过、promotion 失败恢复 pending、promotion/reject/rollback audit JSONL、以及只删除未被用户修改的 candidate-created promoted skill 的安全 rollback。多专家 review 后补齐了 failed-promotion recoverability、rollback/audit、guardrail false serialization、zh/zh-TW/en 文案和 frontend contract test。验证命令：`go test ./internal/skilleval -run 'TestListSkipsInvalidOrTamperedCandidateFiles|TestFailedPromotionRestoresPending|TestRollbackPromotedCandidateRemovesOnlyMatchingSkill|TestRollbackRefusesModifiedPromotedSkill|TestPromoteCandidateWritesActiveSkillAndTransitions' -count=1`、`go test . -run 'TestCapabilitiesProjectsSkillCandidates|TestPromoteAndRejectSkillCandidateFromDesktop|TestRollbackSkillCandidateFromDesktop|TestCapabilitiesProjectsFailedGuardrailExplicitly' -count=1`（`Maddog/desktop`）、`npm run test:all`、`npm run build`、`go test ./... -count=1`、`go test . -count=1`（`Maddog/desktop`）、`git diff --check`。
 
-- [ ] **单元 G4：规则/LLM 混合 code review skill**
+- [x] **单元 G4：规则/LLM 混合 code review skill**
 
 **目标：** 借鉴 open-code-review，给 Maddog review 流程增加 deterministic rules + LLM explanation 的混合路径。
 
@@ -623,6 +623,8 @@ flowchart TB
 - Integration：review skill 结果能作为 skilleval bundle 的 evidence。
 
 **验证：** Review 输出更稳定，能解释规则命中，也不会因 code backend 缺失而失败。
+
+**执行记录（2026-06-30）：** 已通过 test-first 新增 `internal/review` deterministic review rules 与 prompt builder，并接入现有 `maddog review` CLI。Rules v1 覆盖 secret-like token、unsafe remote shell installer、destructive SQL、ignored error hints 和 large-diff risk marker；`BuildLLMPrompt` 把 deterministic findings 作为 grounded input 交给 LLM 解释/排序，并在 code intelligence context 不可用时明确 fallback diff-only。CLI review 现在会先运行 `AnalyzeUnifiedDiff`，将 deterministic report 注入 review subagent task，再附带已脱敏 diff；secret evidence 与 raw diff 都会 redact，untrusted evidence/context 以 fenced block 传入，避免 prompt injection/secret 泄漏。多专家 review 后补强：规则结果不再是死代码、短 secret 不再原样进入 prompt、跳过 unified diff metadata、支持 plain unified `+++` path fallback，并降低 docs/comment examples 的 shell/SQL false positive。验证命令：`go test ./internal/review ./internal/cli ./internal/skill -run 'TestAnalyzeUnifiedDiff|TestBuildLLMPrompt|TestBuildReviewTask|TestBuiltinReviewMentionsHybridDeterministicRules|TestBuiltinSubagentSkillsDeclareAllowedTools' -count=1`、`go test ./... -count=1`。
 
 ## 系统级影响
 
