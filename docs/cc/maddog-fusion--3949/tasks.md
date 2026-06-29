@@ -238,7 +238,7 @@ plan: docs/cc/maddog-fusion--3949/plan.md
 - **Started-at-commit**: 953b3759
 - **Result**: Added a local code intelligence benchmark harness with mock and built-in CodeGraph comparable reports. Reports include index build/update timings, query latency, top-k relevance, returned chars, estimated tokens, result count, unsupported/error status, and failure counts. `cmd/codeintelbench` writes timestamped JSON/Markdown plus `latest.json`/`latest.md`; built-in CodeGraph uses the real MCP adapter when available, waits for fixture expected markers during incremental update, and reports degraded/failure rather than pretending to be ready when unavailable. Doctor now surfaces latest benchmark paths and backend health/failures with redacted errors. Verified by `go test ./internal/codegraph ./internal/doctor ./cmd/codeintelbench -count=1`, `go test ./... -count=1`, and `git diff --check`.
 - **Review**: Spec reviewer found missing token metric, misleading fake CodeGraph backend, non-comparable relevance, and query failures not degrading health; all were fixed with failing-then-passing tests. Code-quality reviewer found timeout cancellation gaps, non-unique/non-atomic report writes, unredacted benchmark errors, and markdown-only archive overwrite risk; all were fixed and revalidated.
-- **Commit**: pending
+- **Commit**: a1c3e966
 
 ## Post-v1 Unit F3: MCP code backend GUI management
 - **Status**: pending
