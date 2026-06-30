@@ -16329,11 +16329,13 @@ body > .mermaid-diagram--fullscreen {
   background: var(--bg-soft);
   border-bottom: 1px solid var(--border-soft);
   --wails-draggable: drag;
+  -webkit-app-region: drag;
   user-select: none;
 }
 
 .app-chrome button {
   --wails-draggable: no-drag;
+  -webkit-app-region: no-drag;
 }
 
 .app-chrome__panel-toggle {
@@ -16456,6 +16458,7 @@ body > .mermaid-diagram--fullscreen {
   min-width: 0;
   margin-left: 8px;
   --wails-draggable: no-drag;
+  -webkit-app-region: no-drag;
   transition:
     margin 0.28s cubic-bezier(0.2, 0.72, 0.2, 1),
     transform 0.18s cubic-bezier(0.2, 0.8, 0.2, 1);
@@ -16499,6 +16502,7 @@ body > .mermaid-diagram--fullscreen {
   align-items: stretch;
   justify-content: flex-end;
   --wails-draggable: no-drag;
+  -webkit-app-region: no-drag;
 }
 
 .app-chrome__window-control {
@@ -16593,6 +16597,18 @@ body > .mermaid-diagram--fullscreen {
   height: 48px;
 }
 
+.app-window-drag-rail {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: var(--window-controls-width);
+  z-index: var(--z-app-chrome);
+  height: 12px;
+  --wails-draggable: drag;
+  -webkit-app-region: drag;
+  user-select: none;
+}
+
 .app--darwin .app-chrome--tabs {
   align-items: stretch;
   padding: 0 calc(var(--chrome-toggle-size) + var(--chrome-toggle-size) + 16px) 0 calc(var(--chrome-left-toggle-offset) + var(--chrome-toggle-size) + 8px);
@@ -16604,9 +16620,12 @@ body > .mermaid-diagram--fullscreen {
 .app--darwin .app-chrome--tabs .tabbar,
 .app--darwin .app-chrome--tabs .tabbar * {
   --wails-draggable: no-drag;
+  -webkit-app-region: no-drag;
 }
 
-.app--darwin .app-chrome--tabs .app-chrome__drag-rail {
+.app--darwin .app-chrome--tabs .app-chrome__drag-rail,
+.app--windows .app-chrome--tabs .app-chrome__drag-rail,
+.app--linux .app-chrome--tabs .app-chrome__drag-rail {
   display: block;
   position: absolute;
   top: 0;
@@ -16615,6 +16634,12 @@ body > .mermaid-diagram--fullscreen {
   z-index: var(--z-local-handle);
   height: 10px;
   --wails-draggable: drag;
+  -webkit-app-region: drag;
+}
+
+.app--windows .app-chrome--tabs .app-chrome__drag-rail,
+.app--linux .app-chrome--tabs .app-chrome__drag-rail {
+  right: calc(var(--window-controls-width) + var(--chrome-toggle-size) + 20px);
 }
 
 .app--darwin .app-chrome--tabs .app-chrome__drag-rail::before {
@@ -16908,10 +16933,33 @@ body > .mermaid-diagram--fullscreen {
 }
 
 .app--windows .app-chrome--native-tabs .tabbar,
-.app--linux .app-chrome--native-tabs .tabbar,
+.app--linux .app-chrome--native-tabs .tabbar {
+  --wails-draggable: drag;
+  -webkit-app-region: drag;
+}
+
 .app--windows .app-chrome--native-tabs .tabbar *,
 .app--linux .app-chrome--native-tabs .tabbar * {
+  --wails-draggable: drag;
+  -webkit-app-region: drag;
+}
+
+.app--windows .app-chrome--native-tabs .tabbar__tab,
+.app--linux .app-chrome--native-tabs .tabbar__tab,
+.app--windows .app-chrome--native-tabs .tabbar__tab *,
+.app--linux .app-chrome--native-tabs .tabbar__tab *,
+.app--windows .app-chrome--native-tabs .tabbar > .tooltip-trigger:has(.tabbar__new),
+.app--linux .app-chrome--native-tabs .tabbar > .tooltip-trigger:has(.tabbar__new),
+.app--windows .app-chrome--native-tabs .tabbar__new,
+.app--linux .app-chrome--native-tabs .tabbar__new,
+.app--windows .app-chrome--native-tabs .tabbar__new *,
+.app--linux .app-chrome--native-tabs .tabbar__new *,
+.app--windows .app-chrome--native-tabs .tabbar__command,
+.app--linux .app-chrome--native-tabs .tabbar__command,
+.app--windows .app-chrome--native-tabs .tabbar__command *,
+.app--linux .app-chrome--native-tabs .tabbar__command * {
   --wails-draggable: no-drag;
+  -webkit-app-region: no-drag;
 }
 
 .app--windows .app-chrome--native-tabs .app-chrome__identity {
@@ -17177,6 +17225,7 @@ body > .mermaid-diagram--fullscreen {
   background: var(--bg-elev);
   border-bottom: 1px solid var(--border-soft);
   --wails-draggable: drag;
+  -webkit-app-region: drag;
   user-select: none;
 }
 
@@ -17189,6 +17238,7 @@ body > .mermaid-diagram--fullscreen {
 
 .topicbar button {
   --wails-draggable: no-drag;
+  -webkit-app-region: no-drag;
 }
 
 .topicbar__chrome-btn {
@@ -17265,6 +17315,7 @@ body > .mermaid-diagram--fullscreen {
   min-width: 0;
   max-width: 100%;
   --wails-draggable: no-drag;
+  -webkit-app-region: no-drag;
 }
 
 .topicbar__title-input {
@@ -17283,6 +17334,7 @@ body > .mermaid-diagram--fullscreen {
   line-height: 1.25;
   font-weight: 680;
   --wails-draggable: no-drag;
+  -webkit-app-region: no-drag;
 }
 
 .topicbar__title-input:focus {
@@ -17301,6 +17353,7 @@ body > .mermaid-diagram--fullscreen {
   gap: 6px;
   position: relative;
   --wails-draggable: no-drag;
+  -webkit-app-region: no-drag;
 }
 
 .topicbar__actions > .tooltip-trigger {

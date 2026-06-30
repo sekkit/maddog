@@ -2777,6 +2777,7 @@ export default function App() {
             onOpenPalette={() => void openPalette()}
           />
         )}
+        {appChromeHidden && <span className="app-window-drag-rail" aria-hidden="true" />}
         {appChromeHidden && <WindowControls platform={desktopPlatform} className="app-window-controls--overlay" />}
         <a className="skip-to-composer" href="#composer-input">
           {t("shortcuts.skipToComposer")}

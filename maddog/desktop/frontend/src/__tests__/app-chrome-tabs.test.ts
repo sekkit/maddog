@@ -72,8 +72,9 @@ ok(
 
 ok(
   /Frameless:\s*true/.test(desktopMainSource) &&
+    !/DisableFramelessWindowDecorations:\s*true/.test(desktopMainSource) &&
     !/TitleBar:\s*mac\.TitleBarHiddenInset\(\)/.test(desktopMainSource),
-  "desktop shell uses a frameless Wails window instead of the native title frame",
+  "desktop shell uses a custom frameless Wails window while preserving Windows shadow decorations",
 );
 
 ok(
@@ -154,8 +155,9 @@ ok(
 
 ok(
   /import \{ AppChrome, WindowControls \} from "\.\/components\/AppChrome";/.test(appSource) &&
+    /\{appChromeHidden && <span className="app-window-drag-rail" aria-hidden="true" \/>\}/.test(appSource) &&
     /\{appChromeHidden && <WindowControls platform=\{desktopPlatform\} className="app-window-controls--overlay" \/>\}/.test(appSource),
-  "frameless workbench and creation layouts keep custom window controls when AppChrome is hidden",
+  "frameless workbench and creation layouts keep custom window controls and a top drag rail when AppChrome is hidden",
 );
 
 ok(
@@ -320,6 +322,20 @@ ok(
     finalDeclaration(".workbench-dock__tabs", "--wails-draggable") === "no-drag" &&
     finalDeclaration(".workbench-dock__tab", "--wails-draggable") === "no-drag",
   "maximized workbench dock keeps a draggable title region while tabs remain clickable",
+);
+
+ok(
+  /<span className="app-chrome__drag-rail" aria-hidden="true" \/>/.test(appChromeSource) &&
+    finalDeclaration(".app-window-drag-rail", "--wails-draggable") === "drag" &&
+    finalDeclaration(".app-window-drag-rail", "-webkit-app-region") === "drag" &&
+    finalDeclaration(".app--windows .app-chrome--tabs .app-chrome__drag-rail", "--wails-draggable") === "drag" &&
+    finalDeclaration(".app--windows .app-chrome--native-tabs .tabbar", "--wails-draggable") === "drag" &&
+    finalDeclaration(".app--windows .app-chrome--native-tabs .tabbar *", "--wails-draggable") === "drag" &&
+    finalDeclaration(".app--windows .app-chrome--native-tabs .tabbar__tab", "--wails-draggable") === "no-drag" &&
+    finalDeclaration(".app--windows .app-chrome--native-tabs .tabbar__new", "--wails-draggable") === "no-drag" &&
+    finalDeclaration(".app-chrome__window-controls", "--wails-draggable") === "no-drag" &&
+    finalDeclaration(".app-chrome__window-controls", "-webkit-app-region") === "no-drag",
+  "custom frameless chrome keeps draggable rails while window controls stay clickable",
 );
 
 for (const selector of [
