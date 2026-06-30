@@ -17,7 +17,7 @@ func touch(path string, t time.Time) error {
 	return os.Chtimes(path, t, t)
 }
 
-// TestSaveLoadRoundTrip is the contract `reasonix chat --resume` depends on: a
+// TestSaveLoadRoundTrip is the contract `reasonix --resume` depends on: a
 // session written to disk reloads byte-for-byte, including tool calls and
 // reasoning content (which the model wants to keep across resumes for cache
 // hits on thinking-mode providers).
@@ -90,7 +90,7 @@ func TestSaveLoadLargeMessage(t *testing.T) {
 
 // TestListSessionsOrdersByMTime makes sure the picker shows the most
 // recently used conversation first — that's what users reach for when they
-// hit `reasonix chat --continue`.
+// hit `reasonix --continue`.
 func TestListSessionsOrdersByMTime(t *testing.T) {
 	dir := t.TempDir()
 	// Write two sessions with explicit mtimes so the order is deterministic.
@@ -122,6 +122,41 @@ func TestListSessionsOrdersByMTime(t *testing.T) {
 	}
 	if got[0].Turns != 1 || got[0].Preview != "preview for b.jsonl" {
 		t.Errorf("preview/turns wrong on newest: turns=%d preview=%q", got[0].Turns, got[0].Preview)
+	}
+}
+
+func TestListSessionsSkipsCleanupPending(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "pending.jsonl")
+	s := NewSession("")
+	s.Add(provider.Message{Role: provider.RoleUser, Content: "preview"})
+	if err := s.Save(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := MarkCleanupPending(path, "delete"); err != nil {
+		t.Fatal(err)
+	}
+	if !IsCleanupPending(path) {
+		t.Fatal("session should be marked cleanup-pending")
+	}
+
+	got, err := ListSessions(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("cleanup-pending session should be hidden, got %+v", got)
+	}
+
+	if err := ClearCleanupPending(path); err != nil {
+		t.Fatal(err)
+	}
+	got, err = ListSessions(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].Path != path {
+		t.Fatalf("session should be visible after clearing marker, got %+v", got)
 	}
 }
 

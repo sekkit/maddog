@@ -1,6 +1,17 @@
 // Run: tsx src/__tests__/provider-model-refresh.test.ts
 
-import { isLikelyChatModel, mergedFetchedProviderModels, providerDefaultModel, providerModelCandidates } from "../lib/providerModels";
+import {
+  apiKeyEnvFromProviderName,
+  inferredVisionModels,
+  isLikelyChatModel,
+  isLikelyVisionModel,
+  mergedFetchedProviderModels,
+  providerApiKeyEnvForSave,
+  providerDefaultModel,
+  providerIsConfigured,
+  providerModelCandidates,
+  providerRequiresKey,
+} from "../lib/providerModels";
 
 let passed = 0;
 let failed = 0;
@@ -65,6 +76,35 @@ eq(
 );
 
 eq(
+  [
+    isLikelyVisionModel("gpt-4o"),
+    isLikelyVisionModel("gpt-4o-audio-preview"),
+    isLikelyVisionModel("gpt-4o-mini-audio-preview"),
+    isLikelyVisionModel("mimo-v2.5"),
+    isLikelyVisionModel("mimo-v2-omni"),
+    isLikelyVisionModel("qwen2.5-vl-72b-instruct"),
+    isLikelyVisionModel("mimo-v2.5-asr"),
+  ],
+  [true, false, false, true, true, true, false],
+  "detects likely image-capable chat model IDs",
+);
+
+eq(
+  inferredVisionModels([
+    "mimo-v2.5-pro",
+    "mimo-v2.5",
+    "mimo-v2-omni",
+    "qwen-vl-plus",
+    "mimo-v2.5-asr",
+    "audio-omni-tts",
+    "gpt-4o-audio-preview",
+    "gpt-4o-mini-audio-preview",
+  ]),
+  ["mimo-v2.5", "mimo-v2-omni", "qwen-vl-plus"],
+  "infers image-capable models without importing audio models",
+);
+
+eq(
   mergedFetchedProviderModels([], ["coding-pro", "chat"], { preserveCurated: true }),
   ["coding-pro", "chat"],
   "background refresh can populate an empty model list",
@@ -80,6 +120,51 @@ eq(
   providerDefaultModel("deleted", ["coding-pro", "chat"]),
   "coding-pro",
   "falls back to first saved model when default is unavailable",
+);
+
+eq(
+  providerApiKeyEnvForSave("Local Gateway", "", ""),
+  "",
+  "keeps custom provider keyless when no key env or key value is supplied",
+);
+
+eq(
+  providerApiKeyEnvForSave("Local Gateway", "", "sk-test"),
+  "LOCAL_GATEWAY_API_KEY",
+  "creates a key env when saving an inline key for a new custom provider",
+);
+
+eq(
+  providerApiKeyEnvForSave("Local Gateway", "GATEWAY_KEY", ""),
+  "GATEWAY_KEY",
+  "preserves an explicitly configured key env",
+);
+
+eq(
+  [
+    apiKeyEnvFromProviderName("商汤"),
+    apiKeyEnvFromProviderName("通义千问"),
+  ],
+  ["CUSTOM_d39b9067_API_KEY", "CUSTOM_e995c4c9_API_KEY"],
+  "generates distinct stable key envs for non-ASCII provider names",
+);
+
+eq(
+  providerApiKeyEnvForSave("商汤", "CUSTOM_API_KEY", "sk-test"),
+  "CUSTOM_API_KEY",
+  "preserves an explicitly configured legacy custom key env",
+);
+
+eq(
+  [
+    providerRequiresKey({ apiKeyEnv: "" }),
+    providerIsConfigured({ apiKeyEnv: "", keySet: false }),
+    providerIsConfigured({ apiKeyEnv: "LOCAL_API_KEY", keySet: false, requiresKey: false }),
+    providerIsConfigured({ apiKeyEnv: "REMOTE_API_KEY", keySet: false, requiresKey: true }),
+    providerIsConfigured({ apiKeyEnv: "REMOTE_API_KEY", keySet: true, requiresKey: true }),
+  ],
+  [false, true, true, false, true],
+  "separates provider selectability from key presence for no-auth providers",
 );
 
 console.log(`\n${passed} passed, ${failed} failed, ${passed + failed} total`);

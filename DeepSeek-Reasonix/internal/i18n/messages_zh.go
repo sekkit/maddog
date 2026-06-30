@@ -8,7 +8,7 @@ var Chinese = Messages{
 	WelcomeTitleFmt: "欢迎使用 %s",
 	NoConfigYet:     "还没有配置 — 现在来设置一下吧。",
 	StartingChatFmt: "正在启动 %s…",
-	SetKeyHint:      "设置好 API key 后运行 `reasonix chat`。",
+	SetKeyHint:      "设置好 API key 后运行 `reasonix`。",
 	ConfigLabel:     "配置",
 	ModelsLabel:     "模型",
 	ConfigNotFound:  "未找到 — 使用内置默认值",
@@ -19,7 +19,7 @@ var Chinese = Messages{
 	StepScaffold:    "生成 reasonix.toml",
 	StepSetKey:      "设置 API key",
 
-	InitHint:       "项目记忆（AGENTS.md）在会话内由模型生成：运行 `reasonix chat`，然后 `/init` —— 模型会分析代码库并写入。配置请用 `reasonix setup`。",
+	InitHint:       "项目记忆（AGENTS.md）在会话内由模型生成：运行 `reasonix`，然后 `/init` —— 模型会分析代码库并写入。配置请用 `reasonix setup`。",
 	StepSetKeyHint: "运行 `reasonix setup`，或 export DEEPSEEK_API_KEY=…",
 	StepChatDesc:   "交互式会话",
 	StepRunDesc:    "执行单次任务",
@@ -27,7 +27,7 @@ var Chinese = Messages{
 
 	ChatTip:           "对话上下文将跨轮保留。输入 'exit' 或按 Ctrl-D 退出。",
 	TurnCancelled:     "已取消 — 回到提示符",
-	NoSessionToResume: "没有可恢复的会话 — 用 `reasonix chat` 开一个新的",
+	NoSessionToResume: "没有可恢复的会话 — 用 `reasonix` 开一个新的",
 	ResumeRequiresTTY: "--resume 需要交互式终端；用 --continue 直接恢复最近一次",
 	PickSessionLabel:  "恢复哪个会话？",
 
@@ -48,6 +48,7 @@ var Chinese = Messages{
 	ChatStatusThinkingFmt:       "%s 思考中… (%d 秒 · Esc 取消)",
 	ChatToolWorkingFmt:          "%s 运行中 · %d 秒",
 	ChatStatusRetryingFmt:       "%s 正在重试 (%d/%d)… (Esc 取消)",
+	ChatStatusCancellingFmt:     "%s 正在停止… (%d 秒 · Ctrl+C 退出)",
 	ChatStatusIdle:              "就绪",
 	ChatStatusYoloIdle:          "已跳过工具批准",
 	ChatStatusCycleHint:         "shift+tab 切换计划 · ctrl+y yolo",
@@ -73,6 +74,9 @@ var Chinese = Messages{
 	PermissionSavedFmt:          "授权已保存到 %s：%s",
 	PermissionAlreadyAllowedFmt: "授权已由 %s 中的规则覆盖：%s",
 	PermissionSaveFailedFmt:     "保存授权 %s 失败：%v",
+	MCPReadOnlyTrustSavedFmt:    "MCP 只读信任已保存到 %s：%s/%s",
+	MCPReadOnlyTrustAlreadyFmt:  "MCP 只读信任已保存在 %s：%s/%s",
+	MCPReadOnlyTrustFailedFmt:   "保存 MCP 只读信任 %s/%s 失败：%v",
 	DiffFoldedFmt:               "… 还有 %d 行",
 	DiffFoldEnabledFmt:          "diff 已折叠至 %d 行（/diff-fold 展开）",
 	DiffFoldDisabled:            "diff 已展开 — 显示全部行（/diff-fold 折叠）",
@@ -101,10 +105,11 @@ var Chinese = Messages{
 	SlashClearPrompt:   "清空当前上下文且不保存？",
 	SlashClearDone:     "已清空当前上下文",
 	SlashClearFailed:   "清空当前上下文失败",
+	SlashClsDone:       "已清屏（LLM 上下文保留）",
 	SlashUnavailable:   "当前构建不支持该命令",
 	SlashUnknown:       "未知命令",
 	SlashTodoCleared:   "已清除任务清单",
-	SlashHelp:          "命令：/compact · /new · /clear · /resume · /rewind · /tree · /branch · /switch · /todo · /verbose · /model（切换模型）· /effort · /theme · /language · /mcp · /skills · /hooks · /paste-image · /memory · /goal · /remember · /quit · /help · 以及 skills（/init、/explore …）",
+	SlashHelp:          "命令：/compact · /new · /clear · /resume · /rewind · /tree · /branch · /switch · /todo · /verbose · /model（切换模型）· /effort · /theme · /language · /mcp · /skills · /hooks · /paste-image · /memory · /memory-v5 · /migrate · /goal · /remember · /quit · /help · 以及 skills（/init、/explore …）",
 
 	SkillPickerTitle:             "Skills",
 	SkillPickerAvailableFmt:      "%d 个可用",
@@ -161,57 +166,68 @@ var Chinese = Messages{
 	ShellExecTimeoutFmt: "Shell 命令超时（>%s）",
 	ShellModeHint:       "Enter 执行 Shell · Esc 取消 · 点击输出展开",
 
-	CmdNew:          "开启新会话并保存历史",
-	CmdClear:        "丢弃当前上下文",
-	CmdCompact:      "压缩上下文",
-	CmdRewind:       "回滚到更早的一轮",
-	CmdTree:         "查看对话分支树",
-	CmdBranch:       "创建对话分支",
-	CmdSwitchBranch: "切换对话分支",
-	CmdResume:       "恢复已保存的会话",
-	CmdRename:       "重命名会话",
-	CmdModel:        "切换模型",
-	CmdMemory:       "查看记忆文件",
-	CmdGoal:         "设置或清除当前目标",
-	CmdRemember:     "保存一条记忆",
-	CmdForget:       "归档一条已存记忆",
-	CmdMcp:          "MCP 服务器",
-	CmdHooks:        "管理 hooks",
-	CmdPasteImage:   "粘贴剪贴板图片",
-	CmdOutputStyle:  "列出输出风格",
-	CmdTheme:        "切换 CLI 主题",
-	CmdLanguage:     "切换 CLI 语言",
-	CmdSkill:        "管理 skills",
-	CmdVerbose:      "切换 thinking 原文显示",
-	CmdDiffFold:     "切换 diff 折叠/展开",
-	CmdSandbox:      "查看沙箱状态",
-	CmdEffort:       "设置推理强度",
-	CmdAutoPlan:     "配置自动计划模式",
-	CmdReasonLang:   "设置可见思考语言",
-	CmdHelp:         "查看命令列表",
-	CmdTodo:         "清除任务清单",
-	CmdQuit:         "退出会话",
-	ArgSkillList:    "列出 skills",
-	ArgSkillShow:    "查看 skill 内容",
-	ArgSkillNew:     "新建一个 skill",
-	ArgSkillPaths:   "显示发现路径",
-	ArgMcpAdd:       "连接一个服务器",
-	ArgMcpRemove:    "断开一个服务器",
-	ArgMcpList:      "显示已配置的服务器",
-	ArgMcpConnected: "已连接",
-	ArgHooksList:    "列出生效的 hooks",
-	ArgHooksTrust:   "信任本项目的 hooks",
-	ArgModelCurrent: "当前",
-	ArgEffortAuto:   "使用模型默认值",
-	ArgEffortLow:    "较轻推理",
-	ArgEffortMedium: "均衡推理",
-	ArgEffortHigh:   "较深推理",
-	ArgEffortXHigh:  "超高推理",
-	ArgEffortMax:    "最高推理",
-	ArgThemeCurrent: "当前",
-	ArgLanguageAuto: "从 REASONIX_LANG / 系统 locale 自动检测",
-	ArgLanguageEn:   "English",
-	ArgLanguageZh:   "中文",
+	CmdNew:              "开启新会话并保存历史",
+	CmdClear:            "丢弃当前上下文",
+	CmdCls:              "清屏（保留 LLM 上下文）",
+	CmdCompact:          "压缩上下文",
+	CmdRewind:           "回滚到更早的一轮",
+	CmdTree:             "查看对话分支树",
+	CmdBranch:           "创建对话分支",
+	CmdSwitchBranch:     "切换对话分支",
+	CmdResume:           "恢复已保存的会话",
+	CmdRename:           "重命名会话",
+	CmdModel:            "切换模型",
+	CmdMemory:           "查看记忆文件",
+	CmdMigrate:          "重试旧数据迁移",
+	CmdGoal:             "设置或清除当前目标",
+	CmdRemember:         "保存一条记忆",
+	CmdForget:           "归档一条已存记忆",
+	CmdMcp:              "MCP 服务器",
+	CmdHooks:            "管理 hooks",
+	CmdPasteImage:       "粘贴剪贴板图片",
+	CmdOutputStyle:      "列出输出风格",
+	CmdTheme:            "切换 CLI 主题",
+	CmdLanguage:         "切换 CLI 语言",
+	CmdSkill:            "管理 skills",
+	CmdVerbose:          "切换 thinking 原文显示",
+	CmdReloadCmd:        "重载自定义命令",
+	CmdDiffFold:         "切换 diff 折叠/展开",
+	CmdSandbox:          "查看沙箱状态",
+	CmdEffort:           "设置推理强度",
+	CmdAutoPlan:         "配置自动计划模式",
+	CmdReasonLang:       "设置可见思考语言",
+	CmdMemoryV5:         "切换 Memory v5",
+	CmdHelp:             "查看命令列表",
+	CmdTodo:             "清除任务清单",
+	CmdQuit:             "退出会话",
+	CmdCopy:             "选择回复复制到剪贴板",
+	CmdExport:           "将会话导出为 Markdown",
+	SlashCopyDone:       "已复制到剪贴板",
+	SlashCopyEmpty:      "没有可复制的助手回复",
+	SlashCopyListHeader: "选择要复制的回复：",
+	SlashExportDoneFmt:  "会话已导出到 %s",
+	SlashExportEmpty:    "没有可导出的消息",
+	ArgSkillList:        "列出 skills",
+	ArgSkillShow:        "查看 skill 内容",
+	ArgSkillNew:         "新建一个 skill",
+	ArgSkillPaths:       "显示发现路径",
+	ArgMcpAdd:           "连接一个服务器",
+	ArgMcpRemove:        "断开一个服务器",
+	ArgMcpList:          "显示已配置的服务器",
+	ArgMcpConnected:     "已连接",
+	ArgHooksList:        "列出生效的 hooks",
+	ArgHooksTrust:       "信任本项目的 hooks",
+	ArgModelCurrent:     "当前",
+	ArgEffortAuto:       "使用模型默认值",
+	ArgEffortLow:        "较轻推理",
+	ArgEffortMedium:     "均衡推理",
+	ArgEffortHigh:       "较深推理",
+	ArgEffortXHigh:      "超高推理",
+	ArgEffortMax:        "最高推理",
+	ArgThemeCurrent:     "当前",
+	ArgLanguageAuto:     "从 REASONIX_LANG / 系统 locale 自动检测",
+	ArgLanguageEn:       "English",
+	ArgLanguageZh:       "中文",
 
 	ListModelsHeaderFmt: "模型（当前：%s）",
 	ListModelsHint:      "用底部的模型切换器，或输入 /model <provider/model>",
@@ -365,29 +381,32 @@ var Chinese = Messages{
 	UsageBody: `reasonix — 由配置和插件驱动的 coding agent（多模型）
 
 用法：
-  reasonix chat [--model NAME] [-c|--continue] [--resume]   交互式会话（多轮；-c 恢复最近一次，--resume 选择一个）
+  reasonix [--model NAME] [-c|--continue] [--resume] [--yolo] [--dir PATH]   交互式会话（多轮；-c 恢复最近一次，--resume 选择一个）
   reasonix run  [--model NAME] [--max-steps N] [-c|--continue] [--resume PATH] <task>   执行单次任务后退出
-  reasonix serve [--model NAME] [--addr HOST:PORT]      通过 HTTP+SSE 提供会话（浏览器客户端在 /）
+  reasonix review [--base BRANCH] [--commit SHA] [--model NAME]  AI 代码审查（基于本地 diff）
+  reasonix serve [--model NAME] [--addr HOST:PORT] [--auth none|token|password] [--token STR] [--password STR] [--hash-password]  通过 HTTP+SSE 提供服务（支持可选认证）
   reasonix acp [--model NAME]                           通过 stdio 提供 Agent Client Protocol（也可用：reasonix --acp）
   reasonix setup [path]                                 交互式配置向导；生成 reasonix.toml（及 .env）
   reasonix config auto-plan [off|on]                    配置自动计划模式
+  reasonix config memory-v5 [off|on|status]             配置 Memory v5
   reasonix config reasoning-language [auto|zh|en]        配置可见思考语言
-  reasonix mcp <add|remove|list>                        管理 reasonix.toml 里的 MCP 服务器
+  reasonix mcp <add|remove|list|import>                 管理 reasonix.toml 里的 MCP 服务器
+  reasonix init                                         查看如何生成项目记忆（AGENTS.md）
   reasonix doctor [--json]                              输出脱敏的本地诊断信息
   reasonix bot start|doctor|weixin-login                多渠道 IM bot 网关
-  reasonix upgrade [--check] [--force]                   自更新到最新版本
+  reasonix upgrade [--check] [--force]                   自更新到最新版本（也可用：reasonix update）
   reasonix version
   reasonix help
 
 示例：
-  reasonix chat
-  reasonix chat --continue
+  reasonix
+  reasonix --continue
   reasonix run "把 main.go 里的 TODO 实现掉"
   reasonix run --model mimo-pro "给这个函数补单元测试"
   echo "解释这段代码" | reasonix run
 
 配置：
-  优先级：flag > ./reasonix.toml > ~/.config/reasonix/config.toml > 内置默认值
+  优先级：flag > ./reasonix.toml > ~/.reasonix/config.toml > 内置默认值
   密钥通过 api_key_env 从环境变量注入（如 DEEPSEEK_API_KEY）。
   运行 'reasonix setup' 生成配置；详见 docs/SPEC.md。
 `,

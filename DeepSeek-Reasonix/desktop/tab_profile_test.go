@@ -166,6 +166,40 @@ func TestSaveTabsPersistsModelAndEffort(t *testing.T) {
 	}
 }
 
+func TestBuildTabControllerMigratesPersistedBareMimoModel(t *testing.T) {
+	isolateDesktopUserDirs(t)
+
+	root := t.TempDir()
+	configBody := `default_model = "deepseek-flash"
+[[providers]]
+name = "deepseek-flash"
+kind = "openai"
+base_url = "https://example.invalid/v1"
+model = "deepseek-v4-flash"
+api_key_env = "REASONIX_TEST_KEY_UNSET"
+`
+	if err := os.WriteFile(filepath.Join(root, "reasonix.toml"), []byte(configBody), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	app := NewApp()
+	app.readyHook = func() {}
+	tab := testTab("mimo", root)
+	tab.model = "mimo-v2.5-pro"
+	app.tabs = map[string]*WorkspaceTab{tab.ID: tab}
+	app.tabOrder = []string{tab.ID}
+	app.activeTabID = tab.ID
+
+	app.buildTabController(tab)
+	if tab.StartupErr != "" {
+		t.Fatalf("tab startup error = %q", tab.StartupErr)
+	}
+	defer tab.Ctrl.Close()
+	if tab.model != "mimo-pro/mimo-v2.5-pro" {
+		t.Fatalf("tab model = %q, want migrated MiMo provider ref", tab.model)
+	}
+}
+
 func TestSaveTabsPersistsTokenModeOnlyWhenEconomy(t *testing.T) {
 	isolateDesktopUserDirs(t)
 
@@ -395,6 +429,32 @@ func TestMetaReportsGoalStatus(t *testing.T) {
 	meta = app.MetaForTab(tab.ID)
 	if meta.CollaborationMode != "plan" || meta.TokenMode != boot.TokenModeEconomy {
 		t.Fatalf("profile meta = %+v, want plan + economy", meta)
+	}
+}
+
+func TestMetaReportsStoredCollaborationModeWhileControllerRebuilds(t *testing.T) {
+	isolateDesktopUserDirs(t)
+
+	app := NewApp()
+	tab := testTab("a", t.TempDir())
+	tab.Ctrl.Close()
+	tab.Ctrl = nil
+	tab.mode = "plan-yolo"
+	tab.toolApprovalMode = control.ToolApprovalYolo
+	app.tabs = map[string]*WorkspaceTab{tab.ID: tab}
+	app.tabOrder = []string{tab.ID}
+	app.activeTabID = tab.ID
+
+	meta := app.MetaForTab(tab.ID)
+	if meta.CollaborationMode != "plan" || meta.ToolApprovalMode != control.ToolApprovalYolo {
+		t.Fatalf("rebuilding plan-yolo meta = %+v, want plan/yolo", meta)
+	}
+
+	tab.mode = "normal"
+	tab.goal = "finish the goal runner"
+	meta = app.MetaForTab(tab.ID)
+	if meta.CollaborationMode != "goal" || meta.Goal != "finish the goal runner" || meta.GoalStatus != control.GoalStatusRunning {
+		t.Fatalf("rebuilding goal meta = %+v, want running goal", meta)
 	}
 }
 

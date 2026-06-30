@@ -54,6 +54,7 @@ func New(cfg provider.Config) (provider.Provider, error) {
 		name = "openai"
 	}
 	keyEnv, _ := cfg.Extra["api_key_env"].(string) // for actionable auth errors
+	keySource, _ := cfg.Extra["api_key_source"].(string)
 	effort, _ := cfg.Extra["effort"].(string)
 	effort = strings.ToLower(strings.TrimSpace(effort))
 	if effort == "auto" {
@@ -113,6 +114,7 @@ func New(cfg provider.Config) (provider.Provider, error) {
 		name:         name,
 		apiKey:       cfg.APIKey,
 		keyEnv:       keyEnv,
+		keySource:    keySource,
 		baseURL:      strings.TrimRight(cfg.BaseURL, "/"),
 		model:        cfg.Model,
 		deepseek:     deepseek,
@@ -139,6 +141,7 @@ type client struct {
 	name         string
 	apiKey       string
 	keyEnv       string // api_key_env name, surfaced in auth errors
+	keySource    string // source of keyEnv, surfaced in auth errors
 	baseURL      string
 	model        string
 	http         *http.Client
@@ -157,6 +160,7 @@ func (c *client) sendOpts() provider.SendOptions {
 	return provider.SendOptions{
 		Provider:   c.name,
 		KeyEnv:     c.keyEnv,
+		KeySource:  c.keySource,
 		KeyPresent: c.apiKey != "",
 		RetryAuth:  c.authed.Load(),
 	}
@@ -196,7 +200,9 @@ func (c *client) Stream(ctx context.Context, req provider.Request) (<-chan provi
 			return nil, err
 		}
 		httpReq.Header.Set("Content-Type", "application/json")
-		httpReq.Header.Set("Authorization", "Bearer "+c.apiKey)
+		if c.apiKey != "" {
+			httpReq.Header.Set("Authorization", "Bearer "+c.apiKey)
+		}
 		httpReq.Header.Set("Accept", "text/event-stream")
 		return httpReq, nil
 	}
@@ -228,23 +234,37 @@ func (c *client) streamWithReconnect(ctx context.Context, resp *http.Response, n
 			return
 		}
 		if !provider.IsConnReset(err) {
-			out <- provider.Chunk{Type: provider.ChunkError, Err: err}
+			sendChunk(ctx, out, provider.Chunk{Type: provider.ChunkError, Err: err})
 			return
 		}
 		if emitted {
-			out <- provider.Chunk{Type: provider.ChunkError, Err: &provider.StreamInterruptedError{Err: err}}
+			sendChunk(ctx, out, provider.Chunk{Type: provider.ChunkError, Err: &provider.StreamInterruptedError{Err: err}})
 			return
 		}
 		if attempt >= maxStreamReconnects {
-			out <- provider.Chunk{Type: provider.ChunkError, Err: err}
+			sendChunk(ctx, out, provider.Chunk{Type: provider.ChunkError, Err: err})
 			return
 		}
 		next, rerr := provider.SendWithRetry(ctx, c.http, c.sendOpts(), newReq)
 		if rerr != nil {
-			out <- provider.Chunk{Type: provider.ChunkError, Err: rerr}
+			sendChunk(ctx, out, provider.Chunk{Type: provider.ChunkError, Err: rerr})
 			return
 		}
 		resp = next
+	}
+}
+
+func sendChunk(ctx context.Context, out chan<- provider.Chunk, chunk provider.Chunk) bool {
+	select {
+	case out <- chunk:
+		return true
+	default:
+	}
+	select {
+	case <-ctx.Done():
+		return false
+	case out <- chunk:
+		return true
 	}
 }
 
@@ -405,7 +425,9 @@ func (c *client) readStream(ctx context.Context, resp *http.Response, out chan<-
 			u := normaliseUsage(sr.Usage)
 			u.FinishReason = lastFinishReason
 			emitted = true
-			out <- provider.Chunk{Type: provider.ChunkUsage, Usage: u}
+			if !sendChunk(ctx, out, provider.Chunk{Type: provider.ChunkUsage, Usage: u}) {
+				return emitted, ctx.Err()
+			}
 		}
 		if len(sr.Choices) == 0 {
 			continue
@@ -414,17 +436,23 @@ func (c *client) readStream(ctx context.Context, resp *http.Response, out chan<-
 		delta := sr.Choices[0].Delta
 		if delta.ReasoningContent != "" {
 			emitted = true
-			out <- provider.Chunk{Type: provider.ChunkReasoning, Text: delta.ReasoningContent}
+			if !sendChunk(ctx, out, provider.Chunk{Type: provider.ChunkReasoning, Text: delta.ReasoningContent}) {
+				return emitted, ctx.Err()
+			}
 		}
 		if delta.Content != "" {
 			r, txt := think.push(delta.Content)
 			if r != "" {
 				emitted = true
-				out <- provider.Chunk{Type: provider.ChunkReasoning, Text: r}
+				if !sendChunk(ctx, out, provider.Chunk{Type: provider.ChunkReasoning, Text: r}) {
+					return emitted, ctx.Err()
+				}
 			}
 			if txt != "" {
 				emitted = true
-				out <- provider.Chunk{Type: provider.ChunkText, Text: txt}
+				if !sendChunk(ctx, out, provider.Chunk{Type: provider.ChunkText, Text: txt}) {
+					return emitted, ctx.Err()
+				}
 			}
 		}
 		for _, tc := range delta.ToolCalls {
@@ -447,11 +475,16 @@ func (c *client) readStream(ctx context.Context, resp *http.Response, out chan<-
 			if !started[tc.Index] && cur.Name != "" {
 				started[tc.Index] = true
 				emitted = true
-				out <- provider.Chunk{Type: provider.ChunkToolCallStart, ToolCall: &provider.ToolCall{ID: cur.ID, Name: cur.Name}}
+				if !sendChunk(ctx, out, provider.Chunk{Type: provider.ChunkToolCallStart, ToolCall: &provider.ToolCall{ID: cur.ID, Name: cur.Name}}) {
+					return emitted, ctx.Err()
+				}
 			}
 		}
 	}
 
+	if err := ctx.Err(); err != nil {
+		return emitted, err
+	}
 	if stalled.Load() {
 		return emitted, fmt.Errorf("%s: stream stalled — no data for %s, connection likely dropped", c.name, idleTimeout)
 	}
@@ -467,10 +500,14 @@ func (c *client) readStream(ctx context.Context, resp *http.Response, out chan<-
 
 	if r, txt := think.flush(); r != "" || txt != "" {
 		if r != "" {
-			out <- provider.Chunk{Type: provider.ChunkReasoning, Text: r}
+			if !sendChunk(ctx, out, provider.Chunk{Type: provider.ChunkReasoning, Text: r}) {
+				return emitted, ctx.Err()
+			}
 		}
 		if txt != "" {
-			out <- provider.Chunk{Type: provider.ChunkText, Text: txt}
+			if !sendChunk(ctx, out, provider.Chunk{Type: provider.ChunkText, Text: txt}) {
+				return emitted, ctx.Err()
+			}
 		}
 	}
 
@@ -483,9 +520,13 @@ func (c *client) readStream(ctx context.Context, resp *http.Response, out chan<-
 			// an empty tool_call_id collapses multi-tool turns downstream.
 			tc.ID = fmt.Sprintf("call_%d", idx)
 		}
-		out <- provider.Chunk{Type: provider.ChunkToolCall, ToolCall: tc}
+		if !sendChunk(ctx, out, provider.Chunk{Type: provider.ChunkToolCall, ToolCall: tc}) {
+			return emitted, ctx.Err()
+		}
 	}
-	out <- provider.Chunk{Type: provider.ChunkDone}
+	if !sendChunk(ctx, out, provider.Chunk{Type: provider.ChunkDone}) {
+		return emitted, ctx.Err()
+	}
 	return emitted, nil
 }
 
@@ -582,17 +623,17 @@ type chatTool struct {
 
 type chatFunction struct {
 	Name        string          `json:"name"`
-	Description string          `json:"description"`
-	Parameters  json.RawMessage `json:"parameters"`
+	Description string          `json:"description,omitempty"`
+	Parameters  json.RawMessage `json:"parameters,omitempty"`
 }
 
 type chatToolCall struct {
-	Index    int    `json:"index"`
+	Index    int    `json:"index,omitempty"`
 	ID       string `json:"id,omitempty"`
 	Type     string `json:"type,omitempty"`
 	Function struct {
-		Name      string `json:"name,omitempty"`
-		Arguments string `json:"arguments,omitempty"`
+		Name      string `json:"name"`
+		Arguments string `json:"arguments"`
 	} `json:"function"`
 }
 

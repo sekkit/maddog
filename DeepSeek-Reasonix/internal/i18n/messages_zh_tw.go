@@ -8,7 +8,7 @@ var ChineseTraditional = Messages{
 	WelcomeTitleFmt: "歡迎使用 %s",
 	NoConfigYet:     "還沒有設定 — 現在來設定一下吧。",
 	StartingChatFmt: "正在啟動 %s…",
-	SetKeyHint:      "設定好 API key 後執行 `reasonix chat`。",
+	SetKeyHint:      "設定好 API key 後執行 `reasonix`。",
 	ConfigLabel:     "設定",
 	ModelsLabel:     "模型",
 	ConfigNotFound:  "未找到 — 使用內建預設值",
@@ -19,7 +19,7 @@ var ChineseTraditional = Messages{
 	StepScaffold:    "生成 reasonix.toml",
 	StepSetKey:      "設定 API key",
 
-	InitHint:       "專案記憶（AGENTS.md）在會話內由模型生成：執行 `reasonix chat`，然後 `/init` —— 模型會分析程式碼庫並寫入。設定請用 `reasonix setup`。",
+	InitHint:       "專案記憶（AGENTS.md）在會話內由模型生成：執行 `reasonix`，然後 `/init` —— 模型會分析程式碼庫並寫入。設定請用 `reasonix setup`。",
 	StepSetKeyHint: "執行 `reasonix setup`，或 export DEEPSEEK_API_KEY=…",
 	StepChatDesc:   "互動式會話",
 	StepRunDesc:    "執行單次任務",
@@ -27,7 +27,7 @@ var ChineseTraditional = Messages{
 
 	ChatTip:           "對話上下文將跨輪保留。輸入 'exit' 或按 Ctrl-D 退出。",
 	TurnCancelled:     "已取消 — 回到提示符",
-	NoSessionToResume: "沒有可恢復的會話 — 用 `reasonix chat` 開一個新的",
+	NoSessionToResume: "沒有可恢復的會話 — 用 `reasonix` 開一個新的",
 	ResumeRequiresTTY: "--resume 需要互動式終端；用 --continue 直接恢復最近一次",
 	PickSessionLabel:  "恢復哪個會話？",
 
@@ -44,6 +44,7 @@ var ChineseTraditional = Messages{
 	ChatStatusThinkingFmt:       "%s 思考中… (%d 秒 · Esc 取消)",
 	ChatToolWorkingFmt:          "%s 執行中 · %d 秒",
 	ChatStatusRetryingFmt:       "%s 正在重試 (%d/%d)… (Esc 取消)",
+	ChatStatusCancellingFmt:     "%s 正在停止… (%d 秒 · Ctrl+C 退出)",
 	ChatStatusIdle:              "就緒",
 	ChatStatusYoloIdle:          "已跳過核准",
 	ChatStatusCycleHint:         "shift+tab 循環切換",
@@ -69,6 +70,9 @@ var ChineseTraditional = Messages{
 	PermissionSavedFmt:          "授權已儲存到 %s：%s",
 	PermissionAlreadyAllowedFmt: "授權已由 %s 中的規則覆蓋：%s",
 	PermissionSaveFailedFmt:     "儲存授權 %s 失敗：%v",
+	MCPReadOnlyTrustSavedFmt:    "MCP 唯讀信任已儲存到 %s：%s/%s",
+	MCPReadOnlyTrustAlreadyFmt:  "MCP 唯讀信任已儲存在 %s：%s/%s",
+	MCPReadOnlyTrustFailedFmt:   "儲存 MCP 唯讀信任 %s/%s 失敗：%v",
 	DiffFoldedFmt:               "… 還有 %d 行",
 
 	OutputStyleNone:    "沒有可用的輸出風格",
@@ -95,7 +99,7 @@ var ChineseTraditional = Messages{
 	SlashUnavailable:   "當前建構不支援該命令",
 	SlashUnknown:       "未知命令",
 	SlashTodoCleared:   "已清除任務清單",
-	SlashHelp:          "命令：/compact · /new（/clear）· /resume · /rewind · /tree · /branch · /switch · /todo · /verbose · /model（切換模型）· /effort · /theme · /language · /mcp · /skills · /hooks · /paste-image · /memory · /remember · /quit · /help · 以及 skills（/init、/explore …）",
+	SlashHelp:          "命令：/compact · /new（/clear）· /resume · /rewind · /tree · /branch · /switch · /todo · /verbose · /model（切換模型）· /effort · /theme · /language · /mcp · /skills · /hooks · /paste-image · /memory · /memory-v5 · /migrate · /remember · /quit · /help · 以及 skills（/init、/explore …）",
 
 	SkillPickerTitle:             "Skills",
 	SkillPickerAvailableFmt:      "%d 個可用",
@@ -152,53 +156,64 @@ var ChineseTraditional = Messages{
 	ShellExecTimeoutFmt: "Shell 命令逾時（>%s）",
 	ShellModeHint:       "Enter 執行 Shell · Esc 取消 · 點擊輸出展開",
 
-	CmdNew:          "清空上下文並儲存歷史",
-	CmdCompact:      "壓縮上下文",
-	CmdRewind:       "回滾到更早的一輪",
-	CmdTree:         "檢視對話分支樹",
-	CmdBranch:       "建立對話分支",
-	CmdSwitchBranch: "切換對話分支",
-	CmdResume:       "恢復已儲存的會話",
-	CmdModel:        "切換模型",
-	CmdMemory:       "檢視記憶檔案",
-	CmdRemember:     "儲存一條記憶",
-	CmdForget:       "刪除一條已存記憶",
-	CmdMcp:          "MCP 伺服器",
-	CmdHooks:        "管理 hooks",
-	CmdPasteImage:   "貼上剪貼簿圖片",
-	CmdOutputStyle:  "列出輸出風格",
-	CmdTheme:        "切換 CLI 主題",
-	CmdLanguage:     "切換 CLI 語言",
-	CmdSkill:        "管理 skills",
-	CmdVerbose:      "切換 thinking 原文顯示",
-	CmdSandbox:      "檢視沙箱狀態",
-	CmdEffort:       "設定推理強度",
-	CmdAutoPlan:     "設定自動計畫模式",
-	CmdReasonLang:   "設定可見思考語言",
-	CmdHelp:         "檢視命令列表",
-	CmdTodo:         "清除任務清單",
-	CmdQuit:         "退出會話",
-	ArgSkillList:    "列出 skills",
-	ArgSkillShow:    "檢視 skill 內容",
-	ArgSkillNew:     "新建一個 skill",
-	ArgSkillPaths:   "顯示發現路徑",
-	ArgMcpAdd:       "連線一個伺服器",
-	ArgMcpRemove:    "斷開一個伺服器",
-	ArgMcpList:      "顯示已設定的伺服器",
-	ArgMcpConnected: "已連線",
-	ArgHooksList:    "列出生效的 hooks",
-	ArgHooksTrust:   "信任本專案的 hooks",
-	ArgModelCurrent: "當前",
-	ArgEffortAuto:   "使用模型預設值",
-	ArgEffortLow:    "較輕推理",
-	ArgEffortMedium: "均衡推理",
-	ArgEffortHigh:   "較深推理",
-	ArgEffortXHigh:  "超高推理",
-	ArgEffortMax:    "最高推理",
-	ArgThemeCurrent: "當前",
-	ArgLanguageAuto: "從 REASONIX_LANG / 系統 locale 自動偵測",
-	ArgLanguageEn:   "English",
-	ArgLanguageZh:   "中文",
+	CmdNew:              "清空上下文並儲存歷史",
+	CmdCls:              "清除畫面（保留 LLM 上下文）",
+	CmdCompact:          "壓縮上下文",
+	CmdRewind:           "回滾到更早的一輪",
+	CmdTree:             "檢視對話分支樹",
+	CmdBranch:           "建立對話分支",
+	CmdSwitchBranch:     "切換對話分支",
+	CmdResume:           "恢復已儲存的會話",
+	CmdModel:            "切換模型",
+	CmdMemory:           "檢視記憶檔案",
+	CmdMigrate:          "重試舊資料遷移",
+	CmdRemember:         "儲存一條記憶",
+	CmdForget:           "刪除一條已存記憶",
+	CmdMcp:              "MCP 伺服器",
+	CmdHooks:            "管理 hooks",
+	CmdPasteImage:       "貼上剪貼簿圖片",
+	CmdOutputStyle:      "列出輸出風格",
+	CmdTheme:            "切換 CLI 主題",
+	CmdLanguage:         "切換 CLI 語言",
+	CmdSkill:            "管理 skills",
+	CmdVerbose:          "切換 thinking 原文顯示",
+	CmdReloadCmd:        "重載自定義命令",
+	CmdSandbox:          "檢視沙箱狀態",
+	CmdEffort:           "設定推理強度",
+	CmdAutoPlan:         "設定自動計畫模式",
+	CmdReasonLang:       "設定可見思考語言",
+	CmdMemoryV5:         "切換 Memory v5",
+	CmdHelp:             "檢視命令列表",
+	CmdTodo:             "清除任務清單",
+	CmdQuit:             "退出會話",
+	CmdCopy:             "選擇回覆複製到剪貼簿",
+	CmdExport:           "將會話匯出為 Markdown",
+	SlashCopyDone:       "已複製到剪貼簿",
+	SlashCopyEmpty:      "沒有可複製的助手回覆",
+	SlashCopyListHeader: "選擇要複製的回覆：",
+	SlashExportDoneFmt:  "會話已匯出到 %s",
+	SlashExportEmpty:    "沒有可匯出的訊息",
+	ArgSkillList:        "列出 skills",
+	ArgSkillShow:        "檢視 skill 內容",
+	ArgSkillNew:         "新建一個 skill",
+	ArgSkillPaths:       "顯示發現路徑",
+	ArgMcpAdd:           "連線一個伺服器",
+	ArgMcpRemove:        "斷開一個伺服器",
+	ArgMcpList:          "顯示已設定的伺服器",
+	ArgMcpConnected:     "已連線",
+	ArgHooksList:        "列出生效的 hooks",
+	ArgHooksTrust:       "信任本專案的 hooks",
+	ArgModelCurrent:     "當前",
+	ArgEffortAuto:       "使用模型預設值",
+	ArgEffortLow:        "較輕推理",
+	ArgEffortMedium:     "均衡推理",
+	ArgEffortHigh:       "較深推理",
+	ArgEffortXHigh:      "超高推理",
+	ArgEffortMax:        "最高推理",
+	ArgThemeCurrent:     "當前",
+	ArgLanguageAuto:     "從 REASONIX_LANG / 系統 locale 自動偵測",
+	ArgLanguageEn:       "English",
+	ArgLanguageZh:       "中文",
 
 	ListModelsHeaderFmt: "模型（當前：%s）",
 	ListModelsHint:      "用底部的模型切換器，或輸入 /model <provider/model>",
@@ -314,27 +329,32 @@ var ChineseTraditional = Messages{
 	UsageBody: `reasonix — 由設定和插件驅動的 coding agent（多模型）
 
 用法：
-  reasonix chat [--model NAME] [-c|--continue] [--resume]   互動式會話（多輪；-c 恢復最近一次，--resume 選擇一個）
+  reasonix [--model NAME] [-c|--continue] [--resume] [--yolo] [--dir PATH]   互動式會話（多輪；-c 恢復最近一次，--resume 選擇一個）
   reasonix run  [--model NAME] [--max-steps N] [-c|--continue] [--resume PATH] <task>   執行單次任務後退出
-  reasonix serve [--model NAME] [--addr HOST:PORT]      透過 HTTP+SSE 提供會話（瀏覽器客戶端在 /）
+  reasonix review [--base BRANCH] [--commit SHA] [--model NAME]  AI 程式碼審查（基於本機 diff）
+  reasonix serve [--model NAME] [--addr HOST:PORT] [--auth none|token|password] [--token STR] [--password STR] [--hash-password]  透過 HTTP+SSE 提供服務（支援可選認證）
   reasonix acp [--model NAME]                           透過 stdio 提供 Agent Client Protocol（也可用：reasonix --acp）
   reasonix setup [path]                                 互動式設定精靈；生成 reasonix.toml（及 .env）
   reasonix config auto-plan [off|on]                    設定自動計畫模式
+  reasonix config memory-v5 [off|on|status]             設定 Memory v5
   reasonix config reasoning-language [auto|zh|en]        設定可見思考語言
-  reasonix mcp <add|remove|list>                        管理 reasonix.toml 裡的 MCP 伺服器
+  reasonix mcp <add|remove|list|import>                 管理 reasonix.toml 裡的 MCP 伺服器
+  reasonix init                                         查看如何產生專案記憶（AGENTS.md）
   reasonix doctor [--json]                              輸出脫敏的本機診斷資訊
+  reasonix bot start|doctor|weixin-login                多管道 IM bot 閘道
+  reasonix upgrade [--check] [--force]                   自更新至最新版本（也可用：reasonix update）
   reasonix version
   reasonix help
 
 範例：
-  reasonix chat
-  reasonix chat --continue
+  reasonix
+  reasonix --continue
   reasonix run "把 main.go 裡的 TODO 實現掉"
   reasonix run --model mimo-pro "給這個函式補單元測試"
   echo "解釋這段程式碼" | reasonix run
 
 設定：
-  優先順序：flag > ./reasonix.toml > ~/.config/reasonix/config.toml > 內建預設值
+  優先順序：flag > ./reasonix.toml > ~/.reasonix/config.toml > 內建預設值
   金鑰透過 api_key_env 從環境變數注入（如 DEEPSEEK_API_KEY）。
   執行 'reasonix setup' 生成設定；詳見 docs/SPEC.md。
 `,
@@ -346,6 +366,7 @@ var ChineseTraditional = Messages{
 	SlashClearPrompt:           "清空當前上下文且不儲存？",
 	SlashClearDone:             "已清空當前上下文",
 	SlashClearFailed:           "清空當前上下文失敗",
+	SlashClsDone:               "已清除畫面（LLM 上下文保留）",
 	CmdClear:                   "丟棄當前上下文",
 	CmdRename:                  "重新命名會話",
 	CmdGoal:                    "設定或清除當前目標",

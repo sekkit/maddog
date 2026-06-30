@@ -11,6 +11,7 @@ import (
 
 	"reasonix/internal/agent"
 	"reasonix/internal/boot"
+	"reasonix/internal/botruntime"
 	"reasonix/internal/config"
 	"reasonix/internal/control"
 	"reasonix/internal/provider"
@@ -20,8 +21,8 @@ import (
 // resolved config and applies edits through internal/config/edit.go (the
 // purpose-built mutation API), then rebuilds the controller so the change takes
 // effect live — the same snapshot→reload→resume pattern as SetModel. Secrets are
-// the exception: they go to the global credentials file (upsertDotEnv), since
-// config stores only the env-var name, not the key.
+// the exception: they go to Reasonix's global .env (upsertDotEnv), since config
+// stores only the env-var name, not the key.
 
 // --- read ---
 
@@ -32,10 +33,16 @@ type ProviderView struct {
 	Kind              string   `json:"kind"`
 	BaseURL           string   `json:"baseUrl"`
 	Models            []string `json:"models"`
+	VisionModels      []string `json:"visionModels"`
+	VisionModelsSet   bool     `json:"visionModelsConfigured"`
 	ModelsURL         string   `json:"modelsUrl"`
 	Default           string   `json:"default"`
 	APIKeyEnv         string   `json:"apiKeyEnv"`
 	KeySet            bool     `json:"keySet"` // the env var currently resolves to a non-empty value
+	RequiresKey       bool     `json:"requiresKey"`
+	Configured        bool     `json:"configured"` // selectable: either key is present or no key is required
+	KeySource         string   `json:"keySource,omitempty"`
+	KeySourcePath     string   `json:"keySourcePath,omitempty"`
 	BalanceURL        string   `json:"balanceUrl"`
 	ContextWindow     int      `json:"contextWindow"`
 	ReasoningProtocol string   `json:"reasoningProtocol"`
@@ -136,31 +143,33 @@ type BotSettingsView struct {
 
 // SettingsView is the whole Settings panel payload.
 type SettingsView struct {
-	DefaultModel       string          `json:"defaultModel"`
-	PlannerModel       string          `json:"plannerModel"`
-	SubagentModel      string          `json:"subagentModel"`
-	SubagentEffort     string          `json:"subagentEffort"`
-	AutoPlan           string          `json:"autoPlan"`
-	Providers          []ProviderView  `json:"providers"`
-	OfficialProviders  []ProviderView  `json:"officialProviders"`
-	Permissions        PermissionsView `json:"permissions"`
-	Sandbox            SandboxView     `json:"sandbox"`
-	Network            NetworkView     `json:"network"`
-	Agent              AgentView       `json:"agent"`
-	Bot                BotSettingsView `json:"bot"`
-	DesktopLanguage    string          `json:"desktopLanguage"`
-	DesktopLayoutStyle string          `json:"desktopLayoutStyle"`
-	DesktopTheme       string          `json:"desktopTheme"`
-	DesktopThemeStyle  string          `json:"desktopThemeStyle"`
-	CloseBehavior      string          `json:"closeBehavior"`
-	DisplayMode        string          `json:"displayMode"`
-	StatusBarStyle     string          `json:"statusBarStyle"`
-	StatusBarItems     []string        `json:"statusBarItems"`
-	CheckUpdates       bool            `json:"checkUpdates"`
-	Telemetry          bool            `json:"telemetry"`
-	Metrics            bool            `json:"metrics"`
-	ExpandThinking     bool            `json:"expandThinking"`
-	ConfigPath         string          `json:"configPath"`
+	DefaultModel            string          `json:"defaultModel"`
+	PlannerModel            string          `json:"plannerModel"`
+	SubagentModel           string          `json:"subagentModel"`
+	SubagentEffort          string          `json:"subagentEffort"`
+	AutoPlan                string          `json:"autoPlan"`
+	Providers               []ProviderView  `json:"providers"`
+	OfficialProviders       []ProviderView  `json:"officialProviders"`
+	Permissions             PermissionsView `json:"permissions"`
+	Sandbox                 SandboxView     `json:"sandbox"`
+	Network                 NetworkView     `json:"network"`
+	Agent                   AgentView       `json:"agent"`
+	Bot                     BotSettingsView `json:"bot"`
+	DesktopLanguage         string          `json:"desktopLanguage"`
+	DesktopLayoutStyle      string          `json:"desktopLayoutStyle"`
+	DesktopTheme            string          `json:"desktopTheme"`
+	DesktopThemeStyle       string          `json:"desktopThemeStyle"`
+	CloseBehavior           string          `json:"closeBehavior"`
+	DisplayMode             string          `json:"displayMode"`
+	StatusBarStyle          string          `json:"statusBarStyle"`
+	StatusBarItems          []string        `json:"statusBarItems"`
+	DefaultToolApprovalMode string          `json:"defaultToolApprovalMode"`
+	CheckUpdates            bool            `json:"checkUpdates"`
+	Telemetry               bool            `json:"telemetry"`
+	Metrics                 bool            `json:"metrics"`
+	MemoryCompiler          bool            `json:"memoryCompilerEnabled"`
+	ExpandThinking          bool            `json:"expandThinking"`
+	ConfigPath              string          `json:"configPath"`
 	// ProviderKinds lists the provider implementations the kernel actually
 	// registered (provider.Kinds()), so the editor's "kind" picker offers only
 	// kinds that resolve — selecting an unregistered one would fail the rebuild.
@@ -171,6 +180,21 @@ type SettingsView struct {
 	AutoApproveTools bool `json:"autoApproveTools"`
 	// Bypass is the legacy JSON key for the same live state.
 	Bypass bool `json:"bypass"`
+}
+
+// DesktopStartupSettingsView is the lightweight Settings subset needed during
+// frontend startup. It deliberately excludes providers and credential state so
+// slow keychain/env resolution stays off the first-render path.
+type DesktopStartupSettingsView struct {
+	Bot                BotSettingsView `json:"bot"`
+	DesktopLanguage    string          `json:"desktopLanguage"`
+	DesktopLayoutStyle string          `json:"desktopLayoutStyle"`
+	DesktopTheme       string          `json:"desktopTheme"`
+	DesktopThemeStyle  string          `json:"desktopThemeStyle"`
+	DisplayMode        string          `json:"displayMode"`
+	StatusBarStyle     string          `json:"statusBarStyle"`
+	StatusBarItems     []string        `json:"statusBarItems"`
+	CheckUpdates       bool            `json:"checkUpdates"`
 }
 
 func nonNil(s []string) []string {
@@ -215,14 +239,6 @@ func officialProviderKindFromEntry(p config.ProviderEntry) string {
 	case "deepseek":
 		if host == "api.deepseek.com" {
 			return "deepseek"
-		}
-	case "mimo-api":
-		if host == "api.xiaomimimo.com" {
-			return "mimo-api"
-		}
-	case "mimo-token-plan":
-		if host == "token-plan-cn.xiaomimimo.com" {
-			return "mimo-token-plan"
 		}
 	}
 	return ""
@@ -270,11 +286,34 @@ func removeProviderAccess(c *config.Config, names ...string) {
 }
 
 func providerViewFromEntry(p config.ProviderEntry, builtIn, added bool) ProviderView {
+	return providerViewFromEntryForRoot(p, builtIn, added, ".")
+}
+
+func providerViewFromEntryForRoot(p config.ProviderEntry, builtIn, added bool, root string) ProviderView {
+	return providerViewFromEntryForRootWithResolver(p, builtIn, added, root, nil)
+}
+
+func providerViewFromEntryForRootWithResolver(p config.ProviderEntry, builtIn, added bool, root string, resolver *config.CredentialResolver) ProviderView {
+	models := p.ChatModelList()
+	visionModels := p.VisionModels
+	visionModelsSet := p.Vision || p.VisionModels != nil
+	if p.Vision {
+		visionModels = models
+	}
+	if resolver == nil {
+		resolver = config.NewCredentialResolverForRoot(root)
+	}
+	key := resolver.ResolveGlobalFirst(p.APIKeyEnv)
+	requiresKey := p.RequiresAPIKey()
 	return ProviderView{
 		Name: p.Name, BuiltIn: builtIn, Added: added, Kind: p.Kind, BaseURL: p.BaseURL,
-		Models: nonNil(p.ChatModelList()), ModelsURL: p.ModelsURL, Default: p.DefaultModel(),
+		Models: nonNil(models), VisionModels: nonNil(providerVisionModels(models, visionModels)), VisionModelsSet: visionModelsSet, ModelsURL: p.ModelsURL, Default: p.DefaultModel(),
 		APIKeyEnv:         p.APIKeyEnv,
-		KeySet:            p.APIKeyEnv != "" && os.Getenv(p.APIKeyEnv) != "",
+		KeySet:            key.Set,
+		RequiresKey:       requiresKey,
+		Configured:        !requiresKey || key.Set,
+		KeySource:         key.Source.Label,
+		KeySourcePath:     key.Source.Path,
 		BalanceURL:        p.BalanceURL,
 		ContextWindow:     p.ContextWindow,
 		ReasoningProtocol: p.ReasoningProtocol,
@@ -283,15 +322,26 @@ func providerViewFromEntry(p config.ProviderEntry, builtIn, added bool) Provider
 	}
 }
 
-func officialProviderViews(added map[string]bool) []ProviderView {
+func officialProviderViews(added map[string]bool, pricingLanguage string) []ProviderView {
+	return officialProviderViewsForRoot(added, pricingLanguage, ".")
+}
+
+func officialProviderViewsForRoot(added map[string]bool, pricingLanguage, root string) []ProviderView {
+	return officialProviderViewsForRootWithResolver(added, pricingLanguage, root, nil)
+}
+
+func officialProviderViewsForRootWithResolver(added map[string]bool, pricingLanguage, root string, resolver *config.CredentialResolver) []ProviderView {
 	var out []ProviderView
-	for _, kind := range []string{"deepseek", "mimo-api", "mimo-token-plan"} {
-		entries, _, err := officialProviderTemplate(kind)
+	if resolver == nil {
+		resolver = config.NewCredentialResolverForRoot(root)
+	}
+	for _, kind := range []string{"deepseek"} {
+		entries, _, err := officialProviderTemplate(kind, pricingLanguage)
 		if err != nil {
 			continue
 		}
 		for _, entry := range entries {
-			out = append(out, providerViewFromEntry(entry, true, added[entry.Name]))
+			out = append(out, providerViewFromEntryForRootWithResolver(entry, true, added[entry.Name], root, resolver))
 		}
 	}
 	return out
@@ -315,13 +365,50 @@ func officialProviderAddedSet(cfg *config.Config) map[string]bool {
 	return out
 }
 
+func desktopStartupSettingsFromConfig(cfg *config.Config) DesktopStartupSettingsView {
+	if cfg == nil {
+		return DesktopStartupSettingsView{
+			Bot:                botSettingsView(config.BotConfig{}),
+			DesktopLayoutStyle: "workbench",
+			DesktopTheme:       "auto",
+			DesktopThemeStyle:  "graphite",
+			DisplayMode:        "standard",
+			StatusBarStyle:     "text",
+			StatusBarItems:     config.DefaultDesktopStatusBarItems(),
+			CheckUpdates:       true,
+		}
+	}
+	return DesktopStartupSettingsView{
+		Bot:                botSettingsView(cfg.Bot),
+		DesktopLanguage:    cfg.DesktopLanguage(),
+		DesktopLayoutStyle: cfg.DesktopLayoutStyle(),
+		DesktopTheme:       cfg.DesktopTheme(),
+		DesktopThemeStyle:  cfg.DesktopThemeStyle(),
+		DisplayMode:        cfg.DesktopDisplayMode(),
+		StatusBarStyle:     cfg.DesktopStatusBarStyle(),
+		StatusBarItems:     cfg.DesktopStatusBarItems(),
+		CheckUpdates:       cfg.DesktopCheckUpdates(),
+	}
+}
+
+// DesktopStartupSettings returns only the desktop chrome preferences needed at
+// app startup. Keep provider/key status in Settings(), where the Settings panel
+// actually needs it.
+func (a *App) DesktopStartupSettings() DesktopStartupSettingsView {
+	cfg, _, err := a.loadDesktopUserConfigForView()
+	if err != nil {
+		return desktopStartupSettingsFromConfig(nil)
+	}
+	return desktopStartupSettingsFromConfig(cfg)
+}
+
 // Settings returns the current configuration for the Settings panel.
 func (a *App) Settings() SettingsView {
-	cfg, cfgPath, err := a.loadDesktopUserConfigForEdit()
+	cfg, cfgPath, err := a.loadDesktopUserConfigForView()
 	if err != nil {
 		return SettingsView{
 			Providers:         []ProviderView{},
-			OfficialProviders: officialProviderViews(map[string]bool{}),
+			OfficialProviders: officialProviderViews(map[string]bool{}, ""),
 			ProviderKinds:     nonNil(provider.Kinds()),
 			Permissions: PermissionsView{
 				Mode:  "ask",
@@ -329,21 +416,23 @@ func (a *App) Settings() SettingsView {
 				Ask:   []string{},
 				Deny:  []string{},
 			},
-			Sandbox:            SandboxView{Bash: "enforce", AllowWrite: []string{}, Shell: "auto"},
-			Agent:              AgentView{PlannerMaxSteps: 12, ColdResumePrune: true, ReasoningLanguage: "auto"},
-			Bot:                botSettingsView(config.BotConfig{}),
-			AutoPlan:           "off",
-			DesktopLayoutStyle: "classic",
-			DesktopTheme:       "light",
-			DesktopThemeStyle:  "graphite",
-			CloseBehavior:      "background",
-			DisplayMode:        "standard",
-			StatusBarStyle:     "text",
-			StatusBarItems:     config.DefaultDesktopStatusBarItems(),
-			CheckUpdates:       true,
-			Telemetry:          true,
-			Metrics:            false,
-			ExpandThinking:     false,
+			Sandbox:                 SandboxView{Bash: "enforce", AllowWrite: []string{}, Shell: "auto"},
+			Agent:                   AgentView{PlannerMaxSteps: 0, ColdResumePrune: true, ReasoningLanguage: "auto"},
+			Bot:                     botSettingsView(config.BotConfig{}),
+			AutoPlan:                "off",
+			DesktopLayoutStyle:      "workbench",
+			DesktopTheme:            "auto",
+			DesktopThemeStyle:       "graphite",
+			CloseBehavior:           "background",
+			DisplayMode:             "standard",
+			StatusBarStyle:          "text",
+			StatusBarItems:          config.DefaultDesktopStatusBarItems(),
+			DefaultToolApprovalMode: "ask",
+			CheckUpdates:            true,
+			Telemetry:               true,
+			Metrics:                 true,
+			MemoryCompiler:          true,
+			ExpandThinking:          false,
 		}
 	}
 	ctrl := a.activeCtrl()
@@ -386,30 +475,34 @@ func (a *App) Settings() SettingsView {
 				Password: cfg.Network.Proxy.Password,
 			},
 		},
-		Agent:              AgentView{Temperature: cfg.Agent.Temperature, MaxSteps: cfg.Agent.MaxSteps, PlannerMaxSteps: cfg.Agent.PlannerMaxSteps, SystemPrompt: cfg.Agent.SystemPrompt, ColdResumePrune: cfg.ColdResumePruneEnabled(), ReasoningLanguage: cfg.ReasoningLanguage()},
-		Bot:                botSettingsView(cfg.Bot),
-		DesktopLanguage:    cfg.DesktopLanguage(),
-		DesktopLayoutStyle: cfg.DesktopLayoutStyle(),
-		DesktopTheme:       cfg.DesktopTheme(),
-		DesktopThemeStyle:  cfg.DesktopThemeStyle(),
-		CloseBehavior:      cfg.DesktopCloseBehavior(),
-		DisplayMode:        cfg.DesktopDisplayMode(),
-		StatusBarStyle:     cfg.DesktopStatusBarStyle(),
-		StatusBarItems:     cfg.DesktopStatusBarItems(),
-		CheckUpdates:       cfg.DesktopCheckUpdates(),
-		Telemetry:          cfg.DesktopTelemetry(),
-		Metrics:            cfg.DesktopMetrics(),
-		ExpandThinking:     cfg.Desktop.ExpandThinking,
-		ConfigPath:         cfgPath,
-		ProviderKinds:      nonNil(provider.Kinds()),
-		AutoApproveTools:   ctrl != nil && ctrl.AutoApproveTools(),
-		Bypass:             ctrl != nil && ctrl.AutoApproveTools(),
+		Agent:                   AgentView{Temperature: cfg.Agent.Temperature, MaxSteps: cfg.Agent.MaxSteps, PlannerMaxSteps: cfg.Agent.PlannerMaxSteps, SystemPrompt: cfg.Agent.SystemPrompt, ColdResumePrune: cfg.ColdResumePruneEnabled(), ReasoningLanguage: cfg.ReasoningLanguage()},
+		Bot:                     botSettingsView(cfg.Bot),
+		DesktopLanguage:         cfg.DesktopLanguage(),
+		DesktopLayoutStyle:      cfg.DesktopLayoutStyle(),
+		DesktopTheme:            cfg.DesktopTheme(),
+		DesktopThemeStyle:       cfg.DesktopThemeStyle(),
+		CloseBehavior:           cfg.DesktopCloseBehavior(),
+		DisplayMode:             cfg.DesktopDisplayMode(),
+		StatusBarStyle:          cfg.DesktopStatusBarStyle(),
+		StatusBarItems:          cfg.DesktopStatusBarItems(),
+		DefaultToolApprovalMode: cfg.DesktopDefaultToolApprovalMode(),
+		CheckUpdates:            cfg.DesktopCheckUpdates(),
+		Telemetry:               cfg.DesktopTelemetry(),
+		Metrics:                 cfg.DesktopMetrics(),
+		MemoryCompiler:          cfg.MemoryCompilerEnabled(),
+		ExpandThinking:          cfg.Desktop.ExpandThinking,
+		ConfigPath:              cfgPath,
+		ProviderKinds:           nonNil(provider.Kinds()),
+		AutoApproveTools:        ctrl != nil && ctrl.AutoApproveTools(),
+		Bypass:                  ctrl != nil && ctrl.AutoApproveTools(),
 	}
 	added := providerAccessSet(cfg.Desktop.ProviderAccess)
-	v.OfficialProviders = officialProviderViews(officialProviderAddedSet(cfg))
+	root := a.activeWorkspaceRoot()
+	resolver := config.NewCredentialResolverForRoot(root)
+	v.OfficialProviders = officialProviderViewsForRootWithResolver(officialProviderAddedSet(cfg), cfg.DeepSeekOfficialPricingLanguage(), root, resolver)
 	for i := range cfg.Providers {
 		p := &cfg.Providers[i]
-		v.Providers = append(v.Providers, providerViewFromEntry(*p, isOfficialBuiltInProvider(*p), added[p.Name]))
+		v.Providers = append(v.Providers, providerViewFromEntryForRootWithResolver(*p, isOfficialBuiltInProvider(*p), added[p.Name], root, resolver))
 	}
 	return v
 }
@@ -526,6 +619,20 @@ func (a *App) ensureActiveTabRebuildAllowed(setting string) error {
 	return nil
 }
 
+func (a *App) ensureLiveControllersRuntimeMutationAllowed(setting string) error {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	for _, tab := range a.tabs {
+		if tab == nil {
+			continue
+		}
+		if controllerHasActiveRuntimeWork(tab.Ctrl) {
+			return rebuildControllerActiveWorkError(setting)
+		}
+	}
+	return nil
+}
+
 func (a *App) loadDesktopUserConfigForEdit() (*config.Config, string, error) {
 	userPath := config.UserConfigPath()
 	if userPath == "" {
@@ -533,7 +640,9 @@ func (a *App) loadDesktopUserConfigForEdit() (*config.Config, string, error) {
 	}
 	if _, err := os.Stat(userPath); err == nil {
 		cfg := config.LoadForEdit(userPath)
-		normalizeLegacyDesktopProviderAccessForSettings(cfg, userPath)
+		if err := normalizeLegacyDesktopProviderAccessForSettings(cfg, userPath); err != nil {
+			return nil, "", err
+		}
 		if err := a.migrateLegacyBotConfigToUser(cfg, userPath); err != nil {
 			return nil, "", err
 		}
@@ -542,11 +651,53 @@ func (a *App) loadDesktopUserConfigForEdit() (*config.Config, string, error) {
 	cfg := config.LoadForEdit(userPath)
 	legacyPath := config.SourcePathForRoot(a.activeWorkspaceRoot())
 	if legacyPath == "" || sameConfigPath(legacyPath, userPath) {
-		normalizeLegacyDesktopProviderAccessForSettings(cfg, userPath)
+		if err := normalizeLegacyDesktopProviderAccessForSettings(cfg, userPath); err != nil {
+			return nil, "", err
+		}
 		return cfg, userPath, nil
 	}
 	legacyCfg := config.LoadForEdit(legacyPath)
-	normalizeLegacyDesktopProviderAccessForSettings(legacyCfg, legacyPath)
+	if err := normalizeLegacyDesktopProviderAccessForSettings(legacyCfg, legacyPath); err != nil {
+		return nil, "", err
+	}
+	legacyCfg.ConfigVersion = config.Default().ConfigVersion
+	if err := migrateLegacyBotConfigToUser(cfg, legacyCfg, userPath); err != nil {
+		return nil, "", err
+	}
+	return legacyCfg, userPath, nil
+}
+
+func (a *App) loadDesktopUserConfigForView() (*config.Config, string, error) {
+	userPath := config.UserConfigPath()
+	if userPath == "" {
+		return nil, "", fmt.Errorf("cannot resolve user config directory")
+	}
+	if _, err := os.Stat(userPath); err == nil {
+		cfg := config.LoadForEditWithoutCredentials(userPath)
+		if err := normalizeLegacyDesktopProviderAccessForSettings(cfg, userPath); err != nil {
+			return nil, "", err
+		}
+		legacyPath := config.SourcePathForRoot(a.activeWorkspaceRoot())
+		if legacyPath != "" && !sameConfigPath(legacyPath, userPath) {
+			legacyCfg := config.LoadForEditWithoutCredentials(legacyPath)
+			if err := migrateLegacyBotConfigToUser(cfg, legacyCfg, userPath); err != nil {
+				return nil, "", err
+			}
+		}
+		return cfg, userPath, nil
+	}
+	cfg := config.LoadForEditWithoutCredentials(userPath)
+	legacyPath := config.SourcePathForRoot(a.activeWorkspaceRoot())
+	if legacyPath == "" || sameConfigPath(legacyPath, userPath) {
+		if err := normalizeLegacyDesktopProviderAccessForSettings(cfg, userPath); err != nil {
+			return nil, "", err
+		}
+		return cfg, userPath, nil
+	}
+	legacyCfg := config.LoadForEditWithoutCredentials(legacyPath)
+	if err := normalizeLegacyDesktopProviderAccessForSettings(legacyCfg, legacyPath); err != nil {
+		return nil, "", err
+	}
 	legacyCfg.ConfigVersion = config.Default().ConfigVersion
 	if err := migrateLegacyBotConfigToUser(cfg, legacyCfg, userPath); err != nil {
 		return nil, "", err
@@ -615,11 +766,21 @@ func desktopBotConfigConfigured(bot config.BotConfig) bool {
 	return false
 }
 
-func normalizeLegacyDesktopProviderAccessForSettings(cfg *config.Config, path string) {
+func normalizeLegacyDesktopProviderAccessForSettings(cfg *config.Config, path string) error {
 	if cfg == nil || len(cfg.Desktop.ProviderAccess) > 0 || configDeclaresProviderAccess(path) {
-		return
+		return nil
 	}
 	config.NormalizeLegacyDesktopProviderAccess(cfg)
+	if len(cfg.Desktop.ProviderAccess) == 0 || strings.TrimSpace(path) == "" {
+		return nil
+	}
+	if _, err := os.Stat(path); err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	return cfg.SaveTo(path)
 }
 
 func configDeclaresProviderAccess(path string) bool {
@@ -650,6 +811,19 @@ func (a *App) activeWorkspaceRoot() string {
 		return tab.WorkspaceRoot
 	}
 	return "."
+}
+
+func (a *App) saveProviderCredential(apiKeyEnv, value string) (string, error) {
+	apiKeyEnv = strings.TrimSpace(apiKeyEnv)
+	value = strings.TrimSpace(value)
+	if err := upsertDotEnv(apiKeyEnv, value); err != nil {
+		return "", err
+	}
+	return providerCredentialSourceNotice(apiKeyEnv, value), nil
+}
+
+func providerCredentialSourceNotice(apiKeyEnv, value string) string {
+	return ""
 }
 
 func projectConfigPathForRoot(root string) string {
@@ -691,7 +865,7 @@ func (a *App) rebuild() error {
 	prevPath := ""
 	if tab.Ctrl != nil {
 		prevPath = tab.Ctrl.SessionPath()
-		_ = tab.Ctrl.Snapshot()
+		_ = a.snapshotTab(tab)
 		carried = tab.Ctrl.History()
 		tab.Ctrl.Close()
 	}
@@ -704,13 +878,16 @@ func (a *App) rebuild() error {
 			model = resolved
 		}
 	}
+	sharedHost := a.lookupSharedHost(tab.SharedHostKey)
 	ctrl, err := boot.Build(a.bootContext(), boot.Options{
 		Model: model, RequireKey: false,
-		Sink:           tab.sink,
-		WorkspaceRoot:  tab.WorkspaceRoot,
-		SessionDir:     tabSessionDir(tab),
-		EffortOverride: cloneStringPtr(tab.effort),
-		TokenMode:      currentTabTokenMode(tab),
+		Sink:                     tab.sink,
+		WorkspaceRoot:            tab.WorkspaceRoot,
+		SessionDir:               tabSessionDir(tab),
+		EffortOverride:           cloneStringPtr(tab.effort),
+		TokenMode:                currentTabTokenMode(tab),
+		SharedHost:               sharedHost,
+		CleanupPendingReconciler: reconcileDesktopCleanupPending,
 	})
 	if err != nil {
 		a.mu.Lock()
@@ -732,6 +909,13 @@ func (a *App) rebuild() error {
 	a.emitReady(a.ctx)
 	ctrl.EnableInteractiveApproval()
 	applyTabModeToController(ctrl, tab.mode)
+	// applyTabModeToController only encodes plan+yolo from tab.mode.
+	// Apply the explicit toolApprovalMode (ask/auto/yolo) afterwards so
+	// "auto" is not lost — otherwise rebuild would silently downgrade
+	// auto to ask (#5424 regression).
+	if mode := strings.TrimSpace(tab.toolApprovalMode); mode != "" {
+		applyTabToolApprovalModeToController(ctrl, mode)
+	}
 	path := agent.ContinueSessionPath(prevPath, ctrl.SessionDir(), ctrl.Label())
 	if len(carried) > 0 {
 		carried = withFreshSystemPrompt(carried, systemPromptFrom(ctrl.History()))
@@ -866,7 +1050,77 @@ func (a *App) SetSubagentEffort(level string) error {
 
 // SetAutoPlan updates the automatic plan-mode gate (off|on).
 func (a *App) SetAutoPlan(mode string) error {
-	return a.applyConfigChange(func(c *config.Config) error { return c.SetAutoPlan(mode) })
+	if err := a.ensureLiveControllersRuntimeMutationAllowed("auto-plan"); err != nil {
+		return err
+	}
+	cfg, path, err := a.loadDesktopUserConfigForEdit()
+	if err != nil {
+		return err
+	}
+	if err := cfg.SetAutoPlan(mode); err != nil {
+		return err
+	}
+	if err := cfg.SaveTo(path); err != nil {
+		return err
+	}
+	a.applyAutoPlanToLiveControllers(cfg.Agent.AutoPlan)
+	if desktopAutoPlanMode(cfg.Agent.AutoPlan) == "on" && strings.TrimSpace(cfg.Agent.AutoPlanClassifier) != "" {
+		return a.rebuild()
+	}
+	return nil
+}
+
+// SetDefaultToolApprovalMode updates the global Ask/Auto/YOLO default used only
+// for newly-created desktop sessions. Existing tabs keep their persisted mode.
+func (a *App) SetDefaultToolApprovalMode(mode string) error {
+	return a.applyConfigOnly(func(c *config.Config) error {
+		return c.SetDesktopDefaultToolApprovalMode(mode)
+	})
+}
+
+// SetMemoryCompilerEnabled toggles the Memory v5 execution compiler.
+func (a *App) SetMemoryCompilerEnabled(enabled bool) error {
+	cfg, path, err := a.loadDesktopUserConfigForEdit()
+	if err != nil {
+		return err
+	}
+	if err := cfg.SetMemoryCompilerEnabled(enabled); err != nil {
+		return err
+	}
+	if err := cfg.SaveTo(path); err != nil {
+		return err
+	}
+	a.applyMemoryCompilerToLiveControllers(enabled)
+	return nil
+}
+
+func (a *App) applyMemoryCompilerToLiveControllers(enabled bool) {
+	if a == nil {
+		return
+	}
+	var controllers []memoryCompilerTarget
+	a.mu.RLock()
+	for _, id := range a.orderedTabIDsLocked() {
+		tab := a.tabs[id]
+		if tab == nil || tab.Ctrl == nil {
+			continue
+		}
+		controllers = append(controllers, tab.Ctrl)
+	}
+	a.mu.RUnlock()
+	applyMemoryCompilerToControllers(enabled, controllers)
+}
+
+type memoryCompilerTarget interface {
+	SetMemoryCompilerEnabled(enabled bool)
+}
+
+func applyMemoryCompilerToControllers(enabled bool, controllers []memoryCompilerTarget) {
+	for _, ctrl := range controllers {
+		if ctrl != nil {
+			ctrl.SetMemoryCompilerEnabled(enabled)
+		}
+	}
 }
 
 func desktopAutoPlanMode(mode string) string {
@@ -878,7 +1132,29 @@ func desktopAutoPlanMode(mode string) string {
 	}
 }
 
-func officialProviderTemplate(kind string) ([]config.ProviderEntry, string, error) {
+func (a *App) applyAutoPlanToLiveControllers(fallback string) {
+	type liveTab struct {
+		root string
+		ctrl control.SessionAPI
+	}
+	var tabs []liveTab
+	a.mu.RLock()
+	for _, tab := range a.tabs {
+		if tab != nil && tab.Ctrl != nil {
+			tabs = append(tabs, liveTab{root: tab.WorkspaceRoot, ctrl: tab.Ctrl})
+		}
+	}
+	a.mu.RUnlock()
+	for _, tab := range tabs {
+		mode := fallback
+		if cfg, err := config.LoadForRoot(tab.root); err == nil {
+			mode = cfg.Agent.AutoPlan
+		}
+		tab.ctrl.SetAutoPlan(mode)
+	}
+}
+
+func officialProviderTemplate(kind, pricingLanguage string) ([]config.ProviderEntry, string, error) {
 	switch strings.ToLower(strings.TrimSpace(kind)) {
 	case "deepseek", "deepseek-official":
 		return []config.ProviderEntry{{
@@ -890,29 +1166,8 @@ func officialProviderTemplate(kind string) ([]config.ProviderEntry, string, erro
 			APIKeyEnv:     "DEEPSEEK_API_KEY",
 			BalanceURL:    "https://api.deepseek.com/user/balance",
 			ContextWindow: 1_000_000,
+			Prices:        config.DeepSeekV4PricesForLanguage(pricingLanguage),
 		}}, "DEEPSEEK_API_KEY", nil
-	case "mimo-api", "xiaomi-mimo", "xiaomi_mimo":
-		return []config.ProviderEntry{{
-			Name:          "mimo-api",
-			Kind:          "openai",
-			BaseURL:       "https://api.xiaomimimo.com/v1",
-			Models:        []string{"mimo-v2.5-pro", "mimo-v2.5", "mimo-v2-omni"},
-			Default:       "mimo-v2.5-pro",
-			APIKeyEnv:     "MIMO_API_KEY",
-			ContextWindow: 1_048_576,
-			NoProxy:       true,
-		}}, "MIMO_API_KEY", nil
-	case "mimo-token-plan", "xiaomi-mimo-token-plan", "xiaomi_mimo_token_plan":
-		return []config.ProviderEntry{{
-			Name:          "mimo-token-plan",
-			Kind:          "openai",
-			BaseURL:       "https://token-plan-cn.xiaomimimo.com/v1",
-			Models:        []string{"mimo-v2.5-pro", "mimo-v2.5"},
-			Default:       "mimo-v2.5-pro",
-			APIKeyEnv:     "MIMO_API_KEY",
-			ContextWindow: 1_048_576,
-			NoProxy:       true,
-		}}, "MIMO_API_KEY", nil
 	default:
 		return nil, "", fmt.Errorf("unknown official provider template %q", kind)
 	}
@@ -932,6 +1187,20 @@ func chatProviderModels(models []string) []string {
 	return out
 }
 
+func providerVisionModels(models, visionModels []string) []string {
+	enabled := map[string]bool{}
+	for _, model := range models {
+		enabled[model] = true
+	}
+	out := make([]string, 0, len(visionModels))
+	for _, model := range chatProviderModels(visionModels) {
+		if enabled[model] {
+			out = append(out, model)
+		}
+	}
+	return out
+}
+
 func providerDefaultForModels(currentDefault string, models []string) string {
 	currentDefault = strings.TrimSpace(currentDefault)
 	if currentDefault != "" {
@@ -947,8 +1216,9 @@ func providerDefaultForModels(currentDefault string, models []string) string {
 	return ""
 }
 
-// SaveProvider adds or updates a provider. A single model fills `model`; several
-// fill `models` (with `default`). The shared key/endpoint live on the entry.
+// SaveProvider adds or updates a provider. Enabled models are persisted through
+// `models` even when only one model is selected, while `model` remains populated
+// in-memory for validation/back-compat. The shared key/endpoint live on the entry.
 func (a *App) SaveProvider(p ProviderView) error {
 	return a.applyConfigChange(func(c *config.Config) error {
 		e := config.ProviderEntry{Name: p.Name}
@@ -971,13 +1241,21 @@ func (a *App) SaveProvider(p ProviderView) error {
 		e.Model = ""
 		e.Models = nil
 		e.Default = ""
+		e.VisionModels = nil
 		models := chatProviderModels(p.Models)
 		if len(models) > 0 {
 			e.Model = models[0] // also satisfies validateProvider's model requirement
+			e.Models = models
+			if p.VisionModelsSet || len(p.VisionModels) > 0 {
+				e.Vision = false
+				e.VisionModels = providerVisionModels(models, p.VisionModels)
+			}
 			if len(models) > 1 {
-				e.Models = models
 				e.Default = providerDefaultForModels(p.Default, models)
 			}
+		} else {
+			e.Vision = false
+			e.VisionModels = nil
 		}
 		if err := c.UpsertProvider(e); err != nil {
 			return err
@@ -990,17 +1268,27 @@ func (a *App) SaveProvider(p ProviderView) error {
 // AddOfficialProviderAccess adds one curated desktop provider template to the
 // Settings > Model > Access list. The runtime default providers still exist
 // independently; this only records the user's explicit access setup.
-func (a *App) AddOfficialProviderAccess(kind, key string) error {
-	entries, keyEnv, err := officialProviderTemplate(kind)
+func (a *App) AddOfficialProviderAccess(kind, key string) (string, error) {
+	cfg, _, err := a.loadDesktopUserConfigForEdit()
 	if err != nil {
-		return err
+		return "", err
 	}
+	entries, keyEnv, err := officialProviderTemplate(kind, cfg.DeepSeekOfficialPricingLanguage())
+	if err != nil {
+		return "", err
+	}
+	if err := a.ensureActiveTabRebuildAllowed("provider access"); err != nil {
+		return "", err
+	}
+	keyWarning := ""
 	if strings.TrimSpace(key) != "" && keyEnv != "" {
-		if err := upsertDotEnv(keyEnv, key); err != nil {
-			return err
+		var err error
+		keyWarning, err = a.saveProviderCredential(keyEnv, key)
+		if err != nil {
+			return "", err
 		}
 	}
-	return a.applyConfigChange(func(c *config.Config) error {
+	if err := a.applyConfigChange(func(c *config.Config) error {
 		names := make([]string, 0, len(entries))
 		for _, e := range entries {
 			if err := c.UpsertProvider(e); err != nil {
@@ -1010,7 +1298,10 @@ func (a *App) AddOfficialProviderAccess(kind, key string) error {
 		}
 		addProviderAccess(c, names...)
 		return nil
-	})
+	}); err != nil {
+		return "", err
+	}
+	return keyWarning, nil
 }
 
 // FetchProviderModels probes the provider's OpenAI-compatible model-list
@@ -1023,6 +1314,7 @@ func (a *App) FetchProviderModels(p ProviderView) ([]string, error) {
 		ModelsURL: p.ModelsURL,
 		APIKeyEnv: p.APIKeyEnv,
 	}
+	e.ResolveAPIKeyForRoot(a.activeWorkspaceRoot())
 	ctx, cancel := context.WithTimeout(a.reqCtx(), 15*time.Second)
 	defer cancel()
 	models, err := e.FetchModels(ctx)
@@ -1058,8 +1350,9 @@ func (a *App) RemoveProviderAccess(name string) error {
 }
 
 type providerRemovalTab struct {
-	id   string
-	ctrl *control.Controller
+	id       string
+	ctrl     control.SessionAPI
+	readOnly bool
 }
 
 func providerAccessFallbackRef(c *config.Config, name string) string {
@@ -1124,11 +1417,16 @@ func (a *App) removeBuiltInProviderAccessAndRetargetTabs(name string) error {
 				a.mu.RUnlock()
 				return fmt.Errorf("finish or cancel active work using %q before removing the provider access", name)
 			}
-			affected = append(affected, providerRemovalTab{id: id, ctrl: tab.Ctrl})
+			affected = append(affected, providerRemovalTab{id: id, ctrl: tab.Ctrl, readOnly: tab.ReadOnly})
 		}
 		a.mu.RUnlock()
 	}
 
+	if len(affected) == 0 {
+		if err := a.ensureActiveTabRebuildAllowed("provider access"); err != nil {
+			return err
+		}
+	}
 	retargetProviderReferences(cfg, name, fallbackRef)
 	removeProviderAccess(cfg, name)
 	if err := cfg.SaveTo(path); err != nil {
@@ -1139,7 +1437,9 @@ func (a *App) removeBuiltInProviderAccessAndRetargetTabs(name string) error {
 	}
 	for _, item := range affected {
 		if item.ctrl != nil {
-			_ = item.ctrl.Snapshot()
+			if !item.readOnly {
+				_ = item.ctrl.Snapshot()
+			}
 			item.ctrl.Close()
 		}
 	}
@@ -1198,12 +1498,17 @@ func (a *App) deleteProviderAndRetargetTabs(name string) error {
 			a.mu.RUnlock()
 			return fmt.Errorf("finish or cancel active work using %q before deleting the provider", name)
 		}
-		affected = append(affected, providerRemovalTab{id: id, ctrl: tab.Ctrl})
+		affected = append(affected, providerRemovalTab{id: id, ctrl: tab.Ctrl, readOnly: tab.ReadOnly})
 	}
 	a.mu.RUnlock()
 
 	if len(affected) > 0 && fallbackRef == "" {
 		return fmt.Errorf("remove provider: %q is used by open tabs and no other configured provider exists", name)
+	}
+	if len(affected) == 0 {
+		if err := a.ensureActiveTabRebuildAllowed("provider"); err != nil {
+			return err
+		}
 	}
 	if err := cfg.RemoveProvider(name); err != nil {
 		return err
@@ -1218,7 +1523,9 @@ func (a *App) deleteProviderAndRetargetTabs(name string) error {
 	}
 	for _, item := range affected {
 		if item.ctrl != nil {
-			_ = item.ctrl.Snapshot()
+			if !item.readOnly {
+				_ = item.ctrl.Snapshot()
+			}
 			item.ctrl.Close()
 		}
 	}
@@ -1248,23 +1555,81 @@ func (a *App) deleteProviderAndRetargetTabs(name string) error {
 	return nil
 }
 
-// SetProviderKey writes a secret to the global credentials file under the given
+// SetProviderKey writes a secret to Reasonix's global .env under the given
 // env-var name (the one a provider's api_key_env points at) and rebuilds so it
 // resolves immediately.
-func (a *App) SetProviderKey(apiKeyEnv, value string) error {
+func (a *App) SetProviderKey(apiKeyEnv, value string) (string, error) {
 	if strings.TrimSpace(apiKeyEnv) == "" {
-		return fmt.Errorf("this provider has no api_key_env set")
+		return "", fmt.Errorf("this provider has no api_key_env set")
 	}
 	if err := a.ensureActiveTabRebuildAllowed("provider key"); err != nil {
-		return err
+		return "", err
 	}
-	if err := upsertDotEnv(apiKeyEnv, value); err != nil {
-		return err
+	warning, err := a.saveProviderCredential(apiKeyEnv, value)
+	if err != nil {
+		return "", err
 	}
-	return a.rebuild()
+	if err := a.ensureProviderAccessForKey(apiKeyEnv); err != nil {
+		return "", err
+	}
+	if err := a.rebuild(); err != nil {
+		return "", err
+	}
+	return warning, nil
 }
 
-// ClearProviderKey removes a provider secret from the global credentials file
+func (a *App) ensureProviderAccessForKey(apiKeyEnv string) error {
+	apiKeyEnv = strings.TrimSpace(apiKeyEnv)
+	if apiKeyEnv == "" {
+		return nil
+	}
+	cfg, path, err := a.loadDesktopUserConfigForEdit()
+	if err != nil {
+		return err
+	}
+	access := providerAccessSet(cfg.Desktop.ProviderAccess)
+	changed := false
+	addAccess := func(name string) {
+		if name == "" || access[name] {
+			return
+		}
+		addProviderAccess(cfg, name)
+		access[name] = true
+		changed = true
+	}
+	for i := range cfg.Providers {
+		p := cfg.Providers[i]
+		if strings.TrimSpace(p.APIKeyEnv) != apiKeyEnv {
+			continue
+		}
+		if len(p.ModelList()) == 0 {
+			continue
+		}
+		if isOfficialBuiltInProvider(p) {
+			addAccess(config.CanonicalDesktopOfficialProviderName(p.Name))
+		} else {
+			addAccess(strings.TrimSpace(p.Name))
+		}
+	}
+	if !changed && apiKeyEnv == "DEEPSEEK_API_KEY" {
+		entries, _, err := officialProviderTemplate("deepseek", cfg.DeepSeekOfficialPricingLanguage())
+		if err != nil {
+			return err
+		}
+		for _, e := range entries {
+			if err := cfg.UpsertProvider(e); err != nil {
+				return err
+			}
+			addAccess(e.Name)
+		}
+	}
+	if !changed {
+		return nil
+	}
+	return cfg.SaveTo(path)
+}
+
+// ClearProviderKey removes a provider secret from Reasonix's global .env
 // and rebuilds so the provider immediately becomes unauthenticated.
 func (a *App) ClearProviderKey(apiKeyEnv string) error {
 	if strings.TrimSpace(apiKeyEnv) == "" {
@@ -1375,6 +1740,37 @@ func (a *App) SetBotSettings(b BotSettingsView) error {
 	return err
 }
 
+// SetBotConnectionToolApprovalMode updates a single connection's tool approval
+// mode without restarting the bot gateway. Only the connection's mode field is
+// persisted; existing sessions on the running gateway are updated in-place.
+func (a *App) SetBotConnectionToolApprovalMode(connID, mode string) error {
+	connID = strings.TrimSpace(connID)
+	mode = normalizeBotConnectionToolApprovalMode(mode)
+	runtimeConnID := connID
+	err := a.applyConfigOnly(func(c *config.Config) error {
+		for i := range c.Bot.Connections {
+			candidateRuntimeID := botruntime.ConnectionRuntimeID(c.Bot.Connections[i])
+			if candidateRuntimeID == "" {
+				candidateRuntimeID = strings.TrimSpace(c.Bot.Connections[i].ID)
+			}
+			if c.Bot.Connections[i].ID == connID || candidateRuntimeID == connID {
+				c.Bot.Connections[i].ToolApprovalMode = mode
+				c.Bot.Connections[i].UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+				runtimeConnID = candidateRuntimeID
+				return nil
+			}
+		}
+		return fmt.Errorf("connection %q not found", connID)
+	})
+	if err != nil {
+		return err
+	}
+	if a.botRuntime != nil {
+		a.botRuntime.updateConnectionToolApprovalMode(runtimeConnID, mode)
+	}
+	return nil
+}
+
 func (a *App) SetBotSecret(envName, value string) error {
 	envName = strings.TrimSpace(envName)
 	if envName == "" {
@@ -1422,13 +1818,24 @@ func (a *App) SetStatusBarItems(items []string) error {
 	return a.applyConfigOnly(func(c *config.Config) error { return c.SetDesktopStatusBarItems(items) })
 }
 
-// SetDesktopLanguage updates only the desktop UI language. It deliberately does
-// not touch config.language, which the CLI/model-facing runtime uses.
+// SetDesktopLanguage updates the desktop UI language and the user-level response
+// language preference used by model-facing desktop sessions.
 func (a *App) SetDesktopLanguage(lang string) error {
-	if err := a.applyConfigOnly(func(c *config.Config) error { return c.SetDesktopLanguage(lang) }); err != nil {
+	responseLanguage := ""
+	if err := a.applyConfigOnly(func(c *config.Config) error {
+		if err := c.SetDesktopLanguage(lang); err != nil {
+			return err
+		}
+		if err := c.SetLanguage(lang); err != nil {
+			return err
+		}
+		responseLanguage = c.ResponseLanguage()
+		return nil
+	}); err != nil {
 		return err
 	}
 	a.updateTrayLocale(lang)
+	a.applyResponseLanguageToLiveControllers(responseLanguage)
 	return nil
 }
 
@@ -1451,7 +1858,20 @@ func (a *App) SetDesktopAppearance(theme, style string) error {
 // SetDesktopLayoutStyle updates only the desktop layout style. It does not
 // rebuild the active controller and must stay out of provider-visible requests.
 func (a *App) SetDesktopLayoutStyle(style string) error {
-	return a.applyConfigOnly(func(c *config.Config) error { return c.SetDesktopLayoutStyle(style) })
+	normalized := ""
+	if err := a.applyConfigOnly(func(c *config.Config) error {
+		if err := c.SetDesktopLayoutStyle(style); err != nil {
+			return err
+		}
+		normalized = c.DesktopLayoutStyle()
+		return nil
+	}); err != nil {
+		return err
+	}
+	if singleSurfaceLayoutStyle(normalized) {
+		return a.applySingleSurfaceTabPolicy()
+	}
+	return nil
 }
 
 // SetDesktopCheckUpdates updates only the desktop startup update-check
@@ -1465,7 +1885,7 @@ func (a *App) SetDesktopTelemetry(enabled bool) error {
 	return a.applyConfigOnly(func(c *config.Config) error { return c.SetDesktopTelemetry(enabled) })
 }
 
-// SetDesktopMetrics sets whether the desktop sends opt-in aggregate agent metrics,
+// SetDesktopMetrics sets whether the desktop sends aggregate desktop metrics,
 // starting or stopping the live aggregator so the toggle takes effect immediately.
 func (a *App) SetDesktopMetrics(enabled bool) error {
 	if err := a.applyConfigOnly(func(c *config.Config) error { return c.SetDesktopMetrics(enabled) }); err != nil {
@@ -1473,7 +1893,10 @@ func (a *App) SetDesktopMetrics(enabled bool) error {
 	}
 	switch {
 	case enabled && a.metrics.Load() == nil && version != "dev":
-		a.metrics.Store(newMetricsAggregator(filepath.Dir(config.UserConfigPath())))
+		a.metrics.Store(newMetricsAggregator(config.MemoryUserDir()))
+		if cfg, err := config.Load(); err == nil {
+			a.recordSettingsMetricsSnapshot(cfg)
+		}
 	case !enabled:
 		a.metrics.Store(nil)
 	}
@@ -1522,6 +1945,9 @@ func (a *App) SetColdResumePrune(enabled bool) error {
 }
 
 func (a *App) SetReasoningLanguage(lang string) error {
+	if err := a.ensureLiveControllersRuntimeMutationAllowed("reasoning language"); err != nil {
+		return err
+	}
 	cfg, path, err := a.loadDesktopUserConfigForEdit()
 	if err != nil {
 		return err
@@ -1539,7 +1965,7 @@ func (a *App) SetReasoningLanguage(lang string) error {
 func (a *App) applyReasoningLanguageToLiveControllers(fallback string) {
 	type liveTab struct {
 		root string
-		ctrl *control.Controller
+		ctrl control.SessionAPI
 	}
 	var tabs []liveTab
 	a.mu.RLock()
@@ -1555,6 +1981,28 @@ func (a *App) applyReasoningLanguageToLiveControllers(fallback string) {
 			mode = cfg.ReasoningLanguage()
 		}
 		tab.ctrl.SetReasoningLanguage(mode)
+	}
+}
+
+func (a *App) applyResponseLanguageToLiveControllers(fallback string) {
+	type liveTab struct {
+		root string
+		ctrl control.SessionAPI
+	}
+	var tabs []liveTab
+	a.mu.RLock()
+	for _, tab := range a.tabs {
+		if tab != nil && tab.Ctrl != nil {
+			tabs = append(tabs, liveTab{root: tab.WorkspaceRoot, ctrl: tab.Ctrl})
+		}
+	}
+	a.mu.RUnlock()
+	for _, tab := range tabs {
+		mode := fallback
+		if cfg, err := config.LoadForRoot(tab.root); err == nil {
+			mode = cfg.ResponseLanguage()
+		}
+		tab.ctrl.SetResponseLanguage(mode)
 	}
 }
 

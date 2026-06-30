@@ -1,8 +1,11 @@
 // Run: tsx src/__tests__/project-tree-runtime.test.ts
 
 import {
+  projectTreeFolderDisclosure,
   defaultExpandedProjectTreeKeys,
+  activeSessionAncestorKeys,
   projectTreeTopicOpenRequest,
+  projectTreeShouldSuppressOpenForRename,
 } from "../components/ProjectTree";
 import type { ProjectNode } from "../lib/types";
 
@@ -61,8 +64,26 @@ const tree: ProjectNode[] = [
 
 eq(
   defaultExpandedProjectTreeKeys(tree),
+  [],
+  "without an active tab, no folders default to expanded",
+);
+
+eq(
+  defaultExpandedProjectTreeKeys(tree, "global", "", "topic-a", "/tmp/b.jsonl"),
   ["global_folder", "global_topic_topic-a"],
-  "runtime-session topic rows default to expanded so child sessions are visible",
+  "active session path expands only ancestor folders",
+);
+
+eq(
+  activeSessionAncestorKeys(tree, "global", "", "topic-a", "/tmp/b.jsonl"),
+  ["global_folder", "global_topic_topic-a"],
+  "activeSessionAncestorKeys matches defaultExpandedProjectTreeKeys for active session",
+);
+
+eq(
+  activeSessionAncestorKeys(tree, "global", "", "topic-b"),
+  ["global_folder"],
+  "active topic without runtime session rows expands only parent folders",
 );
 
 eq(
@@ -81,6 +102,66 @@ eq(
   }),
   { scope: "project", workspaceRoot: "/repo", topicId: "topic-project", sessionPath: undefined },
   "regular project topic still opens by topic",
+);
+
+eq(
+  projectTreeShouldSuppressOpenForRename(
+    { rowKey: "topic-a", canRename: true },
+    { rowKey: "topic-a", canRename: true },
+  ),
+  true,
+  "second click on the same renameable topic suppresses open for inline rename",
+);
+
+eq(
+  projectTreeShouldSuppressOpenForRename(
+    { rowKey: "session-a", canRename: false },
+    { rowKey: "session-a", canRename: false },
+  ),
+  false,
+  "runtime session double-click still allows the session row to open",
+);
+
+eq(
+  projectTreeShouldSuppressOpenForRename(
+    { rowKey: "topic-a", canRename: true },
+    { rowKey: "topic-b", canRename: true },
+  ),
+  false,
+  "quickly clicking a different topic still opens the new target",
+);
+
+eq(
+  projectTreeFolderDisclosure(false, true),
+  {
+    canExpand: false,
+    isOpen: false,
+    ariaExpanded: undefined,
+    iconStackClassName: "project-tree__icon-stack",
+  },
+  "empty project folders are not exposed as expandable disclosure rows",
+);
+
+eq(
+  projectTreeFolderDisclosure(true, false),
+  {
+    canExpand: true,
+    isOpen: false,
+    ariaExpanded: false,
+    iconStackClassName: "project-tree__icon-stack project-tree__icon-stack--expandable",
+  },
+  "collapsed project folders keep disclosure semantics when children exist",
+);
+
+eq(
+  projectTreeFolderDisclosure(true, true),
+  {
+    canExpand: true,
+    isOpen: true,
+    ariaExpanded: true,
+    iconStackClassName: "project-tree__icon-stack project-tree__icon-stack--expandable",
+  },
+  "expanded project folders can show the open-folder state only when children exist",
 );
 
 console.log(`\n${passed} passed, ${failed} failed`);
