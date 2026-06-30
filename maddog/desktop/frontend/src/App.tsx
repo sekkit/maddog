@@ -8,6 +8,7 @@ import { ScrollToPlugin } from "gsap/ScrollToPlugin";
 gsap.registerPlugin(useGSAP, Flip, ScrollToPlugin);
 import {
   Activity,
+  BarChart3,
   CircleHelp,
   Command,
   Download,
@@ -49,6 +50,7 @@ import { StatusBar } from "./components/StatusBar";
 import { CommandPalette, type PaletteItem } from "./components/CommandPalette";
 import { UpdateBanner } from "./components/UpdateBanner";
 import { ContextPanel } from "./components/ContextPanel";
+import { DashboardPanel } from "./components/DashboardPanel";
 import { WorkspacePanel } from "./components/WorkspacePanel";
 import { Tooltip } from "./components/Tooltip";
 import { StartupSplash } from "./components/StartupSplash";
@@ -1134,7 +1136,7 @@ export default function App() {
   const runningRef = useRef(state.running);
   const activeTabIdRef = useRef(activeTabId);
   const commitThenSendRef = useRef<(displayText: string, submitText?: string) => Promise<void>>(async () => {});
-  const rightDockDetailActive = rightDockMode !== "context" && workspacePreviewActive;
+  const rightDockDetailActive = (rightDockMode === "files" || rightDockMode === "changed") && workspacePreviewActive;
   const preferredWorkspacePanelWidth = rightDockDetailActive ? rightDockPreviewWidth : rightDockTreeWidth;
   const workspacePanelMinWidth = rightDockDetailActive ? RIGHT_DOCK_PREVIEW_MIN_WIDTH : RIGHT_DOCK_TREE_MIN_WIDTH;
   const chatReservedWidth = workspacePanelOpen && !workspacePanelMaximized ? CHAT_COMFORT_MIN_WIDTH : CHAT_MIN_WIDTH;
@@ -3445,6 +3447,16 @@ export default function App() {
                 <button
                   type="button"
                   role="tab"
+                  aria-selected={rightDockMode === "dashboard"}
+                  className={`workbench-dock__tab${rightDockMode === "dashboard" ? " workbench-dock__tab--active" : ""}`}
+                  onClick={() => openRightDockMode("dashboard")}
+                >
+                  <BarChart3 size={13} />
+                  <span className="workbench-dock__tab-label">{t("rightDock.dashboard")}</span>
+                </button>
+                <button
+                  type="button"
+                  role="tab"
                   aria-selected={rightDockMode === "files"}
                   className={`workbench-dock__tab${rightDockMode === "files" ? " workbench-dock__tab--active" : ""}`}
                   onClick={() => openRightDockMode("files")}
@@ -3479,6 +3491,24 @@ export default function App() {
                   balance={state.balance}
                   sessionGen={state.sessionGen}
                   refreshKey={dockRefreshKey}
+                />
+              ) : rightDockMode === "dashboard" ? (
+                <DashboardPanel
+                  context={state.context}
+                  usage={state.usage}
+                  providerStatus={state.providerStatus}
+                  sessionTokens={state.sessionTokens}
+                  sessionCost={state.sessionCost}
+                  sessionCurrency={state.sessionCurrency}
+                  sessionTurns={sessionTurns}
+                  turnTokens={state.turnTotalTokens}
+                  turnCost={state.turnCost}
+                  refreshKey={dockRefreshKey}
+                  onOpenSettings={() => {
+                    closeTransientOverlays();
+                    setSettingsFocus(null);
+                    setSettingsTarget("general");
+                  }}
                 />
               ) : (
                 <WorkspacePanel
@@ -3532,6 +3562,7 @@ export default function App() {
             onClose={() => {
               setSettingsFocus(null);
               setSettingsTarget(null);
+              setDockRefreshKey((v) => v + 1);
             }}
             onChanged={(settings) => {
               void refreshMeta();
