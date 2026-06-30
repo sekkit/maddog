@@ -83,6 +83,15 @@ source_research: research/github-stars-sekkit-2026-06-27/analysis.md
 - `research/github-stars-sekkit-2026-06-27/readmes/iamzhihuix__skills-manage.md`
 - `research/github-stars-sekkit-2026-06-27/readmes/alibaba__open-code-review.md`
 
+### 功能到 GitHub 参考项目映射
+
+| Maddog 功能组 | 对应实现单元 | 参考 GitHub 项目 | 参考点 | 采用方式 |
+| --- | --- | --- | --- | --- |
+| Provider、frontier、小模型、official auth/API key、中转、预算与状态 | D1, D2, D3 | [BerriAI/litellm](https://github.com/BerriAI/litellm), [aaif-goose/goose](https://github.com/aaif-goose/goose), [steipete/CodexBar](https://github.com/steipete/CodexBar), [emanueleielo/advisor-middleware](https://github.com/emanueleielo/advisor-middleware), [cobusgreyling/loop-engineering](https://github.com/cobusgreyling/loop-engineering) | 多 provider profile、OpenAI-compatible routing、GUI provider 设置、advisor/frontier 分层与 loop 可观测性 | 不引入外部 provider proxy；吸收 profile schema、role 标注、status/usage event 与 GUI 配置模式 |
+| Tool output/context 压缩、raw output 外置、context metrics 与策略开关 | E1, E2, E3 | [headroomlabs-ai/headroom](https://github.com/headroomlabs-ai/headroom), [rtk-ai/rtk](https://github.com/rtk-ai/rtk), [mksglu/context-mode](https://github.com/mksglu/context-mode), [dirac-run/dirac](https://github.com/dirac-run/dirac), [microsoft/fastcontext](https://github.com/microsoft/fastcontext), [ryoiki-tokuiten/Iterative-Contextual-Refinements](https://github.com/ryoiki-tokuiten/Iterative-Contextual-Refinements) | 长任务输出压缩、检索式上下文保留、token delta 可观测、迭代上下文精炼 | 在 Maddog tool result 进入 model 前实现本地压缩接口；保留 raw store 与可关闭策略，不把外部 sidecar 设为必需依赖 |
+| Code intelligence backend、benchmark harness、MCP code backend GUI | F1, F2, F3 | [DeusData/codebase-memory-mcp](https://github.com/DeusData/codebase-memory-mcp), [oraios/serena](https://github.com/oraios/serena), [zilliztech/claude-context](https://github.com/zilliztech/claude-context), [alibaba/zvec](https://github.com/alibaba/zvec) | 代码记忆 MCP、符号/语义检索、向量索引、后端健康检查与评测基准 | 作为 optional backend 或 benchmark target；默认继续使用 Maddog CodeGraph registry 与本地报告格式 |
+| Skill 自进化、replay eval、promotion lifecycle、桌面审计、混合 code review | G1, G2, G3, G4 | [microsoft/SkillOpt](https://github.com/microsoft/SkillOpt), [iamzhihuix/skills-manage](https://github.com/iamzhihuix/skills-manage), [alibaba/open-code-review](https://github.com/alibaba/open-code-review), [PabloNAX/ultracode-skill](https://github.com/PabloNAX/ultracode-skill), [pat-jj/harness-1](https://github.com/pat-jj/harness-1), [cobusgreyling/loop-engineering](https://github.com/cobusgreyling/loop-engineering) | skill candidate lifecycle、guardrail/eval harness、人工 promotion 审计、规则/LLM 混合 review、loop trace replay | 只采用 evidence/replay/promotion 机制；禁止在线自我改写，promotion 必须通过 guardrail 和人工可见审计 |
+
 ## 关键技术决策
 
 - **D1. Provider profile 是核心数据模型**：把 provider kind、auth mode、base URL、frontier role、small-model role、budget/status/usage 统一投影到 GUI；底层仍复用 `ProviderEntry`，避免迁移配置格式。
