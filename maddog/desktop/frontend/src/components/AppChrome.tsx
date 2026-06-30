@@ -12,6 +12,8 @@ interface WindowControlsProps {
 
 interface AppChromeProps {
   platform: DesktopPlatform;
+  browserPreviewChrome: boolean;
+  customWindowChrome?: boolean;
   workbenchChrome?: boolean;
   tabs: TabMeta[];
   activeTabId?: string;
@@ -125,6 +127,8 @@ export function WindowControls({ platform, className = "" }: WindowControlsProps
 
 export function AppChrome({
   platform,
+  browserPreviewChrome,
+  customWindowChrome = false,
   workbenchChrome = false,
   tabs,
   activeTabId,
@@ -149,13 +153,14 @@ export function AppChrome({
 }: AppChromeProps) {
   const t = useT();
   const darwinChrome = platform === "darwin";
-  const showWindowControls = true;
+  const showWindowsPreviewControls = !customWindowChrome && browserPreviewChrome && platform === "windows";
   const chromeClassName = [
     "app-chrome",
     "app-chrome--tabs",
     darwinChrome ? "app-chrome--darwin-tabs" : "app-chrome--native-tabs",
     workbenchChrome ? "app-chrome--workbench" : "",
     !darwinChrome ? "app-chrome--identityless" : "",
+    showWindowsPreviewControls ? "app-chrome--preview-window-controls" : "",
     `app-chrome--platform-${platform}`,
   ].filter(Boolean).join(" ");
   const tabBar = (
@@ -175,7 +180,14 @@ export function AppChrome({
 
   return (
     <header className={chromeClassName}>
-      <span className="app-chrome__drag-rail" aria-hidden="true" />
+      {browserPreviewChrome && darwinChrome && (
+        <div className="app-chrome__traffic" aria-hidden="true">
+          <span />
+          <span />
+          <span />
+        </div>
+      )}
+      {(darwinChrome || customWindowChrome) && <span className="app-chrome__drag-rail" aria-hidden="true" />}
       <button
         className={[
           "app-chrome__panel-toggle",
@@ -277,7 +289,20 @@ export function AppChrome({
           <PanelRight size={16} />
         </button>
       )}
-      {showWindowControls && <WindowControls platform={platform} />}
+      {showWindowsPreviewControls && (
+        <div className="app-chrome__window-controls app-chrome__window-controls--windows" aria-hidden="true">
+          <span className="app-chrome__window-control app-chrome__window-control--minimize">
+            <Minus size={12} strokeWidth={1.9} />
+          </span>
+          <span className="app-chrome__window-control app-chrome__window-control--maximize">
+            <Square size={10} strokeWidth={1.8} />
+          </span>
+          <span className="app-chrome__window-control app-chrome__window-control--close">
+            <X size={12} strokeWidth={1.9} />
+          </span>
+        </div>
+      )}
+      {customWindowChrome && <WindowControls platform={platform} />}
     </header>
   );
 }

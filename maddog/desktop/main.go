@@ -19,6 +19,8 @@ import (
 	"github.com/wailsapp/wails/v2/pkg/options/mac"
 	"github.com/wailsapp/wails/v2/pkg/options/windows"
 
+	"maddog/internal/config"
+
 	// Blank imports wire compile-time built-ins into their registries, exactly as
 	// the CLI does — boot.Build resolves providers/tools from these registries.
 	_ "maddog/internal/provider/anthropic"
@@ -73,8 +75,19 @@ func linuxWebviewGpuPolicy(pattern string) linux.WebviewGpuPolicy {
 	return linux.WebviewGpuPolicyNever
 }
 
+func macTitleBar(customWindowChrome bool) *mac.TitleBar {
+	if customWindowChrome {
+		return mac.TitleBarHiddenInset()
+	}
+	return mac.TitleBarDefault()
+}
+
 func main() {
 	app := NewApp()
+	customWindowChrome := false
+	if cfg, err := config.Load(); err == nil {
+		customWindowChrome = cfg.DesktopUsesCustomWindowChrome()
+	}
 
 	// Restore saved window size, or fall back to the default.
 	width, height := 1240, 720
@@ -93,8 +106,9 @@ func main() {
 		Height:    height,
 		MinWidth:  760,
 		MinHeight: 480,
-		// The React shell draws the title region and window controls itself.
-		Frameless: true,
+		// Custom chrome is opt-in. The default native frame matches the v1.13
+		// desktop layout; custom mode uses React-drawn window controls.
+		Frameless: customWindowChrome,
 		// Match the dark UI shell so the initial webview background doesn't flash
 		// white before CSS loads — particularly visible on WebKitGTK.
 		BackgroundColour:   &options.RGBA{R: 26, G: 26, B: 46, A: 255},
@@ -120,8 +134,7 @@ func main() {
 
 		// --- per-platform adaptation (see desktop/README.md for the rationale) ---
 		Mac: &mac.Options{
-			// Follow the OS appearance so the title bar matches light/dark system
-			// preference instead of being locked to dark.
+			TitleBar:   macTitleBar(customWindowChrome),
 			Appearance: mac.DefaultAppearance,
 		},
 		Windows: &windows.Options{

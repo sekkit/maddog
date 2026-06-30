@@ -176,11 +176,16 @@ function isThemeMode(value: string): value is Theme {
 }
 
 type DesktopLayoutStyle = "classic" | "workbench" | "creation";
+type DesktopWindowChrome = "native" | "custom";
 
 function normalizeDesktopLayoutStyle(style: string | undefined): DesktopLayoutStyle {
   if (style === "workbench") return "workbench";
   if (style === "creation") return "creation";
   return "classic";
+}
+
+function normalizeDesktopWindowChrome(chrome: string | undefined): DesktopWindowChrome {
+  return chrome === "custom" ? "custom" : "native";
 }
 const SHOW_CONTEXT_DOCK = true;
 type HistoryScopeFilter = { scope: "global" | "project"; workspaceRoot: string };
@@ -868,6 +873,7 @@ export default function App() {
   const settingsFocus = useOverlayStore((s) => s.settingsFocus);
   const setSettingsFocus = useOverlayStore((s) => s.setSettingsFocus);
   const [desktopLayoutStyle, setDesktopLayoutStyle] = useState<DesktopLayoutStyle>("workbench");
+  const [desktopWindowChrome, setDesktopWindowChrome] = useState<DesktopWindowChrome>("native");
   const singleSurfaceLayout = desktopLayoutStyle === "workbench" || desktopLayoutStyle === "creation";
   const [startupUpdateChecksEnabled, setStartupUpdateChecksEnabled] = useState<boolean | null>(null);
   const [histView, setHistView] = useState<HistoryViewState | null>(null);
@@ -1065,11 +1071,12 @@ export default function App() {
   }, []);
 
   const applyDesktopPreferences = useCallback(
-    (settings: Pick<SettingsView, "desktopTheme" | "desktopThemeStyle" | "desktopLayoutStyle" | "desktopLanguage" | "checkUpdates" | "statusBarStyle" | "statusBarItems">) => {
+    (settings: Pick<SettingsView, "desktopTheme" | "desktopThemeStyle" | "desktopLayoutStyle" | "desktopWindowChrome" | "desktopLanguage" | "checkUpdates" | "statusBarStyle" | "statusBarItems">) => {
       const nextTheme = normalizeThemePreference(settings.desktopTheme);
       const nextStyle = normalizeThemeStyleForTheme(settings.desktopThemeStyle, nextTheme);
       applyTheme(nextTheme, nextStyle, { persist: false });
       setDesktopLayoutStyle(normalizeDesktopLayoutStyle(settings.desktopLayoutStyle));
+      setDesktopWindowChrome(normalizeDesktopWindowChrome(settings.desktopWindowChrome));
       setLocalePref(normalizeLangPref(settings.desktopLanguage));
       setStartupUpdateChecksEnabled(settings.checkUpdates !== false);
       setStatusBarStyle(settings.statusBarStyle === "text" ? "text" : "icon");
@@ -2695,6 +2702,7 @@ export default function App() {
   const workspacePanelResizeMinWidth = workspacePanelAriaMinWidth(workspacePanelMinWidth, workspacePanelRenderWidth);
   const workspacePanelMaxWidth = rightDockDetailActive ? RIGHT_DOCK_MAX_WIDTH : RIGHT_DOCK_TREE_MAX_WIDTH;
   const sidebarCreation = desktopLayoutStyle === "creation";
+  const customWindowChrome = desktopWindowChrome === "custom";
   const topicbarTitle = sidebarImDetailConnection ? t("botDetail.title", { name: sidebarImDetailConnection.title }) : topicDisplayTitle(activeTab);
   const topicbarWorkspaceLabel = sidebarImDetailConnection ? t("botDetail.subtitle") : activeTab ? tabWorkspaceTitle(activeTab) : "";
   const topicbarWorkspacePath = activeTab?.scope === "project" ? activeTab.workspaceRoot || state.meta?.cwd : "";
@@ -2754,6 +2762,8 @@ export default function App() {
         {!appChromeHidden && (
           <AppChrome
             platform={desktopPlatform}
+            browserPreviewChrome={browserPreviewChrome}
+            customWindowChrome={customWindowChrome}
             workbenchChrome={sidebarWorkbench}
             tabs={visibleTabs}
             activeTabId={visibleTabId}
@@ -2777,8 +2787,8 @@ export default function App() {
             onOpenPalette={() => void openPalette()}
           />
         )}
-        {appChromeHidden && <span className="app-window-drag-rail" aria-hidden="true" />}
-        {appChromeHidden && <WindowControls platform={desktopPlatform} className="app-window-controls--overlay" />}
+        {appChromeHidden && customWindowChrome && <span className="app-window-drag-rail" aria-hidden="true" />}
+        {appChromeHidden && customWindowChrome && <WindowControls platform={desktopPlatform} className="app-window-controls--overlay" />}
         <a className="skip-to-composer" href="#composer-input">
           {t("shortcuts.skipToComposer")}
         </a>

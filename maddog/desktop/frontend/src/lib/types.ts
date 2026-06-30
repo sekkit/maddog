@@ -1153,6 +1153,7 @@ export interface SettingsView {
   bot: BotSettingsView;
   desktopLanguage: string; // "" | "en" | "zh"; empty = auto
   desktopLayoutStyle: string; // "classic" | "workbench" | "creation"
+  desktopWindowChrome: string; // "native" | "custom"; custom uses self-drawn controls after restart
   desktopTheme: string; // "auto" | "dark" | "light"
   desktopThemeStyle: string;
   closeBehavior: string; // "background" | "quit"
@@ -1173,7 +1174,8 @@ export interface SettingsView {
 export interface DesktopStartupSettingsView {
   bot: BotSettingsView;
   desktopLanguage: string; // "" | "en" | "zh"; empty = auto
-  desktopLayoutStyle: string; // "classic" | "workbench"
+  desktopLayoutStyle: string; // "classic" | "workbench" | "creation"
+  desktopWindowChrome: string; // "native" | "custom"
   desktopTheme: string; // "auto" | "dark" | "light"
   desktopThemeStyle: string;
   displayMode: string;   // "standard" | "compact"

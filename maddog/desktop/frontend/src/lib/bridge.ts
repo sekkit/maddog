@@ -309,6 +309,7 @@ export interface AppBindings {
   SetDesktopLanguage(lang: string): Promise<void>;
   SetDesktopAppearance(theme: string, style: string): Promise<void>;
   SetDesktopLayoutStyle(style: string): Promise<void>;
+  SetDesktopWindowChrome(chrome: string): Promise<void>;
   SetDesktopCheckUpdates(enabled: boolean): Promise<void>;
   SetDesktopTelemetry(enabled: boolean): Promise<void>;
   SetDesktopMetrics(enabled: boolean): Promise<void>;
@@ -1076,6 +1077,7 @@ function makeMockApp(): AppBindings {
     },
     desktopLanguage: "",
     desktopLayoutStyle: "workbench",
+    desktopWindowChrome: "native",
     desktopTheme: "auto",
     desktopThemeStyle: "graphite",
     closeBehavior: "background",
@@ -2716,11 +2718,12 @@ function makeMockApp(): AppBindings {
       return this.SaveDoc(path, body);
     },
     async DesktopStartupSettings() {
-      const { bot, desktopLanguage, desktopLayoutStyle, desktopTheme, desktopThemeStyle, displayMode, statusBarStyle, statusBarItems, checkUpdates } = settings;
+      const { bot, desktopLanguage, desktopLayoutStyle, desktopWindowChrome, desktopTheme, desktopThemeStyle, displayMode, statusBarStyle, statusBarItems, checkUpdates } = settings;
       return JSON.parse(JSON.stringify({
         bot,
         desktopLanguage,
         desktopLayoutStyle,
+        desktopWindowChrome,
         desktopTheme,
         desktopThemeStyle,
         displayMode,
@@ -2960,6 +2963,9 @@ function makeMockApp(): AppBindings {
         },
         async SetDesktopLayoutStyle(style: string) {
           settings.desktopLayoutStyle = style === "workbench" || style === "creation" ? style : "classic";
+        },
+        async SetDesktopWindowChrome(chrome: string) {
+          settings.desktopWindowChrome = chrome === "custom" ? "custom" : "native";
         },
         async SetDesktopCheckUpdates(enabled: boolean) {
           settings.checkUpdates = enabled;

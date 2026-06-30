@@ -278,6 +278,20 @@ func (c *Config) SetDesktopLayoutStyle(style string) error {
 	return nil
 }
 
+// SetDesktopWindowChrome sets whether the desktop uses OS-native window chrome
+// or a frameless window with self-drawn controls. It is read at process startup.
+func (c *Config) SetDesktopWindowChrome(chrome string) error {
+	switch strings.ToLower(strings.TrimSpace(chrome)) {
+	case "", "native":
+		c.Desktop.WindowChrome = "native"
+	case "custom", "frameless", "self-drawn", "self_drawn", "selfdrawn":
+		c.Desktop.WindowChrome = "custom"
+	default:
+		return fmt.Errorf("desktop window chrome %q: must be native|custom", chrome)
+	}
+	return nil
+}
+
 // SetDesktopCloseBehavior sets the desktop close-window preference. It is
 // intentionally UI-only and must not affect model prompts or provider-visible
 // request data.

@@ -98,6 +98,7 @@ type UIConfig struct {
 type DesktopConfig struct {
 	Language                string   `toml:"language"`                   // auto|en|zh; empty/auto = browser/OS auto-detect
 	LayoutStyle             string   `toml:"layout_style"`               // classic|workbench|creation; desktop layout style
+	WindowChrome            string   `toml:"window_chrome"`              // native|custom; custom uses frameless self-drawn window controls
 	Theme                   string   `toml:"theme"`                      // auto|dark|light; empty resolves to auto
 	ThemeStyle              string   `toml:"theme_style"`                // graphite|aurora|slate|carbon|nocturne|amber and legacy aliases
 	CloseBehavior           string   `toml:"close_behavior"`             // quit|background; desktop window close behavior
@@ -201,6 +202,15 @@ func normalizeDesktopLayoutStyle(style string) string {
 	}
 }
 
+func normalizeDesktopWindowChrome(chrome string) string {
+	switch strings.ToLower(strings.TrimSpace(chrome)) {
+	case "custom", "frameless", "self-drawn", "self_drawn", "selfdrawn":
+		return "custom"
+	default:
+		return "native"
+	}
+}
+
 func normalizeCloseBehavior(mode string) string {
 	switch strings.ToLower(strings.TrimSpace(mode)) {
 	case "quit", "exit":
@@ -252,6 +262,17 @@ func (c *Config) DesktopLayoutStyle() string {
 		return "workbench"
 	}
 	return normalizeDesktopLayoutStyle(c.Desktop.LayoutStyle)
+}
+
+// DesktopWindowChrome normalizes the native-vs-self-drawn desktop window chrome
+// choice. Native is the v1.13-aligned default; custom requires a restart because
+// Wails' Frameless option is set when the window is created.
+func (c *Config) DesktopWindowChrome() string {
+	return normalizeDesktopWindowChrome(c.Desktop.WindowChrome)
+}
+
+func (c *Config) DesktopUsesCustomWindowChrome() bool {
+	return c.DesktopWindowChrome() == "custom"
 }
 
 // DesktopCloseBehavior normalizes the desktop close-window preference. It falls

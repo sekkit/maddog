@@ -71,16 +71,17 @@ ok(
 );
 
 ok(
-  /Frameless:\s*true/.test(desktopMainSource) &&
+  /Frameless:\s*customWindowChrome/.test(desktopMainSource) &&
+    /DesktopUsesCustomWindowChrome/.test(desktopMainSource) &&
     !/DisableFramelessWindowDecorations:\s*true/.test(desktopMainSource) &&
-    !/TitleBar:\s*mac\.TitleBarHiddenInset\(\)/.test(desktopMainSource),
-  "desktop shell uses a custom frameless Wails window while preserving Windows shadow decorations",
+    /macTitleBar\(customWindowChrome\)/.test(desktopMainSource),
+  "desktop shell can switch between native frame and custom frameless chrome",
 );
 
 ok(
-  /const showWindowControls = true;/.test(appChromeSource) &&
-    !/browserPreviewChrome && platform === "windows"/.test(appChromeSource),
-  "AppChrome window controls are part of the real desktop chrome, not a browser-preview-only mock",
+  /customWindowChrome/.test(appChromeSource) &&
+    /showWindowsPreviewControls = !customWindowChrome && browserPreviewChrome && platform === "windows"/.test(appChromeSource),
+  "AppChrome uses native frame by default and self-drawn controls only in custom chrome mode",
 );
 
 ok(
@@ -155,9 +156,9 @@ ok(
 
 ok(
   /import \{ AppChrome, WindowControls \} from "\.\/components\/AppChrome";/.test(appSource) &&
-    /\{appChromeHidden && <span className="app-window-drag-rail" aria-hidden="true" \/>\}/.test(appSource) &&
-    /\{appChromeHidden && <WindowControls platform=\{desktopPlatform\} className="app-window-controls--overlay" \/>\}/.test(appSource),
-  "frameless workbench and creation layouts keep custom window controls and a top drag rail when AppChrome is hidden",
+    /\{appChromeHidden && customWindowChrome && <span className="app-window-drag-rail" aria-hidden="true" \/>\}/.test(appSource) &&
+    /\{appChromeHidden && customWindowChrome && <WindowControls platform=\{desktopPlatform\} className="app-window-controls--overlay" \/>\}/.test(appSource),
+  "workbench and creation layouts show custom controls only when custom window chrome is enabled",
 );
 
 ok(

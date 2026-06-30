@@ -923,6 +923,7 @@ function normalizeSettingsView(view: SettingsView | null | undefined): SettingsV
     bypass: Boolean(view.autoApproveTools ?? view.bypass),
     desktopLanguage: normalizeLangPref(view.desktopLanguage),
     desktopLayoutStyle: normalizeDesktopLayoutStyle(view.desktopLayoutStyle),
+    desktopWindowChrome: normalizeDesktopWindowChrome(view.desktopWindowChrome),
     desktopTheme: normalizeThemePreference(view.desktopTheme),
     desktopThemeStyle: normalizeThemeStyleForTheme(view.desktopThemeStyle, normalizeThemePreference(view.desktopTheme)),
     closeBehavior: normalizeCloseBehavior(view.closeBehavior),
@@ -947,6 +948,7 @@ function normalizeDisplayMode(mode: string | undefined): DisplayMode {
 }
 
 type DesktopLayoutStyle = "classic" | "workbench" | "creation";
+type DesktopWindowChrome = "native" | "custom";
 
 function normalizeDesktopLayoutStyle(style: string | undefined): DesktopLayoutStyle {
   if (style === "classic") return "classic";
@@ -956,6 +958,14 @@ function normalizeDesktopLayoutStyle(style: string | undefined): DesktopLayoutSt
 
 function desktopLayoutStyleLabel(style: DesktopLayoutStyle, t: ReturnType<typeof useT>): string {
   return t(`settings.desktopLayoutStyle.${style}`);
+}
+
+function normalizeDesktopWindowChrome(chrome: string | undefined): DesktopWindowChrome {
+  return chrome === "custom" ? "custom" : "native";
+}
+
+function desktopWindowChromeLabel(chrome: DesktopWindowChrome, t: ReturnType<typeof useT>): string {
+  return t(`settings.desktopWindowChrome.${chrome}`);
 }
 
 type StatusBarStyle = "icon" | "text";
@@ -1070,6 +1080,7 @@ function GeneralSection({ s, busy, apply, agentRunning }: SectionProps & { agent
   const memoryCompilerEnabled = s.memoryCompilerEnabled !== false;
   const languagePref = normalizeLangPref(s.desktopLanguage);
   const desktopLayoutStyle = normalizeDesktopLayoutStyle(s.desktopLayoutStyle);
+  const desktopWindowChrome = normalizeDesktopWindowChrome(s.desktopWindowChrome);
   const [genMusicPreset, setGenMusicPreset] = useState<GenerativePreset>(getGenerativePreset());
   const [soundPref, setSoundPref] = useState<SoundWavPref>(getSuccessPreference());
   const [attentionPref, setAttentionPref] = useState<SoundWavPref>(getAttentionPreference());
@@ -1250,6 +1261,20 @@ function GeneralSection({ s, busy, apply, agentRunning }: SectionProps & { agent
               onClick={() => void apply(() => app.SetDesktopLayoutStyle(style))}
             >
               {desktopLayoutStyleLabel(style, t)}
+            </button>
+          ))}
+        </div>
+      </SettingsField>
+      <SettingsField label={t("settings.desktopWindowChrome")} hint={t("settings.desktopWindowChromeHint")}>
+        <div className="set-seg">
+          {(["native", "custom"] as const).map((chrome) => (
+            <button
+              key={chrome}
+              className={`set-seg__btn${desktopWindowChrome === chrome ? " set-seg__btn--on" : ""}`}
+              disabled={busy}
+              onClick={() => void apply(() => app.SetDesktopWindowChrome(chrome))}
+            >
+              {desktopWindowChromeLabel(chrome, t)}
             </button>
           ))}
         </div>

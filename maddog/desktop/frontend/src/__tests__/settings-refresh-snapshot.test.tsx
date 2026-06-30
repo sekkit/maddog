@@ -76,6 +76,7 @@ function baseSettings(displayMode: "standard" | "compact" = "standard"): Setting
     },
     desktopLanguage: "en",
     desktopLayoutStyle: "workbench",
+    desktopWindowChrome: "native",
     desktopTheme: "auto",
     desktopThemeStyle: "graphite",
     closeBehavior: "background",

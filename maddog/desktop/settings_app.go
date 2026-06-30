@@ -169,36 +169,37 @@ type BotSettingsView struct {
 
 // SettingsView is the whole Settings panel payload.
 type SettingsView struct {
-	DefaultModel       string          `json:"defaultModel"`
-	PlannerModel       string          `json:"plannerModel"`
-	SubagentModel      string          `json:"subagentModel"`
-	SubagentEffort     string          `json:"subagentEffort"`
-	FrontierModel      string          `json:"frontierModel"`
-	UpgradeEnabled     bool            `json:"upgradeEnabled"`
-	UpgradeThreshold   int             `json:"upgradeThreshold"`
-	FrontierBudget     int64           `json:"frontierBudget"`
-	AutoPlan           string          `json:"autoPlan"`
-	Providers          []ProviderView  `json:"providers"`
-	OfficialProviders  []ProviderView  `json:"officialProviders"`
-	ProviderWarnings   []string        `json:"providerWarnings"`
-	Permissions        PermissionsView `json:"permissions"`
-	Sandbox            SandboxView     `json:"sandbox"`
-	Network            NetworkView     `json:"network"`
-	Agent              AgentView       `json:"agent"`
-	Bot                BotSettingsView `json:"bot"`
-	DesktopLanguage    string          `json:"desktopLanguage"`
-	DesktopLayoutStyle string          `json:"desktopLayoutStyle"`
-	DesktopTheme       string          `json:"desktopTheme"`
-	DesktopThemeStyle  string          `json:"desktopThemeStyle"`
-	CloseBehavior      string          `json:"closeBehavior"`
-	DisplayMode        string          `json:"displayMode"`
-	StatusBarStyle     string          `json:"statusBarStyle"`
-	StatusBarItems     []string        `json:"statusBarItems"`
-	CheckUpdates       bool            `json:"checkUpdates"`
-	Telemetry          bool            `json:"telemetry"`
-	Metrics            bool            `json:"metrics"`
-	ExpandThinking     bool            `json:"expandThinking"`
-	ConfigPath         string          `json:"configPath"`
+	DefaultModel        string          `json:"defaultModel"`
+	PlannerModel        string          `json:"plannerModel"`
+	SubagentModel       string          `json:"subagentModel"`
+	SubagentEffort      string          `json:"subagentEffort"`
+	FrontierModel       string          `json:"frontierModel"`
+	UpgradeEnabled      bool            `json:"upgradeEnabled"`
+	UpgradeThreshold    int             `json:"upgradeThreshold"`
+	FrontierBudget      int64           `json:"frontierBudget"`
+	AutoPlan            string          `json:"autoPlan"`
+	Providers           []ProviderView  `json:"providers"`
+	OfficialProviders   []ProviderView  `json:"officialProviders"`
+	ProviderWarnings    []string        `json:"providerWarnings"`
+	Permissions         PermissionsView `json:"permissions"`
+	Sandbox             SandboxView     `json:"sandbox"`
+	Network             NetworkView     `json:"network"`
+	Agent               AgentView       `json:"agent"`
+	Bot                 BotSettingsView `json:"bot"`
+	DesktopLanguage     string          `json:"desktopLanguage"`
+	DesktopLayoutStyle  string          `json:"desktopLayoutStyle"`
+	DesktopWindowChrome string          `json:"desktopWindowChrome"`
+	DesktopTheme        string          `json:"desktopTheme"`
+	DesktopThemeStyle   string          `json:"desktopThemeStyle"`
+	CloseBehavior       string          `json:"closeBehavior"`
+	DisplayMode         string          `json:"displayMode"`
+	StatusBarStyle      string          `json:"statusBarStyle"`
+	StatusBarItems      []string        `json:"statusBarItems"`
+	CheckUpdates        bool            `json:"checkUpdates"`
+	Telemetry           bool            `json:"telemetry"`
+	Metrics             bool            `json:"metrics"`
+	ExpandThinking      bool            `json:"expandThinking"`
+	ConfigPath          string          `json:"configPath"`
 	// ProviderKinds lists the provider implementations the kernel actually
 	// registered (provider.Kinds()), so the editor's "kind" picker offers only
 	// kinds that resolve — selecting an unregistered one would fail the rebuild.
@@ -215,15 +216,16 @@ type SettingsView struct {
 // frontend startup. It deliberately excludes providers and credential state so
 // slow keychain/env resolution stays off the first-render path.
 type DesktopStartupSettingsView struct {
-	Bot                BotSettingsView `json:"bot"`
-	DesktopLanguage    string          `json:"desktopLanguage"`
-	DesktopLayoutStyle string          `json:"desktopLayoutStyle"`
-	DesktopTheme       string          `json:"desktopTheme"`
-	DesktopThemeStyle  string          `json:"desktopThemeStyle"`
-	DisplayMode        string          `json:"displayMode"`
-	StatusBarStyle     string          `json:"statusBarStyle"`
-	StatusBarItems     []string        `json:"statusBarItems"`
-	CheckUpdates       bool            `json:"checkUpdates"`
+	Bot                 BotSettingsView `json:"bot"`
+	DesktopLanguage     string          `json:"desktopLanguage"`
+	DesktopLayoutStyle  string          `json:"desktopLayoutStyle"`
+	DesktopWindowChrome string          `json:"desktopWindowChrome"`
+	DesktopTheme        string          `json:"desktopTheme"`
+	DesktopThemeStyle   string          `json:"desktopThemeStyle"`
+	DisplayMode         string          `json:"displayMode"`
+	StatusBarStyle      string          `json:"statusBarStyle"`
+	StatusBarItems      []string        `json:"statusBarItems"`
+	CheckUpdates        bool            `json:"checkUpdates"`
 }
 
 func nonNil(s []string) []string {
@@ -520,26 +522,28 @@ func officialProviderAddedSet(cfg *config.Config) map[string]bool {
 func desktopStartupSettingsFromConfig(cfg *config.Config) DesktopStartupSettingsView {
 	if cfg == nil {
 		return DesktopStartupSettingsView{
-			Bot:                botSettingsView(config.BotConfig{}),
-			DesktopLayoutStyle: "workbench",
-			DesktopTheme:       "auto",
-			DesktopThemeStyle:  "graphite",
-			DisplayMode:        "standard",
-			StatusBarStyle:     "text",
-			StatusBarItems:     config.DefaultDesktopStatusBarItems(),
-			CheckUpdates:       true,
+			Bot:                 botSettingsView(config.BotConfig{}),
+			DesktopLayoutStyle:  "workbench",
+			DesktopWindowChrome: "native",
+			DesktopTheme:        "auto",
+			DesktopThemeStyle:   "graphite",
+			DisplayMode:         "standard",
+			StatusBarStyle:      "text",
+			StatusBarItems:      config.DefaultDesktopStatusBarItems(),
+			CheckUpdates:        true,
 		}
 	}
 	return DesktopStartupSettingsView{
-		Bot:                botSettingsView(cfg.Bot),
-		DesktopLanguage:    cfg.DesktopLanguage(),
-		DesktopLayoutStyle: cfg.DesktopLayoutStyle(),
-		DesktopTheme:       cfg.DesktopTheme(),
-		DesktopThemeStyle:  cfg.DesktopThemeStyle(),
-		DisplayMode:        cfg.DesktopDisplayMode(),
-		StatusBarStyle:     cfg.DesktopStatusBarStyle(),
-		StatusBarItems:     cfg.DesktopStatusBarItems(),
-		CheckUpdates:       cfg.DesktopCheckUpdates(),
+		Bot:                 botSettingsView(cfg.Bot),
+		DesktopLanguage:     cfg.DesktopLanguage(),
+		DesktopLayoutStyle:  cfg.DesktopLayoutStyle(),
+		DesktopWindowChrome: cfg.DesktopWindowChrome(),
+		DesktopTheme:        cfg.DesktopTheme(),
+		DesktopThemeStyle:   cfg.DesktopThemeStyle(),
+		DisplayMode:         cfg.DesktopDisplayMode(),
+		StatusBarStyle:      cfg.DesktopStatusBarStyle(),
+		StatusBarItems:      cfg.DesktopStatusBarItems(),
+		CheckUpdates:        cfg.DesktopCheckUpdates(),
 	}
 }
 
@@ -649,23 +653,24 @@ func (a *App) Settings() SettingsView {
 			ContextCompressionThresholdBytes: cfg.Agent.ContextCompression.EffectiveThresholdBytes(),
 			ContextCompressionMaxBytes:       cfg.Agent.ContextCompression.EffectiveMaxBytes(),
 		},
-		Bot:                botSettingsView(cfg.Bot),
-		DesktopLanguage:    cfg.DesktopLanguage(),
-		DesktopLayoutStyle: cfg.DesktopLayoutStyle(),
-		DesktopTheme:       cfg.DesktopTheme(),
-		DesktopThemeStyle:  cfg.DesktopThemeStyle(),
-		CloseBehavior:      cfg.DesktopCloseBehavior(),
-		DisplayMode:        cfg.DesktopDisplayMode(),
-		StatusBarStyle:     cfg.DesktopStatusBarStyle(),
-		StatusBarItems:     cfg.DesktopStatusBarItems(),
-		CheckUpdates:       cfg.DesktopCheckUpdates(),
-		Telemetry:          cfg.DesktopTelemetry(),
-		Metrics:            cfg.DesktopMetrics(),
-		ExpandThinking:     cfg.Desktop.ExpandThinking,
-		ConfigPath:         cfgPath,
-		ProviderKinds:      nonNil(provider.Kinds()),
-		AutoApproveTools:   ctrl != nil && ctrl.AutoApproveTools(),
-		Bypass:             ctrl != nil && ctrl.AutoApproveTools(),
+		Bot:                 botSettingsView(cfg.Bot),
+		DesktopLanguage:     cfg.DesktopLanguage(),
+		DesktopLayoutStyle:  cfg.DesktopLayoutStyle(),
+		DesktopWindowChrome: cfg.DesktopWindowChrome(),
+		DesktopTheme:        cfg.DesktopTheme(),
+		DesktopThemeStyle:   cfg.DesktopThemeStyle(),
+		CloseBehavior:       cfg.DesktopCloseBehavior(),
+		DisplayMode:         cfg.DesktopDisplayMode(),
+		StatusBarStyle:      cfg.DesktopStatusBarStyle(),
+		StatusBarItems:      cfg.DesktopStatusBarItems(),
+		CheckUpdates:        cfg.DesktopCheckUpdates(),
+		Telemetry:           cfg.DesktopTelemetry(),
+		Metrics:             cfg.DesktopMetrics(),
+		ExpandThinking:      cfg.Desktop.ExpandThinking,
+		ConfigPath:          cfgPath,
+		ProviderKinds:       nonNil(provider.Kinds()),
+		AutoApproveTools:    ctrl != nil && ctrl.AutoApproveTools(),
+		Bypass:              ctrl != nil && ctrl.AutoApproveTools(),
 	}
 	added := providerAccessSet(cfg.Desktop.ProviderAccess)
 	providerRoles, providerWarnings := providerProfileRolesAndWarnings(cfg)
@@ -2056,6 +2061,13 @@ func (a *App) SetDesktopLayoutStyle(style string) error {
 		return a.applySingleSurfaceTabPolicy()
 	}
 	return nil
+}
+
+// SetDesktopWindowChrome updates the next-launch desktop window chrome mode.
+// Wails reads frameless/native chrome at startup, so the active window keeps its
+// current frame until the app is restarted.
+func (a *App) SetDesktopWindowChrome(chrome string) error {
+	return a.applyConfigOnly(func(c *config.Config) error { return c.SetDesktopWindowChrome(chrome) })
 }
 
 // SetDesktopCheckUpdates updates only the desktop startup update-check

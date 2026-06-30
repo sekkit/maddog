@@ -204,6 +204,32 @@ func TestDesktopLayoutStyleNormalizes(t *testing.T) {
 	}
 }
 
+func TestDesktopWindowChromeNormalizes(t *testing.T) {
+	if got := Default().DesktopWindowChrome(); got != "native" {
+		t.Fatalf("default desktop window chrome = %q, want native", got)
+	}
+	for _, tt := range []struct {
+		in      string
+		want    string
+		wantErr bool
+	}{
+		{"", "native", false},
+		{"native", "native", false},
+		{"custom", "custom", false},
+		{"frameless", "custom", false},
+		{"self-drawn", "custom", false},
+		{"later", "native", true},
+	} {
+		c := Default()
+		if err := c.SetDesktopWindowChrome(tt.in); (err != nil) != tt.wantErr {
+			t.Fatalf("SetDesktopWindowChrome(%q) err = %v, wantErr %v", tt.in, err, tt.wantErr)
+		}
+		if got := c.DesktopWindowChrome(); got != tt.want {
+			t.Fatalf("DesktopWindowChrome(%q) = %q, want %q", tt.in, got, tt.want)
+		}
+	}
+}
+
 func TestDesktopStatusBarStyleNormalizes(t *testing.T) {
 	if got := Default().DesktopStatusBarStyle(); got != "text" {
 		t.Fatalf("default desktop status bar style = %q, want text", got)
