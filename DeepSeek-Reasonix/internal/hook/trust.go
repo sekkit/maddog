@@ -23,7 +23,7 @@ type trustFile struct {
 
 // TrustPath is ~/.maddog/trust.json (homeDir overrides ~).
 func TrustPath(homeDir string) string {
-	return filepath.Join(home(homeDir), SettingsDirname, TrustFilename)
+	return filepath.Join(reasonixHome(homeDir), TrustFilename)
 }
 
 // IsTrusted reports whether projectRoot has been trusted to run its hooks.
@@ -59,6 +59,14 @@ func readTrust(homeDir string) trustFile {
 	path := TrustPath(homeDir)
 	b, err := os.ReadFile(path)
 	if err != nil {
+		if os.IsNotExist(err) {
+			if legacy := legacyTrustPath(homeDir); legacy != "" {
+				if legacyBytes, legacyErr := os.ReadFile(legacy); legacyErr == nil {
+					_ = json.Unmarshal(legacyBytes, &tf)
+					return tf
+				}
+			}
+		}
 		return tf
 	}
 	_ = json.Unmarshal(b, &tf) // malformed → empty (untrusted), don't crash

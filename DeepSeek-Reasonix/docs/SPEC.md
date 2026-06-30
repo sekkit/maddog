@@ -80,7 +80,7 @@ type Config struct {
 ```
 
 - The `openai` kind is an OpenAI-compatible `/chat/completions` implementation.
-- **DeepSeek and MiMo are not code — they are config instances** of `kind = "openai"`,
+- **OpenAI-compatible vendors are config instances** of `kind = "openai"`,
   differing only in `base_url` / `model` / `api_key_env`. Adding another OpenAI-
   compatible model is a config edit, not a code change.
 - **A provider is a vendor endpoint** (one `base_url` + `api_key_env`) that offers
@@ -110,6 +110,9 @@ type Tool interface {
   (`tool.RegisterBuiltin(t)`); `tool.Builtins()` lists them.
 - A runtime `*Registry` is assembled per run: enabled built-ins (filtered by
   config) **plus** plugin-provided tools. The agent only sees the `*Registry`.
+- Tool schemas are canonicalized on registry insertion. The built-in contract is
+  documented in [`TOOL_CONTRACT.md`](TOOL_CONTRACT.md) and backed by tests that
+  compare the documented surface against the same canonical schema path.
 - `Execute` parses raw JSON args itself. Errors are returned, not fatal — the
   agent feeds them back so the model can self-correct.
 
@@ -243,15 +246,41 @@ func (p Policy) Decide(toolName string, readOnly bool, args json.RawMessage) Dec
   hard block in *every* mode: the tool never executes and the model receives a
   "blocked" result it can adapt to (the same shape as a plan-mode refusal).
 - **Relationship to plan mode.** Plan mode (§3.4) is an orthogonal, coarser gate
-  that refuses *all* writers regardless of policy; it is checked first. The
-  permission layer is the fine-grained, always-on gate underneath it.
+  checked before the permission layer. Its boundary is fail-closed for untrusted
+  tools: while planning, a tool runs only if it reports a *trustworthy*
+  `ReadOnly()==true` — a built-in, a first-party MCP `ReadOnlyToolNames`
+  override, a plugin-level `trusted_read_only_tools` declaration, or a concrete
+  MCP name listed in `[agent].plan_mode_allowed_tools` — or self-reports
+  plan-safe via `tool.PlanModeClassifier`. An MCP tool's `ReadOnly()` may
+  instead come from the server's self-reported `readOnlyHint`, which plan mode
+  treats as untrusted (`tool.PlanModeUntrustedReadOnly`): interactive
+  controllers may ask once before executing it and may remember a persistent
+  approval as `trusted_read_only_tools`. This trust prompt is a fresh user
+  decision: `auto`, `yolo`, and the approved-plan execution window do not answer
+  it, but an explicit session grant still prevents repeat prompts for the same
+  tool. Non-interactive sessions and declined approvals remain fail-closed.
+  Writers, installers, memory mutation, process
+  control, and `complete_step` (read-only yet post-approval only, so it
+  self-reports plan-unsafe) are refused; the enforced invariant is
+  PlanSafe ⇒ ReadOnly. An untrusted read-only MCP/plugin tool is therefore
+  blocked until the user approves or pre-trusts it, and it is excluded from
+  planner/read-only research sub-agents until the tool is part of the trusted
+  read-only registry. Plan mode still allows `read_only_task` and
+  `read_only_skill`, whose sub-agents receive only read-only research tools and
+  safe foreground bash; writer-capable `task` delegation and full skill execution
+  remain blocked. The desktop MCP panel writes the same
+  `trusted_read_only_tools` raw-name list as an advanced management surface:
+  **Pre-trust read-only** adds currently listed `readOnlyHint` tools, per-tool
+  **Pre-trust** adds an audited reader manually, and **Untrust** removes it
+  again. These UI actions do not make MCP `readOnlyHint` globally trusted by
+  default.
 - **User decisions are separate from tool approvals.** Runtime tool approval has
   three user-facing postures: `ask` ("需要批准"), `auto` ("自动批准"), and
   `yolo` ("Yolo批准"). `auto` lets the permission policy auto-approve the writer
   fallback while preserving explicit ask/deny rules; `yolo` skips all tool
   permission approvals for approval-gated tools such as writers and Bash.
-  Neither posture answers `ask` questions or approves `exit_plan_mode` plans for
-  the user.
+  Neither posture answers `ask` questions, approves `exit_plan_mode` plans, or
+  confirms MCP read-only trust prompts for the user.
   Auto-plan is also a separate feature flag: when enabled, a complex task may
   still enter plan mode in any tool approval posture. After a user approves a
   plan, the controller opens a short `approvedPlanAutoApproveTools` execution
@@ -269,16 +298,29 @@ func (p Policy) Decide(toolName string, readOnly bool, args json.RawMessage) Dec
   stops it, or the safety continuation limit is reached. Blocked-state matching
   is normalized for casing, whitespace, and punctuation so minor wording drift
   does not reset the audit; restarting a goal begins a fresh blocked audit.
-  `/goal clear` removes it. Switching into plan/normal mode clears the active
-  goal in the desktop UI so the collaboration mode remains one of the three
-  choices, while the underlying tool approval posture is preserved.
+  Goals that look like long-horizon research, debugging, optimization, or
+  implementation work automatically add an AutoResearch protocol to the same
+  transient active-goal user block. AutoResearch is a Goal strategy, not a
+  standalone global skill: it writes project-local state under
+  `.reasonix/autoresearch/YYYYMMDD-HHMMSS-slug/` and keeps dynamic run state out
+  of `REASONIX.md`, `AGENTS.md`, project memory, tool schemas, and the
+  cache-stable system prompt. `/goal --research <objective>` forces that
+  strategy; `/goal --simple <objective>` forces lightweight Goal. Outside goal
+  mode, an ordinary prompt with a very strong AutoResearch signal is upgraded by
+  the host into the equivalent of `/goal --research <original prompt>`; the
+  ordinary-prompt classifier is intentionally stricter than `/goal`'s internal
+  classification so weak words such as "long term", "optimize", "research", or
+  "verify" do not create durable task state by themselves. `/goal clear` removes
+  the active goal. Switching into plan/normal mode clears the active goal in the
+  desktop UI so the collaboration mode remains one of the three choices, while
+  the underlying tool approval posture is preserved.
 
-| Tool approval posture | Tool approvals | Plan approval | `ask` questions |
-| --- | --- | --- | --- |
-| Need approval / `ask` | Follow permission policy (`Ask` prompts interactively) | Waits for user | Waits for user |
-| Auto approve / `auto` | Writer fallback auto-allowed; explicit ask/deny rules still apply | Waits for user | Waits for user |
-| YOLO approval / `yolo` | Approval prompts auto-allowed unless denied | Waits for user | Waits for user |
-| Approved-plan execution window | Approved plan's tool calls auto-allowed unless denied | Future plans still wait | Waits for user |
+| Tool approval posture | Tool approvals | Plan approval | MCP read-only trust | `ask` questions |
+| --- | --- | --- | --- | --- |
+| Need approval / `ask` | Follow permission policy (`Ask` prompts interactively) | Waits for user | Waits for user unless session-granted | Waits for user |
+| Auto approve / `auto` | Writer fallback auto-allowed; explicit ask/deny rules still apply | Waits for user | Waits for user unless session-granted | Waits for user |
+| YOLO approval / `yolo` | Approval prompts auto-allowed unless denied | Waits for user | Waits for user unless session-granted | Waits for user |
+| Approved-plan execution window | Approved plan's tool calls auto-allowed unless denied | Future plans still wait | Waits for user unless session-granted | Waits for user |
 
 Out of the box (`mode = "ask"`, no rules) `maddog run` behaves exactly as before
 (writers resolve `Ask`→allow with no TTY), while `maddog chat` now prompts before
@@ -397,6 +439,10 @@ runtime bounds.
 default_model = "deepseek"   # provider name (→ its default model) or "provider/model"
 # language    = "zh"                # ui language tag; empty = auto-detect from $LANG / $MADDOG_LANG
 
+[ui]
+# shortcut_layout = "desktop"       # classic|desktop; compatibility setting
+# cursor_shape = "underline"        # CLI/TUI textarea cursor: underline|block|bar
+
 [agent]
 system_prompt = "You are Maddog, a coding agent..."  # or system_prompt_file = "..."
 max_steps     = 25
@@ -415,24 +461,20 @@ default        = "deepseek-v4-flash"   # optional; defaults to models[0]
 api_key_env    = "DEEPSEEK_API_KEY"
 context_window = 1000000   # tokens; harness compacts older history near this limit (0 disables)
 
-# A single-model entry (use when a model needs its own base_url/context_window/price).
-[[providers]]
-name        = "mimo-pro"
-kind        = "openai"
-base_url    = "https://token-plan-cn.xiaomimimo.com/v1"
-model       = "mimo-v2.5-pro"
-api_key_env = "MIMO_API_KEY"
+# A single-model entry still works for custom OpenAI-compatible endpoints.
 
-[[providers]]
-name        = "mimo-flash"
-kind        = "openai"
-base_url    = "https://token-plan-cn.xiaomimimo.com/v1"
-model       = "mimo-v2.5"
-api_key_env = "MIMO_API_KEY"
+[environment]
+enabled = true   # inject a stable startup summary of OS, shell, and common tool versions
+
+# Optional trusted executable paths shown to the model when PATH probing is not enough.
+# Workspace-local paths are listed but not auto-executed during startup probing.
+# [environment.tools]
+# go = "/opt/homebrew/bin/go"
 
 [tools]
 enabled = []   # omit/empty = all built-ins
 bash_timeout_seconds = 120   # foreground safety cap; set 0 for no tool-local cap
+mcp_call_timeout_seconds = 300   # default MCP call safety cap; plugin/tool overrides may raise it
 
 [tools.shell]
 prefer = "auto"   # auto (default) | bash | powershell | pwsh — force the shell tool's interpreter
@@ -450,14 +492,24 @@ allow = ["Bash(go test:*)", "Bash(git status:*)"]  # never prompted
 ask   = []                                 # force a prompt even if otherwise allowed
 
 [sandbox]
-# workspace_root = ""          # file-writers confined here; empty = cwd (writes stay in-project)
+# workspace_root = ""          # file-writers confined here; empty = cwd
 # allow_write    = ["/tmp"]    # extra dirs write_file/edit_file/multi_edit/move_file may modify
+# forbid_read    = ["${HOME}/.ssh"]   # dirs read/list/search tools and sandboxed bash may not inspect
+
+[serve]
+auth_mode = "none"             # none|token|password; use auth before binding beyond localhost
+# token = ""                   # optional fixed token; empty token mode generates one at startup
+# password_hash = ""           # bcrypt hash generated with reasonix serve --hash-password --password '...'
+# behind_proxy = false         # trust X-Forwarded-* only behind a trusted reverse proxy
 
 [[plugins]]
 name    = "example"            # type defaults to "stdio"
 command = "maddog-plugin-example"
 args    = []
 # env   = { FOO = "bar" }
+# call_timeout_seconds = 600            # per-server MCP call timeout; 0 = global/default cap
+# tool_timeout_seconds = { "generate_video" = 1800 }   # raw MCP tool names
+# trusted_read_only_tools = ["search"]   # optional pre-seeded MCP read-only trust
 
 # [[plugins]]                   # a remote MCP server over Streamable HTTP
 # name    = "stripe"
@@ -467,6 +519,19 @@ args    = []
 ```
 
 `maddog setup` writes this default config so the CLI is usable out of the box.
+
+`[ui].cursor_shape` is normalized to `underline`, `block`, or `bar`; empty or
+unknown values fall back to `underline`. It applies to the Bubble Tea CLI/TUI
+textarea only, while desktop and browser inputs keep their platform-native
+cursor behavior.
+
+`[serve]` controls the HTTP browser frontend used by `reasonix serve`. The
+default `auth_mode = "none"` is intended for the loopback default
+`127.0.0.1:8787`; deployments reachable from another machine must use `token` or
+`password`. Password mode requires either a startup `--password` or a stored
+bcrypt `password_hash`. `behind_proxy` must stay false unless the server is
+behind a trusted proxy that owns the `X-Forwarded-For` and `X-Forwarded-Proto`
+headers.
 
 MCP servers may also be declared in a project-root `.mcp.json` using Claude
 Code's exact `mcpServers` schema (`command`/`args`/`env`, `type`/`url`/`headers`,
@@ -484,15 +549,20 @@ Maddog unchanged.
 
 `[sandbox]` is the *enforcement* layer beneath permissions (which are *policy*).
 Phase 0 confines the file-writing built-ins (`write_file`, `edit_file`,
-`multi_edit`, `move_file`) to `workspace_root` (default cwd) plus `allow_write`: a write whose
-target — resolved to an absolute, symlink-free path so a symlinked dir or `..`
-cannot tunnel out — falls outside every root is refused, and the error is fed
-back to the model. Confinement is on by default (root = cwd), so edits stay in
-the project; reads are unrestricted. `bash` is itself jailed on macOS by default
+`multi_edit`, `move_file`) to `workspace_root` (default cwd), the Reasonix user
+config dir, plus `allow_write`: a write whose target — resolved to an absolute,
+symlink-free path so a symlinked dir or `..` cannot tunnel out — falls outside
+every root is refused, and the error is fed back to the model. Confinement is on
+by default (root = cwd), so edits stay in the project while the agent can still
+update its own global config. `forbid_read` lists directories the agent should
+not read, list, or search; entries support `${VAR}` / `${VAR:-default}` expansion
+and should be absolute, or use `${HOME}` for home-relative secrets such as
+`${HOME}/.ssh`. `bash` is itself jailed on macOS by default
 (`[sandbox] bash = "enforce"`, Seatbelt): each command runs under sandbox-exec
-allowed to write only the same roots (+ temp and toolchain caches) and to reach
-the network only when `network = true`. Unsupported platforms fall back to
-running unconfined. The escape-prompt and Linux support are Phase 1's remainder (§9).
+allowed to write only the same roots (+ temp and toolchain caches), denied reads
+under `forbid_read`, and allowed to reach the network only when `network = true`.
+Unsupported platforms fall back to running unconfined when no OS sandbox is
+available. The escape-prompt and Linux support are Phase 1's remainder (§9).
 
 ## 6. Error Handling
 

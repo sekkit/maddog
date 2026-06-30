@@ -24,6 +24,7 @@ import (
 	"reasonix/internal/config"
 	"reasonix/internal/control"
 	"reasonix/internal/event"
+	"reasonix/internal/jobs"
 	"reasonix/internal/nilutil"
 	"reasonix/internal/provider"
 )
@@ -34,26 +35,50 @@ var indexHTML []byte
 // Server wires a controller to its HTTP surface. The Broadcaster must be the
 // same sink the controller was constructed with, so events reach SSE clients.
 type Server struct {
-	mu        sync.RWMutex // guards ctrl, which switchModel swaps at runtime
-	ctrl      *control.Controller
-	bc        *Broadcaster
-	titleProv provider.Provider // lightweight flash provider for session titles
-	titles    *titleCache
+	mu         sync.RWMutex // guards ctrl, which switchModel swaps at runtime
+	ctrl       control.SessionAPI
+	bc         *Broadcaster
+	titleProv  provider.Provider // lightweight flash provider for session titles
+	titlePrice *provider.Pricing
+	titles     *titleCache
+	auth       *authGate // nil when auth is disabled
 }
 
 // New builds a Server. bc must be the controller's event sink.
-func New(ctrl *control.Controller, bc *Broadcaster) *Server {
-	s := &Server{ctrl: ctrl, bc: bc, titles: newTitleCache(ctrl.SessionDir())}
+// serveCfg controls authentication (none, token, or password).
+func New(ctrl control.SessionAPI, bc *Broadcaster, serveCfg config.ServeConfig) *Server {
+	s := &Server{
+		ctrl:   ctrl,
+		bc:     bc,
+		titles: newTitleCache(ctrl.SessionDir()),
+		auth:   newAuthGate(serveCfg),
+	}
 	s.initTitleProvider()
 	return s
 }
 
 // ctl returns the current controller. Handlers must read it through here, never
 // the field directly, because switchModel replaces it under the write lock.
-func (s *Server) ctl() *control.Controller {
+func (s *Server) ctl() control.SessionAPI {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.ctrl
+}
+
+// AuthToken returns the pre-shared token when in token mode, or "" otherwise.
+func (s *Server) AuthToken() string {
+	if s.auth == nil {
+		return ""
+	}
+	return s.auth.Token()
+}
+
+// AuthMode returns the authentication mode: "none", "token", or "password".
+func (s *Server) AuthMode() string {
+	if s.auth == nil {
+		return "none"
+	}
+	return s.auth.Mode()
 }
 
 // initTitleProvider builds a lightweight flash-model provider used solely to
@@ -79,6 +104,7 @@ func (s *Server) initTitleProvider() {
 		return
 	}
 	s.titleProv = prov
+	s.titlePrice = entry.Price
 }
 
 // switchModel rebuilds the controller with a new model, carrying over the
@@ -109,11 +135,7 @@ func (s *Server) switchModel(ctx context.Context, ref string) error {
 	// Keep the carried conversation in its existing file so the switch doesn't
 	// orphan a duplicate (#2807).
 	newPath := agent.ContinueSessionPath(prevPath, newCtrl.SessionDir(), newCtrl.Label())
-	if len(carried) > 0 {
-		newCtrl.Resume(&agent.Session{Messages: carried}, newPath)
-	} else if newPath != "" {
-		newCtrl.SetSessionPath(newPath)
-	}
+	newCtrl.AdoptHistory(carried, newPath)
 
 	s.ctrl = newCtrl
 	cur.Close()
@@ -207,6 +229,7 @@ func (s *Server) handler() http.Handler {
 	mux.HandleFunc("POST /tool-approval-mode", s.toolApprovalMode)
 	mux.HandleFunc("POST /auto-approve-tools", s.autoApproveTools)
 	mux.HandleFunc("POST /bypass", s.bypass)
+	mux.HandleFunc("POST /goal", s.goal)
 	mux.HandleFunc("POST /answer", s.answer)
 	mux.HandleFunc("POST /resume", s.resume)
 	mux.HandleFunc("POST /forget", s.forget)
@@ -215,8 +238,9 @@ func (s *Server) handler() http.Handler {
 	mux.HandleFunc("GET /status", s.status)
 	mux.HandleFunc("GET /sessions", s.sessions)
 	mux.HandleFunc("GET /skills", s.skills)
+	mux.HandleFunc("GET /todos", s.todos)
 	mux.HandleFunc("POST /delete-session", s.deleteSession)
-	return logMiddleware(csrfGuard(mux))
+	return logMiddleware(s.auth.middleware(csrfGuard(mux)))
 }
 
 // csrfGuard rejects state-changing requests that don't carry a JSON content type.
@@ -233,7 +257,7 @@ func csrfGuard(next http.Handler) http.Handler {
 			if i := strings.IndexByte(ct, ';'); i >= 0 {
 				ct = ct[:i]
 			}
-			if strings.TrimSpace(ct) != "application/json" {
+			if !strings.EqualFold(strings.TrimSpace(ct), "application/json") {
 				http.Error(w, "Content-Type must be application/json", http.StatusUnsupportedMediaType)
 				return
 			}
@@ -689,6 +713,28 @@ func (s *Server) bypass(w http.ResponseWriter, r *http.Request) {
 	s.autoApproveTools(w, r)
 }
 
+// goal sets or clears the active goal. An empty goal string clears it.
+// Setting a non-empty goal disables plan mode (matching the desktop behavior).
+func (s *Server) goal(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Goal string `json:"goal"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "bad body", http.StatusBadRequest)
+		return
+	}
+	goal := strings.TrimSpace(body.Goal)
+	if goal == "" {
+		s.ctl().ClearGoal()
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	// Disable plan mode before setting the goal, mirroring the desktop.
+	s.ctl().SetPlanMode(false)
+	s.ctl().SetGoal(goal)
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // answer responds to an ask_request.
 func (s *Server) answer(w http.ResponseWriter, r *http.Request) {
 	var body struct {
@@ -739,6 +785,10 @@ func (s *Server) resume(w http.ResponseWriter, r *http.Request) {
 	}
 	if realPath == realDir || !strings.HasPrefix(realPath, realDir+string(os.PathSeparator)) {
 		http.Error(w, "path outside session dir", http.StatusForbidden)
+		return
+	}
+	if agent.IsCleanupPending(realPath) {
+		http.Error(w, "session is pending cleanup", http.StatusBadRequest)
 		return
 	}
 	// Snapshot the current session before switching away.
@@ -819,7 +869,13 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 		sess["lastUsage"] = u
 	}
 	if b, err := s.ctl().Balance(r.Context()); err == nil && b != nil {
-		sess["balance"] = b
+		sess["balance"] = map[string]any{
+			"display":   b.Display(),
+			"available": b.Available,
+			"infos":     b.Infos,
+		}
+	} else if err != nil {
+		slog.Warn("serve: balance fetch failed", "err", err)
 	}
 	if j := s.ctl().Jobs(); len(j) > 0 {
 		sess["jobs"] = j
@@ -850,13 +906,19 @@ func (s *Server) generateTitle(ctx context.Context, firstMsg string) string {
 		return ""
 	}
 	var text strings.Builder
+	var usage *provider.Usage
 	for chunk := range ch {
 		switch chunk.Type {
 		case provider.ChunkText:
 			text.WriteString(chunk.Text)
+		case provider.ChunkUsage:
+			// Title usage is intentionally not broadcast on the shared chat SSE stream.
 		case provider.ChunkError:
 			return ""
 		}
+	}
+	if usage != nil && usage.TotalTokens > 0 && s.bc != nil {
+		s.bc.Emit(event.Event{Kind: event.Usage, Usage: usage, Pricing: s.titlePrice, UsageSource: event.UsageSourceTitle})
 	}
 	title := strings.TrimSpace(text.String())
 	if len(title) >= 2 && ((title[0] == '"' && title[len(title)-1] == '"') || (title[0] == '\'' && title[len(title)-1] == '\'')) {
@@ -892,6 +954,9 @@ func (s *Server) sessions(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		path := filepath.Join(dir, e.Name())
+		if agent.IsCleanupPending(path) {
+			continue
+		}
 		name := strings.TrimSuffix(e.Name(), ".jsonl")
 		entry := sessionEntry{Name: name, Path: path, Current: filepath.Clean(path) == current}
 		if first, turns := previewSessionFile(path); turns > 0 {
@@ -954,27 +1019,60 @@ func (s *Server) deleteSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	destroy := s.ctl().BeginDestroySession(abs)
-	if err := os.Remove(abs); err != nil {
-		go finishSessionDestroy(destroy)
+	if result := finishSessionDestroy(destroy); result.HasTimedOut() {
+		if err := agent.MarkCleanupPending(abs, "delete"); err != nil {
+			go delayedSessionDelete(absDir, abs, destroy)
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		go delayedSessionDelete(absDir, abs, destroy)
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	if err := removeSessionFiles(absDir, abs); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	if err := agent.DeleteSubagentsByParent(dir, agent.BranchID(abs)); err != nil {
-		go finishSessionDestroy(destroy)
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	go finishSessionDestroy(destroy)
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func finishSessionDestroy(destroy control.SessionDestroyHandle) {
+func finishSessionDestroy(destroy control.SessionDestroyHandle) jobs.TeardownResult {
 	if destroy.Wait != nil {
-		destroy.Wait()
+		result := destroy.Wait()
+		if destroy.Finish != nil && !result.HasTimedOut() {
+			destroy.Finish()
+		}
+		return result
 	}
 	if destroy.Finish != nil {
 		destroy.Finish()
 	}
+	return jobs.TeardownResult{}
+}
+
+func delayedSessionDelete(absDir, abs string, destroy control.SessionDestroyHandle) {
+	if destroy.WaitAll != nil {
+		destroy.WaitAll()
+	}
+	if err := removeSessionFiles(absDir, abs); err != nil {
+		slog.Warn("serve: delayed session delete failed", "path", abs, "err", err)
+	}
+	if destroy.Finish != nil {
+		destroy.Finish()
+	}
+}
+
+func removeSessionFiles(absDir, abs string) error {
+	if err := os.Remove(abs); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	if err := agent.DeleteSubagentsByParent(absDir, agent.BranchID(abs)); err != nil {
+		return err
+	}
+	if err := jobs.RemoveArtifacts(abs); err != nil {
+		return err
+	}
+	return agent.ClearCleanupPending(abs)
 }
 
 // sessionTitle returns a title for a session: the cached flash-generated title
@@ -1046,6 +1144,23 @@ func (s *Server) skills(w http.ResponseWriter, _ *http.Request) {
 	out := make([]skillEntry, len(raw))
 	for i, sk := range raw {
 		out[i] = skillEntry{Name: sk.Name, Scope: string(sk.Scope), Subagent: sk.RunAs == "subagent", Description: sk.Description}
+	}
+	writeJSON(w, out)
+}
+
+// todos returns the canonical task list (latest todo_write state merged with
+// complete_step advances) so the frontend can render a live task panel.
+func (s *Server) todos(w http.ResponseWriter, _ *http.Request) {
+	type todoItem struct {
+		Content    string `json:"content"`
+		Status     string `json:"status"`
+		ActiveForm string `json:"activeForm,omitempty"`
+		Level      int    `json:"level,omitempty"`
+	}
+	raw := s.ctl().Todos()
+	out := make([]todoItem, len(raw))
+	for i, t := range raw {
+		out[i] = todoItem{Content: t.Content, Status: t.Status, ActiveForm: t.ActiveForm, Level: t.Level}
 	}
 	writeJSON(w, out)
 }

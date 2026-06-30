@@ -165,6 +165,7 @@ type Approval struct {
 	ID      string
 	Tool    string
 	Subject string
+	Reason  string // optional annotation explaining why approval is needed
 }
 
 // AskOption is one choice the user can pick for an AskQuestion.
@@ -201,6 +202,21 @@ type Compaction struct {
 	Archive  string // Done: path the dropped originals were archived to ("" if none)
 }
 
+// GuardianResult carries the outcome of a guardian sub-agent safety review.
+// Emitted with Kind=GuardianAssessment after each review completes.
+type GuardianResult struct {
+	ID                string            // unique review id
+	Tool              string            // tool being reviewed (e.g. "bash")
+	Subject           string            // call subject (e.g. "rm -rf /tmp/build")
+	Outcome           string            // "allow" | "deny"
+	RiskLevel         string            // "low" | "medium" | "high" | "critical"
+	UserAuthorization string            // "unknown" | "low" | "medium" | "high"
+	Rationale         string            // one-sentence reason
+	DurationMs        int64             // wall-clock review time
+	Usage             *provider.Usage   // guardian review token telemetry
+	Pricing           *provider.Pricing // for cost display (nil = omit cost)
+}
+
 // AskAnswer is the user's reply to one AskQuestion: the chosen option label(s)
 // (a free-typed answer is carried as a single Selected entry).
 type AskAnswer struct {
@@ -223,16 +239,29 @@ type CacheDiagnostics struct {
 	CacheHitTokens      int
 }
 
+const (
+	UsageSourceExecutor   = "executor"
+	UsageSourcePlanner    = "planner"
+	UsageSourceSubagent   = "subagent"
+	UsageSourceCompaction = "compaction"
+	UsageSourceClassifier = "classifier"
+	UsageSourceTitle      = "title"
+)
+
 // Event is one increment in a turn's event stream. Read the field(s) documented
 // for Kind; the others are zero.
 type Event struct {
 	Kind             Kind
-	Text             string            // Reasoning / Text / Message / Notice / Phase
-	Reasoning        string            // Message: the full reasoning chain
-	Tool             Tool              // ToolDispatch / ToolResult
-	Usage            *provider.Usage   // Usage
-	Pricing          *provider.Pricing // Usage: for cost display (nil = omit cost)
-	CacheDiagnostics *CacheDiagnostics // Usage: cache-churn attribution (nil = N/A)
+	Text             string                    // Reasoning / Text / Message / Notice / Phase
+	Reasoning        string                    // Message: the full reasoning chain
+	MemoryCitations  []provider.MemoryCitation // Message: local memory references displayed by rich frontends
+	MemoryCompiler   *MemoryCompilerStats      // MemoryCompilerStats: content-free Memory v5 usage counters
+	Tool             Tool                      // ToolDispatch / ToolResult
+	Usage            *provider.Usage           // Usage
+	Pricing          *provider.Pricing         // Usage: for cost display (nil = omit cost)
+	Source           string                    // optional display/event source (executor, planner, subagent, ...)
+	UsageSource      string                    // Usage: billable call source; empty means executor for compatibility
+	CacheDiagnostics *CacheDiagnostics         // Usage: cache-churn attribution (nil = N/A)
 	// SessionHit/SessionMiss carry cumulative cache tokens across the whole
 	// session (Usage events only), so a frontend can show the aggregate hit-rate
 	// — which doesn't crater on a short turn or after compaction — alongside

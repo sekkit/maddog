@@ -74,22 +74,13 @@ func TestPromoteProviderKeysCopiesProjectKeyAndPreservesHomeEnv(t *testing.T) {
 	if err := os.WriteFile(homeEnv, []byte("DEEPSEEK_API_KEY=sk-test\nNPM_TOKEN=secret\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("DEEPSEEK_API_KEY", "sk-test")
-	t.Setenv("NPM_TOKEN", "secret")
 
-	promoteProviderKeysToCredentials(config.Default())
-
-	cred, err := os.ReadFile(config.UserCredentialsPath())
-	if err != nil {
-		t.Fatalf("credentials not written: %v", err)
+	if _, err := config.LoadForRoot(t.TempDir()); err != nil {
+		t.Fatalf("LoadForRoot: %v", err)
 	}
-	if !strings.Contains(string(cred), "DEEPSEEK_API_KEY=sk-test") {
-		t.Errorf("provider key not promoted to credentials:\n%s", cred)
+	if data, err := os.ReadFile(config.UserCredentialsPath()); err == nil && strings.Contains(string(data), "DEEPSEEK_API_KEY") {
+		t.Errorf("legacy ~/.env provider key must not be imported:\n%s", data)
 	}
-	if strings.Contains(string(cred), "NPM_TOKEN") {
-		t.Errorf("non-provider env var must not be promoted:\n%s", cred)
-	}
-
 	rest, _ := os.ReadFile(homeEnv)
 	if !strings.Contains(string(rest), "DEEPSEEK_API_KEY=sk-test") {
 		t.Errorf("Maddog must not remove keys from ~/.env used by other clients:\n%s", rest)

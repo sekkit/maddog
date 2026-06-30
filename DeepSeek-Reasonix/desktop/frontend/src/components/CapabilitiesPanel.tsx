@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { ShieldCheck, ShieldOff } from "lucide-react";
 import { asArray } from "../lib/array";
-import { app, onBuiltInMCPUpdate, openExternal } from "../lib/bridge";
+import { app, openExternal } from "../lib/bridge";
 import { useT } from "../lib/i18n";
-import type { BuiltInMCPUpdateStatus, CapabilitiesView, MCPServerInput, ServerView, SkillRootSkillView, SkillRootView, SkillView } from "../lib/types";
+import { mcpServerLifecycleActions, mcpServerRetryableFromAvailableList } from "../lib/mcpServerLifecycle";
+import type { CapabilitiesView, MCPServerInput, ServerView, SkillRootSkillView, SkillRootView, SkillsSettingsView, SkillView, TabMeta } from "../lib/types";
 import { InlineConfirmButton } from "./InlineConfirmButton";
 import { ResizableDrawer } from "./ResizableDrawer";
 import { Tooltip } from "./Tooltip";
@@ -13,6 +15,19 @@ import { ModalCloseButton } from "./ModalCloseButton";
 // each server shows a connected/failed dot, transport, and tool/prompt/resource
 // counts, with add / remove / retry; skills list their scope and run mode.
 type CapTab = "servers" | "skills";
+
+type SettingsSnapshot<T> = { key: string; value: T };
+
+let mcpSettingsSnapshot: SettingsSnapshot<ServerView[]> | null = null;
+let skillsSettingsSnapshot: SettingsSnapshot<SkillsSettingsView> | null = null;
+
+function settingsSnapshotKey(meta: Awaited<ReturnType<typeof app.Meta>> | null | undefined, tabs: TabMeta[] | null | undefined): string {
+  const active = tabs?.find((tab) => tab.active);
+  const tabID = (active?.id || "").trim();
+  const root = (active?.workspaceRoot || active?.workspacePath || active?.cwd || meta?.workspaceRoot || meta?.workspacePath || meta?.cwd || "").trim();
+  const channel = (meta?.eventChannel || "").trim();
+  return `${channel}|${tabID}|${root}`;
+}
 
 export function CapabilitiesPanel({
   onClose,
@@ -33,32 +48,13 @@ export function CapabilitiesPanel({
   const [expandedErrors, setExpandedErrors] = useState<Set<string>>(() => new Set());
   const [expandedServers, setExpandedServers] = useState<Set<string>>(() => new Set());
   const [expandedServerTools, setExpandedServerTools] = useState<Set<string>>(() => new Set());
-  const [updateStatuses, setUpdateStatuses] = useState<Record<string, BuiltInMCPUpdateStatus>>({});
 
   const reload = useCallback(async () => {
     setView(normalizeCapabilitiesView(await app.Capabilities().catch(() => ({ servers: [], skills: [], skillRoots: [] }))));
   }, []);
-  const reloadUpdateStatuses = useCallback(async () => {
-    setUpdateStatuses(normalizeBuiltInMCPUpdateStatuses(await app.BuiltInMCPUpdateStatuses().catch(() => [])));
-  }, []);
   useEffect(() => {
     void reload();
   }, [reload]);
-  useEffect(() => {
-    let cancelled = false;
-    void app.BuiltInMCPUpdateStatuses()
-      .then((statuses) => {
-        if (!cancelled) setUpdateStatuses(normalizeBuiltInMCPUpdateStatuses(statuses));
-      })
-      .catch(() => {});
-    const unsubscribe = onBuiltInMCPUpdate((status) => {
-      setUpdateStatuses((prev) => mergeBuiltInMCPUpdateStatus(prev, status));
-    });
-    return () => {
-      cancelled = true;
-      unsubscribe();
-    };
-  }, []);
   useEffect(() => {
     if (tab !== "servers" || !view?.servers.some((s) => s.status === "initializing" || s.status === "deferred")) return;
     const id = window.setInterval(() => void reload(), 2500);
@@ -81,12 +77,6 @@ export function CapabilitiesPanel({
     } finally {
       setBusy(false);
     }
-  };
-
-  const upgradeBuiltInMCP = async (name: string) => {
-    const ok = await mutate(() => app.UpdateBuiltInMCPServer(name));
-    await reloadUpdateStatuses();
-    return ok;
   };
 
   const summary = useMemo(() => {
@@ -119,11 +109,7 @@ export function CapabilitiesPanel({
       active: servers.filter((s) => s.status !== "failed"),
     };
   }, [view]);
-  const visibleUpdateStatuses = useMemo(
-    () => Object.values(updateStatuses).filter((status) => isVisibleBuiltInMCPUpdateStatus(status)),
-    [updateStatuses],
-  );
-
+  const retryableActiveServerNames = useMemo(() => retryableAvailableServerNames(serverGroups.active), [serverGroups.active]);
   const toggleSkill = useCallback((name: string) => {
     setExpandedSkills((prev) => {
       const next = new Set(prev);
@@ -204,13 +190,6 @@ export function CapabilitiesPanel({
 
             {tab === "servers" ? (
               <section className="mem-section">
-                {visibleUpdateStatuses.length > 0 && (
-                  <BuiltInMCPUpdateNotice
-                    statuses={visibleUpdateStatuses}
-                    busy={busy}
-                    onUpgrade={(name) => void upgradeBuiltInMCP(name)}
-                  />
-                )}
                 <div className="cap-mcp-toolbar cap-mcp-toolbar--drawer">
                   {!adding && (
                     <button className="btn btn--small" disabled={busy} onClick={() => setAdding(true)}>
@@ -225,8 +204,6 @@ export function CapabilitiesPanel({
                     onToggle={toggleError}
                     onRetry={(name) => void mutate(() => app.ReconnectMCPServer(name))}
                     onRetryMany={(names) => void mutate(() => Promise.allSettled(names.map((name) => app.ReconnectMCPServer(name))))}
-                    onUpgrade={(name) => void upgradeBuiltInMCP(name)}
-                    updates={updateStatuses}
                     onConfirmClearAuth={(name) => void mutate(() => app.ClearMCPServerAuthentication(name))}
                     onConfirm={(name) => void mutate(() => app.RemoveMCPServer(name))}
                     onConfirmMany={(names) => void mutate(() => Promise.allSettled(names.map((name) => app.RemoveMCPServer(name))))}
@@ -238,11 +215,20 @@ export function CapabilitiesPanel({
                 )}
                 {serverGroups.active.length > 0 && (
                   <div className="cap-server-section">
-                    <div className="cap-server-section__title">{t("caps.availableServers")}</div>
+                    <div className="cap-server-section__head">
+                      <div className="cap-server-section__title">{t("caps.availableServers")}</div>
+                      <button
+                        className="btn btn--small"
+                        disabled={busy || retryableActiveServerNames.length === 0}
+                        type="button"
+                        onClick={() => void mutate(() => Promise.allSettled(retryableActiveServerNames.map((name) => app.ReconnectMCPServer(name))))}
+                      >
+                        {t("caps.retryAll")}
+                      </button>
+                    </div>
                     <ServerGroup
                       busy={busy}
                       servers={serverGroups.active}
-                      updates={updateStatuses}
                       expanded={expandedServers}
                       expandedTools={expandedServerTools}
                       editing={editing}
@@ -253,8 +239,10 @@ export function CapabilitiesPanel({
                       onCancelEdit={() => setEditing(null)}
                       onRetry={(name) => void mutate(() => app.ReconnectMCPServer(name))}
                       onReconnect={(name) => void mutate(() => app.ReconnectMCPServer(name))}
-                      onUpgrade={(name) => void upgradeBuiltInMCP(name)}
                       onConfirmClearAuth={(name) => void mutate(() => app.ClearMCPServerAuthentication(name))}
+                      onTrustTool={(name, toolName) => void mutate(() => app.TrustMCPServerTool(name, toolName))}
+                      onTrustTools={(name, toolNames) => void mutate(() => app.TrustMCPServerTools(name, toolNames))}
+                      onUntrustTool={(name, toolName) => void mutate(() => app.UntrustMCPServerTool(name, toolName))}
                       onToggle={(name, on) => void mutate(() => app.SetMCPServerEnabled(name, on))}
                       onUpdate={(name, input) =>
                         void mutate(() => app.UpdateMCPServer(name, input)).then((ok) => {
@@ -325,14 +313,26 @@ export function CapabilitiesPanel({
 
 function normalizeCapabilitiesView(view: CapabilitiesView | null | undefined): CapabilitiesView {
   return {
-    servers: sortServersForDisplay(
-      asArray(view?.servers).map((server) => ({
-        ...server,
-        args: asArray(server.args),
-        envKeys: asArray(server.envKeys),
-        toolList: asArray(server.toolList),
-      })),
-    ),
+    servers: normalizeServerViews(view?.servers),
+    ...normalizeSkillsSettingsView(view),
+  };
+}
+
+function normalizeServerViews(servers: ServerView[] | null | undefined): ServerView[] {
+  return sortServersForDisplay(
+    asArray(servers).map((server) => ({
+      ...server,
+      args: asArray(server.args),
+      envKeys: asArray(server.envKeys),
+      headerKeys: asArray(server.headerKeys),
+      toolList: asArray(server.toolList),
+      trustedReadOnlyTools: asArray(server.trustedReadOnlyTools),
+    })),
+  );
+}
+
+function normalizeSkillsSettingsView(view: SkillsSettingsView | CapabilitiesView | null | undefined): SkillsSettingsView {
+  return {
     skills: asArray(view?.skills),
     skillRoots: asArray(view?.skillRoots).map((root) => ({
       ...root,
@@ -340,84 +340,6 @@ function normalizeCapabilitiesView(view: CapabilitiesView | null | undefined): C
       skillItems: asArray(root.skillItems),
     })),
   };
-}
-
-function normalizeBuiltInMCPUpdateStatuses(
-  statuses: BuiltInMCPUpdateStatus[] | null | undefined,
-): Record<string, BuiltInMCPUpdateStatus> {
-  const out: Record<string, BuiltInMCPUpdateStatus> = {};
-  for (const status of asArray(statuses)) {
-    const name = (status?.name || "").trim();
-    if (!name) continue;
-    out[name] = {
-      ...status,
-      name,
-      phase: normalizeBuiltInMCPUpdatePhase(status.phase),
-    };
-  }
-  return out;
-}
-
-function mergeBuiltInMCPUpdateStatus(
-  prev: Record<string, BuiltInMCPUpdateStatus>,
-  status: BuiltInMCPUpdateStatus,
-): Record<string, BuiltInMCPUpdateStatus> {
-  const name = (status?.name || "").trim();
-  if (!name) return prev;
-  return {
-    ...prev,
-    [name]: {
-      ...status,
-      name,
-      phase: normalizeBuiltInMCPUpdatePhase(status.phase),
-    },
-  };
-}
-
-function normalizeBuiltInMCPUpdatePhase(phase: string): BuiltInMCPUpdateStatus["phase"] {
-  switch (phase) {
-    case "current":
-    case "available":
-    case "downloaded":
-    case "activated":
-    case "skipped":
-    case "error":
-      return phase;
-    default:
-      return "skipped";
-  }
-}
-
-function isVisibleBuiltInMCPUpdateStatus(status: BuiltInMCPUpdateStatus): boolean {
-  return status.name === "codegraph" && ["available", "downloaded", "activated", "error"].includes(status.phase);
-}
-
-function BuiltInMCPUpdateNotice({
-  statuses,
-  busy,
-  onUpgrade,
-}: {
-  statuses: BuiltInMCPUpdateStatus[];
-  busy: boolean;
-  onUpgrade: (name: string) => void;
-}) {
-  const t = useT();
-  const primary = statuses[0];
-  if (!primary) return null;
-  const canUpgrade = primary.name === "codegraph" && (primary.phase === "available" || primary.phase === "downloaded");
-  return (
-    <div className={`cap-update-notice cap-update-notice--${primary.phase}`}>
-      <div className="cap-update-notice__text">
-        <div className="cap-update-notice__title">{t("caps.updateNoticeTitle")}</div>
-        <div className="cap-update-notice__summary">{builtInMCPUpdateSummary(primary, t)}</div>
-      </div>
-      {canUpgrade && (
-        <button className="btn btn--small" disabled={busy} type="button" onClick={() => onUpgrade(primary.name)}>
-          {t("caps.upgradeBuiltInMCP")}
-        </button>
-      )}
-    </div>
-  );
 }
 
 function sortServersForDisplay(servers: ServerView[]): ServerView[] {
@@ -725,7 +647,6 @@ function skillRootBadges(root: SkillRootView, t: ReturnType<typeof useT>): Array
 
 function ServerGroup({
   servers,
-  updates,
   expanded,
   expandedTools,
   busy,
@@ -735,15 +656,16 @@ function ServerGroup({
   onCancelEdit,
   onRetry,
   onReconnect,
-  onUpgrade,
   onConfirmClearAuth,
+  onTrustTool,
+  onTrustTools,
+  onUntrustTool,
   onToggle,
   onUpdate,
   onToggleDetails,
   onToggleTools,
 }: {
   servers: ServerView[];
-  updates: Record<string, BuiltInMCPUpdateStatus>;
   expanded: Set<string>;
   expandedTools: Set<string>;
   busy: boolean;
@@ -753,8 +675,10 @@ function ServerGroup({
   onCancelEdit: () => void;
   onRetry: (name: string) => void;
   onReconnect: (name: string) => void;
-  onUpgrade: (name: string) => void;
   onConfirmClearAuth: (name: string) => void;
+  onTrustTool: (name: string, toolName: string) => void;
+  onTrustTools: (name: string, toolNames: string[]) => void;
+  onUntrustTool: (name: string, toolName: string) => void;
   onToggle: (name: string, on: boolean) => void;
   onUpdate: (name: string, input: MCPServerInput) => void;
   onToggleDetails: (name: string) => void;
@@ -767,7 +691,6 @@ function ServerGroup({
         <ServerRow
           key={s.name}
           s={s}
-          updateStatus={updates[s.name]}
           expanded={expanded.has(s.name)}
           toolsExpanded={expandedTools.has(s.name)}
           busy={busy}
@@ -777,8 +700,10 @@ function ServerGroup({
           onCancelEdit={onCancelEdit}
           onRetry={() => onRetry(s.name)}
           onReconnect={() => onReconnect(s.name)}
-          onUpgrade={() => onUpgrade(s.name)}
           onConfirmClearAuth={() => onConfirmClearAuth(s.name)}
+          onTrustTool={(toolName) => onTrustTool(s.name, toolName)}
+          onTrustTools={(toolNames) => onTrustTools(s.name, toolNames)}
+          onUntrustTool={(toolName) => onUntrustTool(s.name, toolName)}
           onToggle={(on) => onToggle(s.name, on)}
           onUpdate={(input) => onUpdate(s.name, input)}
           onToggleDetails={() => onToggleDetails(s.name)}
@@ -791,24 +716,20 @@ function ServerGroup({
 
 function FailedServersNotice({
   servers,
-  updates,
   expanded,
   busy,
   onToggle,
   onRetry,
-  onUpgrade,
   onRetryMany,
   onConfirmClearAuth,
   onConfirm,
   onConfirmMany,
 }: {
   servers: ServerView[];
-  updates: Record<string, BuiltInMCPUpdateStatus>;
   expanded: Set<string>;
   busy: boolean;
   onToggle: (name: string) => void;
   onRetry: (name: string) => void;
-  onUpgrade: (name: string) => void;
   onRetryMany: (names: string[]) => void;
   onConfirmClearAuth: (name: string) => void;
   onConfirm: (name: string) => void;
@@ -878,19 +799,13 @@ function FailedServersNotice({
                 <span className="cap-dot cap-dot--failed" />
                 <div className="cap-failure__text">
                   <div className="cap-failure__name">{s.name}</div>
-                  <div className="cap-failure__summary">{s.authStatus === "required" ? t("caps.authRequiredSummary") : summarizeServerError(error, t)}</div>
-                  {updates[s.name] && <div className="cap-failure__summary">{builtInMCPUpdateSummary(updates[s.name], t)}</div>}
+                  <div className="cap-failure__summary">{s.authStatus === "required" ? t("caps.authRequiredSummary") : summarizeServerError(error)}</div>
                 </div>
               </div>
               <div className="cap-failure__actions">
                 <button className="btn btn--small" disabled={busy} onClick={handlePrimaryAction}>
                   {actionLabel}
                 </button>
-                {canUpgradeBuiltInMCP(s, updates[s.name]) && (
-                  <button className="btn btn--small" disabled={busy} onClick={() => onUpgrade(s.name)}>
-                    {t("caps.upgradeBuiltInMCP")}
-                  </button>
-                )}
                 {canClearAuth(s) && (
                   <InlineConfirmButton
                     label={t("caps.clearAuth")}
@@ -935,7 +850,6 @@ function FailedServersNotice({
 
 function ServerRow({
   s,
-  updateStatus,
   expanded,
   toolsExpanded,
   busy,
@@ -945,15 +859,16 @@ function ServerRow({
   onCancelEdit,
   onRetry,
   onReconnect,
-  onUpgrade,
   onConfirmClearAuth,
+  onTrustTool,
+  onTrustTools,
+  onUntrustTool,
   onToggle,
   onUpdate,
   onToggleDetails,
   onToggleTools,
 }: {
   s: ServerView;
-  updateStatus?: BuiltInMCPUpdateStatus;
   expanded: boolean;
   toolsExpanded: boolean;
   busy: boolean;
@@ -963,8 +878,10 @@ function ServerRow({
   onCancelEdit: () => void;
   onRetry: () => void;
   onReconnect: () => void;
-  onUpgrade: () => void;
   onConfirmClearAuth: () => void;
+  onTrustTool: (toolName: string) => void;
+  onTrustTools: (toolNames: string[]) => void;
+  onUntrustTool: (toolName: string) => void;
   onToggle: (on: boolean) => void;
   onUpdate: (input: MCPServerInput) => void;
   onToggleDetails: () => void;
@@ -972,6 +889,7 @@ function ServerRow({
 }) {
   const t = useT();
   const actionLabel = serverActionLabel(s, t);
+  const lifecycle = mcpServerLifecycleActions(s);
   const tools = s.toolList ?? [];
   let sub =
     s.status === "failed"
@@ -988,11 +906,6 @@ function ServerRow({
   if (s.authStatus === "possible" && s.status !== "failed") {
     sub = `${sub} · ${t("caps.authPossibleShort")}`;
   }
-  const updateSummary = builtInMCPRowUpdateSummary(s, updateStatus, t);
-  if (updateSummary) {
-    sub = `${sub} · ${updateSummary}`;
-  }
-  const enabled = s.status === "connected" || s.status === "deferred" || s.status === "initializing";
   const handlePrimaryAction = () => {
     if (shouldOpenAuth(s)) {
       openExternal((s.authUrl || "").trim());
@@ -1019,27 +932,20 @@ function ServerRow({
               <span className="cap-row__name">{s.name}</span>
               <span className="cap-row__transport">{s.transport}</span>
               {s.builtIn && <span className="cap-row__builtin">{t("caps.builtIn")}</span>}
-              {isVisibleBuiltInMCPUpdateStatusForServer(s, updateStatus) && (
-                <span className={`cap-row__builtin cap-row__update cap-row__update--${updateStatus.phase}`}>
-                  {builtInMCPUpdateBadge(updateStatus, t)}
-                </span>
-              )}
             </div>
             <div className="cap-row__sub">{sub}</div>
           </div>
           <div className="cap-row__actions">
-            {s.status === "failed" ? (
+            {lifecycle.showRetryInRow ? (
               <button className="btn btn--small" disabled={busy} onClick={handlePrimaryAction}>
                 {actionLabel}
               </button>
-            ) : s.status === "initializing" ? (
-              <span className="cap-row__pending">{t("caps.initializingShort")}</span>
             ) : (
-              <Tooltip label={enabled ? t("caps.disable") : t("caps.enable")}>
+              <Tooltip label={lifecycle.enabled ? t("caps.disable") : t("caps.enable")}>
                 <label className="cap-switch">
                   <input
                     type="checkbox"
-                    checked={enabled}
+                    checked={lifecycle.enabled}
                     disabled={busy}
                     onChange={(e) => onToggle(e.target.checked)}
                   />
@@ -1053,14 +959,15 @@ function ServerRow({
       {expanded && (
         <ServerDetails
           s={s}
-          updateStatus={updateStatus}
           tools={tools}
           busy={busy}
           onConfirm={onConfirm}
           onConnectNow={onRetry}
           onReconnect={onReconnect}
-          onUpgrade={onUpgrade}
           onConfirmClearAuth={onConfirmClearAuth}
+          onTrustTool={onTrustTool}
+          onTrustTools={onTrustTools}
+          onUntrustTool={onUntrustTool}
           toolsExpanded={toolsExpanded}
           editing={editing}
           onEdit={onEdit}
@@ -1075,14 +982,15 @@ function ServerRow({
 
 function ServerDetails({
   s,
-  updateStatus,
   tools,
   busy,
   onConfirm,
   onConnectNow,
   onReconnect,
-  onUpgrade,
   onConfirmClearAuth,
+  onTrustTool,
+  onTrustTools,
+  onUntrustTool,
   toolsExpanded,
   editing,
   onEdit,
@@ -1091,14 +999,15 @@ function ServerDetails({
   onToggleTools,
 }: {
   s: ServerView;
-  updateStatus?: BuiltInMCPUpdateStatus;
   tools: ServerView["toolList"];
   busy: boolean;
   onConfirm: () => void;
   onConnectNow: () => void;
   onReconnect: () => void;
-  onUpgrade: () => void;
   onConfirmClearAuth: () => void;
+  onTrustTool: (toolName: string) => void;
+  onTrustTools: (toolNames: string[]) => void;
+  onUntrustTool: (toolName: string) => void;
   toolsExpanded: boolean;
   editing: boolean;
   onEdit: () => void;
@@ -1109,12 +1018,17 @@ function ServerDetails({
   const t = useT();
   const command = serverCommand(s);
   const canEditConfig = s.configured && !s.builtIn;
-  const canConnectNow = s.status === "deferred" || s.status === "disabled";
-  const canReconnect = s.status === "connected";
-  const canUpgrade = canUpgradeBuiltInMCP(s, updateStatus);
+  const lifecycle = mcpServerLifecycleActions(s);
+  const canConnectNow = lifecycle.canConnectNow;
+  const canReconnect = lifecycle.canReconnect;
   const canShowTools = s.status === "connected" && ((s.tools ?? 0) > 0 || (tools?.length ?? 0) > 0);
   const showClearAuth = canClearAuth(s);
   const authLabel = serverAuthLabel(s, t);
+  const trustedReadOnlyTools = s.trustedReadOnlyTools ?? [];
+  const trustedReadOnlyToolNames = new Set(trustedReadOnlyTools);
+  const canTrustTool = s.configured && !s.builtIn;
+  const reportedReadOnlyToolNames = (tools ?? []).filter((tool) => tool.readOnlyHint).map((tool) => tool.name);
+  const bulkTrustToolNames = reportedReadOnlyToolNames.filter((name) => !trustedReadOnlyToolNames.has(name));
   if (editing && canEditConfig) {
     return (
       <div className="cap-server-details">
@@ -1139,12 +1053,6 @@ function ServerDetails({
             <span className="cap-detail__value">{authLabel}</span>
           </div>
         )}
-        {s.builtIn && (
-          <div className="cap-detail cap-detail--wide">
-            <span className="cap-detail__label">{t("caps.updatePolicy")}</span>
-            <span className="cap-detail__value">{builtInMCPUpdatePolicy(s, updateStatus, t)}</span>
-          </div>
-        )}
         {command && (
           <div className="cap-detail cap-detail--wide">
             <span className="cap-detail__label">{s.transport === "stdio" ? t("caps.command") : t("caps.url")}</span>
@@ -1155,6 +1063,18 @@ function ServerDetails({
           <div className="cap-detail cap-detail--wide">
             <span className="cap-detail__label">{t("caps.envKeys")}</span>
             <span className="cap-detail__value">{s.envKeys.join(", ")}</span>
+          </div>
+        )}
+        {s.headerKeys && s.headerKeys.length > 0 && (
+          <div className="cap-detail cap-detail--wide">
+            <span className="cap-detail__label">{t("caps.headerKeys")}</span>
+            <span className="cap-detail__value">{s.headerKeys.join(", ")}</span>
+          </div>
+        )}
+        {trustedReadOnlyTools.length > 0 && (
+          <div className="cap-detail cap-detail--wide">
+            <span className="cap-detail__label">{t("caps.trustedReadOnlyTools")}</span>
+            <span className="cap-detail__code">{trustedReadOnlyTools.join(", ")}</span>
           </div>
         )}
       </div>
@@ -1169,14 +1089,21 @@ function ServerDetails({
             {t("caps.reconnect")}
           </button>
         )}
-        {canUpgrade && (
-          <button className="btn btn--small" disabled={busy} onClick={onUpgrade}>
-            {t("caps.upgradeBuiltInMCP")}
-          </button>
-        )}
         {canShowTools && (
           <button className="btn btn--small" disabled={busy} onClick={onToggleTools} aria-expanded={toolsExpanded}>
             {toolsExpanded ? t("caps.hideTools") : t("caps.showTools")}
+          </button>
+        )}
+        {canTrustTool && bulkTrustToolNames.length > 0 && (
+          <button
+            className="btn btn--small cap-trust-bulk"
+            disabled={busy}
+            onClick={() => onTrustTools(bulkTrustToolNames)}
+            title={t("caps.trustReportedReadOnlyTitle")}
+            type="button"
+          >
+            <ShieldCheck aria-hidden size={13} strokeWidth={2.2} />
+            {t("caps.trustReportedReadOnly", { count: bulkTrustToolNames.length })}
           </button>
         )}
         {showClearAuth && (
@@ -1208,12 +1135,55 @@ function ServerDetails({
         tools && tools.length > 0 ? (
           <div className="cap-tool-list">
             <div className="cap-tool-list__title">{t("caps.tools")}</div>
-            {tools.map((tool) => (
-              <div className="cap-tool" key={tool.name}>
-                <div className="cap-tool__name">{tool.name}</div>
-                {tool.description && <div className="cap-tool__desc">{tool.description}</div>}
-              </div>
-            ))}
+            {tools.map((tool) => {
+              const trusted = trustedReadOnlyToolNames.has(tool.name);
+              return (
+                <div className="cap-tool" key={tool.name}>
+                  <div className="cap-tool__name">{tool.name}</div>
+                  <div className="cap-tool__desc">
+                    <span>{tool.description}</span>
+                    {tool.readOnlyHint && (
+                      <span className="cap-tool-hint" title={t("caps.reportedReadOnlyTitle")}>
+                        {t("caps.reportedReadOnly")}
+                      </span>
+                    )}
+                  </div>
+                  <div className="cap-tool__action">
+                    {canTrustTool ? (
+                      trusted ? (
+                        <div className="cap-tool-trust-stack">
+                          <span className="cap-tool-trust cap-tool-trust--trusted" title={t("caps.trustedReadOnlyTitle")}>
+                            <ShieldCheck aria-hidden size={12} strokeWidth={2.2} />
+                            {t("caps.trustedReadOnly")}
+                          </span>
+                          <button
+                            className="btn btn--small cap-tool-untrust-btn"
+                            disabled={busy}
+                            onClick={() => onUntrustTool(tool.name)}
+                            title={t("caps.untrustReadOnlyTitle")}
+                            type="button"
+                          >
+                            <ShieldOff aria-hidden size={12} strokeWidth={2.2} />
+                            {t("caps.untrustReadOnly")}
+                          </button>
+                        </div>
+                      ) : (
+                        <button
+                          className="btn btn--small cap-tool-trust-btn"
+                          disabled={busy}
+                          onClick={() => onTrustTool(tool.name)}
+                          title={t("caps.trustReadOnlyTitle")}
+                          type="button"
+                        >
+                          <ShieldCheck aria-hidden size={12} strokeWidth={2.2} />
+                          {t("caps.trustReadOnly")}
+                        </button>
+                      )
+                    ) : null}
+                  </div>
+                </div>
+              );
+            })}
           </div>
         ) : (
           <div className="cap-tool-empty">{t("caps.noToolDetails")}</div>
@@ -1239,20 +1209,23 @@ function EditServerForm({
   const [transport, setTransport] = useState(initialTransport);
   const [command, setCommand] = useState(initialTransport === "stdio" ? serverCommand(s) : "");
   const [url, setUrl] = useState(initialTransport === "stdio" ? "" : s.url || serverCommand(s));
+  const [headers, setHeaders] = useState("");
   const [env, setEnv] = useState("");
   const isStdio = transport === "stdio";
   const ready = isStdio ? command.trim() !== "" : url.trim() !== "";
 
   const submit = () => {
-    const parts = command.trim().split(/\s+/).filter(Boolean);
     const envText = env.trim();
+    const headerText = headers.trim();
     onSave({
       name: s.name,
       transport,
-      command: isStdio ? (parts[0] ?? "") : "",
-      args: isStdio ? parts.slice(1) : [],
+      command: isStdio ? command.trim() : "",
+      args: [],
       url: isStdio ? "" : url.trim(),
-      env: envText === "" ? null : parseEnvText(envText),
+      env: envText === "" ? null : parseKeyValueText(envText),
+      headers: isStdio || headerText === "" ? null : parseKeyValueText(headerText),
+      trustedReadOnlyTools: s.trustedReadOnlyTools ?? [],
     });
   };
 
@@ -1281,6 +1254,19 @@ function EditServerForm({
             <span className="cap-detail__label">{t("caps.url")}</span>
             <input className="mem-input" value={url} disabled={busy} onChange={(e) => setUrl(e.target.value)} placeholder={t("caps.urlPlaceholder")} />
           </label>
+        )}
+        {!isStdio && (
+          <label className="cap-detail cap-detail--wide">
+            <span className="cap-detail__label">{t("caps.headersLabel")}</span>
+            <textarea className="mem-textarea cap-config-edit__env" value={headers} disabled={busy} onChange={(e) => setHeaders(e.target.value)} placeholder={t("caps.headersPlaceholder")} spellCheck={false} />
+          </label>
+        )}
+        {!isStdio && s.headerKeys && s.headerKeys.length > 0 && (
+          <div className="cap-detail cap-detail--wide">
+            <span className="cap-detail__label">{t("caps.headerKeys")}</span>
+            <span className="cap-detail__value">{s.headerKeys.join(", ")}</span>
+            <span className="cap-edit-hint">{t("caps.headersPreserveHint")}</span>
+          </div>
         )}
         <label className="cap-detail cap-detail--wide">
           <span className="cap-detail__label">{t("caps.envLabel")}</span>
@@ -1315,79 +1301,15 @@ function normalizeTransportValue(transport: string): string {
   return transport === "http" || transport === "sse" ? transport : "stdio";
 }
 
-function parseEnvText(env: string): Record<string, string> {
-  const envMap: Record<string, string> = {};
-  for (const line of env.split("\n")) {
+function parseKeyValueText(text: string): Record<string, string> {
+  const values: Record<string, string> = {};
+  for (const rawLine of text.split("\n")) {
+    const line = rawLine.trim();
+    if (!line) continue;
     const eq = line.indexOf("=");
-    if (eq > 0) envMap[line.slice(0, eq).trim()] = line.slice(eq + 1).trim();
+    if (eq > 0) values[line.slice(0, eq).trim()] = line.slice(eq + 1).trim();
   }
-  return envMap;
-}
-
-function isVisibleBuiltInMCPUpdateStatusForServer(s: ServerView, status?: BuiltInMCPUpdateStatus): status is BuiltInMCPUpdateStatus {
-  return Boolean(s.builtIn && status && isVisibleBuiltInMCPUpdateStatus(status));
-}
-
-function builtInMCPRowUpdateSummary(
-  s: ServerView,
-  status: BuiltInMCPUpdateStatus | undefined,
-  t: ReturnType<typeof useT>,
-): string {
-  if (!s.builtIn) return "";
-  if (s.name === "codegraph" && status && status.phase !== "current" && status.phase !== "skipped") {
-    return builtInMCPUpdateSummary(status, t);
-  }
-  if (s.name === "context7") return t("caps.updateManagedByNpxShort");
-  if (s.name === "time") return t("caps.updateBundledWithAppShort");
-  return "";
-}
-
-function builtInMCPUpdatePolicy(
-  s: ServerView,
-  status: BuiltInMCPUpdateStatus | undefined,
-  t: ReturnType<typeof useT>,
-): string {
-  if (s.name === "codegraph") {
-    if (status) return builtInMCPUpdateSummary(status, t);
-    return t("caps.updateCodegraphManual");
-  }
-  if (s.name === "context7") return t("caps.updateManagedByNpx");
-  if (s.name === "time") return t("caps.updateBundledWithApp");
-  return t("caps.updateNotManaged");
-}
-
-function builtInMCPUpdateSummary(status: BuiltInMCPUpdateStatus, t: ReturnType<typeof useT>): string {
-  const current = status.current || "";
-  const latest = status.latest || "";
-  switch (status.phase) {
-    case "available":
-      return t("caps.updateAvailable", { current, latest });
-    case "downloaded":
-      return t("caps.updateDownloaded", { current, latest });
-    case "activated":
-      return t("caps.updateActivated", { latest });
-    case "error":
-      return status.err ? t("caps.updateErrorWithMessage", { err: status.err }) : t("caps.updateError");
-    case "current":
-      return t("caps.updateCurrent", { current });
-    default:
-      return t("caps.updateCodegraphManual");
-  }
-}
-
-function builtInMCPUpdateBadge(status: BuiltInMCPUpdateStatus, t: ReturnType<typeof useT>): string {
-  switch (status.phase) {
-    case "available":
-      return t("caps.updateBadgeAvailable");
-    case "downloaded":
-      return t("caps.updateBadgeDownloaded");
-    case "activated":
-      return t("caps.updateBadgeActivated");
-    case "error":
-      return t("caps.updateBadgeError");
-    default:
-      return "";
-  }
+  return values;
 }
 
 function serverStatusLabel(s: ServerView, t: ReturnType<typeof useT>): string {
@@ -1408,12 +1330,9 @@ function serverStatusLabel(s: ServerView, t: ReturnType<typeof useT>): string {
   }
 }
 
-function summarizeServerError(error: string, t: ReturnType<typeof useT>): string {
+function summarizeServerError(error: string): string {
   const normalized = error.replace(/\s+/g, " ").trim();
   const plugin = normalized.match(/plugin "([^"]+)"/i)?.[1];
-  if (plugin === "codegraph" && normalized.includes("context deadline exceeded")) {
-    return t("caps.codegraphWarming");
-  }
   const npmCode = normalized.match(/\bnpm error code ([A-Z0-9_]+)/i)?.[1];
   const errno = normalized.match(/\berrno (-?\d+)/i)?.[1];
   const reason = npmCode
@@ -1485,6 +1404,10 @@ function canBulkRemoveFailure(server: ServerView): boolean {
   return kind === "missing-command" || kind === "command-unavailable";
 }
 
+function retryableAvailableServerNames(servers: ServerView[]): string[] {
+  return servers.filter(mcpServerRetryableFromAvailableList).map((s) => s.name);
+}
+
 function serverActionLabel(s: ServerView, t: ReturnType<typeof useT>): string {
   const err = (s.error || "").toLowerCase();
   if (shouldOpenAuth(s)) return t("caps.reauthorize");
@@ -1513,12 +1436,6 @@ function shouldOpenAuth(s: ServerView): boolean {
 function canClearAuth(s: ServerView): boolean {
   if (!s.configured || s.builtIn) return false;
   return Boolean(s.authConfigured || s.authStatus === "required" || s.authStatus === "possible" || isRemoteTransport(s.transport));
-}
-
-function canUpgradeBuiltInMCP(s: ServerView, status?: BuiltInMCPUpdateStatus): boolean {
-  if (!s.builtIn || s.name !== "codegraph") return false;
-  if (!status) return true;
-  return status.phase === "available" || status.phase === "downloaded" || status.phase === "error";
 }
 
 function isRemoteTransport(transport?: string): boolean {
@@ -1619,25 +1536,23 @@ function AddServerForm({
   const [transport, setTransport] = useState("stdio");
   const [command, setCommand] = useState("");
   const [url, setUrl] = useState("");
+  const [headers, setHeaders] = useState("");
   const [env, setEnv] = useState("");
 
   const isStdio = transport === "stdio";
   const ready = name.trim() !== "" && (isStdio ? command.trim() !== "" : url.trim() !== "");
 
   const submit = () => {
-    const parts = command.trim().split(/\s+/).filter(Boolean);
-    const envMap: Record<string, string> = {};
-    for (const line of env.split("\n")) {
-      const eq = line.indexOf("=");
-      if (eq > 0) envMap[line.slice(0, eq).trim()] = line.slice(eq + 1).trim();
-    }
+    const envText = env.trim();
+    const headerText = headers.trim();
     onAdd({
       name: name.trim(),
       transport,
-      command: isStdio ? (parts[0] ?? "") : "",
-      args: isStdio ? parts.slice(1) : [],
+      command: isStdio ? command.trim() : "",
+      args: [],
       url: isStdio ? "" : url.trim(),
-      env: envMap,
+      env: envText === "" ? null : parseKeyValueText(envText),
+      headers: isStdio || headerText === "" ? null : parseKeyValueText(headerText),
     });
   };
 
@@ -1654,6 +1569,12 @@ function AddServerForm({
         <input className="mem-input" placeholder={t("caps.commandPlaceholder")} value={command} onChange={(e) => setCommand(e.target.value)} />
       ) : (
         <input className="mem-input" placeholder={t("caps.urlPlaceholder")} value={url} onChange={(e) => setUrl(e.target.value)} />
+      )}
+      {!isStdio && (
+        <>
+          <label className="set-label">{t("caps.headersLabel")}</label>
+          <textarea className="mem-textarea" value={headers} onChange={(e) => setHeaders(e.target.value)} placeholder={t("caps.headersPlaceholder")} spellCheck={false} />
+        </>
       )}
       <label className="set-label">{t("caps.envLabel")}</label>
       <textarea className="mem-textarea" value={env} onChange={(e) => setEnv(e.target.value)} placeholder={t("caps.envPlaceholder")} spellCheck={false} />
@@ -1673,7 +1594,8 @@ function AddServerForm({
 // embedded inside the settings centre.
 export function MCPServersSettingsPage() {
 	const t = useT();
-	const [view, setView] = useState<CapabilitiesView | null>(null);
+	const [snapshotKey, setSnapshotKey] = useState("");
+	const [servers, setServers] = useState<ServerView[] | null>(null);
 	const [busy, setBusy] = useState(false);
 	const [err, setErr] = useState<string | null>(null);
 	const [adding, setAdding] = useState(false);
@@ -1681,35 +1603,30 @@ export function MCPServersSettingsPage() {
 	const [expandedErrors, setExpandedErrors] = useState<Set<string>>(() => new Set());
 	const [expandedServers, setExpandedServers] = useState<Set<string>>(() => new Set());
 	const [expandedServerTools, setExpandedServerTools] = useState<Set<string>>(() => new Set());
-	const [updateStatuses, setUpdateStatuses] = useState<Record<string, BuiltInMCPUpdateStatus>>({});
 
 	const reload = useCallback(async () => {
-		setView(normalizeCapabilitiesView(await app.Capabilities().catch(() => ({ servers: [], skills: [], skillRoots: [] }))));
-	}, []);
-	const reloadUpdateStatuses = useCallback(async () => {
-		setUpdateStatuses(normalizeBuiltInMCPUpdateStatuses(await app.BuiltInMCPUpdateStatuses().catch(() => [])));
+		const [meta, tabs] = await Promise.all([
+			app.Meta().catch(() => null),
+			app.ListTabs().catch(() => []),
+		]);
+		const key = settingsSnapshotKey(meta, tabs);
+		setSnapshotKey(key);
+		const cached = key ? mcpSettingsSnapshot : null;
+		if (cached?.key === key) {
+			setServers(cached.value);
+		} else {
+			setServers(null);
+		}
+		const next = normalizeServerViews(await app.MCPServers().catch(() => []));
+		mcpSettingsSnapshot = { key, value: next };
+		setServers(next);
 	}, []);
 	useEffect(() => { void reload(); }, [reload]);
 	useEffect(() => {
-		let cancelled = false;
-		void app.BuiltInMCPUpdateStatuses()
-			.then((statuses) => {
-				if (!cancelled) setUpdateStatuses(normalizeBuiltInMCPUpdateStatuses(statuses));
-			})
-			.catch(() => {});
-		const unsubscribe = onBuiltInMCPUpdate((status) => {
-			setUpdateStatuses((prev) => mergeBuiltInMCPUpdateStatus(prev, status));
-		});
-		return () => {
-			cancelled = true;
-			unsubscribe();
-		};
-	}, []);
-	useEffect(() => {
-		if (!view || !view.servers.some((s) => s.status === "initializing" || s.status === "deferred")) return;
+		if (!servers?.some((s) => s.status === "initializing" || s.status === "deferred")) return;
 		const id = window.setInterval(() => void reload(), 2500);
 		return () => window.clearInterval(id);
-	}, [reload, view]);
+	}, [reload, servers]);
 
 	const mutate = async (fn: () => Promise<unknown>) => {
 		setBusy(true);
@@ -1726,24 +1643,14 @@ export function MCPServersSettingsPage() {
 			setBusy(false);
 		}
 	};
-	const upgradeBuiltInMCP = async (name: string) => {
-		const ok = await mutate(() => app.UpdateBuiltInMCPServer(name));
-		await reloadUpdateStatuses();
-		return ok;
-	};
-
 	const serverGroups = useMemo(() => {
-		const servers = sortServersForDisplay(view?.servers ?? []);
+		const sorted = sortServersForDisplay(servers ?? []);
 		return {
-			failed: servers.filter((s) => s.status === "failed"),
-			active: servers.filter((s) => s.status !== "failed"),
+			failed: sorted.filter((s) => s.status === "failed"),
+			active: sorted.filter((s) => s.status !== "failed"),
 		};
-	}, [view]);
-	const visibleUpdateStatuses = useMemo(
-		() => Object.values(updateStatuses).filter((status) => isVisibleBuiltInMCPUpdateStatus(status)),
-		[updateStatuses],
-	);
-
+	}, [servers]);
+	const retryableActiveServerNames = useMemo(() => retryableAvailableServerNames(serverGroups.active), [serverGroups.active]);
 	const toggleError = useCallback((name: string) => {
 		setExpandedErrors((prev) => { const next = new Set(prev); if (next.has(name)) next.delete(name); else next.add(name); return next; });
 	}, []);
@@ -1755,27 +1662,21 @@ export function MCPServersSettingsPage() {
 	}, []);
 
 	const summary = useMemo(() => {
-		if (!view) return "";
-		return mcpServerSummary(view.servers, t);
-	}, [view, t]);
+		if (!servers) return "";
+		return mcpServerSummary(servers, t);
+	}, [servers, t]);
 
-	if (!view) return <div className="empty">{t("caps.loading")}</div>;
+	const loading = !servers;
+	const actionBusy = busy || !snapshotKey || loading;
 
 		return (
 			<section className="mem-section">
 				{err && serverGroups.failed.length === 0 && <div className="banner banner--error">{err}</div>}
-				{visibleUpdateStatuses.length > 0 && (
-					<BuiltInMCPUpdateNotice
-						statuses={visibleUpdateStatuses}
-						busy={busy}
-						onUpgrade={(name) => void upgradeBuiltInMCP(name)}
-					/>
-				)}
 				<div className="cap-mcp-toolbar">
-				{view.servers.length > 0 ? <div className="drawer__summary">{summary}</div> : <span />}
+				{servers && servers.length > 0 ? <div className="drawer__summary">{summary}</div> : <span />}
 				<div className="cap-mcp-toolbar__actions">
 					{!adding && (
-						<button className="btn btn--small" disabled={busy} onClick={() => setAdding(true)}>
+						<button className="btn btn--small" disabled={actionBusy} onClick={() => setAdding(true)}>
 							{t("caps.addServer")}
 						</button>
 					)}
@@ -1784,28 +1685,38 @@ export function MCPServersSettingsPage() {
 				{serverGroups.failed.length > 0 && (
 					<FailedServersNotice
 						servers={serverGroups.failed}
-						updates={updateStatuses}
 						expanded={expandedErrors}
-						busy={busy}
+						busy={actionBusy}
 						onToggle={toggleError}
 						onRetry={(name) => void mutate(() => app.ReconnectMCPServer(name))}
 						onRetryMany={(names) => void mutate(() => Promise.allSettled(names.map((name) => app.ReconnectMCPServer(name))))}
-						onUpgrade={(name) => void upgradeBuiltInMCP(name)}
 					onConfirmClearAuth={(name) => void mutate(() => app.ClearMCPServerAuthentication(name))}
 					onConfirm={(name) => void mutate(() => app.RemoveMCPServer(name))}
 					onConfirmMany={(names) => void mutate(() => Promise.allSettled(names.map((name) => app.RemoveMCPServer(name))))}
-				/>
+					/>
 			)}
-			{view.servers.length === 0 && !adding && (
+			{loading && !adding && (
+				<div className="mem-empty">{t("caps.loading")}</div>
+			)}
+			{!loading && servers.length === 0 && !adding && (
 				<div className="mem-empty">{t("caps.noServers")}</div>
 			)}
 			{serverGroups.active.length > 0 && (
 				<div className="cap-server-section">
-					<div className="cap-server-section__title">{t("caps.availableServers")}</div>
+					<div className="cap-server-section__head">
+						<div className="cap-server-section__title">{t("caps.availableServers")}</div>
+						<button
+							className="btn btn--small"
+							disabled={actionBusy || retryableActiveServerNames.length === 0}
+							type="button"
+							onClick={() => void mutate(() => Promise.allSettled(retryableActiveServerNames.map((name) => app.ReconnectMCPServer(name))))}
+						>
+							{t("caps.retryAll")}
+						</button>
+					</div>
 						<ServerGroup
-							busy={busy}
+							busy={actionBusy}
 							servers={serverGroups.active}
-							updates={updateStatuses}
 							expanded={expandedServers}
 						expandedTools={expandedServerTools}
 						editing={editing}
@@ -1814,8 +1725,10 @@ export function MCPServersSettingsPage() {
 						onCancelEdit={() => setEditing(null)}
 						onRetry={(name) => void mutate(() => app.ReconnectMCPServer(name))}
 						onReconnect={(name) => void mutate(() => app.ReconnectMCPServer(name))}
-							onUpgrade={(name) => void upgradeBuiltInMCP(name)}
 						onConfirmClearAuth={(name) => void mutate(() => app.ClearMCPServerAuthentication(name))}
+						onTrustTool={(name, toolName) => void mutate(() => app.TrustMCPServerTool(name, toolName))}
+						onTrustTools={(name, toolNames) => void mutate(() => app.TrustMCPServerTools(name, toolNames))}
+						onUntrustTool={(name, toolName) => void mutate(() => app.UntrustMCPServerTool(name, toolName))}
 						onToggle={(name, on) => void mutate(() => app.SetMCPServerEnabled(name, on))}
 						onUpdate={(name, input) =>
 							void mutate(() => app.UpdateMCPServer(name, input)).then((ok) => {
@@ -1838,14 +1751,29 @@ export function MCPServersSettingsPage() {
 // the settings centre.
 export function SkillsSettingsPage() {
 	const t = useT();
-	const [view, setView] = useState<CapabilitiesView | null>(null);
+	const [snapshotKey, setSnapshotKey] = useState("");
+	const [view, setView] = useState<SkillsSettingsView | null>(null);
 	const [busy, setBusy] = useState(false);
 	const [err, setErr] = useState<string | null>(null);
 	const [skillQuery, setSkillQuery] = useState("");
 	const [expandedSkills, setExpandedSkills] = useState<Set<string>>(() => new Set());
 
 	const reload = useCallback(async () => {
-		setView(normalizeCapabilitiesView(await app.Capabilities().catch(() => ({ servers: [], skills: [], skillRoots: [] }))));
+		const [meta, tabs] = await Promise.all([
+			app.Meta().catch(() => null),
+			app.ListTabs().catch(() => []),
+		]);
+		const key = settingsSnapshotKey(meta, tabs);
+		setSnapshotKey(key);
+		const cached = key ? skillsSettingsSnapshot : null;
+		if (cached?.key === key) {
+			setView(cached.value);
+		} else {
+			setView(null);
+		}
+		const next = normalizeSkillsSettingsView(await app.SkillsSettings().catch(() => ({ skills: [], skillRoots: [] })));
+		skillsSettingsSnapshot = { key, value: next };
+		setView(next);
 	}, []);
 	useEffect(() => { void reload(); }, [reload]);
 
@@ -1885,6 +1813,7 @@ export function SkillsSettingsPage() {
 	}, []);
 
 	if (!view) return <div className="empty">{t("caps.loading")}</div>;
+	const actionBusy = busy || !snapshotKey;
 
 	return (
 		<section className="mem-section">
@@ -1900,7 +1829,7 @@ export function SkillsSettingsPage() {
 			</div>
 			<SkillSources
 				roots={view.skillRoots ?? []}
-				busy={busy}
+				busy={actionBusy}
 				onAdd={() => mutate(async () => {
 					const path = await app.PickSkillFolder();
 					if (path) await app.AddSkillPath(path);
@@ -1924,7 +1853,7 @@ export function SkillsSettingsPage() {
 						<SkillRow
 							key={sk.name}
 							skill={sk}
-							busy={busy}
+							busy={actionBusy}
 							expanded={expandedSkills.has(sk.name)}
 							onToggle={() => toggleSkill(sk.name)}
 							onToggleEnabled={(enabled) => void mutate(() => app.SetSkillEnabled(sk.name, enabled))}

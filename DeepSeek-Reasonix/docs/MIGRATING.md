@@ -71,12 +71,33 @@ and DeepSeek prefix-cache–oriented design.
 
 ## What's different
 
-- **Code intelligence**: embedding semantic search is replaced by **CodeGraph**
-  (`codegraph_*` tools) — a tree-sitter symbol/call graph, no embedding service or
-  API cost. New (first-run) configs start with it off; existing configs keep it
-  on across upgrades. Toggle `[codegraph]` in the MCP manager or config; when
-  enabled it starts in the background so chat startup is never blocked.
+- **Code intelligence**: the Go rewrite uses LSP-assisted code reading plus
+  `grep` / `read_file` / `glob` for local understanding. The legacy v1 semantic
+  search + tree-sitter symbol index is not bundled in v2 yet, and CodeGraph is no
+  longer shipped as an internal MCP server.
 - **Plan mode** + `complete_step` (evidence-backed step sign-off).
+- **Plan-mode tool overrides are narrower, and plan mode is fail-closed for
+  external tools**: `[agent].plan_mode_allowed_tools` now only declares extra
+  read-only custom/external tools. It no longer unlocks known blocked plan-mode
+  tools such as `bash`, `task`, writers, installers, or memory mutation tools, and
+  unsafe bash commands still remain blocked. An MCP/plugin tool whose read-only
+  status comes from the server's untrusted `readOnlyHint` is confirmed the first
+  time an interactive plan-mode run needs it; choose the persistent option to
+  write the plugin-level `trusted_read_only_tools` raw-name list. Auto/YOLO tool
+  approval does not answer this trust prompt, although a session or persistent
+  trust choice prevents repeat prompts for the same MCP tool. Non-interactive
+  runs still fail closed, so pre-seed `trusted_read_only_tools` or declare a
+  concrete `mcp__<server>__<tool>` when no user can approve. In the desktop MCP
+  panel, expand a server and use **Pre-trust read-only** for currently listed
+  `readOnlyHint` tools, per-tool **Pre-trust** for audited readers, or
+  **Untrust** to remove a tool; those actions write the same
+  `trusted_read_only_tools` list. First-party `ReadOnlyToolNames` overrides and
+  built-ins stay trusted.
+- **Read-only subagent research**: use `read_only_task` for generic isolated
+  research in plan mode, or `read_only_skill` when the work should follow an
+  existing skill. Both expose only read-only tools and safe foreground bash, do
+  not write resumable transcripts, and keep writer-capable `task` / `run_skill`
+  blocked until after plan approval.
 - **No web dashboard** — the v2 line is terminal + desktop (Wails), by design.
 - Some granular v1 tools are intentionally consolidated (e.g. file-management ops
   go through `bash`); a few v1 tools are not yet ported (tracked on Discussions).

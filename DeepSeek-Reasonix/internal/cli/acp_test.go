@@ -71,13 +71,12 @@ func TestACPInitializesWithoutAPIKey(t *testing.T) {
 
 func TestACPFactoryLoadsSessionCwdProjectConfig(t *testing.T) {
 	home := isolateCLIConfigHome(t)
-	t.Setenv("REASONIX_TEST_KEY", "test-key")
+	if _, err := config.SetCredential("REASONIX_TEST_KEY", "test-key"); err != nil {
+		t.Fatalf("SetCredential: %v", err)
+	}
 	project := t.TempDir()
 	if err := os.WriteFile(filepath.Join(project, "maddog.toml"), []byte(`
 default_model = "local"
-
-[codegraph]
-enabled = false
 
 [[providers]]
 name = "local"
@@ -115,13 +114,12 @@ api_key_env = "REASONIX_TEST_KEY"
 
 func TestACPFactoryClearsEffortOverrideForUnsupportedModel(t *testing.T) {
 	isolateCLIConfigHome(t)
-	t.Setenv("REASONIX_TEST_KEY", "test-key")
+	if _, err := config.SetCredential("REASONIX_TEST_KEY", "test-key"); err != nil {
+		t.Fatalf("SetCredential: %v", err)
+	}
 	project := t.TempDir()
 	if err := os.WriteFile(filepath.Join(project, "reasonix.toml"), []byte(`
 default_model = "reasoner/reasoning-model"
-
-[codegraph]
-enabled = false
 
 [[providers]]
 name = "reasoner"

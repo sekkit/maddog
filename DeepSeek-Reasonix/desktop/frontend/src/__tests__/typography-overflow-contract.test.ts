@@ -89,6 +89,21 @@ ok(
   "layout reserves scaled status bar height",
 );
 eq(
+  finalDeclaration(".app", "height"),
+  "var(--app-viewport-height, 100%)",
+  "app height follows the live viewport height variable",
+);
+eq(finalDeclaration(".transcript--empty", "overflow-y"), "auto", "empty transcript can scroll instead of clipping");
+eq(finalDeclaration(".welcome", "overflow"), "visible", "welcome empty state is not clipped by its own box");
+ok(
+  hasDeclaration(".transcript--empty > .welcome", "margin-block", "auto"),
+  "empty-state auto margins apply only to the welcome content",
+);
+ok(
+  finalDeclaration(".transcript--empty > *", "margin-block") === undefined,
+  "empty-state generic children do not receive auto margins",
+);
+eq(
   finalDeclaration(":root[data-theme-style] .statusbar", "height"),
   "var(--statusbar-dock-height)",
   "fixed status bar height follows the scaled dock token",
@@ -112,7 +127,8 @@ for (const selector of [
   ".context-panel__section-head span",
   ".context-panel__metric span",
   ".context-panel__metric strong",
-  ".context-panel__file-copy > span",
+  ".app--creation .context-panel__mini-stat span",
+  ".app--creation .context-panel__mini-stat strong",
   ".topbar__model",
   ".composer-modebar__item span",
   ".composer-more-menu__item span",
@@ -120,9 +136,48 @@ for (const selector of [
   clipsSingleLine(selector);
 }
 
+eq(
+  finalDeclaration(".app--creation .layout.layout--workspace-open", "transition"),
+  "grid-template-columns 0s, min-width 0s",
+  "creation dock skips zero-width grid interpolation on open",
+);
+eq(
+  finalDeclaration(".app--creation .context-panel__usage", "animation"),
+  "none",
+  "creation overview usage card disables inherited entrance animation",
+);
+ok(
+  finalDeclaration(".app--creation .context-panel__mini-stat", "justify-content") !== "space-between",
+  "creation overview rows avoid edge-pinned value alignment",
+);
+ok(
+  finalDeclaration(".app--creation .context-panel__mini-stat", "grid-template-columns") !== "minmax(0, 1fr) auto",
+  "creation overview rows avoid the spacer grid that pushes values to the edge",
+);
+ok(
+  finalDeclaration(".app--creation .context-panel__mini-stat strong", "max-width") !== "14ch",
+  "creation overview values are not capped to a fixed 14ch width",
+);
+
 eq(finalDeclaration(".composer-modebar", "overflow"), "hidden", "chat mode switcher contains enlarged labels");
+ok(
+  /@container\s*\(max-width:\s*760px\)[\s\S]*?\.composer-meta--has-intent-chip\s+\.composer-meta__control--model\s*\{[\s\S]*?flex\s*:\s*1 1 160px[\s\S]*?\.composer-meta__control--effort\s*\{[\s\S]*?display\s*:\s*none[\s\S]*?\.composer-meta__control--more\s*\{[\s\S]*?display\s*:\s*inline-flex/.test(styles),
+  "composer compact controls activate at the capped theme width",
+);
 eq(finalDeclaration(".md table", "overflow-x"), "auto", "markdown tables scroll horizontally");
 eq(finalDeclaration(".code", "overflow"), "auto", "code blocks scroll instead of widening the layout");
+ok(
+  /@media\s*\(max-width:\s*900px\)[\s\S]*?\.settings-center\s*\{[\s\S]*?grid-template-columns\s*:\s*1fr/.test(styles),
+  "settings center stacks navigation before the modal is too narrow",
+);
+ok(
+  /@media\s*\(max-width:\s*900px\)[\s\S]*?\.settings-field\s*\{[\s\S]*?grid-template-columns\s*:\s*1fr/.test(styles),
+  "settings fields collapse to one column at the mid-width breakpoint",
+);
+ok(
+  /@media\s*\(max-width:\s*760px\)[\s\S]*?\.settings-modal\s*\{[\s\S]*?width\s*:\s*100vw[\s\S]*?height\s*:\s*100vh/.test(styles),
+  "settings modal only becomes fullscreen at the narrow breakpoint",
+);
 
 console.log(`\n${passed} passed, ${failed} failed, ${passed + failed} total`);
 if (failed > 0) process.exit(1);

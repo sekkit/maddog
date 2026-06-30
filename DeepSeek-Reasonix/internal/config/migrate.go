@@ -3,6 +3,8 @@ package config
 import (
 	"fmt"
 	"strings"
+
+	"github.com/BurntSushi/toml"
 )
 
 // MigrationResult summarizes a legacy import for callers compiled against the
@@ -13,6 +15,14 @@ type MigrationResult struct {
 	KeyToEnv bool
 	Plugins  int
 	Warnings []string
+}
+
+// MCPGlobalMigrationResult summarizes the v1.9.1 MCP backfill that lifts MCP
+// servers from legacy and project-local sources into the user-global config.
+type MCPGlobalMigrationResult struct {
+	To      string
+	Added   int
+	Sources int
 }
 
 func (r *MigrationResult) Notice() string {
