@@ -17,6 +17,12 @@ type DesktopWindowState struct {
 	Maximised bool `json:"maximised"`
 }
 
+const (
+	minRestorableWindowWidth  = 400
+	minRestorableWindowHeight = 300
+	minimizedWindowSentinel   = -10000
+)
+
 func windowStatePath() string {
 	dir := desktopConfigDir()
 	if dir == "" {
@@ -39,19 +45,28 @@ func loadWindowState() (DesktopWindowState, bool) {
 	if err := json.Unmarshal(data, &s); err != nil {
 		return DesktopWindowState{}, false
 	}
-	if s.Width < 400 {
-		s.Width = 0
-	}
-	if s.Height < 300 {
-		s.Height = 0
-	}
 	// Migration guard: the previous version saved (0,0) for first-launch zero
 	// values. Treat an all-zero valid file the same as missing — let domReady
 	// center the window instead of parking it at the screen origin.
 	if s.Width == 0 && s.Height == 0 && s.X == 0 && s.Y == 0 {
 		return DesktopWindowState{}, false
 	}
+	if !isRestorableWindowState(s) {
+		return DesktopWindowState{}, false
+	}
 	return s, true
+}
+
+func isRestorableWindowState(state DesktopWindowState) bool {
+	if state.Width < minRestorableWindowWidth || state.Height < minRestorableWindowHeight {
+		return false
+	}
+	// Windows reports minimised windows around -32000 with a tiny shell size.
+	// Persisting that snapshot makes the next launch appear off-screen.
+	if state.X <= minimizedWindowSentinel || state.Y <= minimizedWindowSentinel {
+		return false
+	}
+	return true
 }
 
 // SaveWindowState is the bound method the frontend calls to persist the current
@@ -59,6 +74,9 @@ func loadWindowState() (DesktopWindowState, bool) {
 func (a *App) SaveWindowState(state DesktopWindowState) error {
 	path := windowStatePath()
 	if path == "" {
+		return nil
+	}
+	if !isRestorableWindowState(state) {
 		return nil
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {

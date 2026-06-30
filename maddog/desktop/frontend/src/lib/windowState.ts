@@ -13,6 +13,10 @@
 import { useEffect, useRef } from "react";
 import { app } from "./bridge";
 
+const MIN_RESTORABLE_WINDOW_WIDTH = 400;
+const MIN_RESTORABLE_WINDOW_HEIGHT = 300;
+const MINIMIZED_WINDOW_SENTINEL = -10000;
+
 export function useWindowStatePersistence() {
   const lastState = useRef("");
 
@@ -28,6 +32,14 @@ export function useWindowStatePersistence() {
         const size = await WindowGetSize();
         const pos = await WindowGetPosition();
         const maximised = await WindowIsMaximised();
+        if (
+          size.w < MIN_RESTORABLE_WINDOW_WIDTH ||
+          size.h < MIN_RESTORABLE_WINDOW_HEIGHT ||
+          pos.x <= MINIMIZED_WINDOW_SENTINEL ||
+          pos.y <= MINIMIZED_WINDOW_SENTINEL
+        ) {
+          return;
+        }
         const json = JSON.stringify({
           width: size.w,
           height: size.h,
