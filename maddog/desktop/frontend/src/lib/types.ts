@@ -469,6 +469,7 @@ export interface ContextInfo {
   sessionCurrency?: string;
   cacheHitTokens?: number;
   cacheMissTokens?: number;
+  sources?: Record<string, UsageSourceStats>;
 }
 
 export interface Meta {
@@ -881,6 +882,7 @@ export interface ProviderView {
   added: boolean;
   kind: string;
   baseUrl: string;
+  chatUrl?: string; // optional full chat completions URL; empty derives from baseUrl
   models: string[];
   visionModels: string[]; // subset of models that accepts image input
   visionModelsConfigured: boolean; // true when an empty list is an explicit choice

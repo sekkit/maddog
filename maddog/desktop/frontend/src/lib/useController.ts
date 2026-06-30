@@ -710,7 +710,7 @@ function applyEvent(s: State, e: WireEvent): State {
       const sessionCurrency = e.usage?.currency || s.sessionCurrency || "¥";
       return {
         ...s,
-        usage: e.usage,
+        usage: updateContextGauge ? e.usage : s.usage,
         providerStatus: e.usage?.providerStatus ?? s.providerStatus,
         context: { ...s.context, used, sessionTokens },
         turnTokens,

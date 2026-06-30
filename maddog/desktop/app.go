@@ -3564,14 +3564,15 @@ func firstNonEmpty(values ...string) string {
 // ContextInfo is the prompt-vs-window gauge payload plus session totals. Used
 // and Window both zero means no context-window data yet.
 type ContextInfo struct {
-	Used            int     `json:"used"`
-	Window          int     `json:"window"`
-	SessionTokens   int     `json:"sessionTokens"`
-	CompactRatio    float64 `json:"compactRatio,omitempty"`
-	SessionCost     float64 `json:"sessionCost,omitempty"`
-	SessionCurrency string  `json:"sessionCurrency,omitempty"`
-	CacheHitTokens  int     `json:"cacheHitTokens,omitempty"`
-	CacheMissTokens int     `json:"cacheMissTokens,omitempty"`
+	Used            int                         `json:"used"`
+	Window          int                         `json:"window"`
+	SessionTokens   int                         `json:"sessionTokens"`
+	CompactRatio    float64                     `json:"compactRatio,omitempty"`
+	SessionCost     float64                     `json:"sessionCost,omitempty"`
+	SessionCurrency string                      `json:"sessionCurrency,omitempty"`
+	CacheHitTokens  int                         `json:"cacheHitTokens,omitempty"`
+	CacheMissTokens int                         `json:"cacheMissTokens,omitempty"`
+	Sources         map[string]usageSourceStats `json:"sources,omitempty"`
 }
 
 // ContextUsage returns the latest context-window gauge numbers.
@@ -3596,6 +3597,7 @@ func (a *App) ContextUsageForTab(tabID string) ContextInfo {
 		info.SessionCurrency = snap.Usage.SessionCurrency
 		info.CacheHitTokens = snap.Usage.CacheHitTokens
 		info.CacheMissTokens = snap.Usage.CacheMissTokens
+		info.Sources = snap.Usage.Sources
 	}
 	if ctrl == nil {
 		return info
