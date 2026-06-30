@@ -56,6 +56,7 @@ func (m *chatTUI) resetFreshContextView(clearTranscript bool) {
 	m.turnDiscarded = false
 	if clearTranscript {
 		m.clearTranscriptDisplay()
+		m.sessionSwitch = true
 	} else {
 		m.commitLine("")
 	}

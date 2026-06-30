@@ -33,6 +33,7 @@ type ProviderView struct {
 	Added              bool     `json:"added"`
 	Kind               string   `json:"kind"`
 	BaseURL            string   `json:"baseUrl"`
+	ChatURL            string   `json:"chatUrl"`
 	Models             []string `json:"models"`
 	VisionModels       []string `json:"visionModels"`
 	VisionModelsSet    bool     `json:"visionModelsConfigured"`
@@ -375,7 +376,7 @@ func providerViewFromEntryForRootWithResolver(p config.ProviderEntry, builtIn, a
 	requiresKey := providerRequiresCredential(p)
 	configured := p.Configured() || key.Set || !requiresKey
 	return ProviderView{
-		Name: p.Name, BuiltIn: builtIn, Added: added, Kind: p.Kind, BaseURL: p.BaseURL,
+		Name: p.Name, BuiltIn: builtIn, Added: added, Kind: p.Kind, BaseURL: p.BaseURL, ChatURL: p.ChatURL,
 		Models: nonNil(models), VisionModels: nonNil(providerVisionModels(models, visionModels)), VisionModelsSet: visionModelsSet,
 		ModelsURL:          p.ModelsURL,
 		Default:            p.DefaultModel(),
@@ -1074,42 +1075,9 @@ func (a *App) rebuild() error {
 		applyTabToolApprovalModeToController(ctrl, mode)
 	}
 	path := agent.ContinueSessionPath(prevPath, ctrl.SessionDir(), ctrl.Label())
-	if len(carried) > 0 {
-		carried = withFreshSystemPrompt(carried, systemPromptFrom(ctrl.History()))
-		ctrl.Resume(&agent.Session{Messages: carried}, path)
-	} else if path != "" {
-		ctrl.SetSessionPath(path)
-	}
+	resumeWithFreshSystemPrompt(ctrl, carried, path)
 	a.persistTabSessionPath(tab, path)
 	return nil
-}
-
-func systemPromptFrom(messages []provider.Message) string {
-	for _, m := range messages {
-		if m.Role == provider.RoleSystem {
-			return m.Content
-		}
-	}
-	return ""
-}
-
-func withFreshSystemPrompt(messages []provider.Message, system string) []provider.Message {
-	if strings.TrimSpace(system) == "" {
-		return messages
-	}
-	out := append([]provider.Message(nil), messages...)
-	for i := range out {
-		if out[i].Role == provider.RoleSystem {
-			out[i].Content = system
-			out[i].ReasoningContent = ""
-			out[i].ReasoningSignature = ""
-			out[i].ToolCalls = nil
-			out[i].ToolCallID = ""
-			out[i].Name = ""
-			return out
-		}
-	}
-	return append([]provider.Message{{Role: provider.RoleSystem, Content: system}}, out...)
 }
 
 // SetDefaultModel sets the config default and switches the live model to it.
@@ -1403,7 +1371,8 @@ func (a *App) SaveProvider(p ProviderView) error {
 		e.Name = p.Name
 		e.Kind = p.Kind
 		e.BaseURL = p.BaseURL
-		e.ModelsURL = p.ModelsURL
+		e.ChatURL = strings.TrimSpace(p.ChatURL)
+		e.ModelsURL = strings.TrimSpace(p.ModelsURL)
 		e.APIKeyEnv = p.APIKeyEnv
 		e.AuthType = p.AuthType
 		e.AuthTokenEnv = p.AuthTokenEnv
@@ -1496,7 +1465,7 @@ func (a *App) FetchProviderModels(p ProviderView) ([]string, error) {
 	e := config.ProviderEntry{
 		Name:               p.Name,
 		BaseURL:            p.BaseURL,
-		ModelsURL:          p.ModelsURL,
+		ModelsURL:          strings.TrimSpace(p.ModelsURL),
 		APIKeyEnv:          p.APIKeyEnv,
 		AuthType:           p.AuthType,
 		AuthTokenEnv:       p.AuthTokenEnv,

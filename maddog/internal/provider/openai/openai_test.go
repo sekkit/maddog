@@ -130,6 +130,58 @@ func TestStreamAuthError(t *testing.T) {
 	}
 }
 
+func TestStreamUsesConfiguredChatURL(t *testing.T) {
+	var sawRequest bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		sawRequest = true
+		if r.URL.Path != "/proxy/v1/chat/completions" {
+			t.Errorf("path = %s, want /proxy/v1/chat/completions", r.URL.Path)
+			http.NotFound(w, r)
+			return
+		}
+		if r.Header.Get("Authorization") != "Bearer k" {
+			http.Error(w, "bad key", http.StatusUnauthorized)
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\ndata: [DONE]\n\n")
+	}))
+	defer srv.Close()
+
+	p, err := New(provider.Config{
+		Name:    "custom",
+		BaseURL: srv.URL + "/base",
+		Model:   "model-a",
+		APIKey:  "k",
+		Extra:   map[string]any{"chat_url": srv.URL + "/proxy/v1/chat/completions"},
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	ch, err := p.Stream(context.Background(), provider.Request{
+		Messages: []provider.Message{{Role: provider.RoleUser, Content: "hi"}},
+	})
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	var got strings.Builder
+	for chunk := range ch {
+		if chunk.Type == provider.ChunkError {
+			t.Fatalf("stream error: %v", chunk.Err)
+		}
+		if chunk.Type == provider.ChunkText {
+			got.WriteString(chunk.Text)
+		}
+	}
+	if !sawRequest {
+		t.Fatal("server did not receive request")
+	}
+	if got.String() != "ok" {
+		t.Fatalf("streamed text = %q, want ok", got.String())
+	}
+}
+
 func TestStreamUsesBearerTokenAuthEnv(t *testing.T) {
 	var gotAuth string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

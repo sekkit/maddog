@@ -1133,6 +1133,7 @@ type ProviderEntry struct {
 	Name               string                       `toml:"name"`
 	Kind               string                       `toml:"kind"`
 	BaseURL            string                       `toml:"base_url"`
+	ChatURL            string                       `toml:"chat_url"`
 	Model              string                       `toml:"model"`      // a single model (back-compat)
 	Models             []string                     `toml:"models"`     // a vendor's model list (one base_url/key, many models)
 	ModelsURL          string                       `toml:"models_url"` // auto-fetch models from this URL on startup
@@ -2109,6 +2110,7 @@ func clearMixedMimoTokenPlanPrice(e *ProviderEntry) {
 func officialProviderFromLegacy(entry ProviderEntry, old *ProviderEntry) ProviderEntry {
 	entry.Kind = old.Kind
 	entry.BaseURL = old.BaseURL
+	entry.ChatURL = old.ChatURL
 	entry.ModelsURL = old.ModelsURL
 	entry.APIKeyEnv = old.APIKeyEnv
 	entry.AuthType = old.AuthType
