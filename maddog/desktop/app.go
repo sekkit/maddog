@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
-	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -31,7 +30,7 @@ import (
 	"maddog/internal/agent"
 	"maddog/internal/billing"
 	"maddog/internal/boot"
-	"maddog/internal/builtinmcp"
+	"maddog/internal/botruntime"
 	"maddog/internal/codegraph"
 	"maddog/internal/config"
 	"maddog/internal/control"
@@ -42,7 +41,6 @@ import (
 	"maddog/internal/i18n"
 	"maddog/internal/mcpdiag"
 	"maddog/internal/memory"
-	"maddog/internal/netclient"
 	"maddog/internal/plugin"
 	"maddog/internal/provider"
 	"maddog/internal/skill"
@@ -497,6 +495,7 @@ func (a *App) restoreOrBuildTabs() {
 	// Prefer DesktopLanguage (desktop UI setting) over Language (CLI setting),
 	// so the user's language choice in desktop settings takes effect.
 	startupCfg, cfgErr := config.Load()
+	f := loadTabsFile()
 	if cfgErr == nil {
 		cfg := startupCfg
 		lang := cfg.DesktopLanguage()
@@ -2746,6 +2745,11 @@ func (a *App) History() []HistoryMessage {
 	return a.HistoryForTab("")
 }
 
+func (a *App) HistoryForTab(tabID string) []HistoryMessage {
+	page := a.HistoryPageForTab(tabID, 0, maxHistoryPageTurns)
+	return page.Messages
+}
+
 func (a *App) HistoryPage(beforeTurn, limit int) HistoryPage {
 	return a.HistoryPageForTab("", beforeTurn, limit)
 }
@@ -2776,11 +2780,71 @@ func (a *App) HistoryPageForTab(tabID string, beforeTurn, limit int) HistoryPage
 	if dir == "" {
 		dir = desktopSessionDir()
 	}
-	return historyMessages(msgs, sessionDisplayResolver(dir, ctrl.SessionPath()))
+	return historyPageFromProviderMessages(
+		msgs,
+		sessionDisplayResolver(dir, ctrl.SessionPath()),
+		nil,
+		ctrl.CheckpointTurnsByMessageIndex(),
+		beforeTurn,
+		limit,
+	)
 }
 
 func historyMessages(msgs []provider.Message, resolveUserContent func(string) string) []HistoryMessage {
 	return historyMessagesWithPlannerDisplays(msgs, resolveUserContent, nil, nil)
+}
+
+func normalizeHistoryPageLimit(limit int) int {
+	if limit <= 0 {
+		return defaultHistoryPageTurns
+	}
+	if limit > maxHistoryPageTurns {
+		return maxHistoryPageTurns
+	}
+	return limit
+}
+
+func historyPageFromMessages(messages []HistoryMessage, beforeTurn, limit int) HistoryPage {
+	limit = normalizeHistoryPageLimit(limit)
+	totalTurns := 0
+	for _, msg := range messages {
+		if msg.Role == "user" {
+			totalTurns++
+		}
+	}
+	if beforeTurn <= 0 || beforeTurn > totalTurns {
+		beforeTurn = totalTurns
+	}
+	startTurn := beforeTurn - limit
+	if startTurn < 0 {
+		startTurn = 0
+	}
+	page := HistoryPage{
+		StartTurn:  startTurn,
+		EndTurn:    beforeTurn,
+		TotalTurns: totalTurns,
+		HasOlder:   startTurn > 0,
+	}
+	if len(messages) == 0 || startTurn >= beforeTurn {
+		page.Messages = []HistoryMessage{}
+		return page
+	}
+	turn := -1
+	for _, msg := range messages {
+		if msg.Role == "user" {
+			turn++
+		}
+		if turn < 0 {
+			if startTurn == 0 {
+				page.Messages = append(page.Messages, msg)
+			}
+			continue
+		}
+		if turn >= startTurn && turn < beforeTurn {
+			page.Messages = append(page.Messages, msg)
+		}
+	}
+	return page
 }
 
 func historyMessagesWithPlannerDisplays(msgs []provider.Message, resolveUserContent func(string) string, plannerTurns []plannerDisplayTurn, checkpointTurns map[int]int) []HistoryMessage {
@@ -3937,8 +4001,9 @@ type ServerView struct {
 }
 
 type ToolView struct {
-	Name        string `json:"name"`
-	Description string `json:"description"`
+	Name         string `json:"name"`
+	Description  string `json:"description"`
+	ReadOnlyHint bool   `json:"readOnlyHint,omitempty"`
 }
 
 type CodeIntelligenceBackendView struct {
@@ -4044,6 +4109,7 @@ func (a *App) Capabilities() CapabilitiesView {
 		return out
 	}
 
+	out.Servers = a.mcpServersView()
 	disabled := map[string]bool{}
 	if cfg, err := config.Load(); err == nil {
 		for _, name := range cfg.Skills.DisabledSkills {
@@ -4060,6 +4126,7 @@ func (a *App) Capabilities() CapabilitiesView {
 		})
 	}
 	out.SkillRoots = a.cachedSkillRootsView()
+	out.SkillCandidates = skillCandidateViews(tab.WorkspaceRoot)
 	return out
 }
 
@@ -4085,8 +4152,6 @@ func (a *App) mcpServersView() []ServerView {
 	}
 	seen := map[string]bool{}
 	connected := map[string]bool{}
-	connectedServers := map[string]plugin.ServerStatus{}
-	failedServers := map[string]plugin.Failure{}
 	retainedDisabled := map[string]ServerView{}
 	configured := map[string]config.PluginEntry{}
 	var configuredEntries []config.PluginEntry
@@ -4114,7 +4179,6 @@ func (a *App) mcpServersView() []ServerView {
 			}
 			seen[s.Name] = true
 			connected[s.Name] = true
-			connectedServers[s.Name] = s
 			view := ServerView{
 				Name: s.Name, Transport: s.Transport, Status: "connected", RuntimeState: "ready",
 				Tools: s.Tools, Prompts: s.Prompts, Resources: s.Resources,
@@ -4127,7 +4191,6 @@ func (a *App) mcpServersView() []ServerView {
 		}
 		for _, f := range h.Failures() {
 			seen[f.Name] = true
-			failedServers[f.Name] = f
 			view := ServerView{
 				Name: f.Name, Transport: f.Transport, Status: "failed", RuntimeState: "issue", Error: f.Error,
 			}
@@ -4177,17 +4240,7 @@ func (a *App) mcpServersView() []ServerView {
 			seen[p.Name] = true
 		}
 	}
-	out.Servers = orderServerViews(out.Servers, order)
-	if loadedCfg != nil {
-		out.CodeIntelligenceBackends = codeIntelligenceBackendViews(
-			codegraph.NewBackendRegistry(loadedCfg),
-			tab.WorkspaceRoot,
-			connectedServers,
-			failedServers,
-			loadCodeIntelligenceBenchmarkView(config.CacheDir()),
-			a.codeIntelligenceBenchmarkRunning(),
-		)
-	}
+	out = orderServerViews(out, order)
 
 	a.mu.Lock()
 	if tab, ok := a.tabs[tabID]; ok {
@@ -4198,16 +4251,6 @@ func (a *App) mcpServersView() []ServerView {
 		tab.mcpOrder = mergeServerOrder(tab.mcpOrder, out)
 	}
 	a.mu.Unlock()
-
-	for _, s := range ctrl.AllSkills() {
-		out.Skills = append(out.Skills, SkillView{
-			Name: s.Name, Description: s.Description,
-			Scope: string(s.Scope), RunAs: string(s.RunAs),
-			Enabled: ctrl.SkillEnabled(s.Name),
-		})
-	}
-	out.SkillRoots = skillRootsView()
-	out.SkillCandidates = skillCandidateViews(tab.WorkspaceRoot)
 	return out
 }
 
@@ -4446,6 +4489,26 @@ func withPluginConfig(v ServerView, p config.PluginEntry) ServerView {
 	v.AuthStatus = auth.Status
 	v.AuthURL = auth.URL
 	return v
+}
+
+func mcpRuntimeState(status string) string {
+	switch status {
+	case "connected":
+		return "ready"
+	case "initializing":
+		return "connecting"
+	case "failed":
+		return "issue"
+	default:
+		return "idle"
+	}
+}
+
+func mcpStartIntent(p config.PluginEntry) string {
+	if !p.ShouldAutoStart() {
+		return "off"
+	}
+	return p.ResolvedTier()
 }
 
 const skillRootsCacheTTL = 10 * time.Second
@@ -5678,6 +5741,24 @@ func controllerHasActiveRuntimeWork(ctrl control.SessionAPI) bool {
 	}
 	status := ctrl.RuntimeStatus()
 	return status.Running || status.PendingPrompt || status.BackgroundJobs > 0
+}
+
+func (a *App) resolvedModelForTab(tab *WorkspaceTab) (string, bool, error) {
+	if tab == nil {
+		return "", false, fmt.Errorf("tab is not ready")
+	}
+	cfg, err := config.LoadForRoot(tab.WorkspaceRoot)
+	if err != nil {
+		return "", false, err
+	}
+	if entry, ok := cfg.ResolveModel(tab.model); ok && modelProviderAccessAllowed(providerAccessSet(cfg.Desktop.ProviderAccess), entry.Name) {
+		return entry.Name + "/" + entry.Model, false, nil
+	}
+	entry, ok := cfg.ResolveModel(cfg.DefaultModel)
+	if !ok {
+		return "", false, fmt.Errorf("unknown model %q", cfg.DefaultModel)
+	}
+	return entry.Name + "/" + entry.Model, true, nil
 }
 
 func rebuildControllerActiveWorkError(setting string) error {

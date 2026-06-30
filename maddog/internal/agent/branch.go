@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"maddog/internal/fileutil"
+	store "maddog/internal/store"
 )
 
 // BranchMeta is the small sidecar record that turns flat session files into a

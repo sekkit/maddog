@@ -6,11 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"runtime/debug"
 	"strings"
 
 	"maddog/internal/event"
 	"maddog/internal/jobs"
+	"maddog/internal/planmode"
 	"maddog/internal/provider"
 	"maddog/internal/tool"
 )
@@ -356,7 +356,7 @@ func (r *ReadOnlyTaskTool) Execute(ctx context.Context, args json.RawMessage) (s
 	if err != nil {
 		return "", fmt.Errorf("read-only sub-agent profile: %w", err)
 	}
-	return r.task.runSubSession(ctx, p.Prompt, subReg, subSink(ctx), maxSteps, prov, pricing, ctxWin, NewSession(DefaultReadOnlyTaskSystemPrompt))
+	return r.task.runSubSession(ctx, p.Prompt, subReg, subSink(ctx), maxSteps, prov, pricing, ctxWin, NewSession(DefaultReadOnlyTaskSystemPrompt), modelRef, effortRef)
 }
 
 func (t *TaskTool) effectiveProfile(model, effort string) (string, string) {

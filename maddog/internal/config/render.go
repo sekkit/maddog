@@ -638,6 +638,12 @@ func RenderTOMLForScope(c *Config, scope RenderScope) string {
 	return b.String()
 }
 
+// RenderTOMLProjectDelta renders the project-scoped configuration that should be
+// merged into an existing project config file.
+func RenderTOMLProjectDelta(c *Config) string {
+	return RenderTOMLForScope(c, RenderScopeProject)
+}
+
 func renderCodeIntelligenceConfig(b *strings.Builder, c CodeIntelligenceConfig) {
 	if len(c.Backends) == 0 {
 		b.WriteString("# [[code_intelligence.backends]]\n")
@@ -853,6 +859,41 @@ func renderStringMap(m map[string]string) string {
 			b.WriteString(", ")
 		}
 		fmt.Fprintf(&b, "%s = %q", k, m[k])
+	}
+	b.WriteString(" }")
+	return b.String()
+}
+
+func renderPricingInline(p *provider.Pricing) string {
+	if p == nil {
+		return "{}"
+	}
+	return fmt.Sprintf("{ cache_hit = %v, input = %v, output = %v, currency = %q }",
+		p.CacheHit, p.Input, p.Output, p.Symbol())
+}
+
+func renderPricingMap(prices map[string]*provider.Pricing) string {
+	if len(prices) == 0 {
+		return "{}"
+	}
+	keys := make([]string, 0, len(prices))
+	for model, price := range prices {
+		if strings.TrimSpace(model) != "" && price != nil {
+			keys = append(keys, model)
+		}
+	}
+	if len(keys) == 0 {
+		return "{}"
+	}
+	sort.Strings(keys)
+
+	var b strings.Builder
+	b.WriteString("{ ")
+	for i, model := range keys {
+		if i > 0 {
+			b.WriteString(", ")
+		}
+		fmt.Fprintf(&b, "%s = %s", strconv.Quote(model), renderPricingInline(prices[model]))
 	}
 	b.WriteString(" }")
 	return b.String()

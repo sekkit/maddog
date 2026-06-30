@@ -19,14 +19,19 @@ func loadDotEnv() {
 
 // loadDotEnvForRoot loads a root's .env file (if present) before the Maddog
 // credentials file. When root is "." it behaves like loadDotEnv().
-func loadDotEnvForRoot(root string) {
+func loadDotEnvForRoot(root string) map[string]string {
 	dotEnvPath := ".env"
 	if root != "" && root != "." {
 		dotEnvPath = filepath.Join(root, ".env")
 	}
-	if current := UserCredentialsPath(); current != "" && samePath(path, current) {
-		return nil
+	loadDotEnvFileAs(dotEnvPath, CredentialSource{Kind: CredentialSourceProjectEnv, Path: dotEnvPath})
+	if current := UserCredentialsPath(); current != "" {
+		loadDotEnvFileAs(current, CredentialSource{Kind: CredentialSourceCredentials, Path: current})
 	}
+	for _, path := range legacyCredentialsPaths() {
+		loadDotEnvFileAs(path, CredentialSource{Kind: CredentialSourceLegacy, Path: path})
+	}
+	return nil
 }
 
 func legacyCredentialsPaths() []string {

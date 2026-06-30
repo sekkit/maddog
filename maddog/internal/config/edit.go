@@ -826,6 +826,56 @@ func (c *Config) TrustPluginReadOnlyTool(name, toolName string) (PluginEntry, bo
 	return PluginEntry{}, false, fmt.Errorf("trust plugin read-only tool: no plugin %q", name)
 }
 
+// WritePermissionsSection persists the allow-list portion of [permissions] in
+// path while preserving the rest of the editable config.
+func WritePermissionsSection(path string, allow []string) error {
+	cfg := LoadForEdit(path)
+	cfg.Permissions.Allow = uniqueStrings(allow)
+	return cfg.SaveTo(path)
+}
+
+// TrustPluginReadOnlyToolInSourceForRoot updates the file that actually owns an
+// MCP server, preferring project TOML, then user TOML, then project .mcp.json.
+func TrustPluginReadOnlyToolInSourceForRoot(root, name, toolName string) (PluginEntry, bool, string, error) {
+	for _, path := range pluginTOMLSourcePathsForRoot(root) {
+		cfg := LoadForEdit(path)
+		updated, changed, err := cfg.TrustPluginReadOnlyTool(name, toolName)
+		if err != nil {
+			continue
+		}
+		if changed {
+			if err := cfg.SaveTo(path); err != nil {
+				return PluginEntry{}, false, path, err
+			}
+		}
+		return updated, changed, path, nil
+	}
+	mcpPath := mcpJSONPathForRoot(root)
+	updated, changed, err := trustMCPJSONReadOnlyTool(mcpPath, name, toolName)
+	if err != nil {
+		return PluginEntry{}, false, mcpPath, err
+	}
+	return updated, changed, mcpPath, nil
+}
+
+func pluginTOMLSourcePathsForRoot(root string) []string {
+	var paths []string
+	if strings.TrimSpace(root) != "" {
+		paths = append(paths, ProjectConfigPathForRoot(root))
+	} else {
+		paths = append(paths, ProjectConfigFilename)
+	}
+	paths = append(paths, userConfigPath())
+	return paths
+}
+
+func mcpJSONPathForRoot(root string) string {
+	if strings.TrimSpace(root) != "" {
+		return filepath.Join(root, mcpJSONFile)
+	}
+	return mcpJSONFile
+}
+
 // ClearPluginAuthenticationInSource clears auth material in the file that actually
 // owns the MCP server. Load() merges user/project TOML and project .mcp.json into
 // one Config, so callers must not mutate that merged view and Save() it back: a
@@ -929,9 +979,6 @@ func (c *Config) saveProjectIncremental(path string) error {
 	if strings.TrimSpace(path) == "" {
 		return fmt.Errorf("save: empty config path")
 	}
-	body := fmt.Sprintf(`# Maddog project configuration.
-# Project-local overrides are merged over the user config.
-
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		if !os.IsNotExist(err) {
@@ -1065,23 +1112,7 @@ func configFilePerm(path string) os.FileMode {
 	if isUserConfigPath(path) {
 		return 0o600
 	}
-	tmp, err := os.CreateTemp(dir, ".maddog.*.toml.tmp")
-	if err != nil {
-		if !os.IsNotExist(err) {
-			return err
-		}
-		raw = nil
-	}
-
-	newBlock := fmt.Sprintf("[permissions]\nallow = %s\n", renderStringArray(allow))
-
-	body := string(raw)
-	if body == "" {
-		return writeConfigFile(path, newBlock)
-	}
-
-	body = replaceTOMLSection(body, "permissions", newBlock)
-	return writeConfigFile(path, body)
+	return 0o644
 }
 
 // replaceTOMLSection replaces the content of a named TOML section (including

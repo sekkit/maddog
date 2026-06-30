@@ -24,6 +24,7 @@ import (
 	"maddog/internal/config"
 	"maddog/internal/control"
 	"maddog/internal/event"
+	"maddog/internal/eventwire"
 	"maddog/internal/fileutil"
 	"maddog/internal/provider"
 )
@@ -109,26 +110,42 @@ type readFileRecord struct {
 }
 
 type sessionUsageStats struct {
-	PromptTokens                int     `json:"promptTokens"`
-	CompletionTokens            int     `json:"completionTokens"`
-	TotalTokens                 int     `json:"totalTokens"`
-	ReasoningTokens             int     `json:"reasoningTokens"`
-	CacheHitTokens              int     `json:"cacheHitTokens"`
-	CacheMissTokens             int     `json:"cacheMissTokens"`
-	RequestCount                int     `json:"requestCount"`
-	ElapsedMs                   int64   `json:"elapsedMs"`
-	SessionCost                 float64 `json:"sessionCost,omitempty"`
-	SessionCurrency             string  `json:"sessionCurrency,omitempty"`
-	SessionCostUsd              float64 `json:"sessionCostUsd,omitempty"`
-	CompressionEvents           int     `json:"compressionEvents,omitempty"`
-	CompressionRawChars         int     `json:"compressionRawChars,omitempty"`
-	CompressionCompressedChars  int     `json:"compressionCompressedChars,omitempty"`
-	CompressionSavedChars       int     `json:"compressionSavedChars,omitempty"`
-	CompressionRawTokens        int     `json:"compressionRawTokens,omitempty"`
-	CompressionCompressedTokens int     `json:"compressionCompressedTokens,omitempty"`
-	CompressionSavedTokens      int     `json:"compressionSavedTokens,omitempty"`
+	PromptTokens                int                         `json:"promptTokens"`
+	CompletionTokens            int                         `json:"completionTokens"`
+	TotalTokens                 int                         `json:"totalTokens"`
+	ReasoningTokens             int                         `json:"reasoningTokens"`
+	CacheHitTokens              int                         `json:"cacheHitTokens"`
+	CacheMissTokens             int                         `json:"cacheMissTokens"`
+	RequestCount                int                         `json:"requestCount"`
+	ElapsedMs                   int64                       `json:"elapsedMs"`
+	SessionCost                 float64                     `json:"sessionCost,omitempty"`
+	SessionCurrency             string                      `json:"sessionCurrency,omitempty"`
+	SessionCostUsd              float64                     `json:"sessionCostUsd,omitempty"`
+	CompressionEvents           int                         `json:"compressionEvents,omitempty"`
+	CompressionRawChars         int                         `json:"compressionRawChars,omitempty"`
+	CompressionCompressedChars  int                         `json:"compressionCompressedChars,omitempty"`
+	CompressionSavedChars       int                         `json:"compressionSavedChars,omitempty"`
+	CompressionRawTokens        int                         `json:"compressionRawTokens,omitempty"`
+	CompressionCompressedTokens int                         `json:"compressionCompressedTokens,omitempty"`
+	CompressionSavedTokens      int                         `json:"compressionSavedTokens,omitempty"`
+	Sources                     map[string]usageSourceStats `json:"sources,omitempty"`
 
-	activeTurnStartedAt int64
+	activeTurnStartedAt            int64
+	executorSessionCacheHitTokens  int
+	executorSessionCacheMissTokens int
+}
+
+type usageSourceStats struct {
+	PromptTokens     int     `json:"promptTokens"`
+	CompletionTokens int     `json:"completionTokens"`
+	TotalTokens      int     `json:"totalTokens"`
+	ReasoningTokens  int     `json:"reasoningTokens"`
+	CacheHitTokens   int     `json:"cacheHitTokens"`
+	CacheMissTokens  int     `json:"cacheMissTokens"`
+	RequestCount     int     `json:"requestCount"`
+	SessionCost      float64 `json:"sessionCost,omitempty"`
+	SessionCurrency  string  `json:"sessionCurrency,omitempty"`
+	SessionCostUsd   float64 `json:"sessionCostUsd,omitempty"`
 }
 
 type tabTelemetrySnapshot struct {
@@ -739,6 +756,62 @@ func (s *tabEventSink) context() context.Context {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.ctx
+}
+
+func (s *tabEventSink) resetPlannerDisplayTurn() {
+	tab, _ := s.telemetryTab()
+	if tab != nil {
+		tab.resetPlannerDisplayTurn()
+	}
+}
+
+func (s *tabEventSink) recordPlannerDisplay(e event.Event) {
+	tab, _ := s.telemetryTab()
+	if tab != nil {
+		tab.recordPlannerDisplayEvent(e)
+	}
+}
+
+func (s *tabEventSink) flushPlannerDisplay() {
+	if s.app == nil {
+		return
+	}
+	s.app.mu.RLock()
+	tab := s.app.tabByEventSinkIDLocked(s.tabID)
+	var ctrl control.SessionAPI
+	if tab != nil {
+		ctrl = tab.Ctrl
+	}
+	s.app.mu.RUnlock()
+	if tab == nil || ctrl == nil {
+		return
+	}
+	messages := tab.takePlannerDisplayTurn()
+	if len(messages) == 0 {
+		return
+	}
+	sessionPath := ctrl.SessionPath()
+	if strings.TrimSpace(sessionPath) == "" {
+		return
+	}
+	userContent := lastPlannerDisplayUserContent(ctrl.History())
+	if strings.TrimSpace(userContent) == "" {
+		return
+	}
+	dir := ctrl.SessionDir()
+	if strings.TrimSpace(dir) == "" {
+		dir = desktopSessionDir(tab.WorkspaceRoot)
+	}
+	_ = recordSessionPlannerDisplay(dir, sessionPath, userContent, messages)
+}
+
+func lastPlannerDisplayUserContent(messages []provider.Message) string {
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].Role == provider.RoleUser {
+			return messages[i].Content
+		}
+	}
+	return ""
 }
 
 func (s *tabEventSink) emitRuntimeEvent(name string, payload ...interface{}) {
@@ -2016,8 +2089,6 @@ func (a *App) buildTabControllerWithContext(tab *WorkspaceTab, loadedSession loa
 		}
 	}
 
-	// Load config for this tab's workspace root.
-	_ = config.MigrateLegacyCredentialsForRoot(root)
 	cfg, err := config.LoadForRoot(root)
 	if err != nil {
 		a.mu.Lock()
@@ -2115,12 +2186,14 @@ func (a *App) buildTabControllerWithContext(tab *WorkspaceTab, loadedSession loa
 	sharedHost := a.acquireSharedHost(rootKey)
 
 	ctrl, err := boot.Build(buildCtx, desktopBootOptions(boot.Options{
-		Model:          model,
-		RequireKey:     false,
-		Sink:           tab.sink,
-		WorkspaceRoot:  root,
-		SessionDir:     sessionDir,
-		EffortOverride: cloneStringPtr(tab.effort),
+		Model:                    model,
+		RequireKey:               false,
+		Sink:                     tab.sink,
+		WorkspaceRoot:            root,
+		SessionDir:               sessionDir,
+		EffortOverride:           cloneStringPtr(tab.effort),
+		CleanupPendingReconciler: reconcileDesktopCleanupPending,
+		SharedHost:               sharedHost,
 	}))
 	if err != nil {
 		a.mu.Lock()
@@ -2598,6 +2671,35 @@ type desktopTabEntry struct {
 type desktopTabsFile struct {
 	Tabs      []desktopTabEntry `json:"tabs"`
 	ActiveTab string            `json:"activeTab"`
+}
+
+func singleSurfaceLayoutStyle(style string) bool {
+	switch strings.ToLower(strings.TrimSpace(style)) {
+	case "creation", "workspace", "single", "single-surface":
+		return true
+	default:
+		return false
+	}
+}
+
+func singleSurfaceTabsFile(f desktopTabsFile) desktopTabsFile {
+	if len(f.Tabs) <= 1 {
+		return f
+	}
+	active := strings.TrimSpace(f.ActiveTab)
+	if active == "" {
+		active = f.Tabs[0].ID
+	}
+	for _, tab := range f.Tabs {
+		if tab.ID == active {
+			f.Tabs = []desktopTabEntry{tab}
+			f.ActiveTab = tab.ID
+			return f
+		}
+	}
+	f.Tabs = []desktopTabEntry{f.Tabs[0]}
+	f.ActiveTab = f.Tabs[0].ID
+	return f
 }
 
 func (a *App) saveTabsLocked() {
@@ -4542,6 +4644,9 @@ type topicSummary struct {
 var listProjectTreeMu sync.Mutex
 
 func (a *App) ListProjectTree() []ProjectNode {
+	listProjectTreeMu.Lock()
+	defer listProjectTreeMu.Unlock()
+
 	sessionDir := desktopSessionDir()
 	migrateLegacySessionsIntoGlobalTopics(sessionDir)
 	f := loadProjectsFile()
@@ -4559,39 +4664,19 @@ func (a *App) ListProjectTree() []ProjectNode {
 	topicSummaries := map[string]topicSummary{}
 	sessionInfos := map[string]agent.SessionInfo{}
 	sessionTitles := map[string]string{}
+	cacheToken := projectSessionCache.versionToken()
 	for _, dir := range a.knownSessionDirs() {
+		if infos, titles, ok := projectSessionCache.get(dir); ok {
+			mergeSessionInfos(dir, infos, titles, sessionInfos, sessionTitles, topicSummaries)
+			continue
+		}
 		infos, err := agent.ListSessions(dir)
 		if err != nil {
 			continue
 		}
 		titles := loadSessionTitles(dir)
-		for _, info := range infos {
-			sessionKey := sessionRuntimeKey(info.Path)
-			if sessionKey != "" {
-				sessionInfos[sessionKey] = info
-				sessionTitles[sessionKey] = titles[filepath.Base(info.Path)]
-			}
-			titles := loadSessionTitles(dir)
-			projectSessionCache.put(dir, infos, titles, cacheToken)
-			result.infos = infos
-			result.titles = titles
-			result.ok = true
-		}()
-	}
-	if pendingLoads > 0 {
-		timer := time.NewTimer(5 * time.Second)
-		for received := 0; received < pendingLoads; {
-			select {
-			case result := <-results:
-				received++
-				if result.ok {
-					mergeSessionInfos(result.dir, result.infos, result.titles, sessionInfos, sessionTitles, topicSummaries)
-				}
-			case <-timer.C:
-				received = pendingLoads
-			}
-		}
-		timer.Stop()
+		projectSessionCache.put(dir, infos, titles, cacheToken)
+		mergeSessionInfos(dir, infos, titles, sessionInfos, sessionTitles, topicSummaries)
 	}
 
 	runtimeSessionsByTopic := map[string][]runtimeSessionStatus{}

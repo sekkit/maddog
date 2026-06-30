@@ -16,18 +16,20 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync/atomic"
 	"time"
 
 	"maddog/internal/agent"
-	"maddog/internal/builtinmcp"
 	"maddog/internal/codegraph"
 	"maddog/internal/command"
 	"maddog/internal/config"
 	"maddog/internal/contextpack"
 	"maddog/internal/control"
+	"maddog/internal/environment"
 	"maddog/internal/event"
+	"maddog/internal/guardian"
 	"maddog/internal/history"
 	"maddog/internal/hook"
 	"maddog/internal/installsource"
@@ -35,6 +37,7 @@ import (
 	"maddog/internal/jobs"
 	"maddog/internal/lsp"
 	"maddog/internal/memory"
+	"maddog/internal/memorycompiler"
 	"maddog/internal/netclient"
 	"maddog/internal/outputstyle"
 	"maddog/internal/permission"
@@ -45,6 +48,7 @@ import (
 	"maddog/internal/skill"
 	"maddog/internal/tool"
 	"maddog/internal/tool/builtin"
+	"maddog/internal/tool/sessiontool"
 )
 
 // ErrUnknownModel is returned by Build when the configured model can't be
@@ -99,10 +103,20 @@ type Options struct {
 	SessionDir    string
 	ArchiveDir    string
 	MemoryUserDir string
+	// ApprovalTimeout bounds interactive approval/ask waits in headless hosts
+	// such as bots. Zero waits indefinitely.
+	ApprovalTimeout time.Duration
+	// CleanupPendingReconciler retries delayed physical cleanup for sessions that
+	// were logically removed before a previous process exited.
+	CleanupPendingReconciler func(sessionDir string) error
 	// ExtraPlugins are session-scoped MCP servers supplied by a host transport
 	// (for example ACP session/new). They are connected eagerly for this
 	// controller but are not persisted to maddog.toml.
 	ExtraPlugins []plugin.Spec
+	// SharedHost lets frontends reuse MCP subprocesses across controllers for the
+	// same workspace root. When nil, Build creates a private host owned by the
+	// returned controller.
+	SharedHost *plugin.Host
 	// TokenMode selects how much optional context/tool surface this session exposes
 	// at boot. Empty/full preserves the normal capability surface. "economy" keeps
 	// the core coding tools visible and moves skills, MCP, LSP, web_fetch,
@@ -159,6 +173,11 @@ func Build(ctx context.Context, opts Options) (*control.Controller, error) {
 	sink := event.Sync(opts.Sink)
 	if strings.TrimSpace(opts.SessionDir) == "" {
 		migrateLegacySessionSources(sink, sessionDir)
+	}
+	if opts.CleanupPendingReconciler != nil {
+		if err := opts.CleanupPendingReconciler(sessionDir); err != nil {
+			sink.Emit(event.Event{Kind: event.Notice, Level: event.LevelWarn, Text: "session cleanup retry skipped: " + err.Error()})
+		}
 	}
 
 	// A resolvable model whose API key env is unset would otherwise build fine
@@ -227,6 +246,7 @@ func Build(ctx context.Context, opts Options) (*control.Controller, error) {
 	if st, ok := outputstyle.Resolve(cfg.Agent.OutputStyle, outputstyle.Dirs()); ok {
 		sysPrompt = outputstyle.Apply(sysPrompt, st)
 	}
+	shell := sandbox.ResolveShell(cfg.Tools.Shell.Prefer, cfg.Tools.Shell.Path, stderr)
 	sysPrompt += "\n\n" + config.UserDecisionPolicy
 	sysPrompt += "\n\n" + config.LanguagePolicy
 	if tokenEconomy {
@@ -624,22 +644,37 @@ func Build(ctx context.Context, opts Options) (*control.Controller, error) {
 	taskModel := firstNonEmpty(cfg.Agent.SubagentModels["task"], cfg.Agent.SubagentModel)
 	taskEffort := firstNonEmpty(cfg.Agent.SubagentEfforts["task"], cfg.Agent.SubagentEffort)
 	taskToolAdded := false
+	readOnlyTaskToolAdded := false
 	addTaskTool := func() string {
 		if taskToolAdded {
 			return "task is already enabled."
 		}
 		taskToolAdded = true
 		taskTool := agent.NewTaskTool(execProv, entry.Price, reg, maxSteps,
-			entry.ContextWindow, cfg.Agent.SoftCompactRatio, cfg.Agent.CompactRatio, cfg.Agent.CompactForceRatio,
+			entry.ContextWindow, cfg.Agent.RecentKeep, cfg.Agent.SoftCompactRatio, cfg.Agent.ToolResultSnipRatio, cfg.Agent.CompactRatio, cfg.Agent.CompactForceRatio,
 			cfg.Agent.Temperature, archiveDir, "", headlessGate,
-			taskModel, taskEffort, resolveSubagentProvider).
+			keepPolicy, taskModel, taskEffort, resolveSubagentProvider).
 			WithTranscripts(subagentStore, root, modelName, entry.Effort).
 			WithTranscriptIdentityResolver(subagentIdentity)
 		reg.Add(taskTool)
 		return "enabled task."
 	}
+	addReadOnlyTaskTool := func() string {
+		if readOnlyTaskToolAdded {
+			return "read_only_task is already enabled."
+		}
+		readOnlyTaskToolAdded = true
+		taskTool := agent.NewTaskTool(execProv, entry.Price, reg, maxSteps,
+			entry.ContextWindow, cfg.Agent.RecentKeep, cfg.Agent.SoftCompactRatio, cfg.Agent.ToolResultSnipRatio, cfg.Agent.CompactRatio, cfg.Agent.CompactForceRatio,
+			cfg.Agent.Temperature, archiveDir, "", headlessGate,
+			keepPolicy, taskModel, taskEffort, resolveSubagentProvider).
+			WithTranscriptIdentityResolver(subagentIdentity)
+		reg.Add(agent.NewReadOnlyTaskTool(taskTool))
+		return "enabled read_only_task."
+	}
 	if !tokenEconomy {
 		addTaskTool()
+		addReadOnlyTaskTool()
 	}
 
 	// The `memory` tool searches/reads saved facts on demand; `remember` persists
@@ -743,7 +778,7 @@ func Build(ctx context.Context, opts Options) (*control.Controller, error) {
 			// own a transcript. Run the skill sub-agent ephemerally, as before
 			// persisted transcripts existed, instead of failing. Continuation needs
 			// a persisted owner, so it errors here.
-			if continueFrom != "" || legacyForkFrom != "" {
+			if continueFrom != "" || forkFrom != "" {
 				return "", fmt.Errorf("subagent continuation requires a persisted session; none is active in this run")
 			}
 			run = agent.EphemeralSubagentRun(sk.Body)
@@ -762,8 +797,8 @@ func Build(ctx context.Context, opts Options) (*control.Controller, error) {
 			var prepErr error
 			if continueFrom != "" {
 				run, prepErr = subagentStore.PrepareContinue(continueFrom, spec)
-			} else if legacyForkFrom != "" {
-				run, prepErr = subagentStore.PrepareLegacyForkFrom(legacyForkFrom, spec)
+			} else if forkFrom != "" {
+				run, prepErr = subagentStore.PrepareLegacyForkFrom(forkFrom, spec)
 			} else {
 				run, prepErr = subagentStore.PrepareFresh(spec)
 			}
@@ -1037,6 +1072,7 @@ func Build(ctx context.Context, opts Options) (*control.Controller, error) {
 		},
 		AdvisorRunner:        advisorRunner,
 		NativeAdvisor:        nativeAdvisor,
+		MemoryCompiler:       memCompiler,
 		Gate:                 headlessGate,
 		Hooks:                hookRunner,
 		Jobs:                 jm,
@@ -1131,7 +1167,10 @@ func Build(ctx context.Context, opts Options) (*control.Controller, error) {
 		Registry:          reg,
 		PluginCtx:         ctx,
 		WorkspaceRoot:     root,
+		ModelRef:          modelRef,
 		AutoPlan:          cfg.Agent.AutoPlan,
+		Shell:             shell,
+		ApprovalTimeout:   opts.ApprovalTimeout,
 		OnRemember: func(rule string) control.RememberResult {
 			return rememberPermissionRule(root, rule)
 		},

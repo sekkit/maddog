@@ -18,6 +18,7 @@ import (
 
 	fileenc "maddog/internal/fileutil/encoding"
 	"maddog/internal/proc"
+	"maddog/internal/sandbox"
 	"maddog/internal/tool"
 )
 

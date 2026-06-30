@@ -24,7 +24,9 @@ import (
 	"maddog/internal/instruction"
 	"maddog/internal/jobs"
 	"maddog/internal/memory"
+	"maddog/internal/memorycompiler"
 	"maddog/internal/nilutil"
+	"maddog/internal/planmode"
 	"maddog/internal/provider"
 	"maddog/internal/tool"
 )
@@ -191,6 +193,7 @@ type Agent struct {
 	temperature          float64
 	pricing              *provider.Pricing
 	reasoningLanguage    atomic.Value // string: auto|zh|en
+	responseLanguage     atomic.Value // string: auto|zh|en
 
 	upgradePolicy         UpgradePolicy
 	frontierProv          provider.Provider
@@ -401,6 +404,15 @@ func (a *Agent) SetReasoningLanguage(lang string) {
 		return
 	}
 	a.reasoningLanguage.Store(NormalizeReasoningLanguage(lang))
+}
+
+// SetResponseLanguage updates the final-answer language preference for
+// subsequent user-role messages emitted by this agent.
+func (a *Agent) SetResponseLanguage(lang string) {
+	if a == nil {
+		return
+	}
+	a.responseLanguage.Store(NormalizeResponseLanguage(lang))
 }
 
 // SetGate installs the per-call permission gate. Used by `maddog chat` to swap the
@@ -679,6 +691,7 @@ type Options struct {
 	// PlanModeReadOnlyTrustGate confirms untrusted external read-only hints when
 	// plan mode would otherwise block them. nil keeps fail-closed behavior.
 	PlanModeReadOnlyTrustGate PlanModeReadOnlyTrustGate
+	PlanModeAllowedTools      []string
 
 	// Context management. ContextWindow <= 0 disables compaction. Ratios and
 	// RecentKeep fall back to defaults when unset.
@@ -710,6 +723,10 @@ type Options struct {
 	// ReasoningLanguage controls visible reasoning language preference as transient
 	// user-turn context. Empty/auto injects nothing.
 	ReasoningLanguage string
+
+	// MemoryCompiler enables Memory v5 execution-contract compilation for
+	// user-authored task turns.
+	MemoryCompiler *memorycompiler.Runtime
 
 	// Frontier upgrade routing. When UpgradePolicy selects an upgrade, the
 	// current turn continues on FrontierProvider while preserving session state.
@@ -800,6 +817,8 @@ func New(prov provider.Provider, tools *tool.Registry, session *Session, opts Op
 		rawToolResultDir:      strings.TrimSpace(opts.RawToolResultDir),
 		evidence:              evidence.NewLedger(),
 		projectChecks:         append([]instruction.VerifyCheck(nil), opts.ProjectChecks...),
+		memoryCompiler:        opts.MemoryCompiler,
+		planModeAllowedTools:  append([]string(nil), opts.PlanModeAllowedTools...),
 		contextWindow:         opts.ContextWindow,
 		softCompactRatio:      opts.SoftCompactRatio,
 		compactRatio:          opts.CompactRatio,
@@ -1855,12 +1874,12 @@ func (a *Agent) stream(ctx context.Context, turn int) (string, string, string, [
 		select {
 		case <-ctx.Done():
 			stored, _ := finishReasoning()
-			return text.String(), stored, signature, calls, usage, false, partialToolStarted, ctx.Err()
+			return text.String(), stored, signature, nativeBlocks, calls, usage, false, partialToolStarted, ctx.Err()
 		case c, ok := <-ch:
 			if !ok {
 				if err := ctx.Err(); err != nil {
 					stored, _ := finishReasoning()
-					return text.String(), stored, signature, calls, usage, false, partialToolStarted, err
+					return text.String(), stored, signature, nativeBlocks, calls, usage, false, partialToolStarted, err
 				}
 				stored, display := finishReasoning()
 				if text.Len() > 0 || display != "" {
@@ -1871,7 +1890,7 @@ func (a *Agent) stream(ctx context.Context, turn int) (string, string, string, [
 						MemoryCitations: a.memoryCitations(),
 					})
 				}
-				return text.String(), stored, signature, calls, usage, false, false, nil
+				return text.String(), stored, signature, nativeBlocks, calls, usage, false, false, nil
 			}
 			chunk = c
 		}
@@ -1926,7 +1945,7 @@ func (a *Agent) memoryCitations() []provider.MemoryCitation {
 	if a.compilerTurn == nil {
 		return nil
 	}
-	return text.String(), stored, signature, nativeBlocks, calls, usage, false, false, nil
+	return a.compilerTurn.MemoryCitations()
 }
 
 func (a *Agent) capturePrefixShape(schemas []provider.ToolSchema) PrefixShape {

@@ -73,6 +73,7 @@ func New(cfg provider.Config) (provider.Provider, error) {
 		baseURL = defaultBaseURL
 	}
 	keyEnv, _ := cfg.Extra["api_key_env"].(string) // for actionable auth errors
+	keySource, _ := cfg.Extra["api_key_source"].(string)
 	auth := provider.AuthConfigFromExtra(cfg.Extra, cfg.APIKey, keyEnv)
 	thinking, _ := cfg.Extra["thinking"].(string)
 	effort, _ := cfg.Extra["effort"].(string)
@@ -100,6 +101,7 @@ func New(cfg provider.Config) (provider.Provider, error) {
 		name:        name,
 		apiKey:      cfg.APIKey,
 		keyEnv:      keyEnv,
+		keySource:   keySource,
 		auth:        auth,
 		baseURL:     root,
 		model:       cfg.Model,
@@ -120,6 +122,7 @@ type client struct {
 	name        string
 	apiKey      string
 	keyEnv      string // api_key_env name, surfaced in auth errors
+	keySource   string // human-readable source of keyEnv, when known
 	auth        provider.AuthConfig
 	baseURL     string
 	model       string

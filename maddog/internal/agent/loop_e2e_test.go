@@ -8,6 +8,7 @@ import (
 
 	"maddog/internal/agent/testutil"
 	"maddog/internal/event"
+	"maddog/internal/memorycompiler"
 	"maddog/internal/provider"
 	"maddog/internal/tool"
 )

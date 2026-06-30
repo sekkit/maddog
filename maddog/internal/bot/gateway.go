@@ -10,7 +10,6 @@ import (
 	"sync"
 	"time"
 
-	"maddog/internal/agent"
 	"maddog/internal/boot"
 	"maddog/internal/config"
 	"maddog/internal/control"

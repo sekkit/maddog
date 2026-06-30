@@ -12,6 +12,7 @@ import (
 
 	"maddog/internal/agent"
 	"maddog/internal/boot"
+	"maddog/internal/botruntime"
 	"maddog/internal/config"
 	"maddog/internal/control"
 	"maddog/internal/provider"
@@ -33,6 +34,8 @@ type ProviderView struct {
 	Kind               string   `json:"kind"`
 	BaseURL            string   `json:"baseUrl"`
 	Models             []string `json:"models"`
+	VisionModels       []string `json:"visionModels"`
+	VisionModelsSet    bool     `json:"visionModelsConfigured"`
 	ModelsURL          string   `json:"modelsUrl"`
 	Default            string   `json:"default"`
 	APIKeyEnv          string   `json:"apiKeyEnv"`
@@ -50,6 +53,10 @@ type ProviderView struct {
 	ServiceAcctID      string   `json:"serviceAccountId"`
 	WorkspaceID        string   `json:"workspaceId"`
 	KeySet             bool     `json:"keySet"` // the env var currently resolves to a non-empty value
+	RequiresKey        bool     `json:"requiresKey"`
+	Configured         bool     `json:"configured"`
+	KeySource          string   `json:"keySource,omitempty"`
+	KeySourcePath      string   `json:"keySourcePath,omitempty"`
 	BalanceURL         string   `json:"balanceUrl"`
 	ContextWindow      int      `json:"contextWindow"`
 	ReasoningProtocol  string   `json:"reasoningProtocol"`
@@ -338,6 +345,13 @@ func providerCredentialStatus(p config.ProviderEntry) string {
 	return "none"
 }
 
+func providerRequiresCredential(p config.ProviderEntry) bool {
+	if p.AuthEnvName() != "" {
+		return true
+	}
+	return p.NormalizedAuthType() == provider.AuthTypeWorkloadIdentity && strings.TrimSpace(p.IdentityFile) != ""
+}
+
 func providerViewFromEntry(p config.ProviderEntry, builtIn, added bool) ProviderView {
 	return providerViewFromEntryForRoot(p, builtIn, added, ".")
 }
@@ -356,11 +370,15 @@ func providerViewFromEntryForRootWithResolver(p config.ProviderEntry, builtIn, a
 	if resolver == nil {
 		resolver = config.NewCredentialResolverForRoot(root)
 	}
-	key := resolver.ResolveGlobalFirst(p.APIKeyEnv)
-	requiresKey := p.RequiresAPIKey()
+	credentialEnv := p.AuthEnvName()
+	key := resolver.ResolveGlobalFirst(credentialEnv)
+	requiresKey := providerRequiresCredential(p)
+	configured := p.Configured() || key.Set || !requiresKey
 	return ProviderView{
 		Name: p.Name, BuiltIn: builtIn, Added: added, Kind: p.Kind, BaseURL: p.BaseURL,
-		Models: nonNil(p.ChatModelList()), ModelsURL: p.ModelsURL, Default: p.DefaultModel(),
+		Models: nonNil(models), VisionModels: nonNil(providerVisionModels(models, visionModels)), VisionModelsSet: visionModelsSet,
+		ModelsURL:          p.ModelsURL,
+		Default:            p.DefaultModel(),
 		APIKeyEnv:          p.APIKeyEnv,
 		AuthType:           p.AuthType,
 		AuthTokenEnv:       p.AuthTokenEnv,
@@ -375,7 +393,11 @@ func providerViewFromEntryForRootWithResolver(p config.ProviderEntry, builtIn, a
 		Organization:       p.Organization,
 		ServiceAcctID:      p.ServiceAcctID,
 		WorkspaceID:        p.WorkspaceID,
-		KeySet:             p.Configured(),
+		KeySet:             key.Set,
+		RequiresKey:        requiresKey,
+		Configured:         configured,
+		KeySource:          key.Source.Label,
+		KeySourcePath:      key.Source.Path,
 		BalanceURL:         p.BalanceURL,
 		ContextWindow:      p.ContextWindow,
 		ReasoningProtocol:  p.ReasoningProtocol,
@@ -385,7 +407,7 @@ func providerViewFromEntryForRootWithResolver(p config.ProviderEntry, builtIn, a
 		Gateway:            providerProfileGateway(p),
 		AuthMode:           p.NormalizedAuthType(),
 		CredentialStatus:   providerCredentialStatus(p),
-		CredentialEnv:      p.AuthEnvName(),
+		CredentialEnv:      credentialEnv,
 	}
 }
 
@@ -456,6 +478,10 @@ func annotateProviderProfile(view ProviderView, p config.ProviderEntry, roles []
 }
 
 func officialProviderViews(added map[string]bool) []ProviderView {
+	return officialProviderViewsForRoot(added, ".", "", nil)
+}
+
+func officialProviderViewsForRoot(added map[string]bool, root, pricingLanguage string, resolver *config.CredentialResolver) []ProviderView {
 	var out []ProviderView
 	if resolver == nil {
 		resolver = config.NewCredentialResolverForRoot(root)
@@ -643,7 +669,7 @@ func (a *App) Settings() SettingsView {
 	added := providerAccessSet(cfg.Desktop.ProviderAccess)
 	providerRoles, providerWarnings := providerProfileRolesAndWarnings(cfg)
 	v.ProviderWarnings = nonNil(providerWarnings)
-	v.OfficialProviders = officialProviderViews(officialProviderAddedSet(cfg))
+	v.OfficialProviders = officialProviderViewsForRoot(officialProviderAddedSet(cfg), ".", cfg.DeepSeekOfficialPricingLanguage(), nil)
 	for i := range cfg.Providers {
 		p := &cfg.Providers[i]
 		view := providerViewFromEntry(*p, isOfficialBuiltInProvider(*p), added[p.Name])
@@ -1754,6 +1780,17 @@ func (a *App) SetProviderKey(apiKeyEnv, value string) (string, error) {
 		return "", err
 	}
 	return warning, nil
+}
+
+func (a *App) saveProviderCredential(apiKeyEnv, value string) (string, error) {
+	apiKeyEnv = strings.TrimSpace(apiKeyEnv)
+	if apiKeyEnv == "" {
+		return "", fmt.Errorf("this provider has no api_key_env set")
+	}
+	if err := upsertDotEnv(apiKeyEnv, strings.TrimSpace(value)); err != nil {
+		return "", err
+	}
+	return "", nil
 }
 
 func (a *App) ensureProviderAccessForKey(apiKeyEnv string) error {

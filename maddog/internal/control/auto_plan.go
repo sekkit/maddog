@@ -8,6 +8,7 @@ import (
 	"unicode/utf8"
 
 	"maddog/internal/agent"
+	"maddog/internal/nilutil"
 )
 
 const (

@@ -1,5 +1,12 @@
 package skill
 
+import (
+	"sort"
+	"strings"
+
+	"maddog/internal/tool"
+)
+
 // Built-in skills ship with Maddog and back the dedicated subagent tools
 // (explore / research / review / security_review) plus the inline `test`
 // playbook. A user/project file with the same name overrides the built-in (see

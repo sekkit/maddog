@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"maddog/internal/provider"
+	"maddog/internal/tool"
 )
 
 // Tool-result maintenance is the free half of context management: stale tool

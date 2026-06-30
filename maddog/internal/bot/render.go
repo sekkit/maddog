@@ -8,7 +8,6 @@ import (
 	"time"
 	"unicode"
 
-	"maddog/internal/control"
 	"maddog/internal/event"
 )
 

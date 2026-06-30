@@ -13,6 +13,7 @@ import (
 
 	"maddog/internal/fileutil"
 	"maddog/internal/provider"
+	store "maddog/internal/store"
 )
 
 const cleanupPendingExt = ".cleanup-pending.json"

@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"maddog/internal/control"
 	"maddog/internal/proc"
 )
 

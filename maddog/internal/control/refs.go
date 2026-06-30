@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"maddog/internal/config"
+	"maddog/internal/fileref"
 	"maddog/internal/proc"
 )
 

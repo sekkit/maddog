@@ -3,8 +3,6 @@ package config
 import (
 	"fmt"
 	"strings"
-
-	"github.com/BurntSushi/toml"
 )
 
 // MigrationResult summarizes a legacy import for callers compiled against the

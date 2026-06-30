@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"maddog/internal/event"
 	"maddog/internal/nilutil"
 	"maddog/internal/provider"
 )

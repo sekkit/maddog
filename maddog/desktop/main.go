@@ -19,8 +19,6 @@ import (
 	"github.com/wailsapp/wails/v2/pkg/options/mac"
 	"github.com/wailsapp/wails/v2/pkg/options/windows"
 
-	"maddog/internal/builtinmcp"
-
 	// Blank imports wire compile-time built-ins into their registries, exactly as
 	// the CLI does — boot.Build resolves providers/tools from these registries.
 	_ "maddog/internal/provider/anthropic"
@@ -47,6 +45,7 @@ var version = "dev"
 var channel = "stable"
 
 const disableWebview2GPUEnv = "MADDOG_DESKTOP_DISABLE_WEBVIEW2_GPU"
+const linuxDRIRenderNodeGlob = "/dev/dri/renderD*"
 
 func windowsWebview2GPUDisabled() bool {
 	if raw, ok := os.LookupEnv(disableWebview2GPUEnv); ok {

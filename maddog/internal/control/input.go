@@ -6,6 +6,7 @@ import (
 	"unicode"
 
 	"maddog/internal/agent"
+	"maddog/internal/planmode"
 	"maddog/internal/skill"
 )
 

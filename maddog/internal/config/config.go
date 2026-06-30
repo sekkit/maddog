@@ -6,14 +6,15 @@ package config
 
 import (
 	"fmt"
-	"net/netip"
 	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
 	"runtime"
 	"strings"
+	"time"
 
+	"maddog/internal/fileutil"
 	"maddog/internal/netclient"
 	"maddog/internal/provider"
 )
@@ -47,6 +48,8 @@ type Config struct {
 	ConfigVersion     int                     `toml:"config_version"`
 	DefaultModel      string                  `toml:"default_model"`
 	Language          string                  `toml:"language"` // ui/model language tag (e.g. "zh"); empty = auto-detect from $LANG / $MADDOG_LANG
+	CredentialsStore  string                  `toml:"credentials_store"`
+	Environment       EnvironmentConfig       `toml:"environment"`
 	UI                UIConfig                `toml:"ui"`
 	Desktop           DesktopConfig           `toml:"desktop"`
 	Notifications     NotificationsConfig     `toml:"notifications"`
@@ -65,6 +68,10 @@ type Config struct {
 	Statusline        StatuslineConfig        `toml:"statusline"`
 	LSP               LSPConfig               `toml:"lsp"`
 	Bot               BotConfig               `toml:"bot"`
+
+	providerSources          map[string]providerSourceScope
+	shadowedProjectProviders []ProviderEntry
+	expansionEnv             map[string]string
 }
 
 type providerSourceScope string
@@ -1035,6 +1042,8 @@ type AgentConfig struct {
 	AdvisorMaxContextChars    int               `toml:"advisor_max_context_chars"`
 	AdvisorNativeEnabled      bool              `toml:"advisor_native_enabled"`
 	AdvisorNativeMaxTokens    int               `toml:"advisor_native_max_tokens"`
+	GuardianModel             string            `toml:"guardian_model"`
+	GuardianTemperature       float64           `toml:"guardian_temperature"`
 	// OutputStyle selects a persona/tone block folded into the system prompt at
 	// startup (a built-in like "explanatory"/"learning"/"concise", or a custom
 	// .maddog/output-styles/<name>.md). Empty = the unmodified prompt.
@@ -1049,7 +1058,9 @@ type AgentConfig struct {
 	ReasoningLanguage string `toml:"reasoning_language"`
 	// AutoPlanClassifier optionally names a provider/model used to classify
 	// borderline auto-plan decisions. Empty keeps the zero-cost heuristic path.
-	AutoPlanClassifier string `toml:"auto_plan_classifier"`
+	AutoPlanClassifier   string               `toml:"auto_plan_classifier"`
+	PlanModeAllowedTools []string             `toml:"plan_mode_allowed_tools"`
+	MemoryCompiler       MemoryCompilerConfig `toml:"memory_compiler"`
 	// Compaction window fractions: soft = notice only, compact = trigger, force = hard ceiling.
 	SoftCompactRatio    float64 `toml:"soft_compact_ratio"`
 	ToolResultSnipRatio float64 `toml:"tool_result_snip_ratio"`
@@ -1066,6 +1077,14 @@ type AgentConfig struct {
 	// ContextCompression controls deterministic compression of high-volume tool
 	// outputs before they enter model context.
 	ContextCompression ContextCompressionConfig `toml:"context_compression"`
+}
+
+type MemoryCompilerConfig struct {
+	Enabled *bool `toml:"enabled"`
+}
+
+func (c *Config) MemoryCompilerEnabled() bool {
+	return c != nil && c.Agent.MemoryCompiler.Enabled != nil && *c.Agent.MemoryCompiler.Enabled
 }
 
 type ContextCompressionConfig struct {
@@ -1111,30 +1130,31 @@ func contextCompressionPolicy(policy string) string {
 // token budget; the harness compacts older history as a turn's prompt approaches
 // it (see agent compaction). 0 disables compaction for the instance.
 type ProviderEntry struct {
-	Name               string            `toml:"name"`
-	Kind               string            `toml:"kind"`
-	BaseURL            string            `toml:"base_url"`
-	Model              string            `toml:"model"`      // a single model (back-compat)
-	Models             []string          `toml:"models"`     // a vendor's model list (one base_url/key, many models)
-	ModelsURL          string            `toml:"models_url"` // auto-fetch models from this URL on startup
-	Default            string            `toml:"default"`    // default model when Models is set (else Models[0])
-	APIKeyEnv          string            `toml:"api_key_env"`
-	AuthType           string            `toml:"auth_type"`            // api_key (default), bearer, or workload_identity
-	AuthTokenEnv       string            `toml:"auth_token_env"`       // bearer/access-token env var; API key auth falls back to api_key_env
-	AuthHeader         string            `toml:"auth_header"`          // optional override; defaults to provider-specific header
-	AuthScheme         string            `toml:"auth_scheme"`          // optional override; bearer modes default to Bearer
-	IdentityEnv        string            `toml:"identity_env"`         // WIF OIDC/JWT assertion env var
-	IdentityFile       string            `toml:"identity_file"`        // WIF OIDC/JWT assertion file
-	IdentityProviderID string            `toml:"identity_provider_id"` // OpenAI WIF provider ID
-	SubjectTokenType   string            `toml:"subject_token_type"`   // OpenAI WIF subject token type; defaults to JWT
-	TokenURL           string            `toml:"token_url"`            // optional WIF token endpoint override
-	FederationID       string            `toml:"federation_rule_id"`
-	Organization       string            `toml:"organization_id"`
-	ServiceAcctID      string            `toml:"service_account_id"`
-	WorkspaceID        string            `toml:"workspace_id"`
-	BalanceURL         string            `toml:"balance_url"` // optional; a provider-specific wallet-balance endpoint (DeepSeek: https://api.deepseek.com/user/balance). Empty = no balance readout.
-	ContextWindow      int               `toml:"context_window"`
-	Price              *provider.Pricing `toml:"price"`
+	Name               string                       `toml:"name"`
+	Kind               string                       `toml:"kind"`
+	BaseURL            string                       `toml:"base_url"`
+	Model              string                       `toml:"model"`      // a single model (back-compat)
+	Models             []string                     `toml:"models"`     // a vendor's model list (one base_url/key, many models)
+	ModelsURL          string                       `toml:"models_url"` // auto-fetch models from this URL on startup
+	Default            string                       `toml:"default"`    // default model when Models is set (else Models[0])
+	APIKeyEnv          string                       `toml:"api_key_env"`
+	AuthType           string                       `toml:"auth_type"`            // api_key (default), bearer, or workload_identity
+	AuthTokenEnv       string                       `toml:"auth_token_env"`       // bearer/access-token env var; API key auth falls back to api_key_env
+	AuthHeader         string                       `toml:"auth_header"`          // optional override; defaults to provider-specific header
+	AuthScheme         string                       `toml:"auth_scheme"`          // optional override; bearer modes default to Bearer
+	IdentityEnv        string                       `toml:"identity_env"`         // WIF OIDC/JWT assertion env var
+	IdentityFile       string                       `toml:"identity_file"`        // WIF OIDC/JWT assertion file
+	IdentityProviderID string                       `toml:"identity_provider_id"` // OpenAI WIF provider ID
+	SubjectTokenType   string                       `toml:"subject_token_type"`   // OpenAI WIF subject token type; defaults to JWT
+	TokenURL           string                       `toml:"token_url"`            // optional WIF token endpoint override
+	FederationID       string                       `toml:"federation_rule_id"`
+	Organization       string                       `toml:"organization_id"`
+	ServiceAcctID      string                       `toml:"service_account_id"`
+	WorkspaceID        string                       `toml:"workspace_id"`
+	BalanceURL         string                       `toml:"balance_url"` // optional; a provider-specific wallet-balance endpoint (DeepSeek: https://api.deepseek.com/user/balance). Empty = no balance readout.
+	ContextWindow      int                          `toml:"context_window"`
+	Price              *provider.Pricing            `toml:"price"`
+	Prices             map[string]*provider.Pricing `toml:"prices"`
 	// Thinking / Effort are provider-kind-specific knobs forwarded to the provider
 	// via Config.Extra. The anthropic provider reads Thinking="adaptive" to enable
 	// extended thinking and Effort ("low".."max") to tune depth. The
@@ -1171,6 +1191,9 @@ type ProviderEntry struct {
 	// prefix — always accepted. DefaultEffort resolves it; omit DefaultEffort
 	// (or set one outside this list) to fall back to SupportedEfforts[0].
 	SupportedEfforts []string `toml:"supported_efforts"`
+
+	resolvedAPIKey string
+	resolvedSource CredentialSource
 	// DefaultEffort is the /effort level used when the user picks "auto" or
 	// has not set Effort. Ignored when SupportedEfforts is empty.
 	DefaultEffort string `toml:"default_effort"`
@@ -1580,6 +1603,9 @@ func Default() *Config {
 	}
 }
 
+/*
+// Legacy loader implementation retained only for merge recovery context.
+// The active implementation lives in load.go.
 // Load builds the configuration: defaults, then user config, then project
 // config, then MCP servers from Claude Code's .mcp.json. A .env in the working
 // directory is loaded first so api_key_env can resolve.
@@ -2202,7 +2228,11 @@ func retargetDesktopOfficialRef(ref string, access map[string]bool) string {
 		return ref
 	}
 }
+*/
 
+/*
+// Legacy path helpers retained only for merge recovery context.
+// The active implementations live in paths.go.
 func userConfigPath() string {
 	dir, err := os.UserConfigDir()
 	if err != nil {
@@ -2361,6 +2391,7 @@ func CommandDirsForRoot(root string) []string {
 	dirs = append(dirs, conventionSubdirsAsc(root, "commands")...)
 	return dirs
 }
+*/
 
 // ProjectConfigPathForRoot returns Maddog's canonical project config path.
 func ProjectConfigPathForRoot(root string) string {
@@ -2371,10 +2402,11 @@ func ProjectConfigPathForRoot(root string) string {
 	return filepath.Join(root, ProjectConfigFilename)
 }
 
-func projectConfigSourceForRoot(root string) string {
-	return ProjectConfigPathForRoot(root)
-}
+func projectConfigSourceForRoot(root string) string { return ProjectConfigPathForRoot(root) }
 
+/*
+// Legacy source-path helpers retained only for merge recovery context.
+// The active implementations live in paths.go.
 // SourcePath returns the highest-priority config file that exists, or "" if none.
 func SourcePath() string {
 	return SourcePathForRoot(".")
@@ -2396,6 +2428,7 @@ func SourcePathForRoot(root string) string {
 	}
 	return ""
 }
+*/
 
 // WriteFile writes the configuration to path as annotated TOML.
 func (c *Config) WriteFile(path string) error {

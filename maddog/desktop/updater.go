@@ -42,6 +42,8 @@ const (
 	httpTimeout    = 15 * time.Second
 )
 
+var macSelfUpdateEnabled = "false"
+
 // manifestEndpoints returns the primary (R2) then fallback (GitHub) manifest URLs
 // for the running build's channel.
 func manifestEndpoints() []string {
@@ -119,6 +121,15 @@ func newHTTPClient(forceIPv4 bool) (*http.Client, error) {
 // signed/notarized build flag so local or ad-hoc builds stay manual.
 func canSelfUpdate() bool {
 	return runtime.GOOS != "darwin" || macSelfUpdateAllowed()
+}
+
+func macSelfUpdateAllowed() bool {
+	switch strings.ToLower(strings.TrimSpace(macSelfUpdateEnabled)) {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
+	}
 }
 
 func manualUpdateReason() string {
@@ -589,6 +600,14 @@ func applyWindows(installer []byte) error {
 		return err
 	}
 	return installerCommand(name, currentInstallDir()).Start()
+}
+
+func applyWindowsFile(path string) error {
+	installer, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	return applyWindows(installer)
 }
 
 // currentInstallDir is the directory of the running executable — the location a

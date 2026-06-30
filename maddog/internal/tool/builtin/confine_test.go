@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"maddog/internal/config"
 	"maddog/internal/sandbox"
 )
 

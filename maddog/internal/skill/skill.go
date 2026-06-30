@@ -77,7 +77,7 @@ func IsValidName(name string) bool { return config.IsValidSkillName(name) }
 // config.MaddogHomeDir(), or HomeDir/.maddog when HomeDir is explicitly set.
 type Options struct {
 	HomeDir         string
-	MaddogHomeDir string
+	MaddogHomeDir   string
 	ProjectRoot     string
 	CustomPaths     []string
 	ExcludedPaths   []string
@@ -93,7 +93,7 @@ type Options struct {
 // Store resolves skills across the configured roots.
 type Store struct {
 	homeDir         string
-	maddogHomeDir string
+	maddogHomeDir   string
 	projectRoot     string
 	customPaths     []string
 	excludedPaths   map[string]bool
@@ -145,7 +145,7 @@ func New(opts Options) *Store {
 	}
 	return &Store{
 		homeDir:         home,
-		maddogHomeDir: maddogHome,
+		maddogHomeDir:   maddogHome,
 		projectRoot:     root,
 		customPaths:     custom,
 		excludedPaths:   excluded,
@@ -187,7 +187,7 @@ type discoveryRoot struct {
 // convention dirs (config.ConventionDirs: .maddog / .agents / .agent / .claude)
 // under the project root → custom paths → the same convention dirs under the home
 // dir. A later root never overrides an earlier one.
-func (s *Store) roots() []Root {
+func (s *Store) roots() []discoveryRoot {
 	type de struct {
 		dir               string
 		scope             Scope
@@ -410,7 +410,7 @@ func (s *Store) injectedSnapshot() []Skill {
 	return out
 }
 
-func (s *Store) discoverRoot(r Root) []Skill {
+func (s *Store) discoverRoot(r discoveryRoot) []Skill {
 	var out []Skill
 	s.scanDir(r.Dir, r.Scope, r.requireFlatMarker, 1, map[string]bool{}, &out)
 	return out

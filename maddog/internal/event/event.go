@@ -102,6 +102,10 @@ const (
 	// ProviderStatusUpdate reports provider auth/rate/balance health outside
 	// successful usage telemetry, most often after a provider request error.
 	ProviderStatusUpdate
+	// MemoryCompilerStatsEvent reports content-free Memory v5 usage counters.
+	MemoryCompilerStatsEvent
+	// GuardianAssessment reports a guardian sub-agent safety review result.
+	GuardianAssessment
 )
 
 // Level classifies a Notice so sinks can style or filter it.
@@ -259,6 +263,24 @@ type GuardianResult struct {
 	Pricing           *provider.Pricing // for cost display (nil = omit cost)
 }
 
+// MemoryCompilerStats carries content-free Memory v5 usage counters.
+type MemoryCompilerStats struct {
+	Injected         bool
+	UsefulIR         bool
+	CompiledTokens   int
+	IROverheadTokens int
+	MemoryReferences int
+	Constraints      int
+	RiskNotes        int
+	ExecutionSteps   int
+	TotalNodes       int
+	HighSignalNodes  int
+	ToolResultNodes  int
+	DecisionNodes    int
+	StrategyCount    int
+	LearningCount    int
+}
+
 // AskAnswer is the user's reply to one AskQuestion: the chosen option label(s)
 // (a free-typed answer is carried as a single Selected entry).
 type AskAnswer struct {
@@ -294,14 +316,18 @@ const (
 // for Kind; the others are zero.
 type Event struct {
 	Kind             Kind
-	Text             string            // Reasoning / Text / Message / Notice / Phase
-	Reasoning        string            // Message: the full reasoning chain
-	Tool             Tool              // ToolDispatch / ToolResult
-	Usage            *provider.Usage   // Usage
-	Profile          *Profile          // Usage: provider role/model/effort
-	ProviderStatus   *ProviderStatus   // Usage: provider health/auth/rate snapshot
-	Pricing          *provider.Pricing // Usage: for cost display (nil = omit cost)
-	CacheDiagnostics *CacheDiagnostics // Usage: cache-churn attribution (nil = N/A)
+	Text             string                    // Reasoning / Text / Message / Notice / Phase
+	Reasoning        string                    // Message: the full reasoning chain
+	MemoryCitations  []provider.MemoryCitation // Message: local memory references displayed by rich frontends
+	MemoryCompiler   *MemoryCompilerStats      // MemoryCompilerStatsEvent
+	Tool             Tool                      // ToolDispatch / ToolResult
+	Usage            *provider.Usage           // Usage
+	Profile          *Profile                  // Usage: provider role/model/effort
+	ProviderStatus   *ProviderStatus           // Usage: provider health/auth/rate snapshot
+	Pricing          *provider.Pricing         // Usage: for cost display (nil = omit cost)
+	Source           string                    // optional display/event source (executor, planner, subagent, ...)
+	UsageSource      string                    // Usage: billable call source; empty means executor for compatibility
+	CacheDiagnostics *CacheDiagnostics         // Usage: cache-churn attribution (nil = N/A)
 	// SessionHit/SessionMiss carry cumulative cache tokens across the whole
 	// session (Usage events only), so a frontend can show the aggregate hit-rate
 	// — which doesn't crater on a short turn or after compaction — alongside
@@ -314,6 +340,7 @@ type Event struct {
 	Err          error      // TurnDone: non-nil on failure
 	Compaction   Compaction // Compaction
 	Advisor      AdvisorConsultation
+	Guardian     GuardianResult
 	RetryAttempt int // Retrying: 1-based attempt about to be made
 	RetryMax     int // Retrying: total attempts before giving up
 }

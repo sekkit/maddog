@@ -10,6 +10,7 @@ import (
 	"maddog/internal/config"
 	"maddog/internal/hook"
 	"maddog/internal/i18n"
+	"maddog/internal/migration"
 	"maddog/internal/skill"
 )
 

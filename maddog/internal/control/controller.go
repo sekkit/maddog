@@ -30,24 +30,25 @@ import (
 
 	"maddog/internal/agent"
 	"maddog/internal/billing"
-	"maddog/internal/builtinmcp"
 	"maddog/internal/checkpoint"
-	"maddog/internal/codegraph"
 	"maddog/internal/command"
 	"maddog/internal/config"
 	"maddog/internal/diff"
 	"maddog/internal/event"
 	"maddog/internal/evidence"
+	"maddog/internal/guardian"
 	"maddog/internal/hook"
 	"maddog/internal/i18n"
 	"maddog/internal/jobs"
 	"maddog/internal/memory"
+	"maddog/internal/memorycompiler"
 	"maddog/internal/nilutil"
 	"maddog/internal/permission"
 	"maddog/internal/plugin"
 	"maddog/internal/provider"
 	"maddog/internal/sandbox"
 	"maddog/internal/skill"
+	"maddog/internal/store"
 	"maddog/internal/tool"
 )
 
@@ -74,15 +75,17 @@ type Controller struct {
 	label             string
 	systemPrompt      string
 	sessionDir        string
+	modelRef          string
 	host              *plugin.Host
-	commands          []command.Command
-	skills            []skill.Skill
+	commands          atomic.Pointer[[]command.Command]
+	skills            skillSet
 	allSkills         []skill.Skill
 	skillStore        *skill.Store
 	allSkillStore     *skill.Store
 	skillOrch         *skill.Orchestrator
 	hooks             *hook.Runner // session hook runner; nil-safe (no hooks configured)
 	mem               *memory.Set
+	memory            memoryManager
 	cleanup           func()
 	autoPlan          string
 	responseLanguage  string
@@ -250,7 +253,9 @@ type Options struct {
 	SystemPrompt      string
 	SessionDir        string
 	SessionPath       string
+	ModelRef          string
 	Host              *plugin.Host
+	Guardian          *guardian.Session
 	Commands          []command.Command
 	Skills            []skill.Skill
 	AllSkills         []skill.Skill
@@ -333,15 +338,17 @@ func New(opts Options) *Controller {
 		systemPrompt:           opts.SystemPrompt,
 		sessionDir:             opts.SessionDir,
 		sessionPath:            opts.SessionPath,
+		modelRef:               opts.ModelRef,
+		guardianSess:           opts.Guardian,
 		host:                   opts.Host,
-		commands:               opts.Commands,
-		skills:                 opts.Skills,
+		skills:                 newSkillSet(opts.Skills, opts.AllSkills, opts.SkillStore, opts.AllSkillStore),
 		allSkills:              opts.AllSkills,
 		skillStore:             opts.SkillStore,
 		allSkillStore:          opts.AllSkillStore,
 		skillOrch:              opts.SkillOrchestrator,
 		hooks:                  opts.Hooks,
 		mem:                    opts.Memory,
+		memory:                 newMemoryManager(opts.Memory),
 		cleanup:                opts.Cleanup,
 		autoPlan:               normalizeAutoPlan(opts.AutoPlan),
 		reasoningLanguage:      config.NormalizeReasoningLanguage(opts.ReasoningLanguage),
@@ -353,14 +360,14 @@ func New(opts Options) *Controller {
 		balanceKey:             opts.BalanceKey,
 		balanceClient:          opts.BalanceClient,
 		jobs:                   opts.Jobs,
-		reg:                    opts.Registry,
-		pluginCtx:              pluginCtx,
-		cpRoot:                 opts.WorkspaceRoot,
-		toolApprovalMode:       ToolApprovalAsk,
-		approvals:              map[string]pendingApproval{},
-		asks:                   map[string]pendingAsk{},
-		granted:                map[string]bool{},
+		mcp:                    newMcpManager(opts.Host, opts.Registry, pluginCtx),
+		approval:               newApprovalManager(opts.Policy, ToolApprovalAsk, opts.ApprovalTimeout),
+		workspaceRoot:          opts.WorkspaceRoot,
+		externalFolderRefs:     map[string]string{},
+		externalFolderToolRefs: opts.ExternalFolderToolRefs,
 	}
+	cmds := append([]command.Command(nil), opts.Commands...)
+	c.commands.Store(&cmds)
 	// Checkpoints: bind a store to the session and route writer pre-edits into it.
 	c.rebindCheckpoints(opts.SessionPath)
 	c.setActiveJobSession(opts.SessionPath)
@@ -655,14 +662,8 @@ func (c *Controller) runTurnWithRawDisplay(ctx context.Context, input, raw, disp
 	// The plan is the go-ahead: don't re-prompt for each write of the approved
 	// work. Auto-approve writers for the duration of this execution turn only; a
 	// later turn (even "continue") falls back to the normal per-tool approval.
-	c.mu.Lock()
-	c.approvedPlanAutoApproveTools = true
-	c.mu.Unlock()
-	defer func() {
-		c.mu.Lock()
-		c.approvedPlanAutoApproveTools = false
-		c.mu.Unlock()
-	}()
+	c.approval.setPlanAutoApprove(true)
+	defer c.approval.setPlanAutoApprove(false)
 	if err := c.runner.Run(ctx, c.ComposeSynthetic(planApprovedMessage)); err != nil {
 		return err
 	}

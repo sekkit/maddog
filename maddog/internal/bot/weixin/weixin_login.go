@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"maddog/internal/config"
+	"maddog/internal/fileutil"
 )
 
 type savedAccount struct {

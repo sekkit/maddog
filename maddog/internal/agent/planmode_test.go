@@ -2,7 +2,9 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"maddog/internal/event"
+	"maddog/internal/planmode"
 	"strings"
 	"testing"
 

@@ -9,6 +9,8 @@ import (
 	"sync"
 
 	"maddog/internal/agent"
+	"maddog/internal/planmode"
+	"maddog/internal/plugin"
 	"maddog/internal/tool"
 )
 

@@ -63,6 +63,7 @@ func New(cfg provider.Config) (provider.Provider, error) {
 		return newResponsesClient(cfg, name)
 	}
 	keyEnv, _ := cfg.Extra["api_key_env"].(string) // for actionable auth errors
+	keySource, _ := cfg.Extra["api_key_source"].(string)
 	auth := provider.AuthConfigFromExtra(cfg.Extra, cfg.APIKey, keyEnv)
 	effort, _ := cfg.Extra["effort"].(string)
 	effort = strings.ToLower(strings.TrimSpace(effort))
@@ -123,6 +124,7 @@ func New(cfg provider.Config) (provider.Provider, error) {
 		name:         name,
 		apiKey:       cfg.APIKey,
 		keyEnv:       keyEnv,
+		keySource:    keySource,
 		auth:         auth,
 		baseURL:      strings.TrimRight(cfg.BaseURL, "/"),
 		model:        cfg.Model,
@@ -150,6 +152,7 @@ type client struct {
 	name         string
 	apiKey       string
 	keyEnv       string // api_key_env name, surfaced in auth errors
+	keySource    string // human-readable source of keyEnv, when known
 	auth         provider.AuthConfig
 	baseURL      string
 	model        string

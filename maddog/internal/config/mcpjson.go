@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 
 	"maddog/internal/fileutil"
 	"maddog/internal/mcpdiag"

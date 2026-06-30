@@ -14,6 +14,7 @@ import (
 	"maddog/internal/agent"
 	"maddog/internal/control"
 	"maddog/internal/fileutil"
+	"maddog/internal/store"
 )
 
 // sessions.go holds the desktop-only session-management state that the shared
@@ -403,6 +404,7 @@ func restoreTrashedSessionFile(dir, path string) error {
 	if err := checkRestoreRawToolResultConflicts(dir, itemDir); err != nil {
 		return err
 	}
+	trashPath := filepath.Join(itemDir, key)
 	if err := movePathIfExists(trashPath, target); err != nil {
 		return err
 	}
