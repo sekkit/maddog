@@ -41,6 +41,10 @@ export const en = {
   "tabBar.tabActions": "Tab actions",
   "tabBar.commandSearch": "Search · Command · Open file",
   "tabBar.commandSearchCompact": "Search",
+  "window.controls": "Window controls",
+  "window.minimize": "Minimize window",
+  "window.maximize": "Maximize window",
+  "window.close": "Close window",
 
   // sidebar
   "sidebar.conversations": "Chats",

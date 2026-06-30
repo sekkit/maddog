@@ -12,6 +12,7 @@ const projectTreeSource = readFileSync(resolve(testDir, "../components/ProjectTr
 const topicShortcutsSource = readFileSync(resolve(testDir, "../lib/topicShortcuts.ts"), "utf8");
 const transcriptSource = readFileSync(resolve(testDir, "../components/Transcript.tsx"), "utf8");
 const layoutStoreSource = readFileSync(resolve(testDir, "../store/layout.ts"), "utf8");
+const desktopMainSource = readFileSync(resolve(testDir, "../../../main.go"), "utf8");
 const stylesSource = readFileSync(resolve(testDir, "../styles.css"), "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
 
 let passed = 0;
@@ -70,6 +71,32 @@ ok(
 );
 
 ok(
+  /Frameless:\s*true/.test(desktopMainSource) &&
+    !/TitleBar:\s*mac\.TitleBarHiddenInset\(\)/.test(desktopMainSource),
+  "desktop shell uses a frameless Wails window instead of the native title frame",
+);
+
+ok(
+  /const showWindowControls = true;/.test(appChromeSource) &&
+    !/browserPreviewChrome && platform === "windows"/.test(appChromeSource),
+  "AppChrome window controls are part of the real desktop chrome, not a browser-preview-only mock",
+);
+
+ok(
+  /window\.runtime\?\.WindowMinimise\?\.\(\);/.test(appChromeSource) &&
+    /window\.runtime\?\.WindowToggleMaximise\?\.\(\);/.test(appChromeSource) &&
+    /window\.runtime\?\.Quit\?\.\(\);/.test(appChromeSource),
+  "AppChrome window controls call Wails runtime window APIs",
+);
+
+for (const control of ["minimize", "maximize", "close"]) {
+  ok(
+    new RegExp(`<button[\\s\\S]*app-chrome__window-control--${control}[\\s\\S]*type="button"`).test(appChromeSource),
+    `AppChrome renders ${control} as an interactive window button`,
+  );
+}
+
+ok(
   /const WORKSPACE_PANEL_DEFAULT_OPEN = false;/.test(layoutStoreSource) &&
     /workspacePanelOpen:\s*WORKSPACE_PANEL_DEFAULT_OPEN/.test(layoutStoreSource),
   "right dock starts collapsed on launch",
@@ -123,6 +150,12 @@ ok(
 ok(
   /\{!appChromeHidden && \(/.test(appSource),
   "workbench skips rendering the top AppChrome row",
+);
+
+ok(
+  /import \{ AppChrome, WindowControls \} from "\.\/components\/AppChrome";/.test(appSource) &&
+    /\{appChromeHidden && <WindowControls platform=\{desktopPlatform\} className="app-window-controls--overlay" \/>\}/.test(appSource),
+  "frameless workbench and creation layouts keep custom window controls when AppChrome is hidden",
 );
 
 ok(

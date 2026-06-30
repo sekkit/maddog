@@ -55,7 +55,7 @@ import { WorkspacePanel } from "./components/WorkspacePanel";
 import { Tooltip } from "./components/Tooltip";
 import { StartupSplash } from "./components/StartupSplash";
 import { OnboardingOverlay } from "./components/OnboardingOverlay";
-import { AppChrome } from "./components/AppChrome";
+import { AppChrome, WindowControls } from "./components/AppChrome";
 import { ShortcutsCheatsheet } from "./components/ShortcutsCheatsheet";
 import { ProjectTree } from "./components/ProjectTree";
 import { HeartbeatPanel } from "./custom/features/heartbeat/HeartbeatPanel";
@@ -2754,7 +2754,6 @@ export default function App() {
         {!appChromeHidden && (
           <AppChrome
             platform={desktopPlatform}
-            browserPreviewChrome={browserPreviewChrome}
             workbenchChrome={sidebarWorkbench}
             tabs={visibleTabs}
             activeTabId={visibleTabId}
@@ -2778,6 +2777,7 @@ export default function App() {
             onOpenPalette={() => void openPalette()}
           />
         )}
+        {appChromeHidden && <WindowControls platform={desktopPlatform} className="app-window-controls--overlay" />}
         <a className="skip-to-composer" href="#composer-input">
           {t("shortcuts.skipToComposer")}
         </a>

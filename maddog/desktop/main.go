@@ -93,6 +93,8 @@ func main() {
 		Height:    height,
 		MinWidth:  760,
 		MinHeight: 480,
+		// The React shell draws the title region and window controls itself.
+		Frameless: true,
 		// Match the dark UI shell so the initial webview background doesn't flash
 		// white before CSS loads — particularly visible on WebKitGTK.
 		BackgroundColour:   &options.RGBA{R: 26, G: 26, B: 46, A: 255},
@@ -118,9 +120,6 @@ func main() {
 
 		// --- per-platform adaptation (see desktop/README.md for the rationale) ---
 		Mac: &mac.Options{
-			// Inset traffic-lights over a frameless-feeling header; the frontend
-			// leaves a drag region at the top (CSS --wails-draggable).
-			TitleBar: mac.TitleBarHiddenInset(),
 			// Follow the OS appearance so the title bar matches light/dark system
 			// preference instead of being locked to dark.
 			Appearance: mac.DefaultAppearance,

@@ -42,6 +42,10 @@ export const zh: Record<DictKey, string> = {
   "tabBar.tabActions": "标签页操作",
   "tabBar.commandSearch": "搜索 · 命令 · 打开文件",
   "tabBar.commandSearchCompact": "搜索",
+  "window.controls": "窗口控制",
+  "window.minimize": "最小化窗口",
+  "window.maximize": "最大化窗口",
+  "window.close": "关闭窗口",
 
   // 侧边栏
   "sidebar.conversations": "会话",
