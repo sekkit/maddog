@@ -27,9 +27,22 @@ func TestToWire(t *testing.T) {
 	})
 
 	t.Run("tool result duration", func(t *testing.T) {
-		w := toWire(event.Event{Kind: event.ToolResult, Tool: event.Tool{Name: "web_fetch", Output: "ok", DurationMs: 522}})
+		w := toWire(event.Event{Kind: event.ToolResult, Tool: event.Tool{
+			Name: "web_fetch", Output: "ok", DurationMs: 522,
+			Compression: &event.Compression{
+				RawRef:          "raw://tool/web",
+				Strategy:        "head-tail",
+				Summary:         "web_fetch output compressed",
+				RawChars:        900,
+				CompressedChars: 200,
+				SavedChars:      700,
+			},
+		}})
 		if w.Tool == nil || w.Tool.Output != "ok" || w.Tool.DurationMs != 522 {
 			t.Errorf("tool result duration = %+v", w.Tool)
+		}
+		if w.Tool.Compression == nil || w.Tool.Compression.RawRef != "raw://tool/web" || w.Tool.Compression.SavedChars != 700 {
+			t.Errorf("tool compression = %+v", w.Tool.Compression)
 		}
 	})
 
@@ -38,6 +51,15 @@ func TestToWire(t *testing.T) {
 			Kind:    event.Usage,
 			Usage:   &provider.Usage{PromptTokens: 1000, CompletionTokens: 200, TotalTokens: 1200, CacheHitTokens: 900, CacheMissTokens: 100},
 			Pricing: &provider.Pricing{CacheHit: 0.02, Input: 1, Output: 2},
+			Profile: &event.Profile{Role: "frontier", Model: "anthropic/claude-3-5-sonnet", Effort: "high", BudgetUsed: 7, BudgetLimit: 10, BudgetRemaining: 3},
+			ProviderStatus: &event.ProviderStatus{
+				Role:             "frontier",
+				Health:           "ok",
+				AuthStatus:       "ok",
+				RateLimit:        "ok",
+				BalanceAvailable: true,
+				BalanceDisplay:   "¥42.00",
+			},
 			CacheDiagnostics: &event.CacheDiagnostics{
 				PrefixChanged:       true,
 				PrefixChangeReasons: []string{"log_rewrite"},
@@ -49,6 +71,15 @@ func TestToWire(t *testing.T) {
 		}
 		if w.Usage.CacheDiagnostics == nil || w.Usage.CacheDiagnostics.PrefixChangeReasons[0] != "log_rewrite" {
 			t.Errorf("cache diagnostics = %+v", w.Usage.CacheDiagnostics)
+		}
+		if w.Usage.Profile == nil || w.Usage.Profile.Role != "frontier" || w.Usage.Profile.Model != "anthropic/claude-3-5-sonnet" || w.Usage.Profile.Effort != "high" {
+			t.Errorf("usage profile = %+v", w.Usage.Profile)
+		}
+		if w.Usage.Profile == nil || w.Usage.Profile.BudgetUsed != 7 || w.Usage.Profile.BudgetLimit != 10 || w.Usage.Profile.BudgetRemaining != 3 {
+			t.Errorf("usage profile budget = %+v", w.Usage.Profile)
+		}
+		if w.Usage.ProviderStatus == nil || w.Usage.ProviderStatus.Health != "ok" || w.Usage.ProviderStatus.RateLimit != "ok" || w.Usage.ProviderStatus.BalanceDisplay != "¥42.00" {
+			t.Errorf("usage provider status = %+v", w.Usage.ProviderStatus)
 		}
 	})
 
@@ -77,11 +108,29 @@ func TestToWire(t *testing.T) {
 			{event.Event{Kind: event.BudgetExceeded, Level: event.LevelWarn, Text: "budget"}, "budget_exceeded", "warn"},
 			{event.Event{Kind: event.SkillPromoted, Text: "promoted"}, "skill_promoted", "info"},
 			{event.Event{Kind: event.Advisor, Text: "advisor consulted"}, "advisor", "info"},
+			{event.Event{Kind: event.ProviderStatusUpdate, Text: "provider status"}, "provider_status", "info"},
 		} {
 			w := toWire(tc.ev)
 			if w.Kind != tc.kind || w.Level != tc.level || w.Text != tc.ev.Text {
 				t.Errorf("runtime event = %+v, want kind=%q level=%q text=%q", w, tc.kind, tc.level, tc.ev.Text)
 			}
+		}
+	})
+
+	t.Run("provider status payload", func(t *testing.T) {
+		w := toWire(event.Event{Kind: event.ProviderStatusUpdate, ProviderStatus: &event.ProviderStatus{
+			Role:          "default",
+			Health:        "rate_limited",
+			AuthStatus:    "ok",
+			RateLimit:     "rate_limited",
+			BalanceStatus: "unknown",
+			LastError:     "openai: status 429",
+		}})
+		if w.Kind != "provider_status" || w.ProviderStatus == nil {
+			t.Fatalf("provider status wire = %+v", w)
+		}
+		if w.ProviderStatus.Health != "rate_limited" || w.ProviderStatus.RateLimit != "rate_limited" || w.ProviderStatus.LastError == "" {
+			t.Fatalf("provider status payload = %+v", w.ProviderStatus)
 		}
 	})
 

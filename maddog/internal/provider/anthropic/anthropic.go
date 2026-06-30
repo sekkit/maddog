@@ -588,10 +588,14 @@ func (c *client) readStream(resp *http.Response, out chan<- provider.Chunk) {
 			// Stream complete; fall through to finalize below.
 		case "error":
 			msg := "stream error"
+			errType := ""
 			if ev.Error != nil && ev.Error.Message != "" {
 				msg = ev.Error.Message
 			}
-			out <- provider.Chunk{Type: provider.ChunkError, Err: fmt.Errorf("%s: %s", c.name, msg)}
+			if ev.Error != nil {
+				errType = ev.Error.Type
+			}
+			out <- provider.Chunk{Type: provider.ChunkError, Err: provider.NewStructuredAPIError(c.name, errType, "", msg)}
 			return
 		}
 	}

@@ -32,7 +32,7 @@ import {
 } from "../lib/fontFamily";
 import { getAvailableFontFamilies, getAvailableMonoFontFamilies } from "../lib/fontAvailability";
 import { getDisplayMode, onDisplayModeChange, setDisplayMode as setLocalDisplayMode } from "../lib/displayMode";
-import { DEFAULT_STATUS_BAR_ITEMS, normalizeStatusBarItems, type StatusBarItemId } from "../lib/statusBarItems";
+import { ALL_STATUS_BAR_ITEMS, normalizeStatusBarItems, type StatusBarItemId } from "../lib/statusBarItems";
 import type { BotAllowlistView, BotConnectionDiagnostic, BotConnectionView, BotInstallStartResult, BotSettingsView, HookConfigView, HooksSettingsView, NetworkView, ProviderView, SettingsTab, SettingsView } from "../lib/types";
 import { InlineConfirmButton } from "./InlineConfirmButton";
 import { Tooltip } from "./Tooltip";
@@ -443,7 +443,15 @@ function allRefs(s: SettingsView): string[] {
 
 function providerCredentialEnv(p: ProviderView | undefined): string {
   if (!p) return "";
-  return normalizeAuthType(p.authType) === "api_key" ? p.apiKeyEnv : p.authTokenEnv || p.identityEnv;
+  if (p.credentialEnv) return p.credentialEnv;
+  switch (normalizeAuthType(p.authType)) {
+    case "bearer":
+      return p.authTokenEnv || p.apiKeyEnv;
+    case "workload_identity":
+      return p.authTokenEnv || p.identityEnv || p.apiKeyEnv;
+    default:
+      return p.apiKeyEnv;
+  }
 }
 
 // toRef normalises a stored model id (a provider name, a bare model, or a ref) to
@@ -459,6 +467,7 @@ function toRef(model: string, s: SettingsView): string {
 }
 
 const PROXY_MODES = ["auto", "custom", "off"] as const;
+const CONTEXT_COMPRESSION_POLICIES = ["off", "auto", "aggressive"] as const;
 
 // EFFORT_PRESETS is the canonical union of /effort levels the kernel
 // recognises. The settings UI exposes these as toggleable checkboxes; users
@@ -473,8 +482,12 @@ const AUTO_PLAN_MODES = ["off", "on"] as const;
 const BOT_TOOL_APPROVAL_MODES = ["", "ask", "auto", "yolo"] as const;
 
 type ProxyMode = (typeof PROXY_MODES)[number];
+type ContextCompressionPolicy = (typeof CONTEXT_COMPRESSION_POLICIES)[number];
 type AutoPlanMode = (typeof AUTO_PLAN_MODES)[number];
 type BotConnectionToolApprovalMode = (typeof BOT_TOOL_APPROVAL_MODES)[number];
+type ContextCompressionBridge = {
+  SetContextCompression(policy: string, thresholdBytes: number, maxBytes: number): Promise<void>;
+};
 
 function normalizeProxyMode(mode: string): ProxyMode {
   switch (mode) {
@@ -498,6 +511,30 @@ function normalizeAutoPlan(mode: string | undefined): AutoPlanMode {
 function sanitizeInteger(value: number, min: number): number {
   if (!Number.isFinite(value)) return min;
   return Math.max(min, Math.floor(value));
+}
+
+function normalizeContextCompressionPolicy(policy: unknown): ContextCompressionPolicy {
+  return CONTEXT_COMPRESSION_POLICIES.includes(policy as ContextCompressionPolicy) ? policy as ContextCompressionPolicy : "auto";
+}
+
+function defaultAgentView(): SettingsView["agent"] {
+  return {
+    temperature: 0,
+    maxSteps: 0,
+    plannerMaxSteps: 12,
+    systemPrompt: "",
+    coldResumePrune: true,
+    contextCompressionPolicy: "auto",
+    contextCompressionThresholdBytes: 0,
+    contextCompressionMaxBytes: 0,
+    reasoningLanguage: "auto",
+  };
+}
+
+function setContextCompressionBridge(policy: string, thresholdBytes: number, maxBytes: number): Promise<void> {
+  const contextApp = app as typeof app & Partial<ContextCompressionBridge>;
+  if (!contextApp.SetContextCompression) return Promise.resolve();
+  return contextApp.SetContextCompression(policy, thresholdBytes, maxBytes);
 }
 
 function formatBudgetLabel(value: number | undefined, t: ReturnType<typeof useT>): string {
@@ -676,9 +713,12 @@ function normalizeSettingsView(view: SettingsView | null | undefined): SettingsV
     noProxy: "",
     proxy: { type: "socks5", server: "", port: 0, username: "", password: "" },
   };
-  const agent = view.agent ?? { temperature: 0, maxSteps: 0, plannerMaxSteps: 12, systemPrompt: "", coldResumePrune: true, reasoningLanguage: "auto" };
+  const agent = { ...defaultAgentView(), ...(view.agent ?? {}) };
   agent.plannerMaxSteps = Number.isFinite(agent.plannerMaxSteps) ? Math.max(0, Math.trunc(agent.plannerMaxSteps)) : 12;
   agent.maxSteps = Number.isFinite(agent.maxSteps) ? Math.max(0, Math.trunc(agent.maxSteps)) : 0;
+  agent.contextCompressionPolicy = normalizeContextCompressionPolicy(agent.contextCompressionPolicy);
+  agent.contextCompressionThresholdBytes = sanitizeInteger(agent.contextCompressionThresholdBytes ?? 0, 0);
+  agent.contextCompressionMaxBytes = sanitizeInteger(agent.contextCompressionMaxBytes ?? 0, 0);
   agent.reasoningLanguage = normalizeReasoningLanguage(agent.reasoningLanguage);
   return {
     ...view,
@@ -756,6 +796,14 @@ function statusBarItemLabel(id: StatusBarItemId, t: ReturnType<typeof useT>): st
   switch (id) {
     case "model":
       return t("settings.statusBarItem.model");
+    case "provider":
+      return t("status.providerLabel");
+    case "frontier_budget":
+      return t("status.frontierBudgetLabel");
+    case "provider_health":
+      return t("status.providerHealthLabel");
+    case "rate_limit":
+      return t("status.rateLimitLabel");
     case "cache":
       return t("status.cacheLabel");
     case "cache_avg":
@@ -849,7 +897,7 @@ function GeneralSection({ s, busy, apply, agentRunning }: SectionProps & { agent
   const visibleStatusItems = new Set<StatusBarItemId>(statusBarItems);
   const orderedStatusItems = [
     ...statusBarItems,
-    ...DEFAULT_STATUS_BAR_ITEMS.filter((id) => !visibleStatusItems.has(id)),
+    ...ALL_STATUS_BAR_ITEMS.filter((id) => !visibleStatusItems.has(id)),
   ];
   const applyStatusBarItems = (items: StatusBarItemId[]) => {
     const contentScrollTop = document.querySelector<HTMLElement>(".settings-center__content")?.scrollTop ?? 0;
@@ -1159,7 +1207,7 @@ function GeneralSection({ s, busy, apply, agentRunning }: SectionProps & { agent
         <div className={`status-bar-items-editor${statusBarItemsExpanded ? " status-bar-items-editor--expanded" : ""}`}>
           <div className="status-bar-items-editor__summary">
             <span className="status-bar-items-editor__summary-text">
-              {t("settings.statusBarItemsSummary", { visible: statusBarItems.length, total: DEFAULT_STATUS_BAR_ITEMS.length })}
+              {t("settings.statusBarItemsSummary", { visible: statusBarItems.length, total: ALL_STATUS_BAR_ITEMS.length })}
             </span>
             <Tooltip label={t(statusBarItemsExpanded ? "settings.statusBarItemsCollapse" : "settings.statusBarItemsExpand")}>
               <button
@@ -2858,10 +2906,16 @@ function ModelsSection({ s, busy, apply, backgroundApply }: ModelsSectionProps) 
   const frontierLabel = frontierRef || t("settings.frontierModelNone");
   const upgradeLabel = s.upgradeEnabled && frontierRef ? t("settings.frontierEnabled") : t("settings.frontierDisabled");
   const keyStatusLabel = defaultProviderView?.keySet ? t("settings.keySet") : t("settings.noKey");
-  const agent = s.agent ?? { temperature: 0, maxSteps: 0, plannerMaxSteps: 12, systemPrompt: "", coldResumePrune: true, reasoningLanguage: "auto" };
+  const agent = s.agent ?? defaultAgentView();
   const setAgentSteps = (maxSteps: number, plannerMaxSteps: number) => (
     app.SetAgentParams(agent.temperature, maxSteps, plannerMaxSteps, agent.systemPrompt)
   );
+  const setContextCompression = (next: { policy?: ContextCompressionPolicy; thresholdBytes?: number; maxBytes?: number }) => {
+    const policy = normalizeContextCompressionPolicy(next.policy ?? agent.contextCompressionPolicy);
+    const thresholdBytes = sanitizeInteger(next.thresholdBytes ?? agent.contextCompressionThresholdBytes ?? 0, 0);
+    const maxBytes = sanitizeInteger(next.maxBytes ?? agent.contextCompressionMaxBytes ?? 0, 0);
+    return setContextCompressionBridge(policy, thresholdBytes, maxBytes);
+  };
   const setFrontierRoute = (next: Partial<Pick<SettingsView, "frontierModel" | "upgradeEnabled" | "upgradeThreshold" | "frontierBudget">>) => {
     const model = next.frontierModel !== undefined ? next.frontierModel : s.frontierModel;
     const enabled = next.upgradeEnabled !== undefined ? next.upgradeEnabled : s.upgradeEnabled;
@@ -3021,6 +3075,56 @@ function ModelsSection({ s, busy, apply, backgroundApply }: ModelsSectionProps) 
                 </button>
               ))}
             </div>
+          </SettingsField>
+          <SettingsField label={t("settings.contextCompressionPolicy")} hint={t("settings.contextCompressionPolicyHint")}>
+            <div className="set-seg">
+              {CONTEXT_COMPRESSION_POLICIES.map((policy) => (
+                <button
+                  key={policy}
+                  className={`set-seg__btn${agent.contextCompressionPolicy === policy ? " set-seg__btn--on" : ""}`}
+                  disabled={busy}
+                  onClick={() => void apply(() => setContextCompression({ policy }))}
+                >
+                  {t(`settings.contextCompressionPolicy.${policy}`)}
+                </button>
+              ))}
+            </div>
+          </SettingsField>
+          <SettingsField label={t("settings.contextCompressionThresholdBytes")} hint={t("settings.contextCompressionThresholdBytesHint")}>
+            <input
+              key={`context-compression-threshold-${agent.contextCompressionThresholdBytes ?? 0}`}
+              className="mem-input set-numeric"
+              type="number"
+              min={0}
+              step={1024}
+              defaultValue={String(agent.contextCompressionThresholdBytes ?? 0)}
+              disabled={busy}
+              onBlur={(e) => {
+                const next = sanitizeInteger(Number(e.currentTarget.value), 0);
+                if (next !== sanitizeInteger(agent.contextCompressionThresholdBytes ?? 0, 0)) void apply(() => setContextCompression({ thresholdBytes: next }));
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") e.currentTarget.blur();
+              }}
+            />
+          </SettingsField>
+          <SettingsField label={t("settings.contextCompressionMaxBytes")} hint={t("settings.contextCompressionMaxBytesHint")}>
+            <input
+              key={`context-compression-max-${agent.contextCompressionMaxBytes ?? 0}`}
+              className="mem-input set-numeric"
+              type="number"
+              min={0}
+              step={1024}
+              defaultValue={String(agent.contextCompressionMaxBytes ?? 0)}
+              disabled={busy}
+              onBlur={(e) => {
+                const next = sanitizeInteger(Number(e.currentTarget.value), 0);
+                if (next !== sanitizeInteger(agent.contextCompressionMaxBytes ?? 0, 0)) void apply(() => setContextCompression({ maxBytes: next }));
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") e.currentTarget.blur();
+              }}
+            />
           </SettingsField>
           <SettingsField label={t("settings.reasoningLanguage")} hint={t("settings.reasoningLanguageHint")}>
             <div className="set-seg">
@@ -3587,6 +3691,7 @@ type ProviderAccessGroup = {
   builtIn: boolean;
   providers: ProviderView[];
   apiKeyEnv: string;
+  credentialEnv: string;
   authType: string;
   keySet: boolean;
   baseUrl: string;
@@ -3842,7 +3947,7 @@ function ProviderAccessCard({
         <span>{group.kind}</span>
         <span>{group.baseUrl}</span>
         <span>{authTypeLabel(group.authType, t)}</span>
-        <span>{group.apiKeyEnv || t("common.none")}</span>
+        <span>{group.credentialEnv || t("common.none")}</span>
       </div>
 
       <div className="provider-card-block">
@@ -4009,6 +4114,7 @@ function providerAccessGroups(providers: ProviderView[], t: ReturnType<typeof us
       existing.providers.push(p);
       existing.keySet = existing.keySet || p.keySet;
       existing.models = uniqueStrings([...existing.models, ...p.models]);
+      existing.credentialEnv = existing.credentialEnv || providerCredentialEnv(p);
       continue;
     }
     groups.set(id, {
@@ -4018,6 +4124,7 @@ function providerAccessGroups(providers: ProviderView[], t: ReturnType<typeof us
       builtIn,
       providers: [p],
       apiKeyEnv: p.apiKeyEnv,
+      credentialEnv: providerCredentialEnv(p),
       authType: p.authType,
       keySet: p.keySet,
       baseUrl: p.baseUrl,

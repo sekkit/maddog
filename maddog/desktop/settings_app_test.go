@@ -65,6 +65,43 @@ func TestProviderViewFromEntry_FiltersNonChatModels(t *testing.T) {
 	}
 }
 
+func TestSettingsSurfacesContextCompressionDefaults(t *testing.T) {
+	got := NewApp().Settings()
+
+	if got.Agent.ContextCompressionPolicy != "auto" {
+		t.Fatalf("context compression policy = %q, want auto", got.Agent.ContextCompressionPolicy)
+	}
+	if got.Agent.ContextCompressionThresholdBytes <= 0 {
+		t.Fatalf("context compression threshold = %d, want positive default", got.Agent.ContextCompressionThresholdBytes)
+	}
+	if got.Agent.ContextCompressionMaxBytes <= 0 {
+		t.Fatalf("context compression max bytes = %d, want positive default", got.Agent.ContextCompressionMaxBytes)
+	}
+}
+
+func TestSetContextCompressionSavesUserConfig(t *testing.T) {
+	cfgDir := t.TempDir()
+	t.Setenv("MADDOG_CONFIG_DIR", cfgDir)
+
+	app := NewApp()
+	if err := app.SetContextCompression("off", 2048, 1024); err != nil {
+		t.Fatalf("SetContextCompression: %v", err)
+	}
+
+	got := app.Settings()
+	if got.Agent.ContextCompressionPolicy != "off" ||
+		got.Agent.ContextCompressionThresholdBytes != 2048 ||
+		got.Agent.ContextCompressionMaxBytes != 1024 {
+		t.Fatalf("settings context compression = policy:%q threshold:%d max:%d", got.Agent.ContextCompressionPolicy, got.Agent.ContextCompressionThresholdBytes, got.Agent.ContextCompressionMaxBytes)
+	}
+	cfg := config.LoadForEdit(config.UserConfigPath())
+	if cfg.Agent.ContextCompression.Policy != "off" ||
+		cfg.Agent.ContextCompression.ThresholdBytes != 2048 ||
+		cfg.Agent.ContextCompression.MaxBytes != 1024 {
+		t.Fatalf("saved config context compression = %+v", cfg.Agent.ContextCompression)
+	}
+}
+
 func TestFetchProviderModelsFiltersNonChatModels(t *testing.T) {
 	t.Setenv("TEST_PROVIDER_KEY", "test-key")
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -98,6 +135,57 @@ func TestFetchProviderModelsFiltersNonChatModels(t *testing.T) {
 	want := []string{"mimo-v2.5-pro"}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("FetchProviderModels = %v, want %v", got, want)
+	}
+}
+
+func TestFetchProviderModelsPreservesWorkloadIdentityProbeFields(t *testing.T) {
+	t.Setenv("OPENAI_IDENTITY_TOKEN", "external-oidc-jwt")
+	var gotTokenBody map[string]string
+	var gotAuth string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/oauth/token":
+			if err := json.NewDecoder(r.Body).Decode(&gotTokenBody); err != nil {
+				t.Fatalf("decode token request: %v", err)
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"access_token": "probe-access-token",
+				"token_type":   "bearer",
+			})
+		case "/models":
+			gotAuth = r.Header.Get("Authorization")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": []map[string]string{{"id": "gpt-5.5"}},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	got, err := NewApp().FetchProviderModels(ProviderView{
+		Name:               "official-openai",
+		Kind:               "openai",
+		BaseURL:            srv.URL,
+		AuthType:           "workload_identity",
+		IdentityEnv:        "OPENAI_IDENTITY_TOKEN",
+		IdentityProviderID: "wip_openai",
+		ServiceAcctID:      "svc_openai",
+		SubjectTokenType:   "urn:ietf:params:oauth:token-type:id_token",
+		TokenURL:           srv.URL + "/oauth/token",
+	})
+	if err != nil {
+		t.Fatalf("FetchProviderModels: %v", err)
+	}
+	if gotTokenBody["service_account_id"] != "svc_openai" || gotTokenBody["subject_token_type"] != "urn:ietf:params:oauth:token-type:id_token" {
+		t.Fatalf("token request = %+v", gotTokenBody)
+	}
+	if gotAuth != "Bearer probe-access-token" {
+		t.Fatalf("Authorization = %q, want exchanged token", gotAuth)
+	}
+	if !reflect.DeepEqual(got, []string{"gpt-5.5"}) {
+		t.Fatalf("FetchProviderModels = %v, want [gpt-5.5]", got)
 	}
 }
 
@@ -172,6 +260,98 @@ func TestSaveProviderPreservesOpenAIWorkloadIdentityFields(t *testing.T) {
 	t.Fatalf("Settings() missing saved provider: %+v", view.Providers)
 }
 
+func TestSettingsProviderProfilesAnnotateRolesAuthAndGateway(t *testing.T) {
+	isolateDesktopUserDirs(t)
+	t.Setenv("ANTHROPIC_TOKEN", "frontier-token")
+	t.Setenv("ICODEEASY_API_KEY", "")
+	t.Setenv("SMALL_API_KEY", "")
+
+	app := NewApp()
+	if err := app.applyConfigChange(func(c *config.Config) error {
+		c.DefaultModel = "icodeeasy/gpt-4o-mini"
+		c.Agent.FrontierModel = "anthropic/claude-3-5-sonnet"
+		c.Agent.UpgradeEnabled = true
+		c.Agent.FrontierBudget = 1234
+		c.Agent.SubagentModel = "small/qwen2.5-coder"
+		c.Desktop.ProviderAccess = []string{"icodeeasy", "anthropic", "small"}
+		c.Providers = []config.ProviderEntry{
+			{
+				Name: "icodeeasy", Kind: "openai", BaseURL: "https://api.icodeeasy.com/v1",
+				Models: []string{"gpt-4o-mini"}, Default: "gpt-4o-mini", APIKeyEnv: "ICODEEASY_API_KEY",
+			},
+			{
+				Name: "anthropic", Kind: "anthropic", BaseURL: "https://api.anthropic.com",
+				Models: []string{"claude-3-5-sonnet"}, Default: "claude-3-5-sonnet",
+				AuthType: "bearer", AuthTokenEnv: "ANTHROPIC_TOKEN",
+			},
+			{
+				Name: "small", Kind: "openai", BaseURL: "https://small.local/v1",
+				Models: []string{"qwen2.5-coder"}, Default: "qwen2.5-coder", APIKeyEnv: "SMALL_API_KEY",
+			},
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("applyConfigChange: %v", err)
+	}
+
+	view := app.Settings()
+	providers := providerViewsByName(view.Providers)
+
+	defaultProvider := providers["icodeeasy"]
+	if !containsString(defaultProvider.Roles, "default") {
+		t.Fatalf("icodeeasy roles = %v, want default", defaultProvider.Roles)
+	}
+	if defaultProvider.Gateway != "openai-compatible" {
+		t.Fatalf("icodeeasy gateway = %q, want openai-compatible", defaultProvider.Gateway)
+	}
+	if defaultProvider.CredentialStatus != "missing" || defaultProvider.CredentialEnv != "ICODEEASY_API_KEY" {
+		t.Fatalf("icodeeasy credential = %q/%q, want missing ICODEEASY_API_KEY", defaultProvider.CredentialStatus, defaultProvider.CredentialEnv)
+	}
+
+	frontierProvider := providers["anthropic"]
+	if !containsString(frontierProvider.Roles, "frontier") {
+		t.Fatalf("anthropic roles = %v, want frontier", frontierProvider.Roles)
+	}
+	if frontierProvider.AuthMode != "bearer" || frontierProvider.CredentialStatus != "configured" {
+		t.Fatalf("anthropic auth = %q/%q, want bearer configured", frontierProvider.AuthMode, frontierProvider.CredentialStatus)
+	}
+	if frontierProvider.FrontierBudget != 1234 {
+		t.Fatalf("anthropic frontier budget = %d, want 1234", frontierProvider.FrontierBudget)
+	}
+
+	smallProvider := providers["small"]
+	if !containsString(smallProvider.Roles, "small") {
+		t.Fatalf("small roles = %v, want small", smallProvider.Roles)
+	}
+	if smallProvider.SmallModelEligible {
+		t.Fatalf("small model provider with missing credential should not be eligible: %+v", smallProvider)
+	}
+}
+
+func TestSettingsProviderProfilesWarnOnDanglingFrontierRef(t *testing.T) {
+	isolateDesktopUserDirs(t)
+
+	app := NewApp()
+	if err := app.applyConfigChange(func(c *config.Config) error {
+		c.DefaultModel = "icodeeasy/gpt-4o-mini"
+		c.Agent.FrontierModel = "missing-provider/claude"
+		c.Agent.UpgradeEnabled = true
+		c.Providers = []config.ProviderEntry{{
+			Name: "icodeeasy", Kind: "openai", BaseURL: "https://api.icodeeasy.com/v1",
+			Models: []string{"gpt-4o-mini"}, Default: "gpt-4o-mini", APIKeyEnv: "ICODEEASY_API_KEY",
+		}}
+		c.Desktop.ProviderAccess = []string{"icodeeasy"}
+		return nil
+	}); err != nil {
+		t.Fatalf("applyConfigChange: %v", err)
+	}
+
+	view := app.Settings()
+	if !containsSubstring(view.ProviderWarnings, "frontier_model missing-provider/claude") {
+		t.Fatalf("provider warnings = %v, want dangling frontier warning", view.ProviderWarnings)
+	}
+}
+
 func TestOfficialMimoAPITemplateIncludesVisionModels(t *testing.T) {
 	entries, keyEnv, err := officialProviderTemplate("mimo-api")
 	if err != nil {
@@ -189,6 +369,32 @@ func TestOfficialMimoAPITemplateIncludesVisionModels(t *testing.T) {
 	if got.DefaultModel() != "mimo-v2.5-pro" {
 		t.Fatalf("mimo-api default = %q, want mimo-v2.5-pro", got.DefaultModel())
 	}
+}
+
+func providerViewsByName(providers []ProviderView) map[string]ProviderView {
+	out := make(map[string]ProviderView, len(providers))
+	for _, p := range providers {
+		out[p.Name] = p
+	}
+	return out
+}
+
+func containsString(values []string, want string) bool {
+	for _, v := range values {
+		if v == want {
+			return true
+		}
+	}
+	return false
+}
+
+func containsSubstring(values []string, want string) bool {
+	for _, v := range values {
+		if strings.Contains(v, want) {
+			return true
+		}
+	}
+	return false
 }
 
 func TestSetAgentParamsPersistsStepLimitsToUserConfig(t *testing.T) {

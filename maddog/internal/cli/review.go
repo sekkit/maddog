@@ -11,6 +11,7 @@ import (
 	"maddog/internal/boot"
 	"maddog/internal/config"
 	"maddog/internal/event"
+	reviewrules "maddog/internal/review"
 	"maddog/internal/skill"
 	"maddog/internal/tool"
 )
@@ -132,23 +133,53 @@ func getReviewDiff(base, commit string) (string, error) {
 }
 
 func buildReviewTask(diff string, extra string) string {
+	report := reviewrules.AnalyzeUnifiedDiff(diff, reviewrules.Options{})
+	safeDiff := reviewrules.RedactSecrets(diff)
+	rulePrompt := reviewrules.BuildLLMPrompt(report, reviewrules.PromptOptions{
+		Task:                "review pending changes",
+		CodeIntelligence:    reviewChangedFileContext(report),
+		MaxFindingEvidence:  160,
+		MaxContextFragments: 6,
+	})
 	var b strings.Builder
 	b.WriteString("Review the following changes. ")
 	if extra != "" {
 		b.WriteString(extra)
 		b.WriteString(" ")
 	}
+	b.WriteString("First use this deterministic rules report as grounded input, then explain/prioritize it and add only high-confidence diff-backed findings.\n\n")
+	b.WriteString(rulePrompt)
+	b.WriteString("\n\n")
 	b.WriteString("The diff is:\n\n```diff\n")
 	// Truncate huge diffs to protect the review subagent's context budget.
 	const maxLen = 16000
-	if len(diff) > maxLen {
-		b.WriteString(diff[:maxLen])
+	if len(safeDiff) > maxLen {
+		b.WriteString(safeDiff[:maxLen])
 		b.WriteString("\n```\n\n(diff truncated at ")
 		fmt.Fprint(&b, maxLen)
 		b.WriteString(" chars — focus on the changes shown)")
 	} else {
-		b.WriteString(diff)
+		b.WriteString(safeDiff)
 		b.WriteString("\n```")
 	}
 	return b.String()
+}
+
+func reviewChangedFileContext(report reviewrules.Report) []string {
+	if len(report.Findings) == 0 {
+		return nil
+	}
+	seen := map[string]bool{}
+	out := []string{}
+	for _, finding := range report.Findings {
+		if finding.File == "" || seen[finding.File] {
+			continue
+		}
+		seen[finding.File] = true
+		out = append(out, "changed file with deterministic finding: "+finding.File)
+		if len(out) >= 6 {
+			break
+		}
+	}
+	return out
 }

@@ -123,3 +123,26 @@ func TestMetricsSinkAccumulatesMechanismEvents(t *testing.T) {
 		t.Fatalf("tool metrics = calls:%d errors:%d trunc:%d", s.m.ToolCalls, s.m.ToolErrors, s.m.ToolTruncations)
 	}
 }
+
+func TestMetricsSinkAccumulatesCompressionSavings(t *testing.T) {
+	s := &metricsSink{inner: event.Discard}
+
+	s.Emit(event.Event{Kind: event.ToolResult, Tool: event.Tool{Compression: &event.Compression{
+		RawChars:         1000,
+		CompressedChars:  250,
+		SavedChars:       750,
+		RawTokens:        250,
+		CompressedTokens: 63,
+		SavedTokens:      187,
+	}}})
+
+	if s.m.ToolCompressionEvents != 1 {
+		t.Fatalf("compression events = %d, want 1", s.m.ToolCompressionEvents)
+	}
+	if s.m.ToolCompressionRawTokens != 250 || s.m.ToolCompressionSavedTokens != 187 {
+		t.Fatalf("compression token metrics = raw:%d saved:%d", s.m.ToolCompressionRawTokens, s.m.ToolCompressionSavedTokens)
+	}
+	if s.m.ToolCompressionRawChars != 1000 || s.m.ToolCompressionSavedChars != 750 {
+		t.Fatalf("compression char metrics = raw:%d saved:%d", s.m.ToolCompressionRawChars, s.m.ToolCompressionSavedChars)
+	}
+}

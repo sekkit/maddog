@@ -90,6 +90,9 @@ func Run(args []string, version string) int {
 	case "codegraph":
 		configureCLIThemeFromConfigNoProbe()
 		return codegraphCommand(rest)
+	case "skilleval":
+		configureCLIThemeFromConfigNoProbe()
+		return skillevalCommand(rest)
 	case "doctor":
 		configureCLIThemeFromConfigNoProbe()
 		return doctorCommand(rest, version)

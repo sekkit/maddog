@@ -30,12 +30,25 @@ function formatToolDuration(ms?: number): string {
   return `${Math.round(ms)} ms`;
 }
 
+function formatCompactCount(n?: number): string {
+  if (typeof n !== "number" || !Number.isFinite(n) || n <= 0) return "";
+  if (n >= 1000) {
+    const value = Math.round((n / 1000) * 10) / 10;
+    return `${Number.isInteger(value) ? value.toFixed(0) : value}k`;
+  }
+  return String(Math.round(n));
+}
+
 /** Returns the first n lines of text and the total line count. */
 function splitPreview(text: string, n: number): { preview: string; total: number; hasMore: boolean } {
   const lines = text.split("\n");
   const total = lines.length;
   if (total <= n) return { preview: text, total, hasMore: false };
   return { preview: lines.slice(0, n).join("\n"), total, hasMore: true };
+}
+
+export function rawToolResultNoteKey(rawUnavailable?: boolean): "tool.rawUnavailable" | "" {
+  return rawUnavailable ? "tool.rawUnavailable" : "";
 }
 
 // ToolCard renders one tool call. `subcalls` are sub-agent calls nested under a
@@ -62,9 +75,10 @@ export const ToolCard = memo(function ToolCard({ item, subcalls }: { item: ToolI
   const [showAll, setShowAll] = useState(false);
   // Lazy-load full tool data from the backend when the card is expanded and
   // the in-memory copy was archived for memory efficiency.
-  const [fullData, setFullData] = useState<{ args: string; output?: string } | null>(null);
+  const [fullData, setFullData] = useState<{ args: string; output?: string; rawUnavailable?: boolean } | null>(null);
   const effectiveArgs = fullData?.args ?? item.args;
   const effectiveOutput = fullData?.output ?? item.output;
+  const rawUnavailableNote = rawToolResultNoteKey(fullData?.rawUnavailable ?? item.rawUnavailable);
   const diffs = diffsFor(item.name, effectiveArgs);
   const subject = subjectOf(item.name, effectiveArgs);
   // Reset cached fullData when the item identity changes (e.g. after rewind).
@@ -109,6 +123,11 @@ export const ToolCard = memo(function ToolCard({ item, subcalls }: { item: ToolI
 
   const duration = item.status === "running" ? "" : formatToolDuration(item.durationMs);
   const summary = item.status === "running" ? "" : item.summary || summarize(item.name, effectiveArgs, effectiveOutput, item.error);
+  const compressionTokens = formatCompactCount(item.compression?.savedTokens);
+  const compressionLabel = compressionTokens ? t("tool.compressedTokens", { tokens: compressionTokens }) : "";
+  const compressionTitle = compressionTokens
+    ? t("tool.compressedTitle", { strategy: item.compression?.strategy || "compression", tokens: compressionTokens })
+    : "";
 
   // GSAP-driven collapse/expand for tool body
   const toolBodyRef = useRef<HTMLDivElement>(null);
@@ -132,6 +151,7 @@ export const ToolCard = memo(function ToolCard({ item, subcalls }: { item: ToolI
           {subject && <span className="tool__subject">{subject}</span>}
         </span>
         {profileText && <span className="tool__profile">{profileText}</span>}
+        {compressionLabel && <span className="tool__compression" title={compressionTitle}>{compressionLabel}</span>}
         {summary && <span className="tool__summary">{summary}</span>}
         {duration && <span className="tool__duration">{duration}</span>}
         {hasBody && (
@@ -183,6 +203,7 @@ export const ToolCard = memo(function ToolCard({ item, subcalls }: { item: ToolI
               </button>
             )}
             {item.truncated && <div className="tool__note">{t("tool.truncated")}</div>}
+            {rawUnavailableNote && <div className="tool__note">{t(rawUnavailableNote)}</div>}
           </>
         )}
 
@@ -193,6 +214,7 @@ export const ToolCard = memo(function ToolCard({ item, subcalls }: { item: ToolI
               <>
                 <CodeViewer value={effectiveOutput} maxHeight={280} />
                 {item.truncated && <div className="tool__note">{t("tool.truncated")}</div>}
+                {rawUnavailableNote && <div className="tool__note">{t(rawUnavailableNote)}</div>}
               </>
             )}
           </>

@@ -62,6 +62,7 @@ type Config struct {
 	Plugins           []PluginEntry           `toml:"plugins"`
 	Skills            SkillsConfig            `toml:"skills"`
 	Codegraph         CodegraphConfig         `toml:"codegraph"`
+	CodeIntelligence  CodeIntelligenceConfig  `toml:"code_intelligence"`
 	BuiltInMCP        BuiltInMCPConfig        `toml:"builtin_mcp"`
 	BuiltInMCPUpdates BuiltInMCPUpdatesConfig `toml:"builtin_mcp_updates"`
 	Statusline        StatuslineConfig        `toml:"statusline"`
@@ -264,17 +265,21 @@ var defaultDesktopStatusBarItems = []string{
 }
 
 var knownDesktopStatusBarItems = map[string]bool{
-	"model":          true,
-	"cache":          true,
-	"cache_avg":      true,
-	"session_tokens": true,
-	"turn_tokens":    true,
-	"turn_cost":      true,
-	"session_turns":  true,
-	"context":        true,
-	"compact":        true,
-	"cost":           true,
-	"balance":        true,
+	"model":           true,
+	"cache":           true,
+	"cache_avg":       true,
+	"session_tokens":  true,
+	"turn_tokens":     true,
+	"turn_cost":       true,
+	"session_turns":   true,
+	"context":         true,
+	"compact":         true,
+	"cost":            true,
+	"balance":         true,
+	"provider":        true,
+	"frontier_budget": true,
+	"provider_health": true,
+	"rate_limit":      true,
 }
 
 // DefaultDesktopStatusBarItems returns the default ordered visible desktop
@@ -423,6 +428,28 @@ func (c CodegraphConfig) ShouldAutoStart() bool {
 
 func (c CodegraphConfig) ResolvedTier() string {
 	return "background"
+}
+
+// CodeIntelligenceConfig declares optional external code-intelligence backends.
+// The built-in CodeGraph backend remains configured by [codegraph] and is always
+// considered separately so an external MCP cannot silently replace it.
+type CodeIntelligenceConfig struct {
+	Backends []CodeIntelligenceBackendConfig `toml:"backends"`
+}
+
+// CodeIntelligenceBackendConfig maps an MCP server's tools onto Maddog's
+// abstract code-intelligence capabilities. Enabled nil means enabled; false
+// keeps the backend visible to management surfaces but out of the usable set.
+type CodeIntelligenceBackendConfig struct {
+	Name    string            `toml:"name"`
+	Kind    string            `toml:"kind"`
+	Server  string            `toml:"server"`
+	Enabled *bool             `toml:"enabled"`
+	Tools   map[string]string `toml:"tools"`
+}
+
+func (c CodeIntelligenceBackendConfig) IsEnabled() bool {
+	return c.Enabled == nil || *c.Enabled
 }
 
 // BuiltInMCPConfig controls Maddog-shipped MCP servers that require no user
@@ -890,6 +917,48 @@ type AgentConfig struct {
 	// ColdResumePrune elides stale tool results when a session reopens past the
 	// provider cache window. nil = default enabled.
 	ColdResumePrune *bool `toml:"cold_resume_prune"`
+	// ContextCompression controls deterministic compression of high-volume tool
+	// outputs before they enter model context.
+	ContextCompression ContextCompressionConfig `toml:"context_compression"`
+}
+
+type ContextCompressionConfig struct {
+	Policy         string `toml:"policy"`
+	ThresholdBytes int    `toml:"threshold_bytes"`
+	MaxBytes       int    `toml:"max_bytes"`
+}
+
+const (
+	DefaultContextCompressionPolicy         = "auto"
+	DefaultContextCompressionThresholdBytes = 8 * 1024
+	DefaultContextCompressionMaxBytes       = 4 * 1024
+)
+
+func (c ContextCompressionConfig) EffectivePolicy() string {
+	return contextCompressionPolicy(c.Policy)
+}
+
+func (c ContextCompressionConfig) EffectiveThresholdBytes() int {
+	if c.ThresholdBytes > 0 {
+		return c.ThresholdBytes
+	}
+	return DefaultContextCompressionThresholdBytes
+}
+
+func (c ContextCompressionConfig) EffectiveMaxBytes() int {
+	if c.MaxBytes > 0 {
+		return c.MaxBytes
+	}
+	return DefaultContextCompressionMaxBytes
+}
+
+func contextCompressionPolicy(policy string) string {
+	switch strings.ToLower(strings.TrimSpace(policy)) {
+	case "off", "aggressive":
+		return strings.ToLower(strings.TrimSpace(policy))
+	default:
+		return DefaultContextCompressionPolicy
+	}
 }
 
 // ProviderEntry declares a model provider instance. ContextWindow is the model's
@@ -1237,6 +1306,11 @@ func Default() *Config {
 			SoftCompactRatio:          0.5,
 			CompactRatio:              0.8,
 			CompactForceRatio:         0.9,
+			ContextCompression: ContextCompressionConfig{
+				Policy:         DefaultContextCompressionPolicy,
+				ThresholdBytes: DefaultContextCompressionThresholdBytes,
+				MaxBytes:       DefaultContextCompressionMaxBytes,
+			},
 		},
 		Skills: SkillsConfig{
 			RuntimeOrchestration: true,

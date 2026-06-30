@@ -24,7 +24,8 @@ export type EventKind =
   | "budget_exceeded"
   | "skill_promoted"
   | "steer"
-  | "advisor";
+  | "advisor"
+  | "provider_status";
 
 export interface WireCompaction {
   trigger?: string; // "auto" | "manual"
@@ -34,8 +35,35 @@ export interface WireCompaction {
 }
 
 export interface WireProfile {
+  role?: string;
   model?: string;
   effort?: string;
+  budgetUsed?: number;
+  budgetLimit?: number;
+  budgetRemaining?: number;
+}
+
+export interface WireProviderStatus {
+  role?: string;
+  health?: string;
+  authStatus?: string;
+  rateLimit?: string;
+  balanceStatus?: string;
+  lastError?: string;
+  balanceAvailable?: boolean;
+  balanceDisplay?: string;
+}
+
+export interface WireCompression {
+  rawRef?: string;
+  strategy?: string;
+  summary?: string;
+  rawChars?: number;
+  compressedChars?: number;
+  savedChars?: number;
+  rawTokens?: number;
+  compressedTokens?: number;
+  savedTokens?: number;
 }
 
 export interface WireTool {
@@ -46,10 +74,12 @@ export interface WireTool {
   err?: string;
   readOnly: boolean;
   truncated?: boolean;
+  rawUnavailable?: boolean;
   durationMs?: number;
   partial?: boolean; // an early dispatch (name only) — a full one with args follows
   parentId?: string; // set on a sub-agent's calls — the parent `task` call's id
   profile?: WireProfile; // subagent model/effort resolved for this call
+  compression?: WireCompression;
 }
 
 export interface WireUsage {
@@ -59,6 +89,8 @@ export interface WireUsage {
   cacheHitTokens: number;
   cacheMissTokens: number;
   reasoningTokens?: number;
+  profile?: WireProfile;
+  providerStatus?: WireProviderStatus;
   // Session-cumulative cache tokens — the status bar shows the aggregate
   // hit-rate (Σhit/Σ(hit+miss)), steadier than the single-turn cacheHitTokens.
   sessionCacheHitTokens: number;
@@ -118,6 +150,7 @@ export interface WireEvent {
   level?: "info" | "warn";
   tool?: WireTool;
   usage?: WireUsage;
+  providerStatus?: WireProviderStatus;
   advisor?: WireAdvisor;
   approval?: WireApproval;
   ask?: WireAsk;
@@ -203,6 +236,13 @@ export interface ContextPanelInfo {
   sessionCurrency?: string;
   // Deprecated compatibility alias. Prefer sessionCost + sessionCurrency.
   sessionCostUsd?: number;
+  compressionEvents?: number;
+  compressionRawChars?: number;
+  compressionCompressedChars?: number;
+  compressionSavedChars?: number;
+  compressionRawTokens?: number;
+  compressionCompressedTokens?: number;
+  compressionSavedTokens?: number;
   mock?: boolean;
   readFiles: ReadFileRecord[];
   changedFiles: ChangedFileInfo[];
@@ -478,12 +518,69 @@ export interface MCPToolView {
   name: string;
   description: string;
 }
+export interface CodeIntelligenceBackendCapabilities {
+  SymbolSearch?: boolean;
+  SemanticSearch?: boolean;
+  ContextPack?: boolean;
+  GraphTrace?: boolean;
+  EditRefactor?: boolean;
+  Health?: boolean;
+}
+export interface CodeIntelligenceBenchmarkView {
+  jsonPath?: string;
+  markdownPath?: string;
+  health?: string;
+  failures?: number;
+  updatedAt?: string;
+  error?: string;
+  backends?: CodeIntelligenceBenchmarkBackendView[];
+}
+export interface CodeIntelligenceBenchmarkBackendView {
+  id: string;
+  name?: string;
+  health?: string;
+  failures?: number;
+}
+export interface CodeIntelligenceBackendView {
+  id: string;
+  name: string;
+  kind: "builtin" | "mcp" | string;
+  serverName?: string;
+  status: "ready" | "unknown" | "degraded" | "disabled" | "invalid" | string;
+  lastError?: string;
+  indexStatus?: "initialized" | "not_initialized" | string;
+  enabled: boolean;
+  builtIn?: boolean;
+  configured: boolean;
+  capabilities: CodeIntelligenceBackendCapabilities;
+  toolMapping?: Record<string, string>;
+  toolCount: number;
+  benchmark?: CodeIntelligenceBenchmarkView;
+  benchmarkRunning?: boolean;
+}
 export interface SkillView {
   name: string;
   description: string;
   scope: string;
   runAs: string;
   enabled: boolean;
+}
+export interface SkillCandidateView {
+  hash: string;
+  name: string;
+  description: string;
+  status: "pending" | "promoting" | "rejected" | "promoted" | "rolled_back" | string;
+  sourceTask?: string;
+  sourceBundleId?: string;
+  sourceBundlePath?: string;
+  validationReason?: string;
+  promotedPath?: string;
+  targetRoot?: string;
+  score?: number;
+  scoreReason?: string;
+  guardrailPass?: boolean;
+  guardrailReason?: string;
+  updatedAt?: string;
 }
 export interface SkillRootSkillView {
   name: string;
@@ -506,6 +603,8 @@ export interface CapabilitiesView {
   servers: ServerView[];
   skills: SkillView[];
   skillRoots: SkillRootView[];
+  skillCandidates?: SkillCandidateView[];
+  codeIntelligenceBackends?: CodeIntelligenceBackendView[];
 }
 export interface BuiltInMCPUpdateResult {
   name: string;
@@ -657,6 +756,14 @@ export interface ProviderView {
   reasoningProtocol: string; // auto|deepseek|openai|none; empty = auto/model registry
   supportedEfforts: string[]; // custom /effort levels; empty = use built-in Kind/BaseURL default
   defaultEffort: string; // /effort level when user picks "auto" or unset; "" = supportedEfforts[0]
+  roles?: string[]; // derived profile roles: default|planner|frontier|small
+  gateway?: string; // openai-official|openai-compatible|anthropic-official|...
+  authMode?: string; // normalized auth mode from the provider entry
+  credentialStatus?: "configured" | "missing" | "none" | string;
+  credentialEnv?: string; // env name only; never a token value
+  frontierBudget?: number;
+  frontierEligible?: boolean;
+  smallModelEligible?: boolean;
 }
 
 // BalanceInfo is the wallet-balance readout (desktop/app.go Balance). available
@@ -707,12 +814,17 @@ export interface NetworkView {
   proxy: NetworkProxyView;
 }
 
+export type ContextCompressionPolicy = "off" | "auto" | "aggressive";
+
 export interface AgentView {
   temperature: number;
   maxSteps: number;
   plannerMaxSteps: number;
   systemPrompt: string;
   coldResumePrune: boolean;
+  contextCompressionPolicy?: ContextCompressionPolicy;
+  contextCompressionThresholdBytes?: number;
+  contextCompressionMaxBytes?: number;
   reasoningLanguage: string; // "auto" | "zh" | "en"
 }
 
@@ -877,6 +989,7 @@ export interface SettingsView {
   autoPlan: string;
   providers: ProviderView[];
   officialProviders: ProviderView[];
+  providerWarnings?: string[];
   permissions: PermissionsView;
   sandbox: SandboxView;
   network: NetworkView;

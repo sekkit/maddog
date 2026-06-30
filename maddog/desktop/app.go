@@ -44,6 +44,7 @@ import (
 	"maddog/internal/plugin"
 	"maddog/internal/provider"
 	"maddog/internal/skill"
+	"maddog/internal/skilleval"
 )
 
 // eventChannel is the Wails runtime event name the frontend subscribes to for the
@@ -90,6 +91,9 @@ type App struct {
 
 	builtInMCPUpdatesMu sync.RWMutex
 	builtInMCPUpdates   map[string]BuiltInMCPUpdateStatus
+
+	codeIntelBenchMu      sync.RWMutex
+	codeIntelBenchRunning map[string]int
 
 	metrics atomic.Pointer[metricsAggregator] // non-nil only when desktop.metrics is opted in; swapped live by SetDesktopMetrics
 
@@ -271,11 +275,12 @@ func (a *App) workspaceMediaMiddleware() func(http.Handler) http.Handler {
 // last session's desktop-tabs.json.
 func NewApp() *App {
 	return &App{
-		tabs:             map[string]*WorkspaceTab{},
-		detachedSessions: map[string]*WorkspaceTab{},
-		mediaTokens:      newMediaTokenStore(),
-		botInstalls:      map[string]*botInstallSession{},
-		botRuntime:       newDesktopBotRuntime(),
+		tabs:                  map[string]*WorkspaceTab{},
+		detachedSessions:      map[string]*WorkspaceTab{},
+		mediaTokens:           newMediaTokenStore(),
+		botInstalls:           map[string]*botInstallSession{},
+		botRuntime:            newDesktopBotRuntime(),
+		codeIntelBenchRunning: map[string]int{},
 	}
 }
 
@@ -2670,9 +2675,11 @@ func (a *App) SlashArgs(input string) SlashArgsResult {
 // CapabilitiesView is the MCP & Skills drawer's data: connected/failed MCP
 // servers and the discoverable skills, the GUI counterpart to `/mcp` + `/skill`.
 type CapabilitiesView struct {
-	Servers    []ServerView    `json:"servers"`
-	Skills     []SkillView     `json:"skills"`
-	SkillRoots []SkillRootView `json:"skillRoots"`
+	Servers                  []ServerView                  `json:"servers"`
+	Skills                   []SkillView                   `json:"skills"`
+	SkillRoots               []SkillRootView               `json:"skillRoots"`
+	SkillCandidates          []SkillCandidateView          `json:"skillCandidates"`
+	CodeIntelligenceBackends []CodeIntelligenceBackendView `json:"codeIntelligenceBackends"`
 }
 
 // ServerView is one MCP server for the drawer. Status is "connected" (with
@@ -2706,6 +2713,41 @@ type ToolView struct {
 	Description string `json:"description"`
 }
 
+type CodeIntelligenceBackendView struct {
+	ID               string                         `json:"id"`
+	Name             string                         `json:"name"`
+	Kind             string                         `json:"kind"`
+	ServerName       string                         `json:"serverName,omitempty"`
+	Status           string                         `json:"status"`
+	LastError        string                         `json:"lastError,omitempty"`
+	IndexStatus      string                         `json:"indexStatus,omitempty"`
+	Enabled          bool                           `json:"enabled"`
+	BuiltIn          bool                           `json:"builtIn,omitempty"`
+	Configured       bool                           `json:"configured"`
+	Capabilities     codegraph.BackendCapabilities  `json:"capabilities"`
+	ToolMapping      map[string]string              `json:"toolMapping,omitempty"`
+	ToolCount        int                            `json:"toolCount"`
+	Benchmark        *CodeIntelligenceBenchmarkView `json:"benchmark,omitempty"`
+	BenchmarkRunning bool                           `json:"benchmarkRunning,omitempty"`
+}
+
+type CodeIntelligenceBenchmarkView struct {
+	JSONPath     string                                 `json:"jsonPath,omitempty"`
+	MarkdownPath string                                 `json:"markdownPath,omitempty"`
+	Health       string                                 `json:"health,omitempty"`
+	Failures     int                                    `json:"failures,omitempty"`
+	UpdatedAt    string                                 `json:"updatedAt,omitempty"`
+	Backends     []CodeIntelligenceBenchmarkBackendView `json:"backends,omitempty"`
+	Error        string                                 `json:"error,omitempty"`
+}
+
+type CodeIntelligenceBenchmarkBackendView struct {
+	ID       string `json:"id"`
+	Name     string `json:"name,omitempty"`
+	Health   string `json:"health,omitempty"`
+	Failures int    `json:"failures,omitempty"`
+}
+
 type BuiltInMCPUpdateResult struct {
 	Name    string `json:"name"`
 	Version string `json:"version"`
@@ -2719,6 +2761,24 @@ type SkillView struct {
 	Scope       string `json:"scope"`
 	RunAs       string `json:"runAs"`
 	Enabled     bool   `json:"enabled"`
+}
+
+type SkillCandidateView struct {
+	Hash             string   `json:"hash"`
+	Name             string   `json:"name"`
+	Description      string   `json:"description"`
+	Status           string   `json:"status"`
+	SourceTask       string   `json:"sourceTask,omitempty"`
+	SourceBundleID   string   `json:"sourceBundleId,omitempty"`
+	SourceBundlePath string   `json:"sourceBundlePath,omitempty"`
+	ValidationReason string   `json:"validationReason,omitempty"`
+	PromotedPath     string   `json:"promotedPath,omitempty"`
+	TargetRoot       string   `json:"targetRoot,omitempty"`
+	Score            *float64 `json:"score,omitempty"`
+	ScoreReason      string   `json:"scoreReason,omitempty"`
+	GuardrailPass    *bool    `json:"guardrailPass,omitempty"`
+	GuardrailReason  string   `json:"guardrailReason,omitempty"`
+	UpdatedAt        string   `json:"updatedAt,omitempty"`
 }
 
 type SkillRootSkillView struct {
@@ -2744,7 +2804,7 @@ type SkillRootView struct {
 // Capabilities projects the session's MCP servers (connected + failed) and skills
 // for the MCP & Skills drawer. Non-nil slices so the frontend can map over them.
 func (a *App) Capabilities() CapabilitiesView {
-	out := CapabilitiesView{Servers: []ServerView{}, Skills: []SkillView{}, SkillRoots: []SkillRootView{}}
+	out := CapabilitiesView{Servers: []ServerView{}, Skills: []SkillView{}, SkillRoots: []SkillRootView{}, SkillCandidates: []SkillCandidateView{}, CodeIntelligenceBackends: []CodeIntelligenceBackendView{}}
 	a.mu.RLock()
 	tab := a.activeTabLocked()
 	a.mu.RUnlock()
@@ -2762,6 +2822,8 @@ func (a *App) Capabilities() CapabilitiesView {
 	}
 	seen := map[string]bool{}
 	connected := map[string]bool{}
+	connectedServers := map[string]plugin.ServerStatus{}
+	failedServers := map[string]plugin.Failure{}
 	retainedDisabled := map[string]ServerView{}
 	var loadedCfg *config.Config
 	configured := map[string]config.PluginEntry{}
@@ -2777,6 +2839,7 @@ func (a *App) Capabilities() CapabilitiesView {
 		for _, s := range h.Servers() {
 			seen[s.Name] = true
 			connected[s.Name] = true
+			connectedServers[s.Name] = s
 			view := ServerView{
 				Name: s.Name, Transport: s.Transport, Status: "connected",
 				Tools: s.Tools, Prompts: s.Prompts, Resources: s.Resources,
@@ -2793,6 +2856,7 @@ func (a *App) Capabilities() CapabilitiesView {
 		}
 		for _, f := range h.Failures() {
 			seen[f.Name] = true
+			failedServers[f.Name] = f
 			view := ServerView{
 				Name: f.Name, Transport: f.Transport, Status: "failed", Error: f.Error,
 			}
@@ -2875,6 +2939,16 @@ func (a *App) Capabilities() CapabilitiesView {
 		}
 	}
 	out.Servers = orderServerViews(out.Servers, order)
+	if loadedCfg != nil {
+		out.CodeIntelligenceBackends = codeIntelligenceBackendViews(
+			codegraph.NewBackendRegistry(loadedCfg),
+			tab.WorkspaceRoot,
+			connectedServers,
+			failedServers,
+			loadCodeIntelligenceBenchmarkView(config.CacheDir()),
+			a.codeIntelligenceBenchmarkRunning(),
+		)
+	}
 
 	a.mu.Lock()
 	for name := range connected {
@@ -2892,7 +2966,200 @@ func (a *App) Capabilities() CapabilitiesView {
 		})
 	}
 	out.SkillRoots = skillRootsView()
+	out.SkillCandidates = skillCandidateViews(tab.WorkspaceRoot)
 	return out
+}
+
+func skillCandidateViews(workspaceRoot string) []SkillCandidateView {
+	candidates, err := skilleval.NewCandidateStore(skillCandidateStoreDir(workspaceRoot)).List()
+	if err != nil {
+		return []SkillCandidateView{}
+	}
+	out := make([]SkillCandidateView, 0, len(candidates))
+	for _, c := range candidates {
+		view := SkillCandidateView{
+			Hash:             c.Hash,
+			Name:             c.Skill.Name,
+			Description:      c.Skill.Description,
+			Status:           string(c.Status),
+			SourceTask:       c.SourceTask,
+			SourceBundleID:   c.SourceBundleID,
+			SourceBundlePath: c.SourceBundlePath,
+			ValidationReason: c.ValidationReason,
+			PromotedPath:     c.PromotedPath,
+			GuardrailReason:  c.GuardrailReason,
+		}
+		targetRoot := filepath.Join(strings.TrimSpace(workspaceRoot), config.ProjectConventionDir, skill.SkillsDirname)
+		if strings.TrimSpace(workspaceRoot) != "" {
+			view.TargetRoot = targetRoot
+		}
+		if c.EvalScore != nil {
+			score := c.EvalScore.Score
+			view.Score = &score
+			view.ScoreReason = c.EvalScore.Reason
+			guardrailPass := c.GuardrailPass
+			view.GuardrailPass = &guardrailPass
+		}
+		if !c.UpdatedAt.IsZero() {
+			view.UpdatedAt = c.UpdatedAt.Format(time.RFC3339)
+		}
+		out = append(out, view)
+	}
+	return out
+}
+
+func skillCandidateStoreDir(workspaceRoot string) string {
+	root := strings.TrimSpace(workspaceRoot)
+	if root == "" {
+		if wd, err := os.Getwd(); err == nil {
+			root = wd
+		}
+	}
+	return filepath.Join(root, config.ProjectConventionDir, "skilleval")
+}
+
+func codeIntelligenceBackendViews(reg codegraph.BackendRegistry, workspaceRoot string, connected map[string]plugin.ServerStatus, failed map[string]plugin.Failure, benchmark CodeIntelligenceBenchmarkView, running map[string]bool) []CodeIntelligenceBackendView {
+	backends := append(reg.Backends(), reg.InvalidBackends()...)
+	out := make([]CodeIntelligenceBackendView, 0, len(backends))
+	for _, backend := range backends {
+		indexStatus := ""
+		if backend.Kind == codegraph.BackendKindBuiltIn {
+			indexStatus = "not_initialized"
+			if codegraph.Initialized(workspaceRoot) {
+				indexStatus = "initialized"
+			}
+		}
+		status := backend.Health.Status
+		lastError := backend.Health.Error
+		toolCount := len(backend.ToolMapping)
+		if backend.Kind == codegraph.BackendKindMCP {
+			if failure, ok := failed[backend.ServerName]; ok {
+				status = codegraph.BackendHealthInvalid
+				lastError = failure.Error
+			} else if server, ok := connected[backend.ServerName]; ok && backend.Health.Status != codegraph.BackendHealthInvalid {
+				status = codegraph.BackendHealthReady
+				lastError = ""
+				toolCount = server.Tools
+			}
+		}
+		view := CodeIntelligenceBackendView{
+			ID:           backend.ID,
+			Name:         backend.Name,
+			Kind:         backend.Kind,
+			ServerName:   backend.ServerName,
+			Status:       status,
+			LastError:    lastError,
+			IndexStatus:  indexStatus,
+			Enabled:      backend.Enabled,
+			BuiltIn:      backend.Kind == codegraph.BackendKindBuiltIn,
+			Configured:   true,
+			Capabilities: backend.Capabilities,
+			ToolMapping:  backend.ToolMapping,
+			ToolCount:    toolCount,
+			Benchmark:    benchmarkViewForBackend(benchmark, backend),
+		}
+		if running[backend.ID] || (backend.ServerName != "" && running[backend.ServerName]) {
+			view.BenchmarkRunning = true
+		}
+		out = append(out, view)
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].BuiltIn != out[j].BuiltIn {
+			return out[i].BuiltIn
+		}
+		return out[i].ID < out[j].ID
+	})
+	return out
+}
+
+func benchmarkViewForBackend(benchmark CodeIntelligenceBenchmarkView, backend codegraph.Backend) *CodeIntelligenceBenchmarkView {
+	if benchmark.JSONPath == "" && benchmark.MarkdownPath == "" && benchmark.Error == "" && len(benchmark.Backends) == 0 {
+		return nil
+	}
+	if benchmark.Error != "" {
+		if backend.ID == codegraph.BuiltInBackendID {
+			return &benchmark
+		}
+		return nil
+	}
+	for _, row := range benchmark.Backends {
+		if row.ID == backend.ID || (backend.ServerName != "" && row.ID == backend.ServerName) {
+			return &benchmark
+		}
+	}
+	return nil
+}
+
+func loadCodeIntelligenceBenchmarkView(cacheDir string) CodeIntelligenceBenchmarkView {
+	if strings.TrimSpace(cacheDir) == "" {
+		return CodeIntelligenceBenchmarkView{}
+	}
+	benchDir := filepath.Join(cacheDir, "codeintel-bench")
+	jsonPath := filepath.Join(benchDir, codegraph.BenchmarkLatestJSONName)
+	raw, err := os.ReadFile(jsonPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return CodeIntelligenceBenchmarkView{}
+		}
+		return CodeIntelligenceBenchmarkView{JSONPath: jsonPath, Error: err.Error()}
+	}
+	var report codegraph.BenchmarkReport
+	if err := json.Unmarshal(raw, &report); err != nil {
+		return CodeIntelligenceBenchmarkView{JSONPath: jsonPath, Error: err.Error()}
+	}
+	out := CodeIntelligenceBenchmarkView{
+		JSONPath:     jsonPath,
+		MarkdownPath: filepath.Join(benchDir, codegraph.BenchmarkLatestMarkdownName),
+		UpdatedAt:    report.StartedAt.UTC().Format(time.RFC3339),
+		Backends:     make([]CodeIntelligenceBenchmarkBackendView, 0, len(report.Backends)),
+	}
+	if _, err := os.Stat(out.MarkdownPath); err != nil {
+		out.MarkdownPath = ""
+	}
+	for _, backend := range report.Backends {
+		out.Backends = append(out.Backends, CodeIntelligenceBenchmarkBackendView{
+			ID:       backend.ID,
+			Name:     backend.Name,
+			Health:   backend.Health,
+			Failures: backend.Failures,
+		})
+		out.Failures += backend.Failures
+		if out.Health == "" || backend.Health == codegraph.BackendHealthDegraded {
+			out.Health = backend.Health
+		}
+	}
+	return out
+}
+
+func (a *App) codeIntelligenceBenchmarkRunning() map[string]bool {
+	a.codeIntelBenchMu.RLock()
+	defer a.codeIntelBenchMu.RUnlock()
+	out := make(map[string]bool, len(a.codeIntelBenchRunning))
+	for id, running := range a.codeIntelBenchRunning {
+		out[id] = running > 0
+	}
+	return out
+}
+
+func (a *App) setCodeIntelligenceBenchmarkRunning(id string, running bool) {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		id = "codegraph"
+	}
+	a.codeIntelBenchMu.Lock()
+	defer a.codeIntelBenchMu.Unlock()
+	if a.codeIntelBenchRunning == nil {
+		a.codeIntelBenchRunning = map[string]int{}
+	}
+	if running {
+		a.codeIntelBenchRunning[id]++
+		return
+	}
+	if a.codeIntelBenchRunning[id] <= 1 {
+		delete(a.codeIntelBenchRunning, id)
+		return
+	}
+	a.codeIntelBenchRunning[id]--
 }
 
 func withPluginConfig(v ServerView, p config.PluginEntry) ServerView {
@@ -3087,6 +3354,53 @@ func (a *App) SetSkillEnabled(name string, enabled bool) error {
 	return a.applyConfigChange(func(c *config.Config) error {
 		return c.SetSkillEnabled(name, enabled)
 	})
+}
+
+func (a *App) PromoteSkillCandidate(hash string) (string, error) {
+	root := a.activeWorkspaceRoot()
+	if strings.TrimSpace(root) == "" {
+		return "", fmt.Errorf("no active workspace")
+	}
+	store := skilleval.NewCandidateStore(skillCandidateStoreDir(root))
+	home, _ := os.UserHomeDir()
+	activeStore := skill.New(skill.Options{HomeDir: home, ProjectRoot: root})
+	_, path, err := store.Promote(strings.TrimSpace(hash), activeStore, skill.ScopeProject)
+	if err != nil {
+		return "", err
+	}
+	if tabID := a.activeTabIDSnapshot(); tabID != "" {
+		a.noticeForTab(tabID, fmt.Sprintf("promoted skill candidate to %s", path))
+	}
+	if err := a.rebuild(); err != nil {
+		return "", err
+	}
+	return path, nil
+}
+
+func (a *App) RollbackSkillCandidate(hash, reason string) error {
+	root := a.activeWorkspaceRoot()
+	if strings.TrimSpace(root) == "" {
+		return fmt.Errorf("no active workspace")
+	}
+	store := skilleval.NewCandidateStore(skillCandidateStoreDir(root))
+	home, _ := os.UserHomeDir()
+	activeStore := skill.New(skill.Options{HomeDir: home, ProjectRoot: root})
+	if _, err := store.Rollback(strings.TrimSpace(hash), activeStore, reason); err != nil {
+		return err
+	}
+	if tabID := a.activeTabIDSnapshot(); tabID != "" {
+		a.noticeForTab(tabID, "rolled back promoted skill candidate")
+	}
+	return a.rebuild()
+}
+
+func (a *App) RejectSkillCandidate(hash, reason string) error {
+	root := a.activeWorkspaceRoot()
+	if strings.TrimSpace(root) == "" {
+		return fmt.Errorf("no active workspace")
+	}
+	_, err := skilleval.NewCandidateStore(skillCandidateStoreDir(root)).Reject(strings.TrimSpace(hash), reason)
+	return err
 }
 
 func normalizeSkillPath(path string) string {
@@ -3455,6 +3769,113 @@ func (a *App) SetMCPServerEnabled(name string, enabled bool) error {
 	}
 	tab.Ctrl.DisconnectMCPServer(name)
 	return nil
+}
+
+// SetCodeIntelligenceBackendEnabled is the GUI-facing backend toggle. Built-in
+// CodeGraph reuses the persisted codegraph config path; external MCP backends map
+// to their server name and use the existing per-session MCP toggle.
+func (a *App) SetCodeIntelligenceBackendEnabled(id string, enabled bool) error {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return fmt.Errorf("code intelligence backend id is required")
+	}
+	return a.SetMCPServerEnabled(id, enabled)
+}
+
+// RetryCodeIntelligenceBackend performs a best-effort health reconnect. Failures
+// are recorded on the MCP host by ReconnectMCPServer so Capabilities can render
+// degraded state; the GUI action itself stays non-blocking from the user's point
+// of view.
+func (a *App) RetryCodeIntelligenceBackend(id string) error {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return fmt.Errorf("code intelligence backend id is required")
+	}
+	if err := a.ReconnectMCPServer(id); err != nil {
+		return nil
+	}
+	return nil
+}
+
+// RunCodeIntelligenceBenchmark starts a background benchmark and updates the
+// latest codeintel-bench report consumed by Capabilities and doctor.
+func (a *App) RunCodeIntelligenceBenchmark(id string) error {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		id = "codegraph"
+	}
+	tab := a.activeTab()
+	if tab == nil || tab.Ctrl == nil {
+		return fmt.Errorf("no active session")
+	}
+	root := tab.WorkspaceRoot
+	if strings.TrimSpace(root) == "" {
+		if cwd, err := os.Getwd(); err == nil {
+			root = cwd
+		}
+	}
+	cacheDir := config.CacheDir()
+	if strings.TrimSpace(cacheDir) == "" {
+		return fmt.Errorf("maddog cache dir is unavailable")
+	}
+	a.setCodeIntelligenceBenchmarkRunning(id, true)
+	go func() {
+		started := time.Now()
+		defer func() {
+			if remaining := 150*time.Millisecond - time.Since(started); remaining > 0 {
+				time.Sleep(remaining)
+			}
+			a.setCodeIntelligenceBenchmarkRunning(id, false)
+		}()
+		ctx, cancel := context.WithTimeout(a.bootContext(), 2*time.Minute)
+		defer cancel()
+		cases := []codegraph.BenchmarkCase{{
+			Name:        "symbol search",
+			Query:       "RunBenchmark",
+			Capability:  codegraph.BenchmarkCapabilitySymbolSearch,
+			ExpectedIDs: []string{"runner.go"},
+			TopK:        5,
+		}}
+		report := codegraph.RunBenchmark(ctx, codegraph.BenchmarkOptions{
+			Root:     root,
+			Backends: []codegraph.BenchmarkBackend{newCodeIntelligenceBenchmarkBackend(id)},
+			Cases:    cases,
+		})
+		_, _ = codegraph.SaveBenchmarkReport(report, cacheDir)
+	}()
+	return nil
+}
+
+type codeIntelligenceBenchmarkBackend struct {
+	*codegraph.LocalFilesBenchmarkBackend
+	id   string
+	name string
+}
+
+func newCodeIntelligenceBenchmarkBackend(id string) codegraph.BenchmarkBackend {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		id = codegraph.BuiltInBackendID
+	}
+	return &codeIntelligenceBenchmarkBackend{
+		LocalFilesBenchmarkBackend: codegraph.NewLocalFilesBenchmarkBackend(),
+		id:                         id,
+		name:                       codeIntelligenceBenchmarkBackendName(id),
+	}
+}
+
+func (b *codeIntelligenceBenchmarkBackend) BenchmarkInfo() codegraph.BenchmarkBackendInfo {
+	info := b.LocalFilesBenchmarkBackend.BenchmarkInfo()
+	info.ID = b.id
+	info.Name = b.name
+	return info
+}
+
+func codeIntelligenceBenchmarkBackendName(id string) string {
+	if id == codegraph.BuiltInBackendID {
+		return "CodeGraph"
+	}
+	return id
 }
 
 func (a *App) connectConfiguredMCPServerForTab(tab *WorkspaceTab, name string) (int, error) {

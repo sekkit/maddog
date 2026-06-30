@@ -12,19 +12,20 @@ import "maddog/internal/event"
 // may diverge later; if they don't, this is the obvious thing to lift into a
 // shared event.ToWire.)
 type wireEvent struct {
-	Kind         string          `json:"kind"`
-	Text         string          `json:"text,omitempty"`
-	Reasoning    string          `json:"reasoning,omitempty"`
-	Level        string          `json:"level,omitempty"`
-	Tool         *wireTool       `json:"tool,omitempty"`
-	Usage        *wireUsage      `json:"usage,omitempty"`
-	Advisor      *wireAdvisor    `json:"advisor,omitempty"`
-	Approval     *wireApproval   `json:"approval,omitempty"`
-	Ask          *wireAsk        `json:"ask,omitempty"`
-	Compaction   *wireCompaction `json:"compaction,omitempty"`
-	Err          string          `json:"err,omitempty"`
-	RetryAttempt int             `json:"retryAttempt,omitempty"`
-	RetryMax     int             `json:"retryMax,omitempty"`
+	Kind           string              `json:"kind"`
+	Text           string              `json:"text,omitempty"`
+	Reasoning      string              `json:"reasoning,omitempty"`
+	Level          string              `json:"level,omitempty"`
+	Tool           *wireTool           `json:"tool,omitempty"`
+	Usage          *wireUsage          `json:"usage,omitempty"`
+	ProviderStatus *wireProviderStatus `json:"providerStatus,omitempty"`
+	Advisor        *wireAdvisor        `json:"advisor,omitempty"`
+	Approval       *wireApproval       `json:"approval,omitempty"`
+	Ask            *wireAsk            `json:"ask,omitempty"`
+	Compaction     *wireCompaction     `json:"compaction,omitempty"`
+	Err            string              `json:"err,omitempty"`
+	RetryAttempt   int                 `json:"retryAttempt,omitempty"`
+	RetryMax       int                 `json:"retryMax,omitempty"`
 }
 
 // wireCompaction is the JSON form of an event.Compaction. On a compaction_started
@@ -56,22 +57,50 @@ type wireAsk struct {
 }
 
 type wireTool struct {
-	ID         string       `json:"id,omitempty"`
-	Name       string       `json:"name"`
-	Args       string       `json:"args,omitempty"`
-	Output     string       `json:"output,omitempty"`
-	Err        string       `json:"err,omitempty"`
-	ReadOnly   bool         `json:"readOnly"`
-	Truncated  bool         `json:"truncated,omitempty"`
-	DurationMs int64        `json:"durationMs,omitempty"`
-	Partial    bool         `json:"partial,omitempty"`
-	ParentID   string       `json:"parentId,omitempty"`
-	Profile    *wireProfile `json:"profile,omitempty"`
+	ID          string           `json:"id,omitempty"`
+	Name        string           `json:"name"`
+	Args        string           `json:"args,omitempty"`
+	Output      string           `json:"output,omitempty"`
+	Err         string           `json:"err,omitempty"`
+	ReadOnly    bool             `json:"readOnly"`
+	Truncated   bool             `json:"truncated,omitempty"`
+	DurationMs  int64            `json:"durationMs,omitempty"`
+	Partial     bool             `json:"partial,omitempty"`
+	ParentID    string           `json:"parentId,omitempty"`
+	Profile     *wireProfile     `json:"profile,omitempty"`
+	Compression *wireCompression `json:"compression,omitempty"`
 }
 
 type wireProfile struct {
-	Model  string `json:"model,omitempty"`
-	Effort string `json:"effort,omitempty"`
+	Role            string `json:"role,omitempty"`
+	Model           string `json:"model,omitempty"`
+	Effort          string `json:"effort,omitempty"`
+	BudgetUsed      int64  `json:"budgetUsed,omitempty"`
+	BudgetLimit     int64  `json:"budgetLimit,omitempty"`
+	BudgetRemaining int64  `json:"budgetRemaining,omitempty"`
+}
+
+type wireProviderStatus struct {
+	Role             string `json:"role,omitempty"`
+	Health           string `json:"health,omitempty"`
+	AuthStatus       string `json:"authStatus,omitempty"`
+	RateLimit        string `json:"rateLimit,omitempty"`
+	BalanceStatus    string `json:"balanceStatus,omitempty"`
+	LastError        string `json:"lastError,omitempty"`
+	BalanceAvailable bool   `json:"balanceAvailable,omitempty"`
+	BalanceDisplay   string `json:"balanceDisplay,omitempty"`
+}
+
+type wireCompression struct {
+	RawRef           string `json:"rawRef,omitempty"`
+	Strategy         string `json:"strategy,omitempty"`
+	Summary          string `json:"summary,omitempty"`
+	RawChars         int    `json:"rawChars,omitempty"`
+	CompressedChars  int    `json:"compressedChars,omitempty"`
+	SavedChars       int    `json:"savedChars,omitempty"`
+	RawTokens        int    `json:"rawTokens,omitempty"`
+	CompressedTokens int    `json:"compressedTokens,omitempty"`
+	SavedTokens      int    `json:"savedTokens,omitempty"`
 }
 
 type wireUsage struct {
@@ -81,6 +110,8 @@ type wireUsage struct {
 	CacheHitTokens   int                   `json:"cacheHitTokens"`
 	CacheMissTokens  int                   `json:"cacheMissTokens"`
 	ReasoningTokens  int                   `json:"reasoningTokens,omitempty"`
+	Profile          *wireProfile          `json:"profile,omitempty"`
+	ProviderStatus   *wireProviderStatus   `json:"providerStatus,omitempty"`
 	CacheDiagnostics *wireCacheDiagnostics `json:"cacheDiagnostics,omitempty"`
 	// Session-cumulative cache tokens — the status line shows the aggregate
 	// hit-rate Σhit/Σ(hit+miss), steadier than the single-turn CacheHitTokens.
@@ -125,29 +156,30 @@ type wireAdvisor struct {
 
 // kindNames maps the event.Kind enum to stable wire strings.
 var kindNames = map[event.Kind]string{
-	event.TurnStarted:       "turn_started",
-	event.Reasoning:         "reasoning",
-	event.Text:              "text",
-	event.Message:           "message",
-	event.ToolDispatch:      "tool_dispatch",
-	event.ToolResult:        "tool_result",
-	event.Usage:             "usage",
-	event.Notice:            "notice",
-	event.Phase:             "phase",
-	event.ApprovalRequest:   "approval_request",
-	event.AskRequest:        "ask_request",
-	event.TurnDone:          "turn_done",
-	event.CompactionStarted: "compaction_started",
-	event.CompactionDone:    "compaction_done",
-	event.ToolProgress:      "tool_progress",
-	event.MCPSurfaceReady:   "mcp_surface_ready",
-	event.Retrying:          "retrying",
-	event.Steer:             "steer",
-	event.Upgrade:           "upgrade",
-	event.SkillGenerated:    "skill_generated",
-	event.BudgetExceeded:    "budget_exceeded",
-	event.SkillPromoted:     "skill_promoted",
-	event.Advisor:           "advisor",
+	event.TurnStarted:          "turn_started",
+	event.Reasoning:            "reasoning",
+	event.Text:                 "text",
+	event.Message:              "message",
+	event.ToolDispatch:         "tool_dispatch",
+	event.ToolResult:           "tool_result",
+	event.Usage:                "usage",
+	event.Notice:               "notice",
+	event.Phase:                "phase",
+	event.ApprovalRequest:      "approval_request",
+	event.AskRequest:           "ask_request",
+	event.TurnDone:             "turn_done",
+	event.CompactionStarted:    "compaction_started",
+	event.CompactionDone:       "compaction_done",
+	event.ToolProgress:         "tool_progress",
+	event.MCPSurfaceReady:      "mcp_surface_ready",
+	event.Retrying:             "retrying",
+	event.Steer:                "steer",
+	event.Upgrade:              "upgrade",
+	event.SkillGenerated:       "skill_generated",
+	event.BudgetExceeded:       "budget_exceeded",
+	event.SkillPromoted:        "skill_promoted",
+	event.Advisor:              "advisor",
+	event.ProviderStatusUpdate: "provider_status",
 }
 
 // toWireAsk converts an event.Ask into its JSON wire form.
@@ -167,11 +199,14 @@ func toWireAsk(a event.Ask) *wireAsk {
 func toWire(e event.Event) wireEvent {
 	w := wireEvent{Kind: kindNames[e.Kind], Text: e.Text, Reasoning: e.Reasoning}
 	switch e.Kind {
-	case event.Notice, event.MCPSurfaceReady, event.Upgrade, event.SkillGenerated, event.BudgetExceeded, event.SkillPromoted:
+	case event.Notice, event.MCPSurfaceReady, event.Upgrade, event.SkillGenerated, event.BudgetExceeded, event.SkillPromoted, event.ProviderStatusUpdate:
 		if e.Level == event.LevelWarn {
 			w.Level = "warn"
 		} else {
 			w.Level = "info"
+		}
+		if e.Kind == event.ProviderStatusUpdate {
+			w.ProviderStatus = toWireProviderStatus(e.ProviderStatus)
 		}
 	case event.Advisor:
 		if e.Level == event.LevelWarn {
@@ -189,7 +224,10 @@ func toWire(e event.Event) wireEvent {
 			ParentID: e.Tool.ParentID,
 		}
 		if e.Tool.Profile != nil {
-			wt.Profile = &wireProfile{Model: e.Tool.Profile.Model, Effort: e.Tool.Profile.Effort}
+			wt.Profile = toWireProfile(e.Tool.Profile)
+		}
+		if e.Tool.Compression != nil {
+			wt.Compression = toWireCompression(e.Tool.Compression)
 		}
 		w.Tool = wt
 	case event.Usage:
@@ -200,6 +238,8 @@ func toWire(e event.Event) wireEvent {
 				CacheMissTokens: u.CacheMissTokens, ReasoningTokens: u.ReasoningTokens,
 				SessionCacheHitTokens: e.SessionHit, SessionCacheMissTokens: e.SessionMiss,
 			}
+			w.Usage.Profile = toWireProfile(e.Profile)
+			w.Usage.ProviderStatus = toWireProviderStatus(e.ProviderStatus)
 			if e.CacheDiagnostics != nil {
 				w.Usage.CacheDiagnostics = toWireCacheDiagnostics(e.CacheDiagnostics)
 			}
@@ -228,6 +268,53 @@ func toWire(e event.Event) wireEvent {
 		w.RetryMax = e.RetryMax
 	}
 	return w
+}
+
+func toWireProfile(p *event.Profile) *wireProfile {
+	if p == nil {
+		return nil
+	}
+	return &wireProfile{
+		Role:            p.Role,
+		Model:           p.Model,
+		Effort:          p.Effort,
+		BudgetUsed:      p.BudgetUsed,
+		BudgetLimit:     p.BudgetLimit,
+		BudgetRemaining: p.BudgetRemaining,
+	}
+}
+
+func toWireProviderStatus(s *event.ProviderStatus) *wireProviderStatus {
+	if s == nil {
+		return nil
+	}
+	return &wireProviderStatus{
+		Role:             s.Role,
+		Health:           s.Health,
+		AuthStatus:       s.AuthStatus,
+		RateLimit:        s.RateLimit,
+		BalanceStatus:    s.BalanceStatus,
+		LastError:        s.LastError,
+		BalanceAvailable: s.BalanceAvailable,
+		BalanceDisplay:   s.BalanceDisplay,
+	}
+}
+
+func toWireCompression(c *event.Compression) *wireCompression {
+	if c == nil {
+		return nil
+	}
+	return &wireCompression{
+		RawRef:           c.RawRef,
+		Strategy:         c.Strategy,
+		Summary:          c.Summary,
+		RawChars:         c.RawChars,
+		CompressedChars:  c.CompressedChars,
+		SavedChars:       c.SavedChars,
+		RawTokens:        c.RawTokens,
+		CompressedTokens: c.CompressedTokens,
+		SavedTokens:      c.SavedTokens,
+	}
 }
 
 func toWireAdvisor(a event.AdvisorConsultation) *wireAdvisor {

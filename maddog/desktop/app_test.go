@@ -2718,6 +2718,116 @@ tier = "lazy"
 	t.Fatalf("codegraph missing from Capabilities: %+v", view.Servers)
 }
 
+func TestCodeIntelligenceBackendManagementMethods(t *testing.T) {
+	isolateDesktopUserDirs(t)
+	dir := robustTempDir(t)
+	t.Chdir(dir)
+	if err := os.WriteFile(filepath.Join(dir, "maddog.toml"), []byte(`
+[codegraph]
+enabled = true
+tier = "lazy"
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	app := NewApp()
+	app.setTestCtrl(control.New(control.Options{Host: plugin.NewHost()}), "")
+	defer app.activeCtrl().Close()
+
+	if err := app.SetCodeIntelligenceBackendEnabled("codegraph", false); err != nil {
+		t.Fatalf("SetCodeIntelligenceBackendEnabled(codegraph,false): %v", err)
+	}
+	view := app.Capabilities()
+	backend := findCodeIntelligenceBackendForTest(view, "codegraph")
+	if backend == nil {
+		t.Fatalf("codegraph code intelligence backend missing: %+v", view.CodeIntelligenceBackends)
+	}
+	if backend.Enabled || backend.Status != "disabled" {
+		t.Fatalf("backend after disable = %+v, want disabled", *backend)
+	}
+	if err := app.SetCodeIntelligenceBackendEnabled("codegraph", true); err != nil {
+		t.Fatalf("SetCodeIntelligenceBackendEnabled(codegraph,true): %v", err)
+	}
+	if err := app.RetryCodeIntelligenceBackend("codegraph"); err != nil {
+		t.Fatalf("RetryCodeIntelligenceBackend(codegraph): %v", err)
+	}
+}
+
+func TestRunCodeIntelligenceBenchmarkUpdatesCapabilities(t *testing.T) {
+	isolateDesktopUserDirs(t)
+	dir := robustTempDir(t)
+	t.Chdir(dir)
+	if err := os.WriteFile(filepath.Join(dir, "runner.go"), []byte("package main\nfunc RunBenchmark() {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	app := NewApp()
+	app.setTestCtrl(control.New(control.Options{Host: plugin.NewHost()}), "")
+	app.tabs["test"].WorkspaceRoot = dir
+	defer app.activeCtrl().Close()
+
+	if err := app.RunCodeIntelligenceBenchmark("codegraph"); err != nil {
+		t.Fatalf("RunCodeIntelligenceBenchmark(codegraph): %v", err)
+	}
+	view := app.Capabilities()
+	backend := findCodeIntelligenceBackendForTest(view, "codegraph")
+	if backend == nil {
+		t.Fatalf("codegraph code intelligence backend missing: %+v", view.CodeIntelligenceBackends)
+	}
+	if !backend.BenchmarkRunning {
+		t.Fatalf("benchmark running = false immediately after launch; backend = %+v", *backend)
+	}
+
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		view = app.Capabilities()
+		backend = findCodeIntelligenceBackendForTest(view, "codegraph")
+		if backend != nil && !backend.BenchmarkRunning && backend.Benchmark != nil && backend.Benchmark.JSONPath != "" {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if backend == nil {
+		t.Fatalf("codegraph code intelligence backend missing after benchmark: %+v", view.CodeIntelligenceBackends)
+	}
+	if backend.BenchmarkRunning {
+		t.Fatalf("benchmark still running after timeout: %+v", *backend)
+	}
+	if backend.Benchmark == nil || backend.Benchmark.JSONPath == "" || backend.Benchmark.MarkdownPath == "" {
+		t.Fatalf("benchmark paths missing from capabilities: %+v", backend.Benchmark)
+	}
+	if len(backend.Benchmark.Backends) == 0 || backend.Benchmark.Backends[0].ID == "" {
+		t.Fatalf("benchmark backend summary missing: %+v", backend.Benchmark)
+	}
+}
+
+func TestCodeIntelligenceBenchmarkRunningCountsConcurrentRuns(t *testing.T) {
+	app := NewApp()
+	app.setCodeIntelligenceBenchmarkRunning("codegraph", true)
+	app.setCodeIntelligenceBenchmarkRunning("codegraph", true)
+	if !app.codeIntelligenceBenchmarkRunning()["codegraph"] {
+		t.Fatal("running should be true after two concurrent starts")
+	}
+	app.setCodeIntelligenceBenchmarkRunning("codegraph", false)
+	if !app.codeIntelligenceBenchmarkRunning()["codegraph"] {
+		t.Fatal("running should remain true until every concurrent run finishes")
+	}
+	app.setCodeIntelligenceBenchmarkRunning("codegraph", false)
+	if app.codeIntelligenceBenchmarkRunning()["codegraph"] {
+		t.Fatal("running should be false after both concurrent runs finish")
+	}
+}
+
+func findCodeIntelligenceBackendForTest(view CapabilitiesView, id string) *CodeIntelligenceBackendView {
+	for i := range view.CodeIntelligenceBackends {
+		backend := &view.CodeIntelligenceBackends[i]
+		if backend.ID == id || backend.ServerName == id {
+			return backend
+		}
+	}
+	return nil
+}
+
 func TestUpdateBuiltInMCPServerUpdatesCodegraphRuntime(t *testing.T) {
 	isolateDesktopUserDirs(t)
 	dir := robustTempDir(t)

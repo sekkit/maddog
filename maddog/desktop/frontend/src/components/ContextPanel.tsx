@@ -91,8 +91,41 @@ interface ContextBreakdown {
   otherPct: number;
 }
 
+interface ContextCompressionInput {
+  compressionEvents?: number;
+  compressionRawChars?: number;
+  compressionCompressedChars?: number;
+  compressionSavedChars?: number;
+  compressionRawTokens?: number;
+  compressionCompressedTokens?: number;
+  compressionSavedTokens?: number;
+}
+
+interface ContextCompressionBreakdown {
+  events: number;
+  rawChars: number;
+  compressedChars: number;
+  savedChars: number;
+  rawTokens: number;
+  compressedTokens: number;
+  savedTokens: number;
+  savedPct: number;
+  rawTokensLabel: string;
+  savedTokensLabel: string;
+  compressedTokensLabel: string;
+}
+
 function nonNegativeTokenCount(value: number): number {
   return Number.isFinite(value) ? Math.max(0, value) : 0;
+}
+
+function fmtCompactCount(n: number): string {
+  if (n <= 0) return "-";
+  if (n >= 1000) {
+    const value = Math.round((n / 1000) * 10) / 10;
+    return `${Number.isInteger(value) ? value.toFixed(0) : value}k`;
+  }
+  return String(Math.round(n));
 }
 
 export function contextBreakdown(
@@ -133,6 +166,30 @@ export function contextBreakdown(
     completionPct,
     reasoningPct,
     otherPct,
+  };
+}
+
+export function contextCompressionBreakdown(input: ContextCompressionInput = {}): ContextCompressionBreakdown {
+  const events = nonNegativeTokenCount(input.compressionEvents ?? 0);
+  const rawChars = nonNegativeTokenCount(input.compressionRawChars ?? 0);
+  const compressedChars = nonNegativeTokenCount(input.compressionCompressedChars ?? 0);
+  const savedChars = nonNegativeTokenCount(input.compressionSavedChars ?? Math.max(0, rawChars - compressedChars));
+  const rawTokens = nonNegativeTokenCount(input.compressionRawTokens ?? 0);
+  const compressedTokens = nonNegativeTokenCount(input.compressionCompressedTokens ?? 0);
+  const savedTokens = nonNegativeTokenCount(input.compressionSavedTokens ?? Math.max(0, rawTokens - compressedTokens));
+  const savedPct = rawTokens > 0 ? Math.round((savedTokens / rawTokens) * 100) : 0;
+  return {
+    events,
+    rawChars,
+    compressedChars,
+    savedChars,
+    rawTokens,
+    compressedTokens,
+    savedTokens,
+    savedPct,
+    rawTokensLabel: fmtCompactCount(rawTokens),
+    savedTokensLabel: fmtCompactCount(savedTokens),
+    compressedTokensLabel: fmtCompactCount(compressedTokens),
   };
 }
 
@@ -224,6 +281,7 @@ export function ContextPanel({
   const cacheHitTokens = hasPanelUsage ? info?.cacheHitTokens ?? 0 : usage?.cacheHitTokens ?? 0;
   const cacheMissTokens = hasPanelUsage ? info?.cacheMissTokens ?? 0 : usage?.cacheMissTokens ?? 0;
   const cost = contextCostDisplay({ info, sessionCost, sessionCurrency, usage });
+  const compression = contextCompressionBreakdown(info ?? {});
   const readFiles = asArray(info?.readFiles);
   const changedFiles = asArray(info?.changedFiles);
 
@@ -292,6 +350,15 @@ export function ContextPanel({
               <MetricCard label={t("context.time")} value={fmtDuration(elapsed, t)} />
               <MetricCard label={t("context.requests")} value={requestCount > 0 ? String(requestCount) : "-"} />
               <MetricCard label={t("context.sessionTokens")} value={totalTokens > 0 ? totalTokens.toLocaleString() : "-"} wide />
+              <MetricCard
+                label={t("context.compressionSaved")}
+                value={compression.events > 0 ? t("context.compressionSavedValue", { tokens: compression.savedTokensLabel, pct: compression.savedPct }) : "-"}
+                tone={compression.events > 0 ? "accent" : undefined}
+              />
+              <MetricCard
+                label={t("context.compressionVisible")}
+                value={compression.events > 0 ? t("context.compressionVisibleValue", { compressed: compression.compressedTokensLabel, raw: compression.rawTokensLabel }) : "-"}
+              />
             </div>
           </section>
           <section className="context-panel__section">

@@ -23,6 +23,7 @@ import type {
   BuiltInMCPUpdateStatus,
   CapabilitiesView,
   CheckpointMeta,
+  CodeIntelligenceBackendView,
   CommandInfo,
   ContextInfo,
   ContextPanelInfo,
@@ -49,6 +50,7 @@ import type {
   ServerView,
   SessionMeta,
   SettingsView,
+  SkillCandidateView,
   SkillRootView,
   SkillSuggestion,
   SkillView,
@@ -156,7 +158,7 @@ export interface AppBindings {
   BalanceForTab(tabID: string): Promise<BalanceInfo>;
   Jobs(): Promise<JobView[]>;
   JobsForTab(tabID: string): Promise<JobView[]>;
-  ToolResultForTab(tabID: string, toolID: string): Promise<{ args: string; output: string } | null>;
+  ToolResultForTab(tabID: string, toolID: string): Promise<{ args: string; output: string; rawUnavailable?: boolean } | null>;
   Meta(): Promise<Meta>;
   MetaForTab(tabID: string): Promise<Meta>;
   Commands(): Promise<CommandInfo[]>;
@@ -165,6 +167,12 @@ export interface AppBindings {
   UpdateMCPServer(name: string, input: MCPServerInput): Promise<void>;
   RemoveMCPServer(name: string): Promise<void>;
   ReconnectMCPServer(name: string): Promise<void>;
+  SetCodeIntelligenceBackendEnabled(id: string, enabled: boolean): Promise<void>;
+  RetryCodeIntelligenceBackend(id: string): Promise<void>;
+  RunCodeIntelligenceBenchmark(id: string): Promise<void>;
+  setCodeIntelligenceBackendEnabled(id: string, enabled: boolean): Promise<void>;
+  retryCodeIntelligenceBackend(id: string): Promise<void>;
+  runCodeIntelligenceBenchmark(id: string): Promise<void>;
   UpdateBuiltInMCPServer(name: string): Promise<BuiltInMCPUpdateResult>;
   BuiltInMCPUpdateStatuses(): Promise<BuiltInMCPUpdateStatus[]>;
   ClearMCPServerAuthentication(name: string): Promise<void>;
@@ -173,6 +181,9 @@ export interface AppBindings {
   RemoveSkillPath(path: string): Promise<void>;
   RefreshSkills(): Promise<void>;
   SetSkillEnabled(name: string, enabled: boolean): Promise<void>;
+  PromoteSkillCandidate(hash: string): Promise<string>;
+  RollbackSkillCandidate(hash: string, reason: string): Promise<void>;
+  RejectSkillCandidate(hash: string, reason: string): Promise<void>;
   SetMCPServerEnabled(name: string, enabled: boolean): Promise<void>;
   SetMCPServerTier(name: string, tier: string): Promise<void>;
   SlashArgs(input: string): Promise<SlashArgsResult>;
@@ -264,6 +275,7 @@ export interface AppBindings {
   MigrateDesktopPreferences(language: string, theme: string, style: string): Promise<void>;
   SetAgentParams(temperature: number, maxSteps: number, plannerMaxSteps: number, systemPrompt: string): Promise<void>;
   SetColdResumePrune(enabled: boolean): Promise<void>;
+  SetContextCompression(policy: string, thresholdBytes: number, maxBytes: number): Promise<void>;
   SetReasoningLanguage(lang: string): Promise<void>;
   SetTrayLocale(locale: "en" | "zh" | "zh-TW"): Promise<void>;
   // SetBypass is the legacy Wails name for YOLO/full-access tool auto-approval
@@ -441,9 +453,9 @@ function bridgeBreadcrumb(method: string): string {
   if (/^(SaveProvider|AddOfficialProviderAccess|RemoveProviderAccess|DeleteProvider|SetProviderKey|ClearProviderKey|FetchProviderModels|ConnectKey)/.test(method))
     return `provider ${method}`;
   if (/^(CheckUpdate|ApplyUpdate|OpenDownloadPage)/.test(method)) return `update ${method}`;
-  if (/^(AddMCPServer|UpdateMCPServer|RemoveMCPServer|ReconnectMCPServer|UpdateBuiltInMCPServer|BuiltInMCPUpdateStatuses|ClearMCPServerAuthentication|SetMCPServer)/.test(method))
+  if (/^(AddMCPServer|UpdateMCPServer|RemoveMCPServer|ReconnectMCPServer|UpdateBuiltInMCPServer|BuiltInMCPUpdateStatuses|ClearMCPServerAuthentication|SetMCPServer|SetCodeIntelligenceBackendEnabled|RetryCodeIntelligenceBackend|RunCodeIntelligenceBenchmark|setCodeIntelligenceBackendEnabled|retryCodeIntelligenceBackend|runCodeIntelligenceBenchmark)/.test(method))
     return `mcp ${method}`;
-  if (/^(AddSkillPath|RemoveSkillPath|RefreshSkills|SetSkillEnabled|AcceptSkillSuggestion)/.test(method))
+  if (/^(AddSkillPath|RemoveSkillPath|RefreshSkills|SetSkillEnabled|PromoteSkillCandidate|RollbackSkillCandidate|RejectSkillCandidate|AcceptSkillSuggestion)/.test(method))
     return `skill ${method}`;
   if (/^(OpenProjectTab|OpenGlobalTab|EnsureBlankTab|SetActiveTab|CloseTab|ReorderTabs|CreateTopic|RenameTopic|DeleteTopic|TrashTopic|RenameProject|RemoveWorkspace|SwitchWorkspace|PickWorkspace)/.test(method))
     return `nav ${method}`;
@@ -453,10 +465,12 @@ function bridgeBreadcrumb(method: string): string {
 export const app: AppBindings = new Proxy({} as AppBindings, {
   get(_t, prop) {
     const target = realApp() ?? getMock();
-    const v = (target as unknown as Record<string, unknown>)[String(prop)];
+    const method = String(prop);
+    const codeIntelMethod = codeIntelligenceBridgeMethod(target, method);
+    if (codeIntelMethod) return codeIntelMethod;
+    const v = (target as unknown as Record<string, unknown>)[method];
     if (typeof v !== "function") return v;
     return (...args: unknown[]) => {
-      const method = String(prop);
       const crumb = bridgeBreadcrumb(method);
       if (crumb) addBreadcrumb("bridge", crumb);
       try {
@@ -475,6 +489,30 @@ export const app: AppBindings = new Proxy({} as AppBindings, {
     };
   },
 });
+
+function codeIntelligenceBridgeMethod(target: AppBindings, method: string): ((...args: unknown[]) => Promise<void>) | null {
+  const methods = target as unknown as Record<string, unknown>;
+  if (method === "setCodeIntelligenceBackendEnabled") {
+    return (id: unknown, enabled: unknown) => {
+      const native = methods.SetCodeIntelligenceBackendEnabled ?? methods.SetMCPServerEnabled;
+      return (native as (name: string, value: boolean) => Promise<void>).call(target, String(id), Boolean(enabled));
+    };
+  }
+  if (method === "retryCodeIntelligenceBackend") {
+    return (id: unknown) => {
+      const native = methods.RetryCodeIntelligenceBackend ?? methods.ReconnectMCPServer;
+      return (native as (name: string) => Promise<void>).call(target, String(id));
+    };
+  }
+  if (method === "runCodeIntelligenceBenchmark") {
+    return (id: unknown) => {
+      const native = methods.RunCodeIntelligenceBenchmark;
+      if (typeof native !== "function") return Promise.reject(new Error("code intelligence benchmark is unavailable"));
+      return (native as (name: string) => Promise<void>).call(target, String(id));
+    };
+  }
+  return null;
+}
 
 // openExternal opens a URL in the system browser (so links in rendered markdown
 // don't navigate the webview away from the app). Falls back to window.open in the
@@ -634,6 +672,36 @@ function makeMockApp(): AppBindings {
     },
     { name: "figma", transport: "http", status: "failed", configured: true, autoStart: true, tier: "background", url: "https://mcp.figma.com/mcp", authStatus: "required", authUrl: "https://mcp.figma.com/mcp", tools: 0, prompts: 0, resources: 0, error: "connect: 401 unauthorized" },
   ];
+  let capCodeIntelligenceBackends: CodeIntelligenceBackendView[] = [
+    {
+      id: "codegraph",
+      name: "CodeGraph",
+      kind: "builtin",
+      serverName: "codegraph",
+      status: "disabled",
+      indexStatus: "not_initialized",
+      enabled: false,
+      builtIn: true,
+      configured: true,
+      capabilities: { SymbolSearch: true, ContextPack: true, GraphTrace: true, Health: true },
+      toolMapping: {
+        symbol_search: "mcp__codegraph__search",
+        context_pack: "mcp__codegraph__context",
+        graph_trace: "mcp__codegraph__trace",
+        health: "mcp__codegraph__status",
+      },
+      toolCount: 4,
+      benchmarkRunning: false,
+      benchmark: {
+        jsonPath: "/tmp/maddog/codeintel-bench/latest.json",
+        markdownPath: "/tmp/maddog/codeintel-bench/latest.md",
+        health: "ready",
+        failures: 0,
+        updatedAt: new Date(t0 - 30 * 60_000).toISOString(),
+        backends: [{ id: "codegraph", name: "CodeGraph", health: "ready", failures: 0 }],
+      },
+    },
+  ];
   let builtInMCPUpdates: BuiltInMCPUpdateStatus[] = [
     {
       name: "codegraph",
@@ -647,6 +715,37 @@ function makeMockApp(): AppBindings {
     { name: "explore", description: "Investigate the codebase in an isolated subagent", scope: "builtin", runAs: "subagent", enabled: true },
     { name: "review", description: "Review the staged diff", scope: "project", runAs: "inline", enabled: false },
     { name: "init", description: "Scaffold a MADDOG.md for this repo", scope: "builtin", runAs: "inline", enabled: true },
+  ];
+  let capSkillCandidates: SkillCandidateView[] = [
+    {
+      hash: "skill-candidate-local-dev",
+      name: "local-dev",
+      description: "Local custom development workflow",
+      status: "pending",
+      sourceTask: "Improve local development flow",
+      sourceBundleId: "replay-demo",
+      sourceBundlePath: ".maddog/skilleval/replay-demo.json",
+      targetRoot: "~/projects/maddog/.maddog/skills",
+      score: 0.91,
+      scoreReason: "Replay checks passed",
+      guardrailPass: true,
+      guardrailReason: "No blocked patterns",
+      updatedAt: new Date().toISOString(),
+    },
+    {
+      hash: "skill-candidate-docs-helper",
+      name: "docs-helper",
+      description: "Adds documentation review reminders",
+      status: "pending",
+      sourceTask: "Review docs",
+      sourceBundleId: "replay-regression",
+      targetRoot: "~/projects/maddog/.maddog/skills",
+      score: 0.84,
+      scoreReason: "Replay was mixed",
+      guardrailPass: false,
+      guardrailReason: "Regression on held-out bundle",
+      updatedAt: new Date().toISOString(),
+    },
   ];
   let capSkillRoots: SkillRootView[] = [
     { dir: "~/projects/maddog/.maddog/skills", scope: "project", priority: 1, status: "missing", configured: false, removable: true, skills: 0 },
@@ -1836,6 +1935,13 @@ function makeMockApp(): AppBindings {
         servers: capServers.map((s) => ({ ...s })),
         skills: capSkills.map((s) => ({ ...s })),
         skillRoots: capSkillRoots.map((s) => ({ ...s })),
+        skillCandidates: capSkillCandidates.map((s) => ({ ...s })),
+        codeIntelligenceBackends: capCodeIntelligenceBackends.map((s) => ({
+          ...s,
+          capabilities: { ...s.capabilities },
+          toolMapping: { ...s.toolMapping },
+          benchmark: s.benchmark ? { ...s.benchmark } : undefined,
+        })),
       };
     },
     async AddMCPServer(input: MCPServerInput) {
@@ -1894,6 +2000,57 @@ function makeMockApp(): AppBindings {
       capServers = capServers.map((s) =>
         s.name === name ? { ...s, status: "connected", tools: s.tools || 4 } : s,
       );
+    },
+    async SetCodeIntelligenceBackendEnabled(id: string, enabled: boolean) {
+      capCodeIntelligenceBackends = capCodeIntelligenceBackends.map((backend) =>
+        backend.id === id || backend.serverName === id
+          ? { ...backend, enabled, status: enabled ? "ready" : "disabled", benchmarkRunning: false }
+          : backend,
+      );
+      if (id === "codegraph") {
+        capServers = capServers.map((s) =>
+          s.name === "codegraph"
+            ? { ...s, status: enabled ? "connected" : "disabled", autoStart: enabled, tools: enabled ? s.tools || 4 : 0, error: undefined }
+            : s,
+        );
+      }
+    },
+    async RetryCodeIntelligenceBackend(id: string) {
+      capCodeIntelligenceBackends = capCodeIntelligenceBackends.map((backend) =>
+        backend.id === id || backend.serverName === id ? { ...backend, status: "ready", lastError: undefined } : backend,
+      );
+      if (id === "codegraph") await this.ReconnectMCPServer("codegraph").catch(() => undefined);
+    },
+    async RunCodeIntelligenceBenchmark(id: string) {
+      capCodeIntelligenceBackends = capCodeIntelligenceBackends.map((backend) =>
+        backend.id === id || backend.serverName === id ? { ...backend, benchmarkRunning: true } : backend,
+      );
+      await new Promise((r) => setTimeout(r, 300));
+      capCodeIntelligenceBackends = capCodeIntelligenceBackends.map((backend) =>
+        backend.id === id || backend.serverName === id
+          ? {
+              ...backend,
+              benchmarkRunning: false,
+              benchmark: {
+                jsonPath: "/tmp/maddog/codeintel-bench/latest.json",
+                markdownPath: "/tmp/maddog/codeintel-bench/latest.md",
+                health: "ready",
+                failures: 0,
+                updatedAt: new Date().toISOString(),
+                backends: [{ id: backend.id, name: backend.name, health: "ready", failures: 0 }],
+              },
+            }
+          : backend,
+      );
+    },
+    async setCodeIntelligenceBackendEnabled(id: string, enabled: boolean) {
+      return this.SetCodeIntelligenceBackendEnabled(id, enabled);
+    },
+    async retryCodeIntelligenceBackend(id: string) {
+      return this.RetryCodeIntelligenceBackend(id);
+    },
+    async runCodeIntelligenceBenchmark(id: string) {
+      return this.RunCodeIntelligenceBenchmark(id);
     },
     async UpdateBuiltInMCPServer(name: string) {
       if (name !== "codegraph") throw new Error(`${name} is not an updatable built-in MCP server`);
@@ -1964,6 +2121,33 @@ function makeMockApp(): AppBindings {
     async SetSkillEnabled(name: string, enabled: boolean) {
       const skill = capSkills.find((s) => s.name === name);
       if (skill) skill.enabled = enabled;
+    },
+    async PromoteSkillCandidate(hash: string) {
+      const candidate = capSkillCandidates.find((s) => s.hash === hash);
+      if (!candidate) throw new Error(`unknown skill candidate: ${hash}`);
+      candidate.status = "promoted";
+      candidate.promotedPath = `~/projects/maddog/.maddog/skills/${candidate.name}/SKILL.md`;
+      candidate.updatedAt = new Date().toISOString();
+      if (!capSkills.some((s) => s.name === candidate.name)) {
+        capSkills.push({ name: candidate.name, description: candidate.description, scope: "project", runAs: "inline", enabled: true });
+      }
+      return candidate.promotedPath;
+    },
+    async RollbackSkillCandidate(hash: string, reason: string) {
+      const candidate = capSkillCandidates.find((s) => s.hash === hash);
+      if (!candidate) throw new Error(`unknown skill candidate: ${hash}`);
+      candidate.status = "rolled_back";
+      candidate.validationReason = reason || "rolled back from desktop";
+      candidate.updatedAt = new Date().toISOString();
+      const idx = capSkills.findIndex((s) => s.name === candidate.name && s.scope === "project");
+      if (idx >= 0) capSkills.splice(idx, 1);
+    },
+    async RejectSkillCandidate(hash: string, reason: string) {
+      const candidate = capSkillCandidates.find((s) => s.hash === hash);
+      if (!candidate) throw new Error(`unknown skill candidate: ${hash}`);
+      candidate.status = "rejected";
+      candidate.validationReason = reason || "rejected from desktop";
+      candidate.updatedAt = new Date().toISOString();
     },
     async SetMCPServerEnabled(name: string, enabled: boolean) {
       capServers = capServers.map((s) =>
@@ -2509,6 +2693,15 @@ function makeMockApp(): AppBindings {
     },
     async SetColdResumePrune(enabled: boolean) {
       settings.agent = { ...settings.agent, coldResumePrune: enabled };
+    },
+    async SetContextCompression(policy: string, thresholdBytes: number, maxBytes: number) {
+      const normalized = policy === "off" || policy === "aggressive" ? policy : "auto";
+      settings.agent = {
+        ...settings.agent,
+        contextCompressionPolicy: normalized,
+        contextCompressionThresholdBytes: Math.max(0, Math.trunc(thresholdBytes)),
+        contextCompressionMaxBytes: Math.max(0, Math.trunc(maxBytes)),
+      };
     },
     async SetReasoningLanguage(lang: string) {
       const normalized = lang === "zh" || lang === "en" ? lang : "auto";

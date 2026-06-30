@@ -3,6 +3,7 @@ package anthropic
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -395,6 +396,13 @@ func TestReadStreamError(t *testing.T) {
 	}
 	if gotErr == nil || !strings.Contains(gotErr.Error(), "overloaded") {
 		t.Fatalf("expected an error chunk mentioning overloaded, got %v", gotErr)
+	}
+	var apiErr *provider.APIError
+	if !errors.As(gotErr, &apiErr) {
+		t.Fatalf("stream error = %T %[1]v, want *provider.APIError", gotErr)
+	}
+	if apiErr.Provider != "anthropic" || apiErr.Status != 529 || !strings.Contains(apiErr.Body, "overloaded_error") {
+		t.Fatalf("api error = %+v, want anthropic status 529 with type", apiErr)
 	}
 }
 

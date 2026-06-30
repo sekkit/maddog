@@ -2,6 +2,7 @@
 package doctor
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/url"
 	"os"
@@ -64,12 +65,27 @@ type PluginReport struct {
 }
 
 type CodegraphReport struct {
-	Enabled     bool   `json:"enabled"`
-	AutoInstall bool   `json:"auto_install"`
-	Version     string `json:"version"`
-	CacheDir    string `json:"cache_dir,omitempty"`
-	Resolved    bool   `json:"resolved"`
-	Path        string `json:"path,omitempty"`
+	Enabled     bool                            `json:"enabled"`
+	AutoInstall bool                            `json:"auto_install"`
+	Version     string                          `json:"version"`
+	CacheDir    string                          `json:"cache_dir,omitempty"`
+	Resolved    bool                            `json:"resolved"`
+	Path        string                          `json:"path,omitempty"`
+	Benchmark   CodeIntelligenceBenchmarkReport `json:"benchmark,omitempty"`
+}
+
+type CodeIntelligenceBenchmarkReport struct {
+	JSONPath     string                                `json:"json_path,omitempty"`
+	MarkdownPath string                                `json:"markdown_path,omitempty"`
+	Backends     []CodeIntelligenceBenchmarkBackendRow `json:"backends,omitempty"`
+	Error        string                                `json:"error,omitempty"`
+}
+
+type CodeIntelligenceBenchmarkBackendRow struct {
+	ID       string `json:"id"`
+	Name     string `json:"name,omitempty"`
+	Health   string `json:"health,omitempty"`
+	Failures int    `json:"failures,omitempty"`
 }
 
 type LSPReport struct {
@@ -134,6 +150,7 @@ func Collect(opts Options) Report {
 			AutoInstall: cfg.Codegraph.AutoInstall,
 			Version:     codegraph.Version,
 			CacheDir:    redactHome(codegraph.CacheDir()),
+			Benchmark:   collectCodeIntelligenceBenchmark(config.CacheDir()),
 		},
 		LSP: LSPReport{
 			Enabled: cfg.LSP.Enabled,
@@ -242,6 +259,18 @@ func RenderText(r Report) string {
 	fmt.Fprintf(&b, "  auto_install %v\n", r.Codegraph.AutoInstall)
 	fmt.Fprintf(&b, "  version      %s\n", r.Codegraph.Version)
 	fmt.Fprintf(&b, "  resolved     %s\n", resolved)
+	if r.Codegraph.Benchmark.JSONPath != "" || r.Codegraph.Benchmark.Error != "" {
+		fmt.Fprintf(&b, "  latest bench %s\n", valueOr(r.Codegraph.Benchmark.JSONPath, "unavailable"))
+		if r.Codegraph.Benchmark.MarkdownPath != "" {
+			fmt.Fprintf(&b, "  bench summary %s\n", r.Codegraph.Benchmark.MarkdownPath)
+		}
+		if r.Codegraph.Benchmark.Error != "" {
+			fmt.Fprintf(&b, "  bench warning %s\n", r.Codegraph.Benchmark.Error)
+		}
+		for _, backend := range r.Codegraph.Benchmark.Backends {
+			fmt.Fprintf(&b, "  bench backend %-16s %s failures:%d\n", backend.ID, valueOr(backend.Health, "unknown"), backend.Failures)
+		}
+	}
 
 	fmt.Fprintf(&b, "\nlsp\n")
 	fmt.Fprintf(&b, "  enabled      %v\n", r.LSP.Enabled)
@@ -297,6 +326,42 @@ func collectSessions(dir string) SessionsReport {
 		r.Error = err.Error()
 	}
 	return r
+}
+
+func collectCodeIntelligenceBenchmark(cacheDir string) CodeIntelligenceBenchmarkReport {
+	if strings.TrimSpace(cacheDir) == "" {
+		return CodeIntelligenceBenchmarkReport{}
+	}
+	benchDir := filepath.Join(cacheDir, "codeintel-bench")
+	jsonPath := filepath.Join(benchDir, codegraph.BenchmarkLatestJSONName)
+	raw, err := os.ReadFile(jsonPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return CodeIntelligenceBenchmarkReport{}
+		}
+		return CodeIntelligenceBenchmarkReport{JSONPath: redactHome(jsonPath), Error: redactHome(err.Error())}
+	}
+	var report codegraph.BenchmarkReport
+	if err := json.Unmarshal(raw, &report); err != nil {
+		return CodeIntelligenceBenchmarkReport{JSONPath: redactHome(jsonPath), Error: redactHome(err.Error())}
+	}
+	out := CodeIntelligenceBenchmarkReport{
+		JSONPath:     redactHome(jsonPath),
+		MarkdownPath: redactHome(filepath.Join(benchDir, codegraph.BenchmarkLatestMarkdownName)),
+		Backends:     make([]CodeIntelligenceBenchmarkBackendRow, 0, len(report.Backends)),
+	}
+	if _, err := os.Stat(filepath.Join(benchDir, codegraph.BenchmarkLatestMarkdownName)); err != nil {
+		out.MarkdownPath = ""
+	}
+	for _, backend := range report.Backends {
+		out.Backends = append(out.Backends, CodeIntelligenceBenchmarkBackendRow{
+			ID:       backend.ID,
+			Name:     backend.Name,
+			Health:   backend.Health,
+			Failures: backend.Failures,
+		})
+	}
+	return out
 }
 
 func pluginTarget(p config.PluginEntry) string {

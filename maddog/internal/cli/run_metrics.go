@@ -11,29 +11,36 @@ import (
 // RunMetrics is the machine-readable token/cache/cost summary `run --metrics`
 // writes, so a benchmark harness can read a run's cost without scraping stdout.
 type RunMetrics struct {
-	PromptTokens                  int     `json:"prompt_tokens"`
-	CompletionTokens              int     `json:"completion_tokens"`
-	CacheHitTokens                int     `json:"cache_hit_tokens"`
-	CacheMissTokens               int     `json:"cache_miss_tokens"`
-	Steps                         int     `json:"steps"` // model calls (one per stream, incl. tool rounds)
-	Cost                          float64 `json:"cost"`
-	Currency                      string  `json:"currency"`
-	Compactions                   int     `json:"compactions"`
-	ReadinessChecks               int     `json:"readiness_checks"`
-	ReadinessAllowed              int     `json:"readiness_allowed"`
-	ReadinessBlocks               int     `json:"readiness_blocks"`
-	ReadinessRecoveries           int     `json:"readiness_recoveries"`
-	ReadinessErrors               int     `json:"readiness_errors"`
-	ReadinessMissingProjectChecks int     `json:"readiness_missing_project_checks"`
-	ReadinessIncompleteTodos      int     `json:"readiness_incomplete_todos"`
-	ReadinessCommandMismatches    int     `json:"readiness_command_mismatches"`
-	UpgradeEvents                 int     `json:"upgrade_events"`
-	AdvisorEvents                 int     `json:"advisor_events"`
-	SkillGeneratedEvents          int     `json:"skill_generated_events"`
-	BudgetExceededEvents          int     `json:"budget_exceeded_events"`
-	ToolCalls                     int     `json:"tool_calls"`
-	ToolErrors                    int     `json:"tool_errors"`
-	ToolTruncations               int     `json:"tool_truncations"`
+	PromptTokens                    int     `json:"prompt_tokens"`
+	CompletionTokens                int     `json:"completion_tokens"`
+	CacheHitTokens                  int     `json:"cache_hit_tokens"`
+	CacheMissTokens                 int     `json:"cache_miss_tokens"`
+	Steps                           int     `json:"steps"` // model calls (one per stream, incl. tool rounds)
+	Cost                            float64 `json:"cost"`
+	Currency                        string  `json:"currency"`
+	Compactions                     int     `json:"compactions"`
+	ReadinessChecks                 int     `json:"readiness_checks"`
+	ReadinessAllowed                int     `json:"readiness_allowed"`
+	ReadinessBlocks                 int     `json:"readiness_blocks"`
+	ReadinessRecoveries             int     `json:"readiness_recoveries"`
+	ReadinessErrors                 int     `json:"readiness_errors"`
+	ReadinessMissingProjectChecks   int     `json:"readiness_missing_project_checks"`
+	ReadinessIncompleteTodos        int     `json:"readiness_incomplete_todos"`
+	ReadinessCommandMismatches      int     `json:"readiness_command_mismatches"`
+	UpgradeEvents                   int     `json:"upgrade_events"`
+	AdvisorEvents                   int     `json:"advisor_events"`
+	SkillGeneratedEvents            int     `json:"skill_generated_events"`
+	BudgetExceededEvents            int     `json:"budget_exceeded_events"`
+	ToolCalls                       int     `json:"tool_calls"`
+	ToolErrors                      int     `json:"tool_errors"`
+	ToolTruncations                 int     `json:"tool_truncations"`
+	ToolCompressionEvents           int     `json:"tool_compression_events"`
+	ToolCompressionRawChars         int     `json:"tool_compression_raw_chars"`
+	ToolCompressionCompressedChars  int     `json:"tool_compression_compressed_chars"`
+	ToolCompressionSavedChars       int     `json:"tool_compression_saved_chars"`
+	ToolCompressionRawTokens        int     `json:"tool_compression_raw_tokens"`
+	ToolCompressionCompressedTokens int     `json:"tool_compression_compressed_tokens"`
+	ToolCompressionSavedTokens      int     `json:"tool_compression_saved_tokens"`
 }
 
 // metricsSink forwards every event to the real sink and accumulates the per-call
@@ -78,6 +85,15 @@ func (s *metricsSink) Emit(e event.Event) {
 		}
 		if e.Tool.Truncated {
 			s.m.ToolTruncations++
+		}
+		if c := e.Tool.Compression; c != nil {
+			s.m.ToolCompressionEvents++
+			s.m.ToolCompressionRawChars += c.RawChars
+			s.m.ToolCompressionCompressedChars += c.CompressedChars
+			s.m.ToolCompressionSavedChars += c.SavedChars
+			s.m.ToolCompressionRawTokens += c.RawTokens
+			s.m.ToolCompressionCompressedTokens += c.CompressedTokens
+			s.m.ToolCompressionSavedTokens += c.SavedTokens
 		}
 	}
 	s.inner.Emit(e)

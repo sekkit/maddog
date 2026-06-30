@@ -83,6 +83,15 @@ source_research: research/github-stars-sekkit-2026-06-27/analysis.md
 - `research/github-stars-sekkit-2026-06-27/readmes/iamzhihuix__skills-manage.md`
 - `research/github-stars-sekkit-2026-06-27/readmes/alibaba__open-code-review.md`
 
+### 功能到 GitHub 参考项目映射
+
+| Maddog 功能组 | 对应实现单元 | 参考 GitHub 项目 | 参考点 | 采用方式 |
+| --- | --- | --- | --- | --- |
+| Provider、frontier、小模型、official auth/API key、中转、预算与状态 | D1, D2, D3 | [BerriAI/litellm](https://github.com/BerriAI/litellm), [aaif-goose/goose](https://github.com/aaif-goose/goose), [steipete/CodexBar](https://github.com/steipete/CodexBar), [emanueleielo/advisor-middleware](https://github.com/emanueleielo/advisor-middleware), [cobusgreyling/loop-engineering](https://github.com/cobusgreyling/loop-engineering) | 多 provider profile、OpenAI-compatible routing、GUI provider 设置、advisor/frontier 分层与 loop 可观测性 | 不引入外部 provider proxy；吸收 profile schema、role 标注、status/usage event 与 GUI 配置模式 |
+| Tool output/context 压缩、raw output 外置、context metrics 与策略开关 | E1, E2, E3 | [headroomlabs-ai/headroom](https://github.com/headroomlabs-ai/headroom), [rtk-ai/rtk](https://github.com/rtk-ai/rtk), [mksglu/context-mode](https://github.com/mksglu/context-mode), [dirac-run/dirac](https://github.com/dirac-run/dirac), [microsoft/fastcontext](https://github.com/microsoft/fastcontext), [ryoiki-tokuiten/Iterative-Contextual-Refinements](https://github.com/ryoiki-tokuiten/Iterative-Contextual-Refinements) | 长任务输出压缩、检索式上下文保留、token delta 可观测、迭代上下文精炼 | 在 Maddog tool result 进入 model 前实现本地压缩接口；保留 raw store 与可关闭策略，不把外部 sidecar 设为必需依赖 |
+| Code intelligence backend、benchmark harness、MCP code backend GUI | F1, F2, F3 | [DeusData/codebase-memory-mcp](https://github.com/DeusData/codebase-memory-mcp), [oraios/serena](https://github.com/oraios/serena), [zilliztech/claude-context](https://github.com/zilliztech/claude-context), [alibaba/zvec](https://github.com/alibaba/zvec) | 代码记忆 MCP、符号/语义检索、向量索引、后端健康检查与评测基准 | 作为 optional backend 或 benchmark target；默认继续使用 Maddog CodeGraph registry 与本地报告格式 |
+| Skill 自进化、replay eval、promotion lifecycle、桌面审计、混合 code review | G1, G2, G3, G4 | [microsoft/SkillOpt](https://github.com/microsoft/SkillOpt), [iamzhihuix/skills-manage](https://github.com/iamzhihuix/skills-manage), [alibaba/open-code-review](https://github.com/alibaba/open-code-review), [PabloNAX/ultracode-skill](https://github.com/PabloNAX/ultracode-skill), [pat-jj/harness-1](https://github.com/pat-jj/harness-1), [cobusgreyling/loop-engineering](https://github.com/cobusgreyling/loop-engineering) | skill candidate lifecycle、guardrail/eval harness、人工 promotion 审计、规则/LLM 混合 review、loop trace replay | 只采用 evidence/replay/promotion 机制；禁止在线自我改写，promotion 必须通过 guardrail 和人工可见审计 |
+
 ## 关键技术决策
 
 - **D1. Provider profile 是核心数据模型**：把 provider kind、auth mode、base URL、frontier role、small-model role、budget/status/usage 统一投影到 GUI；底层仍复用 `ProviderEntry`，避免迁移配置格式。
@@ -121,7 +130,7 @@ flowchart TB
 
 ## 实现单元
 
-- [ ] **单元 D1：Provider profile 与 role 标注**
+- [x] **单元 D1：Provider profile 与 role 标注**
 
 **目标：** 在现有 `ProviderEntry` 之上建立 GUI 可消费的 provider profile 投影，标注 default/frontier/small/advisor/auth/status/budget 能力。
 
@@ -158,7 +167,9 @@ flowchart TB
 
 **验证：** Settings 模型页能同时看到 default/frontier/small/advisor provider，且不会泄露任何 token。
 
-- [ ] **单元 D2：Official auth + API key + icodeeasy 中转配置闭环**
+**执行记录（2026-06-29）：** 已通过 test-first 落地为 desktop `ProviderView` 投影扩展，覆盖 role、gateway、auth mode、credential env/status、frontier budget/eligibility、small-model eligibility 与 dangling model warning。验证命令：`go test . -run TestSettingsProviderProfiles -count=1`（`maddog/desktop`）、`go test . -count=1`（`maddog/desktop`）、frontend `npm run test:all`、`npm run build`。
+
+- [x] **单元 D2：Official auth + API key + icodeeasy 中转配置闭环**
 
 **目标：** 在 GUI 中完整配置 API key、bearer/official token、workload identity 与 OpenAI-compatible 中转，并能测试连接与拉取模型。
 
@@ -196,7 +207,9 @@ flowchart TB
 
 **验证：** 用户可以在 GUI 中配置 OpenAI/Anthropic official/API key/icodeeasy，保存后实际 provider probe 与当前模型切换可用。
 
-- [ ] **单元 D3：Provider usage、budget 与 status event**
+**执行记录（2026-06-29）：** 已通过 test-first 让 Settings/model probe 复用 runtime `AuthConfig`：OpenAI-compatible/API key、official bearer、workload identity exchange、icodeeasy/custom base URL 均走同一 fetch/probe auth 路径。401/403 现在返回 typed `provider.AuthError`，WIF token exchange auth failure 也保留 provider/env/status 元数据且不泄露 token；desktop `FetchProviderModels` 传递完整 WIF 字段；Settings provider card 显示当前 auth mode 的 credential env（含 bearer/WIF fallback）。验证命令：`go test ./internal/provider/openai ./internal/config -count=1`、`go test . -count=1`（`maddog/desktop`）、frontend `npm run test:all`、`npm run build`。
+
+- [x] **单元 D3：Provider usage、budget 与 status event**
 
 **目标：** 把 frontier/small/default provider 的 usage、预算、rate/status、balance 统一汇总到 runtime event 和 desktop status。
 
@@ -206,7 +219,12 @@ flowchart TB
 
 **文件：**
 - 修改：`Maddog/internal/provider/costwrap/costwrap.go`
+- 修改：`Maddog/internal/provider/retry.go`
+- 修改：`Maddog/internal/provider/openai/responses.go`
+- 修改：`Maddog/internal/provider/anthropic/anthropic.go`
 - 修改：`Maddog/internal/agent/agent.go`
+- 修改：`Maddog/internal/agent/coordinator.go`
+- 修改：`Maddog/internal/agent/task.go`
 - 修改：`Maddog/internal/event/event.go`
 - 修改：`Maddog/internal/serve/wire.go`
 - 修改：`Maddog/desktop/wire.go`
@@ -214,9 +232,16 @@ flowchart TB
 - 修改：`Maddog/desktop/frontend/src/lib/types.ts`
 - 修改：`Maddog/desktop/frontend/src/components/StatusBar.tsx`
 - 测试：`Maddog/internal/provider/costwrap/costwrap_test.go`
+- 测试：`Maddog/internal/provider/openai/openai_test.go`
+- 测试：`Maddog/internal/provider/anthropic/anthropic_test.go`
 - 测试：`Maddog/internal/agent/upgrade_test.go`
+- 测试：`Maddog/internal/agent/usage_profile_test.go`
+- 测试：`Maddog/internal/agent/coordinator_test.go`
+- 测试：`Maddog/internal/agent/task_test.go`
+- 测试：`Maddog/internal/boot/boot_test.go`
 - 测试：`Maddog/internal/serve/wire_test.go`
 - 测试：`Maddog/desktop/wire_test.go`
+- 测试：`Maddog/desktop/frontend/src/__tests__/use-controller-meta.test.ts`
 - 新建测试：`Maddog/desktop/frontend/src/__tests__/status-bar.test.ts`
 
 **方案：**
@@ -233,7 +258,7 @@ flowchart TB
 
 **验证：** 一个真实任务运行后，desktop 能解释使用了哪个 provider、为什么升级、花了多少 token/cost、预算还剩多少。
 
-- [ ] **单元 E1：Tool output compressor 接口与 deterministic 策略**
+- [x] **单元 E1：Tool output compressor 接口与 deterministic 策略**
 
 **目标：** 为工具输出进入模型前增加可配置压缩层，保留 raw output，可计算 token/char delta。
 
@@ -272,7 +297,9 @@ flowchart TB
 
 **验证：** 长工具输出不会把完整 raw log 塞进 model context，但用户仍能在 GUI 展开完整输出。
 
-- [ ] **单元 E2：Shell/test/log 专用压缩与 context metrics**
+**执行记录（2026-06-29）：** 已通过 test-first 新增 Go-native `internal/contextpack` deterministic compressor，并接入 agent tool result 路径：模型收到压缩内容，controller 保留 raw 查询，compression metadata 经 event/serve/Wails/TypeScript wire 传递。已覆盖 compressor panic fallback warning、UTF-8 safe trimming、Windows path line preservation、raw output lookup 与 final visible metrics。验证命令：`go test ./internal/contextpack -count=1`、`go test ./internal/agent -count=1`、`go test ./internal/control -count=1`、`go test ./internal/serve -count=1`、`go test . -count=1`（`maddog/desktop`）、frontend `npm run test:all`、`npm run build`。
+
+- [x] **单元 E2：Shell/test/log 专用压缩与 context metrics**
 
 **目标：** 针对常见开发命令输出提供高信号压缩，并在 UI 显示节省效果。
 
@@ -310,7 +337,9 @@ flowchart TB
 
 **验证：** 真实测试失败任务中，模型收到的是高信号摘要，UI 能展示节省比例和 raw output。
 
-- [ ] **单元 E3：Context policy、raw-data 外置与可关闭开关**
+**执行记录（2026-06-30）：** 已通过 test-first 新增 shell/test/log 专用 deterministic 压缩策略：识别 `go test`、`npm test`、`npm run build`、`rg`、`git status`、`git diff` 与重复 server log，保留失败测试名、file:line、expected/actual、panic/error、代表性匹配、重复次数和末尾行；tight budget 下优先保留真实信号而不是标题。Desktop 侧记录 latest-turn compression raw/compressed/saved char/token metrics，ContextPanel 显示 saved 与 compressed/raw breakdown，ToolCard 显示压缩 badge 且保留 full raw lookup。验证命令：`go test ./internal/contextpack ./internal/agent ./internal/control ./internal/serve -count=1`、`go test . -count=1`（`maddog/desktop`）、frontend `npm run test:all`、`npm run check:css`、`npm run build`、`git diff --check`。Spec 与 code-quality subagent 复审均通过。
+
+- [x] **单元 E3：Context policy、raw-data 外置与可关闭开关**
 
 **目标：** 让用户可在 CLI/desktop 中控制压缩策略，并保证 raw data 外置不会破坏 replay、export、history。
 
@@ -347,7 +376,9 @@ flowchart TB
 
 **验证：** 用户能关闭或调整压缩；长期会话、resume、export 都能保持一致。
 
-- [ ] **单元 F1：Code intelligence backend registry**
+**执行记录（2026-06-30）：** 已通过 test-first 落地 context compression policy（`off`/`auto`/`aggressive`）、配置默认值/编辑/渲染、boot 装配、CLI run metrics 聚合、desktop Settings 保存与展示，以及 session-scoped raw tool result 外置存储。Raw result 缺失时 `ToolResult` 返回 compressed fallback 并标记 `rawUnavailable`，ToolCard 展示本地化提示；raw store 写入失败时降级为 compressed-only 并发 warning；`Resume`、新会话、清空会话、初始 session path 均重新绑定 raw store；desktop session trash/restore/purge 会迁移或清理 `raw-tool-results/<branchID>`。验证命令：`go test ./internal/contextpack ./internal/config ./internal/agent ./internal/control ./internal/cli ./internal/boot -count=1`、`go test . -count=1`（`maddog/desktop`）、frontend `npm run test:all`、`npm run build`、`git diff --check`。Spec 与 code-quality subagent 复审均通过。
+
+- [x] **单元 F1：Code intelligence backend registry**
 
 **目标：** 把内置 CodeGraph 与外部 MCP code intelligence 后端抽象成统一 registry，供 Settings/Capabilities 和 agent tools 使用。
 
@@ -382,7 +413,9 @@ flowchart TB
 
 **验证：** 用户能看见当前 code intelligence 后端，外部后端失败不会拖垮内置能力。
 
-- [ ] **单元 F2：Code intelligence benchmark harness**
+**执行记录（2026-06-30）：** 已通过 test-first 落地 `internal/codegraph` backend registry、`[code_intelligence.backends]` TOML 配置/渲染、desktop `CapabilitiesView.codeIntelligenceBackends` 投影和 CapabilitiesPanel 的 Code Intelligence 分组。内置 CodeGraph 始终作为默认 backend 保留，外部 MCP backend 只能通过 config 声明且不会自动注册或替换 `mcp__codegraph__context`；外部 backend 未连接时显示 degraded，连接/失败时合并 live MCP status/tool count/last error。Invalid mapping（空值、server/tool prefix 不匹配、无 code intelligence capability、reserved `codegraph` ID）会进入 invalid list，不进入 usable registry，并且不会被 live connected 状态覆盖。Built-in backend 显示 `.codegraph` initialized/not initialized index status。验证命令：`go test ./internal/codegraph ./internal/config ./internal/control -count=1`、`go test . -count=1`（`maddog/desktop`）、`go test ./... -count=1`、frontend `npm run test:all`、frontend `npm run build`、`git diff --check`。Spec 与 code-quality subagent 多轮复审均通过。
+
+- [x] **单元 F2：Code intelligence benchmark harness**
 
 **目标：** 建立对 CodeGraph、codebase-memory-mcp、Serena、claude-context 类后端的本地评测框架。
 
@@ -412,7 +445,9 @@ flowchart TB
 
 **验证：** 能对至少一个 mock backend 和内置 backend 生成可比较报告。
 
-- [ ] **单元 F3：MCP code backend GUI 管理**
+**执行记录（2026-06-30）：** 已通过 test-first 落地 `internal/codegraph` benchmark harness、`cmd/codeintelbench` CLI、真实内置 CodeGraph MCP benchmark adapter、mock backend 比较报告，以及 doctor latest benchmark 摘要。Benchmark 报告覆盖 index build time、incremental update time、query latency、top-k relevance、returned chars、estimated tokens、result count、tool/query failures，并输出 timestamped JSON/Markdown 与 `latest.json`/`latest.md`。CLI 默认在本地 repo fixture 上运行 mock + built-in CodeGraph；CodeGraph 未安装或查询失败时报告 degraded/failure，不伪装 ready；CodeGraph 已连接时，incremental update 阶段会等待 fixture expected marker 可查到，避免后台索引未完成导致 relevance 抖动。报告写入使用唯一 archive 文件名和 `fileutil.ReplaceFile` 原子替换 latest 文件；doctor 暴露 latest report path、backend health/failures，并对错误路径做脱敏。验证命令：`go test ./internal/codegraph ./internal/doctor ./cmd/codeintelbench -count=1`、`go test ./... -count=1`、`git diff --check`。Spec 与 code-quality subagent 多轮复审均通过。
+
+- [x] **单元 F3：MCP code backend GUI 管理**
 
 **目标：** 在 MCP/Skills 管理页中管理 code intelligence 后端，显示健康、工具映射、索引状态和 benchmark 入口。
 
@@ -428,7 +463,7 @@ flowchart TB
 - 修改：`Maddog/desktop/frontend/src/locales/en.ts`
 - 修改：`Maddog/desktop/frontend/src/locales/zh.ts`
 - 新建测试：`Maddog/desktop/capabilities_app_test.go`
-- 新建测试：`Maddog/desktop/frontend/src/__tests__/capabilities-panel.test.ts`
+- 修改测试：`Maddog/desktop/frontend/src/__tests__/capabilities-code-intelligence.test.ts`
 
 **方案：**
 - CapabilitiesPanel 增加 Code Intelligence 分组，列出 built-in 和 external backend。
@@ -444,7 +479,9 @@ flowchart TB
 
 **验证：** 用户可以在 GUI 中理解并管理 code intelligence 能力，而不是只看 MCP 原始 server 列表。
 
-- [ ] **单元 G1：Replay eval bundle v2 与 SkillOpt-style candidate lifecycle**
+**执行记录（2026-06-30）：** 已通过 test-first 落地 CapabilitiesPanel 的 Code Intelligence 管理 UI：backend 行支持 enable/disable、retry health check、run benchmark，显示 health、index status、capability chips、tool count、benchmark running、latest JSON/Markdown path、benchmark health/failure summary。Frontend bridge 增加 lowercase GUI wrapper，并映射到真实 Wails App 方法或 browser dev mock；mock 覆盖 running 与 latest report 状态。Desktop App 增加 `SetCodeIntelligenceBackendEnabled`、`RetryCodeIntelligenceBackend`、`RunCodeIntelligenceBenchmark`，benchmark 以后台 goroutine 运行，不阻塞 GUI 调用，并写入共享 `codeintel-bench/latest.json`/`latest.md`，`Capabilities()` 会合并 latest report 与 running 状态。Review 后补强：benchmark running 改为引用计数，latest report 改为 nullable 且只挂到匹配 backend，corrupt/latest read error 会在 GUI 展示，并用 bridge contract test 防止绑定漂移。验证命令：frontend `npm run test:all`、frontend `npm run build`、`go test . -count=1`（`maddog/desktop`）、`go test ./internal/codegraph ./internal/doctor ./cmd/codeintelbench -count=1`、`go test ./... -count=1`、`git diff --check`。
+
+- [x] **单元 G1：Replay eval bundle v2 与 SkillOpt-style candidate lifecycle**
 
 **目标：** 把 session/evidence/history 转成可评测 bundle，并为 skill candidate 建立 pending/promoted/rejected 生命周期。
 
@@ -482,7 +519,9 @@ flowchart TB
 
 **验证：** 运行时不会自动覆盖 skill；所有候选都有可追溯证据。
 
-- [ ] **单元 G2：Replay runner、guardrail 与 promotion scoring**
+**执行记录（2026-06-30）：** 已通过 test-first 新增 `internal/skilleval` 包，落地 replay bundle v2 捕获/加载和 SkillOpt-style candidate lifecycle。`CaptureBundle` 会保存非 system 的 session snapshot、tool/evidence receipts、history、task/skill metadata、selected/dynamic skill snapshot、compression metrics、human review metadata、derived outcome signals 和 durable bundle path；首次同 session 捕获保留 sanitized filename，后续同 session 捕获自动使用 timestamp/序号避免覆盖历史证据；`LoadBundle` 支持回读。`CandidateStore` 以 skill markdown content hash 去重，保留首次 source bundle/path，记录 validator result 和 eval-score placeholder，使用 `skill.Validator` 将无效候选置为 rejected，重复内容会按当前 task 重新验证以避免高风险任务绕过 gating；默认有效候选为 pending，只有显式 `Promote` 才会通过 active `skill.Store` 写入 `.maddog/skills/<name>/SKILL.md`。Review 后补强：promotion 先持久化 `promoting` 状态，active skill 已写但最终候选状态写入失败时可通过下一次 promote 检测已存在 skill 并恢复为 promoted；candidate JSON 更新使用唯一 temp 文件与 atomic replace，首次写入使用 exclusive create，阻止并发覆盖。G1 暂不接入 runtime event、replay runner、scorer 或 guardrail；这些仍归 G2/G3。验证命令：`go test ./internal/skilleval -count=1`、`go test ./... -count=1`。
+
+- [x] **单元 G2：Replay runner、guardrail 与 promotion scoring**
 
 **目标：** 建立离线评测管线，对 candidate skill 进行 replay、score、guardrail 和 promotion。
 
@@ -520,7 +559,9 @@ flowchart TB
 
 **验证：** 只有通过 replay + guardrail 的 candidate 才可能 promotion。
 
-- [ ] **单元 G3：Skill 管理 GUI 与 promotion 审计**
+**执行记录（2026-06-30）：** 已通过 test-first 落地 `internal/skilleval` replay runner、deterministic dry-run replay、rule/frontier scorer、promotion guardrail、candidate evaluation persistence 和 `maddog skilleval` CLI/headless eval。CLI 支持 `--bundle`/`--candidate`/`--json`/`--dry-run`/`--model`，非 dry-run 会按 `default_model` 或 `--model` 解析 provider 并运行真实 replay；dry-run 也会使用 candidate body 生成 replay outcome，不再自评分。`skilleval list --dir` 可列出 pending/rejected/promoted candidate state。`CandidateStore.Promote` 现在要求 `RecordEvaluation` 写入 score 与 passing guardrail 后才允许写入 active skill。Guardrail 覆盖 held-out bundle 数、missing results、candidate validation/status、task-dependent validator recheck、高风险 allowed-tool expansion、success regression、token cost spike、low score。Scorer 在 frontier 不可用或输出不可解析时返回 deterministic fallback，不把 optional scorer outage 变成 hard fail。验证命令：`go test ./internal/skilleval -count=1`、`go test ./internal/cli -run TestSkillEval -count=1`、`go test ./... -count=1`。
+
+- [x] **单元 G3：Skill 管理 GUI 与 promotion 审计**
 
 **目标：** 在 desktop 中显示 built-in/project/custom/dynamic/pending/promoted skill，支持查看证据、接受/拒绝/回滚。
 
@@ -556,7 +597,9 @@ flowchart TB
 
 **验证：** 用户能在 GUI 中完成 skill 自进化的审核闭环，且所有操作可追溯。
 
-- [ ] **单元 G4：规则/LLM 混合 code review skill**
+**执行记录（2026-06-30）：** 已通过 test-first 落地 desktop skill candidate 管理和 promotion audit 闭环。`Capabilities()` 现在从项目 `.maddog/skilleval` 投影 pending/promoted/rejected/rolled_back candidates，包含 source task、source bundle/path、target skill root、eval score、guardrail verdict、promoted path、validation/audit reason 和更新时间；`GuardrailPass` 使用可空布尔，确保 GUI 能区分“未评估”和“评估失败”。Skills drawer 与 Settings/Skills 页面增加候选队列、状态过滤、证据/目标详情、Promote、Reject、Rollback 操作；Promote/Rollback 后会 rebuild controller，让 slash menu 与 skill store 立即同步。`CandidateStore` 补强了 hash path validation、tampered list entry 跳过、promotion 失败恢复 pending、promotion/reject/rollback audit JSONL、以及只删除未被用户修改的 candidate-created promoted skill 的安全 rollback。多专家 review 后补齐了 failed-promotion recoverability、rollback/audit、guardrail false serialization、zh/zh-TW/en 文案和 frontend contract test。验证命令：`go test ./internal/skilleval -run 'TestListSkipsInvalidOrTamperedCandidateFiles|TestFailedPromotionRestoresPending|TestRollbackPromotedCandidateRemovesOnlyMatchingSkill|TestRollbackRefusesModifiedPromotedSkill|TestPromoteCandidateWritesActiveSkillAndTransitions' -count=1`、`go test . -run 'TestCapabilitiesProjectsSkillCandidates|TestPromoteAndRejectSkillCandidateFromDesktop|TestRollbackSkillCandidateFromDesktop|TestCapabilitiesProjectsFailedGuardrailExplicitly' -count=1`（`Maddog/desktop`）、`npm run test:all`、`npm run build`、`go test ./... -count=1`、`go test . -count=1`（`Maddog/desktop`）、`git diff --check`。
+
+- [x] **单元 G4：规则/LLM 混合 code review skill**
 
 **目标：** 借鉴 open-code-review，给 Maddog review 流程增加 deterministic rules + LLM explanation 的混合路径。
 
@@ -589,6 +632,8 @@ flowchart TB
 - Integration：review skill 结果能作为 skilleval bundle 的 evidence。
 
 **验证：** Review 输出更稳定，能解释规则命中，也不会因 code backend 缺失而失败。
+
+**执行记录（2026-06-30）：** 已通过 test-first 新增 `internal/review` deterministic review rules 与 prompt builder，并接入现有 `maddog review` CLI。Rules v1 覆盖 secret-like token、unsafe remote shell installer、destructive SQL、ignored error hints 和 large-diff risk marker；`BuildLLMPrompt` 把 deterministic findings 作为 grounded input 交给 LLM 解释/排序，并在 code intelligence context 不可用时明确 fallback diff-only。CLI review 现在会先运行 `AnalyzeUnifiedDiff`，将 deterministic report 注入 review subagent task，再附带已脱敏 diff；secret evidence 与 raw diff 都会 redact，untrusted evidence/context 以 fenced block 传入，避免 prompt injection/secret 泄漏。多专家 review 后补强：规则结果不再是死代码、短 secret 不再原样进入 prompt、跳过 unified diff metadata、支持 plain unified `+++` path fallback，并降低 docs/comment examples 的 shell/SQL false positive。验证命令：`go test ./internal/review ./internal/cli ./internal/skill -run 'TestAnalyzeUnifiedDiff|TestBuildLLMPrompt|TestBuildReviewTask|TestBuiltinReviewMentionsHybridDeterministicRules|TestBuiltinSubagentSkillsDeclareAllowedTools' -count=1`、`go test ./... -count=1`。
 
 ## 系统级影响
 

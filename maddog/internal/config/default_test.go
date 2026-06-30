@@ -42,3 +42,16 @@ func TestDefaultAdvisorGuardrails(t *testing.T) {
 		t.Fatal("advisor_native_enabled should default off because it is a provider beta")
 	}
 }
+
+func TestDefaultContextCompressionPolicy(t *testing.T) {
+	cfg := Default()
+	if got := cfg.Agent.ContextCompression.Policy; got != "auto" {
+		t.Fatalf("context compression policy = %q, want auto", got)
+	}
+	if cfg.Agent.ContextCompression.ThresholdBytes <= 0 {
+		t.Fatalf("context compression threshold = %d, want positive default", cfg.Agent.ContextCompression.ThresholdBytes)
+	}
+	if cfg.Agent.ContextCompression.MaxBytes <= 0 {
+		t.Fatalf("context compression max bytes = %d, want positive default", cfg.Agent.ContextCompression.MaxBytes)
+	}
+}

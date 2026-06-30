@@ -3,14 +3,21 @@ package agent
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
+	"maddog/internal/contextpack"
 	"maddog/internal/diff"
 	"maddog/internal/event"
 	"maddog/internal/evidence"
@@ -171,6 +178,9 @@ type Agent struct {
 	frontierPricing       *provider.Pricing
 	frontierContextWindow int
 	frontierTarget        string
+	usageRole             string
+	usageModel            string
+	usageEffort           string
 	defaultProv           provider.Provider
 	defaultPricing        *provider.Pricing
 	defaultContextWindow  int
@@ -240,6 +250,15 @@ type Agent struct {
 	// run_in_background, task run_in_background, bash_output/kill_shell/wait) can
 	// reach it. nil leaves those tools to degrade gracefully.
 	jobs *jobs.Manager
+
+	// toolOutputCompressor optionally reduces high-volume tool results before
+	// they enter session history and the next model request. Full raw outputs are
+	// retained only when compression actually saves context.
+	toolOutputCompressor  contextpack.ToolOutputCompressor
+	toolOutputCompression contextpack.Options
+	rawToolResultDir      string
+	rawToolResultsMu      sync.RWMutex
+	rawToolResults        map[string]string
 
 	// steerQueue holds mid-turn user messages queued while the agent is
 	// running. Each is consumed once per loop iteration, persisted to the
@@ -381,9 +400,96 @@ func (a *Agent) SetSession(s *Session) {
 	a.sessMu.Lock()
 	a.session = s
 	a.sessMu.Unlock()
+	a.clearRawToolResults()
 	if s != nil {
 		a.rebuildTodoState(s.Snapshot())
 	}
+}
+
+// RawToolResult returns the uncompressed text retained for a compressed tool
+// call. Raw results are kept in memory and keyed by provider tool call ID.
+func (a *Agent) RawToolResult(toolID string) (string, bool) {
+	if a == nil || toolID == "" {
+		return "", false
+	}
+	a.rawToolResultsMu.RLock()
+	raw, ok := a.rawToolResults[toolID]
+	a.rawToolResultsMu.RUnlock()
+	if ok {
+		return raw, true
+	}
+	if a.rawToolResultDir == "" {
+		return "", false
+	}
+	b, err := os.ReadFile(a.rawToolResultPath(toolID))
+	if err != nil {
+		return "", false
+	}
+	raw = string(b)
+	a.rawToolResultsMu.Lock()
+	if a.rawToolResults == nil {
+		a.rawToolResults = make(map[string]string)
+	}
+	a.rawToolResults[toolID] = raw
+	a.rawToolResultsMu.Unlock()
+	return raw, true
+}
+
+func (a *Agent) storeRawToolResult(toolID, raw string) error {
+	if a == nil || toolID == "" {
+		return nil
+	}
+	a.rawToolResultsMu.Lock()
+	if a.rawToolResults == nil {
+		a.rawToolResults = make(map[string]string)
+	}
+	a.rawToolResults[toolID] = raw
+	a.rawToolResultsMu.Unlock()
+	if a.rawToolResultDir == "" {
+		return nil
+	}
+	if err := os.MkdirAll(a.rawToolResultDir, 0o700); err != nil {
+		a.clearRawToolResult(toolID)
+		return err
+	}
+	if err := os.WriteFile(a.rawToolResultPath(toolID), []byte(raw), 0o600); err != nil {
+		a.clearRawToolResult(toolID)
+		return err
+	}
+	return nil
+}
+
+func (a *Agent) clearRawToolResult(toolID string) {
+	if a == nil || toolID == "" {
+		return
+	}
+	a.rawToolResultsMu.Lock()
+	defer a.rawToolResultsMu.Unlock()
+	delete(a.rawToolResults, toolID)
+}
+
+func (a *Agent) clearRawToolResults() {
+	if a == nil {
+		return
+	}
+	a.rawToolResultsMu.Lock()
+	defer a.rawToolResultsMu.Unlock()
+	a.rawToolResults = nil
+}
+
+func (a *Agent) SetRawToolResultDir(dir string) {
+	if a == nil {
+		return
+	}
+	a.rawToolResultsMu.Lock()
+	defer a.rawToolResultsMu.Unlock()
+	a.rawToolResultDir = strings.TrimSpace(dir)
+	a.rawToolResults = nil
+}
+
+func (a *Agent) rawToolResultPath(toolID string) string {
+	sum := sha256.Sum256([]byte(toolID))
+	return filepath.Join(a.rawToolResultDir, hex.EncodeToString(sum[:])+".txt")
 }
 
 // LastUsage returns the most recent per-turn token telemetry the provider
@@ -508,6 +614,12 @@ type Options struct {
 	// Jobs is the session's background-job manager (nil disables background tools).
 	Jobs *jobs.Manager
 
+	// ToolOutputCompressor, when non-nil, compresses high-volume tool results
+	// before they enter session history and the next model request.
+	ToolOutputCompressor  contextpack.ToolOutputCompressor
+	ToolOutputCompression contextpack.Options
+	RawToolResultDir      string
+
 	// ProjectChecks are host-observable structured checks extracted during boot.
 	ProjectChecks []instruction.VerifyCheck
 
@@ -522,6 +634,9 @@ type Options struct {
 	FrontierPricing       *provider.Pricing
 	FrontierContextWindow int
 	FrontierTarget        string
+	UsageRole             string
+	UsageModel            string
+	UsageEffort           string
 	Advisor               AdvisorConfig
 	AdvisorRunner         AdvisorRunner
 	NativeAdvisor         *provider.NativeAdvisorConfig
@@ -555,6 +670,10 @@ func New(prov provider.Provider, tools *tool.Registry, session *Session, opts Op
 	if nilutil.IsNil(hooks) {
 		hooks = nil
 	}
+	toolOutputCompressor := opts.ToolOutputCompressor
+	if nilutil.IsNil(toolOutputCompressor) {
+		toolOutputCompressor = nil
+	}
 	maxStepsKey := opts.MaxStepsKey
 	if strings.TrimSpace(maxStepsKey) == "" {
 		maxStepsKey = "agent.max_steps"
@@ -572,6 +691,9 @@ func New(prov provider.Provider, tools *tool.Registry, session *Session, opts Op
 		frontierPricing:       opts.FrontierPricing,
 		frontierContextWindow: opts.FrontierContextWindow,
 		frontierTarget:        opts.FrontierTarget,
+		usageRole:             strings.TrimSpace(opts.UsageRole),
+		usageModel:            strings.TrimSpace(opts.UsageModel),
+		usageEffort:           strings.TrimSpace(opts.UsageEffort),
 		advisor:               opts.Advisor,
 		advisorRunner:         opts.AdvisorRunner,
 		nativeAdvisor:         cloneNativeAdvisor(opts.NativeAdvisor),
@@ -579,6 +701,9 @@ func New(prov provider.Provider, tools *tool.Registry, session *Session, opts Op
 		gate:                  gate,
 		hooks:                 hooks,
 		jobs:                  opts.Jobs,
+		toolOutputCompressor:  toolOutputCompressor,
+		toolOutputCompression: opts.ToolOutputCompression,
+		rawToolResultDir:      strings.TrimSpace(opts.RawToolResultDir),
 		evidence:              evidence.NewLedger(),
 		projectChecks:         append([]instruction.VerifyCheck(nil), opts.ProjectChecks...),
 		contextWindow:         opts.ContextWindow,
@@ -635,6 +760,7 @@ func (a *Agent) Run(ctx context.Context, input string) error {
 
 		text, reasoning, signature, nativeBlocks, calls, usage, interrupted, partialToolStarted, err := a.stream(ctx, step+1)
 		if err != nil {
+			a.emitProviderStatus(err)
 			if a.onFrontier {
 				a.downgradeFromFrontier()
 				a.sink.Emit(event.Event{Kind: event.Upgrade, Level: event.LevelWarn, Text: "frontier request failed, switched back to default: " + err.Error()})
@@ -670,16 +796,20 @@ func (a *Agent) Run(ctx context.Context, input string) error {
 		a.haveLastPrefixShape = true
 		if usage != nil && usage.TotalTokens > 0 {
 			pricing := a.pricing
+			profile := a.currentUsageProfile()
 			if a.onFrontier {
 				pricing = a.frontierPricing
 				if _, ok := a.frontierProv.(frontierBudgetTracker); !ok {
 					a.frontierTokens.Add(int64(usage.CompletionTokens))
 				}
+				profile = a.currentUsageProfile()
 				if a.emitFrontierBudgetIfExceeded() {
 					a.downgradeFromFrontier()
 				}
 			}
 			a.sink.Emit(event.Event{Kind: event.Usage, Usage: usage, Pricing: pricing,
+				Profile:          profile,
+				ProviderStatus:   providerStatusForProfile(profile, nil),
 				CacheDiagnostics: &cacheDiagnostics,
 				SessionHit:       int(a.sessCacheHit.Load()), SessionMiss: int(a.sessCacheMiss.Load())})
 		}
@@ -926,6 +1056,109 @@ func (a *Agent) emitFrontierBudgetIfExceeded() bool {
 		}
 	}
 	return false
+}
+
+func (a *Agent) currentUsageProfile() *event.Profile {
+	if a == nil || a.prov == nil {
+		return nil
+	}
+	role := "default"
+	model := a.prov.Name()
+	if a.usageRole != "" {
+		role = a.usageRole
+	}
+	if a.usageModel != "" {
+		model = a.usageModel
+	}
+	if a.onFrontier {
+		role = "frontier"
+		if target := strings.TrimSpace(a.frontierTarget); target != "" {
+			model = target
+		}
+	}
+	profile := &event.Profile{Role: role, Model: strings.TrimSpace(model), Effort: a.usageEffort}
+	if role == "frontier" {
+		used, limit := a.frontierBudgetSnapshot()
+		profile.BudgetUsed = used
+		profile.BudgetLimit = limit
+		if limit > 0 && used < limit {
+			profile.BudgetRemaining = limit - used
+		}
+	}
+	return profile
+}
+
+func (a *Agent) emitProviderStatus(err error) {
+	status := providerStatusForProfile(a.currentUsageProfile(), err)
+	if status == nil {
+		return
+	}
+	a.sink.Emit(event.Event{Kind: event.ProviderStatusUpdate, ProviderStatus: status})
+}
+
+func providerStatusForProfile(profile *event.Profile, err error) *event.ProviderStatus {
+	if profile == nil {
+		return nil
+	}
+	if err != nil && (errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)) {
+		return nil
+	}
+	status := &event.ProviderStatus{
+		Role:          profile.Role,
+		Health:        "ok",
+		AuthStatus:    "ok",
+		RateLimit:     "ok",
+		BalanceStatus: "unknown",
+	}
+	if err == nil {
+		return status
+	}
+	status.LastError = err.Error()
+	var authErr *provider.AuthError
+	if errors.As(err, &authErr) {
+		status.Health = "auth_error"
+		status.AuthStatus = "auth_error"
+		return status
+	}
+	var apiErr *provider.APIError
+	if errors.As(err, &apiErr) {
+		switch apiErr.Status {
+		case http.StatusUnauthorized, http.StatusForbidden:
+			status.Health = "auth_error"
+			status.AuthStatus = "auth_error"
+		case http.StatusTooManyRequests:
+			status.Health = "rate_limited"
+			status.RateLimit = "rate_limited"
+		case http.StatusPaymentRequired:
+			status.Health = "balance_error"
+			status.BalanceStatus = "insufficient"
+		default:
+			if apiErr.Status >= 500 && apiErr.Status <= 599 {
+				status.Health = "degraded"
+			} else {
+				status.Health = "error"
+			}
+		}
+		return status
+	}
+	status.Health = "error"
+	return status
+}
+
+func (a *Agent) frontierBudgetSnapshot() (used int64, limit int64) {
+	if a == nil {
+		return 0, 0
+	}
+	if tracked, ok := a.frontierProv.(frontierBudgetTracker); ok {
+		return tracked.OutputTokens(), tracked.BudgetLimit()
+	}
+	used = a.frontierTokens.Load()
+	if limited, ok := a.upgradePolicy.(interface {
+		FrontierBudgetLimit() int64
+	}); ok {
+		limit = limited.FrontierBudgetLimit()
+	}
+	return used, limit
 }
 
 type frontierBudgetTracker interface {
@@ -1416,14 +1649,15 @@ func (a *Agent) executeBatch(ctx context.Context, calls []provider.ToolCall) []s
 		o := outcomes[i]
 		t, ok := a.tools.Get(c.Name)
 		a.sink.Emit(event.Event{Kind: event.ToolResult, Tool: event.Tool{
-			ID:         c.ID,
-			Name:       c.Name,
-			Args:       c.Arguments,
-			Output:     o.output,
-			Err:        o.errMsg,
-			ReadOnly:   ok && t.ReadOnly(),
-			Truncated:  o.truncated,
-			DurationMs: durations[i],
+			ID:          c.ID,
+			Name:        c.Name,
+			Args:        c.Arguments,
+			Output:      o.output,
+			Err:         o.errMsg,
+			ReadOnly:    ok && t.ReadOnly(),
+			Truncated:   o.truncated,
+			DurationMs:  durations[i],
+			Compression: o.compression,
 		}})
 		if o.truncated && o.truncMsg != "" {
 			a.sink.Emit(event.Event{Kind: event.Notice, Level: event.LevelInfo, Text: o.truncMsg})
@@ -1571,11 +1805,12 @@ func batchStormSignature(calls []provider.ToolCall, outcomes []toolOutcome) (str
 // blocked narrows that to a refusal (plan mode / permission). truncMsg is set
 // (without the "· " prefix) when the output was head+tailed.
 type toolOutcome struct {
-	output    string
-	blocked   bool
-	errMsg    string
-	truncated bool
-	truncMsg  string
+	output      string
+	blocked     bool
+	errMsg      string
+	truncated   bool
+	truncMsg    string
+	compression *event.Compression
 }
 
 // executeOne runs a single tool call. It is pure with respect to the event sink
@@ -1698,8 +1933,8 @@ func (a *Agent) executeOne(ctx context.Context, call provider.ToolCall) toolOutc
 		if !json.Valid([]byte(call.Arguments)) {
 			detail = strings.TrimRight(detail, "\n") + "\nThe arguments were not valid JSON. Re-emit them exactly per this schema:\n" + string(t.Schema())
 		}
-		body, truncMsg := truncateToolOutput(fmt.Sprintf("error: %v\n%s", err, detail))
-		return toolOutcome{output: body, errMsg: firstLine(err.Error()), truncated: truncMsg != "", truncMsg: truncMsg}
+		body, truncMsg, compression := a.modelToolOutput(call, t, fmt.Sprintf("error: %v\n%s", err, detail))
+		return toolOutcome{output: body, errMsg: firstLine(err.Error()), truncated: truncMsg != "", truncMsg: truncMsg, compression: compression}
 	}
 	a.recordRepeatSuccess(call, t)
 	// A foreground `task` sub-agent just finished — its result is the final answer.
@@ -1708,8 +1943,127 @@ func (a *Agent) executeOne(ctx context.Context, call provider.ToolCall) toolOutc
 	if a.hooks != nil && call.Name == "task" && !isBackgroundTaskCall(call.Arguments) {
 		a.hooks.SubagentStop(ctx, result)
 	}
-	body, truncMsg := truncateToolOutput(result)
-	return toolOutcome{output: body, truncated: truncMsg != "", truncMsg: truncMsg}
+	body, truncMsg, compression := a.modelToolOutput(call, t, result)
+	return toolOutcome{output: body, truncated: truncMsg != "", truncMsg: truncMsg, compression: compression}
+}
+
+func (a *Agent) modelToolOutput(call provider.ToolCall, t tool.Tool, raw string) (string, string, *event.Compression) {
+	body := raw
+	var compression *event.Compression
+	if compressed, meta, ok := a.compressToolOutput(call, t, raw); ok {
+		body = compressed
+		compression = meta
+	} else if a.toolOutputCompressor != nil {
+		a.clearRawToolResult(call.ID)
+	}
+	output, truncMsg := truncateToolOutput(body)
+	if compression != nil {
+		updateToolCompressionVisibleMetrics(compression, output)
+	}
+	return output, truncMsg, compression
+}
+
+func (a *Agent) compressToolOutput(call provider.ToolCall, t tool.Tool, raw string) (string, *event.Compression, bool) {
+	if a == nil || a.toolOutputCompressor == nil || call.ID == "" {
+		return "", nil, false
+	}
+	rawRef := "raw://tool/" + call.ID
+	opts := a.toolOutputCompression
+	opts.RawRef = rawRef
+	result, recovered := func() (result contextpack.Result, recovered any) {
+		defer func() {
+			if r := recover(); r != nil {
+				recovered = r
+			}
+		}()
+		result = a.toolOutputCompressor.Compress(contextpack.ToolOutput{
+			ToolName: call.Name,
+			Args:     call.Arguments,
+			Output:   raw,
+			ReadOnly: t.ReadOnly(),
+		}, opts)
+		return result, nil
+	}()
+	if recovered != nil {
+		a.sink.Emit(event.Event{Kind: event.Notice, Level: event.LevelWarn, Text: fmt.Sprintf(
+			"tool output compression failed for %s: %v; using raw/truncated output",
+			call.Name, recovered)})
+		return "", nil, false
+	}
+	if !result.Compressed || result.Content == "" {
+		return "", nil, false
+	}
+	compressed := formatCompressedToolOutput(result, rawRef)
+	if compressed == "" || len(compressed) >= len(raw) {
+		return "", nil, false
+	}
+	if err := a.storeRawToolResult(call.ID, raw); err != nil {
+		a.sink.Emit(event.Event{Kind: event.Notice, Level: event.LevelWarn, Text: fmt.Sprintf(
+			"raw tool result store failed for %s (%s): %v; full output unavailable",
+			call.Name, call.ID, err)})
+		compressedOnly := formatCompressedToolOutput(result, "")
+		if compressedOnly == "" {
+			compressedOnly = result.Content
+		}
+		return compressedOnly, toolCompressionEvent(result, ""), true
+	}
+	return compressed, toolCompressionEvent(result, rawRef), true
+}
+
+func toolCompressionEvent(result contextpack.Result, rawRef string) *event.Compression {
+	return &event.Compression{
+		RawRef:           rawRef,
+		Strategy:         result.Strategy,
+		Summary:          result.Summary,
+		RawChars:         result.RawChars,
+		CompressedChars:  result.CompressedChars,
+		SavedChars:       result.SavedChars,
+		RawTokens:        result.RawTokens,
+		CompressedTokens: result.CompressedTokens,
+		SavedTokens:      result.SavedTokens,
+	}
+}
+
+func updateToolCompressionVisibleMetrics(c *event.Compression, visible string) {
+	c.CompressedChars = utf8.RuneCountInString(visible)
+	if c.RawChars > c.CompressedChars {
+		c.SavedChars = c.RawChars - c.CompressedChars
+	} else {
+		c.SavedChars = 0
+	}
+	c.RawTokens = estimateToolCompressionTokens(c.RawChars)
+	c.CompressedTokens = estimateToolCompressionTokens(c.CompressedChars)
+	if c.RawTokens > c.CompressedTokens {
+		c.SavedTokens = c.RawTokens - c.CompressedTokens
+	} else {
+		c.SavedTokens = 0
+	}
+}
+
+func estimateToolCompressionTokens(chars int) int {
+	if chars <= 0 {
+		return 0
+	}
+	return (chars + 3) / 4
+}
+
+func formatCompressedToolOutput(result contextpack.Result, rawRef string) string {
+	content := strings.TrimRight(result.Content, "\n")
+	var note strings.Builder
+	note.WriteString("[compressed tool output")
+	if result.Summary != "" {
+		note.WriteString(": ")
+		note.WriteString(result.Summary)
+	}
+	if rawRef != "" {
+		note.WriteString("; raw available at ")
+		note.WriteString(rawRef)
+	}
+	note.WriteByte(']')
+	if content == "" {
+		return note.String()
+	}
+	return content + "\n\n" + note.String()
 }
 
 func (a *Agent) repeatedSuccessBlock(call provider.ToolCall, t tool.Tool) (string, bool) {

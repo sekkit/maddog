@@ -10,11 +10,29 @@ export const STATUS_BAR_ITEM_IDS = [
   "compact",
   "cost",
   "balance",
+  "provider",
+  "frontier_budget",
+  "provider_health",
+  "rate_limit",
 ] as const;
 
 export type StatusBarItemId = typeof STATUS_BAR_ITEM_IDS[number];
 
-export const DEFAULT_STATUS_BAR_ITEMS: StatusBarItemId[] = [...STATUS_BAR_ITEM_IDS];
+export const ALL_STATUS_BAR_ITEMS: StatusBarItemId[] = [...STATUS_BAR_ITEM_IDS];
+
+export const DEFAULT_STATUS_BAR_ITEMS: StatusBarItemId[] = [
+  "model",
+  "cache",
+  "cache_avg",
+  "session_tokens",
+  "turn_tokens",
+  "turn_cost",
+  "session_turns",
+  "context",
+  "compact",
+  "cost",
+  "balance",
+];
 
 const statusBarItemSet = new Set<string>(STATUS_BAR_ITEM_IDS);
 

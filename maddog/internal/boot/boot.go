@@ -25,6 +25,7 @@ import (
 	"maddog/internal/codegraph"
 	"maddog/internal/command"
 	"maddog/internal/config"
+	"maddog/internal/contextpack"
 	"maddog/internal/control"
 	"maddog/internal/event"
 	"maddog/internal/history"
@@ -580,6 +581,7 @@ func Build(ctx context.Context, opts Options) (*control.Controller, error) {
 			}
 			prov, price, ctxWin = p, pr, cw
 		}
+		identityModel, identityEffort := subagentIdentity(modelRef, effortRef)
 		subReg := agent.FilterRegistry(reg, sk.AllowedTools, agent.SubagentMetaTools()...)
 		continueFrom, forkFrom := strings.TrimSpace(runOpts.ContinueFrom), strings.TrimSpace(runOpts.ForkFrom)
 		if continueFrom != "" && forkFrom != "" {
@@ -598,7 +600,6 @@ func Build(ctx context.Context, opts Options) (*control.Controller, error) {
 			}
 			run = agent.EphemeralSubagentRun(sk.Body)
 		} else {
-			identityModel, identityEffort := subagentIdentity(modelRef, effortRef)
 			spec := agent.SubagentSpec{
 				Kind:             "skill",
 				Name:             sk.Name,
@@ -641,6 +642,9 @@ func Build(ctx context.Context, opts Options) (*control.Controller, error) {
 			CompactForceRatio: cfg.Agent.CompactForceRatio,
 			ArchiveDir:        archiveDir,
 			ReasoningLanguage: agent.ReasoningLanguageFromContext(sctx),
+			UsageRole:         "small",
+			UsageModel:        identityModel,
+			UsageEffort:       identityEffort,
 		}, agent.NestedSink(sctx, event.Discard))
 		if err != nil {
 			return "", errors.Join(err, subagentStore.SaveFailed(run))
@@ -652,10 +656,8 @@ func Build(ctx context.Context, opts Options) (*control.Controller, error) {
 	}
 	skillProfile := func(sk skill.Skill) *event.Profile {
 		model, effort := subagentModelRef(cfg, sk), subagentEffortRef(cfg, sk)
-		if model == "" && effort == "" {
-			return nil
-		}
-		return &event.Profile{Model: model, Effort: effort}
+		model, effort = subagentIdentity(model, effort)
+		return &event.Profile{Role: "small", Model: model, Effort: effort}
 	}
 	var advisorRunner agent.AdvisorRunner
 	if cfg.Agent.AdvisorMaxUsesPerTurn > 0 && frontierProv != nil {
@@ -864,6 +866,7 @@ func Build(ctx context.Context, opts Options) (*control.Controller, error) {
 		})
 	}
 
+	executorUsageModel, executorUsageEffort := providerProfileIdentity(entry, modelName)
 	execSess := agent.NewSession(sysPrompt)
 	executor := agent.New(execProv, reg, execSess, agent.Options{
 		MaxSteps:              maxSteps,
@@ -874,18 +877,28 @@ func Build(ctx context.Context, opts Options) (*control.Controller, error) {
 		FrontierPricing:       frontierPricing,
 		FrontierContextWindow: frontierContextWindow,
 		FrontierTarget:        frontierTarget,
+		UsageRole:             "default",
+		UsageModel:            executorUsageModel,
+		UsageEffort:           executorUsageEffort,
 		Advisor: agent.AdvisorConfig{
 			MaxUsesPerTurn:     cfg.Agent.AdvisorMaxUsesPerTurn,
 			MaxUsesPerSession:  cfg.Agent.AdvisorMaxUsesPerSession,
 			MaxContextMessages: cfg.Agent.AdvisorMaxContextMessages,
 			MaxContextChars:    cfg.Agent.AdvisorMaxContextChars,
 		},
-		AdvisorRunner:     advisorRunner,
-		NativeAdvisor:     nativeAdvisor,
-		Gate:              headlessGate,
-		Hooks:             hookRunner,
-		Jobs:              jm,
-		ProjectChecks:     projectChecks,
+		AdvisorRunner:        advisorRunner,
+		NativeAdvisor:        nativeAdvisor,
+		Gate:                 headlessGate,
+		Hooks:                hookRunner,
+		Jobs:                 jm,
+		ProjectChecks:        projectChecks,
+		ToolOutputCompressor: contextpack.DefaultCompressor{},
+		ToolOutputCompression: contextpack.Options{
+			Policy:         cfg.Agent.ContextCompression.EffectivePolicy(),
+			ThresholdBytes: cfg.Agent.ContextCompression.EffectiveThresholdBytes(),
+			MaxBytes:       cfg.Agent.ContextCompression.EffectiveMaxBytes(),
+		},
+		RawToolResultDir:  filepath.Join(sessionDir, "raw-tool-results"),
 		ContextWindow:     entry.ContextWindow,
 		SoftCompactRatio:  cfg.Agent.SoftCompactRatio,
 		CompactRatio:      cfg.Agent.CompactRatio,
@@ -913,9 +926,13 @@ func Build(ctx context.Context, opts Options) (*control.Controller, error) {
 			}
 			plannerSess := agent.NewSession(agent.PlannerPromptWithContext(mem.Block()))
 			plannerTools := agent.PlannerToolRegistry(reg)
+			plannerUsageModel, plannerUsageEffort := providerProfileIdentity(pe, pm)
 			runner = agent.NewCoordinator(plannerProv, plannerSess, pe.Price, plannerTools, agent.Options{
 				MaxSteps:          cfg.Agent.PlannerMaxSteps,
 				MaxStepsKey:       "agent.planner_max_steps",
+				UsageRole:         "planner",
+				UsageModel:        plannerUsageModel,
+				UsageEffort:       plannerUsageEffort,
 				Gate:              headlessGate,
 				ContextWindow:     pe.ContextWindow,
 				SoftCompactRatio:  cfg.Agent.SoftCompactRatio,
@@ -1157,6 +1174,22 @@ func newSubagentStore(sessionDir string) *agent.SubagentStore {
 		return nil
 	}
 	return agent.NewSubagentStore(filepath.Join(sessionDir, "subagents"))
+}
+
+func providerProfileIdentity(entry *config.ProviderEntry, fallbackRef string) (string, string) {
+	if entry == nil {
+		return strings.TrimSpace(fallbackRef), ""
+	}
+	modelID := strings.TrimSpace(entry.Name)
+	model := strings.TrimSpace(entry.Model)
+	if modelID != "" && model != "" {
+		modelID += "/" + model
+	} else if model != "" {
+		modelID = model
+	} else if modelID == "" {
+		modelID = strings.TrimSpace(fallbackRef)
+	}
+	return modelID, strings.TrimSpace(config.EffectiveEffort(entry))
 }
 
 func subagentEffectiveIdentity(cfg *config.Config, baseModelRef string, base *config.ProviderEntry, modelRef, effort string) (string, string) {

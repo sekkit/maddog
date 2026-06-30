@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"maddog/internal/codegraph"
 	"maddog/internal/config"
 )
 
@@ -123,5 +124,63 @@ func TestRenderTextFlagsInactiveSandbox(t *testing.T) {
 	active := RenderText(Report{Sandbox: SandboxReport{Bash: "enforce", Available: true}})
 	if strings.Contains(active, "inactive") {
 		t.Fatalf("enforce with an OS sandbox should not be flagged inactive:\n%s", active)
+	}
+}
+
+func TestCollectReportIncludesLatestCodeIntelligenceBenchmark(t *testing.T) {
+	cacheRoot := t.TempDir()
+	t.Setenv("APPDATA", cacheRoot)
+	t.Setenv("XDG_CONFIG_HOME", cacheRoot)
+
+	report := codegraph.BenchmarkReport{
+		Backends: []codegraph.BenchmarkBackendReport{{
+			ID:     "mock",
+			Name:   "MockGraph",
+			Health: codegraph.BenchmarkHealthReady,
+		}},
+	}
+	saved, err := codegraph.SaveBenchmarkReport(report, config.CacheDir())
+	if err != nil {
+		t.Fatalf("SaveBenchmarkReport: %v", err)
+	}
+
+	got := Collect(Options{Version: "test", Config: config.Default()})
+	if got.Codegraph.Benchmark.JSONPath == "" {
+		t.Fatalf("doctor should expose latest benchmark path: %+v", got.Codegraph.Benchmark)
+	}
+	if got.Codegraph.Benchmark.JSONPath != redactHome(filepath.Join(filepath.Dir(saved.JSONPath), codegraph.BenchmarkLatestJSONName)) {
+		t.Fatalf("benchmark json path = %q, want latest next to %q", got.Codegraph.Benchmark.JSONPath, saved.JSONPath)
+	}
+	if got.Codegraph.Benchmark.MarkdownPath != redactHome(filepath.Join(filepath.Dir(saved.MarkdownPath), codegraph.BenchmarkLatestMarkdownName)) {
+		t.Fatalf("benchmark markdown path = %q, want latest next to %q", got.Codegraph.Benchmark.MarkdownPath, saved.MarkdownPath)
+	}
+	if len(got.Codegraph.Benchmark.Backends) != 1 || got.Codegraph.Benchmark.Backends[0].ID != "mock" || got.Codegraph.Benchmark.Backends[0].Health != codegraph.BenchmarkHealthReady {
+		t.Fatalf("benchmark backends = %+v, want mock ready", got.Codegraph.Benchmark.Backends)
+	}
+
+	text := RenderText(got)
+	if !strings.Contains(text, "latest bench") || !strings.Contains(text, "mock") || !strings.Contains(text, "ready") {
+		t.Fatalf("doctor text missing latest benchmark summary:\n%s", text)
+	}
+}
+
+func TestCollectReportRedactsBenchmarkReadErrors(t *testing.T) {
+	cacheRoot := t.TempDir()
+	t.Setenv("APPDATA", cacheRoot)
+	t.Setenv("XDG_CONFIG_HOME", cacheRoot)
+	benchDir := filepath.Join(config.CacheDir(), "codeintel-bench")
+	if err := os.MkdirAll(benchDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(benchDir, codegraph.BenchmarkLatestJSONName), []byte(`{`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got := Collect(Options{Version: "test", Config: config.Default()})
+	if got.Codegraph.Benchmark.Error == "" {
+		t.Fatal("expected benchmark parse error")
+	}
+	if strings.Contains(got.Codegraph.Benchmark.Error, cacheRoot) {
+		t.Fatalf("benchmark error leaked cache root: %q", got.Codegraph.Benchmark.Error)
 	}
 }

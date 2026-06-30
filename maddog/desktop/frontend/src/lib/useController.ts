@@ -31,7 +31,10 @@ import type {
   WireApproval,
   WireAdvisor,
   WireAsk,
+  WireCompression,
   WireEvent,
+  WireProfile,
+  WireProviderStatus,
   WireUsage,
 } from "./types";
 
@@ -67,12 +70,14 @@ export type Item =
       output?: string;
       error?: string;
       truncated?: boolean;
+      rawUnavailable?: boolean;
       dataArchived?: boolean; // args/output trimmed for memory; full data available via backend
       durationMs?: number;
       summary?: string; // stable collapsed readout kept even after args/output archive
       isShell?: boolean; // true for !-prefix shell commands (controls default expand)
       parentId?: string; // a sub-agent call nests under the `task` call with this id
-      profile?: { model?: string; effort?: string }; // subagent model/effort from tool event
+      profile?: WireProfile; // subagent provider role/model/effort from tool event
+      compression?: WireCompression; // tool-output compression metadata for badges and context metrics
     };
 
 interface State {
@@ -82,6 +87,7 @@ interface State {
   approval?: WireApproval;
   ask?: WireAsk;
   usage?: WireUsage;
+  providerStatus?: WireProviderStatus;
   context: ContextInfo;
   meta?: Meta;
   balance?: BalanceInfo;
@@ -466,7 +472,7 @@ function applyEvent(s: State, e: WireEvent): State {
           const existing = it;
           const shortArgs = existing.args && existing.args.length > 200 ? existing.args.slice(0, 200) + "…" : existing.args;
           const summary = t.err ? undefined : existing.summary || summarize(existing.name, existing.args, t.output);
-          next[idx] = { ...existing, status: t.err ? "error" : "done", args: shortArgs, output: undefined, error: t.err, truncated: t.truncated, durationMs: t.durationMs, dataArchived: true, summary };
+          next[idx] = { ...existing, status: t.err ? "error" : "done", args: shortArgs, output: undefined, error: t.err, truncated: t.truncated, durationMs: t.durationMs, dataArchived: true, summary, compression: t.compression ?? existing.compression };
         }
       }
       return { ...s, items: next };
@@ -491,8 +497,21 @@ function applyEvent(s: State, e: WireEvent): State {
       const turnCost = s.turnCost + usageCost;
       const sessionCost = s.sessionCost + usageCost;
       const sessionCurrency = e.usage?.currency || s.sessionCurrency || "¥";
-      return { ...s, usage: e.usage, context: { ...s.context, used, sessionTokens }, turnTokens, turnTotalTokens, turnCost, sessionTokens, sessionCost, sessionCurrency };
+      return {
+        ...s,
+        usage: e.usage,
+        providerStatus: e.usage?.providerStatus ?? s.providerStatus,
+        context: { ...s.context, used, sessionTokens },
+        turnTokens,
+        turnTotalTokens,
+        turnCost,
+        sessionTokens,
+        sessionCost,
+        sessionCurrency,
+      };
     }
+    case "provider_status":
+      return { ...s, providerStatus: e.providerStatus ?? s.providerStatus };
     case "notice":
       return { ...s, running: s.turnActive ? s.running : false, seq: s.seq + 1, items: [...s.items, { kind: "notice", id: `n${s.seq}`, level: e.level ?? "info", text: e.text ?? "" }] };
     case "mcp_surface_ready":

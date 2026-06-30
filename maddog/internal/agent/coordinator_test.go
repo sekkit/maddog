@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"maddog/internal/event"
+	"net/http"
 	"strings"
 	"testing"
 
@@ -81,6 +82,68 @@ func TestCoordinatorHandsPlanToExecutor(t *testing.T) {
 	// prefix grows prepend-only and stays cache-stable.
 	if n := len(plannerSess.Messages); n != 3 {
 		t.Errorf("planner session has %d messages, want 3", n)
+	}
+}
+
+func TestCoordinatorPlannerUsageCarriesProfileAndStatus(t *testing.T) {
+	planner := &mockProvider{name: "runtime-planner", chunks: []provider.Chunk{
+		{Type: provider.ChunkText, Text: "1. inspect"},
+		{Type: provider.ChunkUsage, Usage: &provider.Usage{PromptTokens: 9, CompletionTokens: 2, TotalTokens: 11}},
+		{Type: provider.ChunkDone},
+	}}
+	exec := &mockProvider{name: "executor", chunks: []provider.Chunk{
+		{Type: provider.ChunkText, Text: "Done."},
+		{Type: provider.ChunkDone},
+	}}
+	sink := &recordSink{}
+	executor := New(exec, tool.NewRegistry(), NewSession("exec-sys"), Options{}, event.Discard)
+	coord := NewCoordinator(planner, NewSession("planner-sys"), nil, nil, Options{
+		UsageRole:   "planner",
+		UsageModel:  "default-provider/planner-model",
+		UsageEffort: "high",
+	}, executor, 0, sink, nil)
+
+	if err := coord.Run(context.Background(), "plan this"); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	usages := sink.kinds(event.Usage)
+	if len(usages) == 0 {
+		t.Fatal("planner usage event missing")
+	}
+	profile := usages[0].Profile
+	if profile == nil || profile.Role != "planner" || profile.Model != "default-provider/planner-model" || profile.Effort != "high" {
+		t.Fatalf("planner usage profile = %+v, want planner/default-provider/planner-model/high", profile)
+	}
+	status := usages[0].ProviderStatus
+	if status == nil || status.Role != "planner" || status.Health != "ok" || status.AuthStatus != "ok" || status.RateLimit != "ok" {
+		t.Fatalf("planner provider status = %+v, want planner ok/auth ok/rate ok", status)
+	}
+}
+
+func TestCoordinatorPlannerErrorEmitsProviderStatus(t *testing.T) {
+	planner := &mockProvider{name: "runtime-planner", chunks: []provider.Chunk{
+		{Type: provider.ChunkError, Err: &provider.APIError{Provider: "planner", Status: http.StatusTooManyRequests, Body: "slow down"}},
+	}}
+	exec := &mockProvider{name: "executor", chunks: []provider.Chunk{{Type: provider.ChunkDone}}}
+	sink := &recordSink{}
+	executor := New(exec, tool.NewRegistry(), NewSession("exec-sys"), Options{}, event.Discard)
+	coord := NewCoordinator(planner, NewSession("planner-sys"), nil, nil, Options{
+		UsageRole:  "planner",
+		UsageModel: "default-provider/planner-model",
+	}, executor, 0, sink, nil)
+
+	if err := coord.Run(context.Background(), "plan this"); err == nil {
+		t.Fatal("Run error = nil, want planner provider error")
+	}
+
+	statuses := sink.kinds(event.ProviderStatusUpdate)
+	if len(statuses) != 1 {
+		t.Fatalf("planner provider status events = %d, want 1", len(statuses))
+	}
+	status := statuses[0].ProviderStatus
+	if status == nil || status.Role != "planner" || status.Health != "rate_limited" || status.RateLimit != "rate_limited" || status.LastError == "" {
+		t.Fatalf("planner provider status = %+v, want planner rate_limited with last error", status)
 	}
 }
 

@@ -86,6 +86,27 @@ func (c *Config) SetFrontierRoute(model string, enabled bool, threshold int, bud
 	return nil
 }
 
+func (c *Config) SetContextCompression(policy string, thresholdBytes int, maxBytes int) error {
+	policy = strings.ToLower(strings.TrimSpace(policy))
+	switch policy {
+	case "", "auto":
+		policy = "auto"
+	case "off", "aggressive":
+	default:
+		return fmt.Errorf("context compression policy %q: must be off|auto|aggressive", policy)
+	}
+	if thresholdBytes < 0 {
+		return fmt.Errorf("context compression threshold must be >= 0")
+	}
+	if maxBytes < 0 {
+		return fmt.Errorf("context compression max bytes must be >= 0")
+	}
+	c.Agent.ContextCompression.Policy = policy
+	c.Agent.ContextCompression.ThresholdBytes = thresholdBytes
+	c.Agent.ContextCompression.MaxBytes = maxBytes
+	return nil
+}
+
 // SetAutoPlan sets the interactive auto-plan gate. "off" keeps plan mode manual;
 // "on" opts into automatic read-only planning for complex-looking turns.
 // "ask" is accepted as a legacy synonym for "on" but is never written back.

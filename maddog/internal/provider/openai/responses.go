@@ -217,7 +217,7 @@ func (c *responsesClient) readStream(ctx context.Context, resp *http.Response, o
 			return
 		}
 		if ev.Error != nil {
-			out <- provider.Chunk{Type: provider.ChunkError, Err: fmt.Errorf("%s: %s", c.name, ev.Error.Message)}
+			out <- provider.Chunk{Type: provider.ChunkError, Err: provider.NewStructuredAPIError(c.name, ev.Error.Type, ev.Error.Code, ev.Error.Message)}
 			return
 		}
 		switch ev.Type {
@@ -370,6 +370,8 @@ type responsesEvent struct {
 	} `json:"response"`
 	Error *struct {
 		Message string `json:"message"`
+		Type    string `json:"type"`
+		Code    string `json:"code"`
 	} `json:"error"`
 }
 

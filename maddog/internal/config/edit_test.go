@@ -212,6 +212,11 @@ func TestDesktopStatusBarItemsNormalizeAndValidate(t *testing.T) {
 	if got, want := Default().DesktopStatusBarItems(), DefaultDesktopStatusBarItems(); !reflect.DeepEqual(got, want) {
 		t.Fatalf("default desktop status bar items = %v, want %v", got, want)
 	}
+	for _, id := range []string{"provider", "frontier_budget", "provider_health", "rate_limit"} {
+		if stringSliceContains(DefaultDesktopStatusBarItems(), id) {
+			t.Fatalf("%q should be configurable but not visible by default", id)
+		}
+	}
 
 	c := Default()
 	c.Desktop.StatusBarItems = []string{" balance ", "cache", "cache", "unknown", "model"}
@@ -227,6 +232,13 @@ func TestDesktopStatusBarItemsNormalizeAndValidate(t *testing.T) {
 		t.Fatalf("saved desktop status bar items = %v, want %v", got, want)
 	}
 
+	if err := c.SetDesktopStatusBarItems([]string{"provider", "frontier_budget", "provider_health", "rate_limit"}); err != nil {
+		t.Fatalf("SetDesktopStatusBarItems D3 provider items: %v", err)
+	}
+	if got, want := c.DesktopStatusBarItems(), []string{"provider", "frontier_budget", "provider_health", "rate_limit"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("saved D3 desktop status bar items = %v, want %v", got, want)
+	}
+
 	if err := c.SetDesktopStatusBarItems(nil); err != nil {
 		t.Fatalf("SetDesktopStatusBarItems nil: %v", err)
 	}
@@ -237,6 +249,15 @@ func TestDesktopStatusBarItemsNormalizeAndValidate(t *testing.T) {
 	if err := c.SetDesktopStatusBarItems([]string{"ghost"}); err == nil {
 		t.Fatal("expected error for unknown status bar item")
 	}
+}
+
+func stringSliceContains(items []string, want string) bool {
+	for _, item := range items {
+		if item == want {
+			return true
+		}
+	}
+	return false
 }
 
 func TestDesktopCloseBehaviorFallsBackToLegacyUI(t *testing.T) {
@@ -317,6 +338,30 @@ func TestSetFrontierRoute(t *testing.T) {
 	}
 	if err := c.SetFrontierRoute("deepseek-pro", true, 3, -1); err == nil {
 		t.Error("expected error for negative frontier budget")
+	}
+}
+
+func TestSetContextCompressionRoundTripsPolicyAndThreshold(t *testing.T) {
+	c := Default()
+
+	if err := c.SetContextCompression("aggressive", 512, 256); err != nil {
+		t.Fatalf("SetContextCompression: %v", err)
+	}
+	if got := c.Agent.ContextCompression.Policy; got != "aggressive" {
+		t.Fatalf("context compression policy = %q, want aggressive", got)
+	}
+	if c.Agent.ContextCompression.ThresholdBytes != 512 || c.Agent.ContextCompression.MaxBytes != 256 {
+		t.Fatalf("context compression limits = threshold:%d max:%d", c.Agent.ContextCompression.ThresholdBytes, c.Agent.ContextCompression.MaxBytes)
+	}
+
+	if err := c.SetContextCompression("disabled", 1, 1); err == nil {
+		t.Fatal("expected error for unsupported context compression policy")
+	}
+	if err := c.SetContextCompression("auto", -1, 1); err == nil {
+		t.Fatal("expected error for negative threshold")
+	}
+	if err := c.SetContextCompression("auto", 1, -1); err == nil {
+		t.Fatal("expected error for negative max bytes")
 	}
 }
 

@@ -1,6 +1,6 @@
 // Run: tsx src/__tests__/context-panel-breakdown.test.ts
 
-import { contextBreakdown, contextCostDisplay } from "../components/ContextPanel";
+import { contextBreakdown, contextCompressionBreakdown, contextCostDisplay } from "../components/ContextPanel";
 import { currencySymbol, formatMoney } from "../lib/money";
 
 let passed = 0;
@@ -79,6 +79,27 @@ eq(formatMoney(infoCost.amount, infoCost.currency, "dash"), "$0.1759", "USD pane
 eq(currencySymbol("楼"), "¥", "unexpected currency text does not leak into money values");
 eq(currencySymbol("aud"), "AUD ", "unknown ISO currency codes stay readable");
 eq(currencySymbol("A$"), "A$", "compact multi-character currency symbols are preserved");
+
+console.log("\ncontext compression breakdown");
+
+const compression = contextCompressionBreakdown({
+  compressionEvents: 3,
+  compressionRawTokens: 4000,
+  compressionCompressedTokens: 900,
+  compressionSavedTokens: 3100,
+  compressionRawChars: 16_000,
+  compressionCompressedChars: 3_600,
+  compressionSavedChars: 12_400,
+});
+eq(compression.events, 3, "compression breakdown keeps event count");
+eq(compression.savedPct, 78, "compression breakdown rounds saved/raw percentage");
+eq(compression.rawTokensLabel, "4k", "compression raw token label is compact");
+eq(compression.savedTokensLabel, "3.1k", "compression saved token label is compact");
+eq(compression.compressedTokensLabel, "900", "compression compressed token label keeps sub-1k values exact");
+
+const emptyCompression = contextCompressionBreakdown({});
+eq(emptyCompression.savedPct, 0, "empty compression breakdown has zero savings");
+eq(emptyCompression.savedTokensLabel, "-", "empty compression breakdown uses dash label");
 
 console.log(`\n${passed} passed, ${failed} failed, ${passed + failed} total`);
 if (failed > 0) process.exit(1);

@@ -91,6 +91,17 @@ func TestRenderTOMLRoundTrips(t *testing.T) {
 	orig.Skills.DisabledSkills = []string{"review", "explore"}
 	orig.Skills.MaxDepth = 2
 	orig.Codegraph = CodegraphConfig{Enabled: true, AutoInstall: false, Path: "/opt/codegraph", Tier: "background"}
+	orig.CodeIntelligence.Backends = []CodeIntelligenceBackendConfig{{
+		Name:    "serena",
+		Kind:    "mcp",
+		Server:  "serena",
+		Enabled: boolPtr(true),
+		Tools: map[string]string{
+			"symbol_search": "mcp__serena__find_symbol",
+			"context_pack":  "mcp__serena__read_context",
+			"health":        "mcp__serena__status",
+		},
+	}}
 	orig.BuiltInMCPUpdates = BuiltInMCPUpdatesConfig{Mode: BuiltInMCPUpdateModeDownload, CheckInterval: "12h"}
 	orig.Bot.ToolApprovalMode = "auto"
 	orig.Bot.Connections = []BotConnectionConfig{{
@@ -235,6 +246,12 @@ func TestRenderTOMLRoundTrips(t *testing.T) {
 	}
 	if got.Codegraph.Path != "/opt/codegraph" {
 		t.Errorf("codegraph.path = %q, want /opt/codegraph", got.Codegraph.Path)
+	}
+	if len(got.CodeIntelligence.Backends) != 1 || got.CodeIntelligence.Backends[0].Name != "serena" {
+		t.Fatalf("code intelligence backends = %+v, want serena", got.CodeIntelligence.Backends)
+	}
+	if got.CodeIntelligence.Backends[0].Tools["context_pack"] != "mcp__serena__read_context" {
+		t.Fatalf("code intelligence context tool = %q", got.CodeIntelligence.Backends[0].Tools["context_pack"])
 	}
 	if got.Codegraph.Tier != "" {
 		t.Errorf("codegraph.tier = %q, want migrated empty", got.Codegraph.Tier)
@@ -394,6 +411,30 @@ extensions = [".cc", ".cpp", ".hpp"]
 				t.Fatalf("lsp.servers.c++ not preserved: %+v", cpp)
 			}
 		})
+	}
+}
+
+func TestRenderCodeIntelligenceToolKeysRoundTripWhenQuoted(t *testing.T) {
+	c := Default()
+	c.CodeIntelligence.Backends = []CodeIntelligenceBackendConfig{{
+		Name:   "custom",
+		Kind:   "mcp",
+		Server: "custom",
+		Tools: map[string]string{
+			"context.pack": "mcp__custom__context",
+		},
+	}}
+
+	rendered := RenderTOML(c)
+	if !strings.Contains(rendered, `"context.pack" = "mcp__custom__context"`) {
+		t.Fatalf("rendered code intelligence tool key was not quoted:\n%s", rendered)
+	}
+	var got Config
+	if _, err := toml.Decode(rendered, &got); err != nil {
+		t.Fatalf("decode rendered TOML: %v\n---\n%s", err, rendered)
+	}
+	if got.CodeIntelligence.Backends[0].Tools["context.pack"] != "mcp__custom__context" {
+		t.Fatalf("tool mapping did not round-trip: %+v", got.CodeIntelligence.Backends[0].Tools)
 	}
 }
 

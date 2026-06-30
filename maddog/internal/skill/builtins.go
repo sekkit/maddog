@@ -89,6 +89,7 @@ How to operate:
 - Discover scope first: ` + "`bash git status`" + `, ` + "`git diff --stat`" + `, ` + "`git log --oneline`" + `. Then ` + "`git diff`" + ` (or ` + "`git diff <base>...HEAD`" + `) for the hunks.
 - Read touched files (read_file) when the diff alone lacks context — signatures, surrounding invariants, callers.
 - For "any callers depending on this?" questions: use codegraph_callers or codegraph_impact (preferred) or grep the symbol BEFORE asserting impact.
+- Run deterministic review rules before asking the LLM to explain: secret-like strings, unsafe remote shell installers, destructive SQL, ignored errors, and large-diff risk markers. Treat rule hits as grounded findings; use code intelligence context when available, but fall back to diff-only review if it is unavailable.
 - Stay read-only. Never commit, never write files, never propose edits as applied changes. The parent decides whether to act.
 - Cap yourself at ~12 tool calls. If the diff is too big, pick the riskiest 2-3 files and say so.
 
