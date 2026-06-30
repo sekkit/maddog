@@ -1152,7 +1152,7 @@ export interface SettingsView {
   agent: AgentView;
   bot: BotSettingsView;
   desktopLanguage: string; // "" | "en" | "zh"; empty = auto
-  desktopLayoutStyle: string; // "classic" | "workbench" | "creation"
+  desktopLayoutStyle: string; // "workbench" | "creation"; "classic" legacy configs open as workbench
   desktopWindowChrome: string; // "native" | "custom"; custom uses self-drawn controls after restart
   desktopTheme: string; // "auto" | "dark" | "light"
   desktopThemeStyle: string;
@@ -1174,7 +1174,7 @@ export interface SettingsView {
 export interface DesktopStartupSettingsView {
   bot: BotSettingsView;
   desktopLanguage: string; // "" | "en" | "zh"; empty = auto
-  desktopLayoutStyle: string; // "classic" | "workbench" | "creation"
+  desktopLayoutStyle: string; // "workbench" | "creation"; "classic" legacy configs open as workbench
   desktopWindowChrome: string; // "native" | "custom"
   desktopTheme: string; // "auto" | "dark" | "light"
   desktopThemeStyle: string;

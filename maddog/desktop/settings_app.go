@@ -584,7 +584,7 @@ func (a *App) Settings() SettingsView {
 			},
 			Bot:                botSettingsView(config.BotConfig{}),
 			AutoPlan:           "off",
-			DesktopLayoutStyle: "classic",
+			DesktopLayoutStyle: "workbench",
 			DesktopTheme:       "light",
 			DesktopThemeStyle:  "graphite",
 			CloseBehavior:      "background",

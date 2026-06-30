@@ -2962,7 +2962,7 @@ function makeMockApp(): AppBindings {
           settings.desktopThemeStyle = style;
         },
         async SetDesktopLayoutStyle(style: string) {
-          settings.desktopLayoutStyle = style === "workbench" || style === "creation" ? style : "classic";
+          settings.desktopLayoutStyle = style === "creation" ? "creation" : "workbench";
         },
         async SetDesktopWindowChrome(chrome: string) {
           settings.desktopWindowChrome = chrome === "custom" ? "custom" : "native";

@@ -175,13 +175,12 @@ function isThemeMode(value: string): value is Theme {
   return value === "auto" || value === "light" || value === "dark";
 }
 
-type DesktopLayoutStyle = "classic" | "workbench" | "creation";
+type DesktopLayoutStyle = "workbench" | "creation";
 type DesktopWindowChrome = "native" | "custom";
 
 function normalizeDesktopLayoutStyle(style: string | undefined): DesktopLayoutStyle {
-  if (style === "workbench") return "workbench";
   if (style === "creation") return "creation";
-  return "classic";
+  return "workbench";
 }
 
 function normalizeDesktopWindowChrome(chrome: string | undefined): DesktopWindowChrome {
@@ -2718,8 +2717,8 @@ export default function App() {
   const topicbarCanRename = !sidebarImDetailConnection && Boolean(activeTab?.topicId);
   const topicbarTitleEditSize = Math.min(56, Math.max(4, topicTitleDraft.length || topicbarTitle.length || 1));
   const sidebarWorkbench = desktopLayoutStyle === "workbench";
-  // Creation keeps the classic sidebar/chat structure while gating chrome tweaks
-  // behind its own style flag so classic/workbench remain unchanged.
+  // Creation keeps its separate sidebar/chat structure while workbench remains
+  // the v1.13-aligned default shell.
   const appChromeHidden = sidebarWorkbench || sidebarCreation;
   const workbenchChromeHidden = sidebarWorkbench;
   const sidebarClassName = [
@@ -2799,6 +2798,7 @@ export default function App() {
               <div className="sidebar__head" aria-hidden={sidebarCollapsed}>
                 <div className="sidebar__brand sidebar__brand--workbench">
                   <img src={maddogIcon} alt="Maddog" className="sidebar__brand-logo sidebar__brand-logo--workbench" draggable={false} />
+                  <span className="sidebar__brand-wordmark">Maddog</span>
                 </div>
               </div>
 
@@ -2900,7 +2900,7 @@ export default function App() {
               }}
               timeFilter={topicTimeFilter}
               onTimeFilterChange={setTopicTimeFilter}
-              variant={sidebarWorkbench ? "workbench" : sidebarCreation ? "creation" : "classic"}
+              variant={sidebarWorkbench ? "workbench" : sidebarCreation ? "creation" : "workbench"}
               searchExpanded={!sidebarCreation || sidebarSearchOpen}
               searchFocusSignal={sidebarSearchFocusSignal}
               showShortcutBadges={showTopicBadges}

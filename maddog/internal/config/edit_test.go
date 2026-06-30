@@ -177,8 +177,8 @@ func TestDesktopLayoutStyleNormalizes(t *testing.T) {
 		want    string
 		wantErr bool
 	}{
-		{"", "classic", false},
-		{"classic", "classic", false},
+		{"", "workbench", false},
+		{"classic", "workbench", false},
 		{" workbench ", "workbench", false},
 		{"workspace", "workbench", false},
 		{"creation", "creation", false},

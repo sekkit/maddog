@@ -150,6 +150,17 @@ ok(
 );
 
 ok(
+  /function normalizeDesktopLayoutStyle\(style: string \| undefined\): DesktopLayoutStyle \{\s*if \(style === "creation"\) return "creation";\s*return "workbench";\s*\}/.test(appSource),
+  "legacy or missing desktop layout preferences open in the v1.13 workbench layout",
+);
+
+ok(
+  /className="sidebar__brand-wordmark">Maddog<\/span>/.test(appSource) &&
+    finalDeclaration(".sidebar--workbench .sidebar__brand-wordmark", "letter-spacing") === "0",
+  "workbench sidebar shows a compact Maddog wordmark like the v1.13 reference",
+);
+
+ok(
   /\{!appChromeHidden && \(/.test(appSource),
   "workbench skips rendering the top AppChrome row",
 );
