@@ -81,6 +81,7 @@ func TestCollectReportRedactsSecrets(t *testing.T) {
 }
 
 func TestCollectReportDoesNotRequireAPIKey(t *testing.T) {
+	t.Setenv("MADDOG_HOME", filepath.Join(t.TempDir(), "maddog"))
 	t.Setenv("DEEPSEEK_API_KEY", "")
 
 	cfg := config.Default()

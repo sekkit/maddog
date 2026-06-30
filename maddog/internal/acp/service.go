@@ -4,8 +4,10 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
@@ -30,8 +32,8 @@ import (
 //
 // Cwd roots the session's file tools and bash (built via builtin.Workspace).
 // Model and EffortOverride are optional session-local provider selectors from
-// ACP config options. MCPServers are the stdio MCP servers the client asked the
-// agent to connect for this session.
+// ACP config options. MCPServers are the MCP servers the client asked the agent
+// to connect for this session.
 type SessionParams struct {
 	Cwd            string
 	MCPServers     []plugin.Spec
@@ -102,6 +104,7 @@ func Serve(ctx context.Context, r io.Reader, w io.Writer, factory Factory, info 
 		sessions: make(map[string]*acpSession),
 	}
 	conn.Handle("initialize", svc.initialize)
+	conn.Handle("authenticate", svc.authenticate)
 	conn.Handle("session/new", svc.sessionNew)
 	conn.Handle("session/load", svc.sessionLoad)
 	conn.Handle("session/resume", svc.sessionResume)
@@ -127,12 +130,25 @@ type service struct {
 	sessions map[string]*acpSession
 }
 
+// acpController is the slice of the controller's driving port the ACP transport
+// drives: session lifecycle + persistence, turn execution, interactive approval,
+// and the capability surface (commands/skills/MCP prompts). ACP never touches
+// goals, checkpoints, or memory, so it depends on those sub-ports only — not the
+// concrete *control.Controller.
+type acpController interface {
+	control.Lifecycle
+	control.TurnControl
+	control.Approvals
+	control.Capabilities
+	control.SessionPersistence
+}
+
 // acpSession is one open session: its controller, the on-disk transcript path
 // (empty when persistence is off), and the cancel func of the in-flight turn
 // (nil when idle) so session/cancel can abort it.
 type acpSession struct {
 	id         string
-	ctrl       *control.Controller
+	ctrl       acpController
 	sink       *updateSink
 	transcript string
 	cwd        string
@@ -217,7 +233,8 @@ func (s *acpSession) deleteAndWait() {
 
 // initialize advertises the agent's capability set: persisted load plus ACP v1
 // list/resume/close/delete lifecycle helpers, prompts carrying inline resource
-// text (embeddedContext) but not image/audio, and stdio-only MCP (no http/sse).
+// text (embeddedContext) but not image/audio, and stdio / Streamable HTTP MCP
+// (no legacy sse).
 func (s *service) initialize(_ context.Context, _ json.RawMessage) (any, error) {
 	return InitializeResult{
 		ProtocolVersion: ProtocolVersion,
@@ -234,11 +251,32 @@ func (s *service) initialize(_ context.Context, _ json.RawMessage) (any, error) 
 				Audio:           false,
 				EmbeddedContext: true,
 			},
-			MCPCapabilities: MCPCapabilities{HTTP: false, SSE: false},
+			MCPCapabilities: MCPCapabilities{HTTP: true, SSE: false},
 		},
 		AgentInfo:   Implementation{Name: s.info.Name, Version: s.info.Version},
-		AuthMethods: []any{},
+		AuthMethods: []AuthMethod{maddogSetupAuthMethod()},
 	}, nil
+}
+
+func maddogSetupAuthMethod() AuthMethod {
+	return AuthMethod{
+		ID:          "maddog-setup",
+		Name:        "Maddog setup",
+		Description: "Configure Maddog providers and credentials in a terminal",
+		Type:        "terminal",
+		Args:        []string{"setup"},
+	}
+}
+
+func (s *service) authenticate(_ context.Context, raw json.RawMessage) (any, error) {
+	var p AuthenticateParams
+	if err := json.Unmarshal(raw, &p); err != nil {
+		return nil, &RPCError{Code: ErrInvalidParams, Message: "authenticate: " + err.Error()}
+	}
+	if strings.TrimSpace(p.MethodID) != maddogSetupAuthMethod().ID {
+		return nil, &RPCError{Code: ErrInvalidParams, Message: "authenticate: unknown methodId " + p.MethodID}
+	}
+	return AuthenticateResult{}, nil
 }
 
 // sessionNew opens a session: it mints an id, builds the session's sink bound to
@@ -283,6 +321,7 @@ func (s *service) sessionNew(ctx context.Context, raw json.RawMessage) (any, err
 	}
 	ctrl.EnableInteractiveApproval()
 	sink.bindApprove(ctrl.Approve)
+	sink.bindAnswer(ctrl.AnswerQuestion)
 
 	now := time.Now().UTC()
 	sess := &acpSession{
@@ -307,6 +346,7 @@ func (s *service) sessionNew(ctx context.Context, raw json.RawMessage) (any, err
 	s.mu.Lock()
 	s.sessions[id] = sess
 	s.mu.Unlock()
+	s.sendAvailableCommands(sess)
 
 	return SessionNewResult{
 		SessionID:     id,
@@ -360,6 +400,9 @@ func (s *service) openExistingSession(ctx context.Context, method, id, cwdParam 
 	}
 
 	if sess := s.session(id); sess != nil {
+		if agent.IsCleanupPending(sess.transcript) {
+			return SessionConfigState{}, &RPCError{Code: ErrInvalidParams, Message: method + ": unknown session " + id}
+		}
 		if replay {
 			newUpdateSink(s.conn, id).replay(sess.ctrl.History())
 		}
@@ -371,8 +414,13 @@ func (s *service) openExistingSession(ctx context.Context, method, id, cwdParam 
 	}
 
 	var saved acpSessionMeta
+	persistedPath := ""
 	if dir := s.sessionDir(); dir != "" {
-		meta, _, metaErr := loadACPMeta(transcriptPath(dir, id))
+		persistedPath = transcriptPath(dir, id)
+		if agent.IsCleanupPending(persistedPath) {
+			return SessionConfigState{}, &RPCError{Code: ErrInvalidParams, Message: method + ": unknown session " + id}
+		}
+		meta, _, metaErr := loadACPMeta(persistedPath)
 		if metaErr != nil {
 			return SessionConfigState{}, &RPCError{Code: ErrInternal, Message: method + ": " + metaErr.Error()}
 		}
@@ -404,6 +452,7 @@ func (s *service) openExistingSession(ctx context.Context, method, id, cwdParam 
 	}
 	ctrl.EnableInteractiveApproval()
 	sink.bindApprove(ctrl.Approve)
+	sink.bindAnswer(ctrl.AnswerQuestion)
 
 	dir := ctrl.SessionDir()
 	if dir == "" {
@@ -411,6 +460,10 @@ func (s *service) openExistingSession(ctx context.Context, method, id, cwdParam 
 		return SessionConfigState{}, &RPCError{Code: ErrInternal, Message: method + ": persistence is disabled"}
 	}
 	path := transcriptPath(dir, id)
+	if path != persistedPath && agent.IsCleanupPending(path) {
+		ctrl.Close()
+		return SessionConfigState{}, &RPCError{Code: ErrInvalidParams, Message: method + ": unknown session " + id}
+	}
 	loaded, err := agent.LoadSession(path)
 	if err != nil {
 		ctrl.Close()
@@ -441,6 +494,7 @@ func (s *service) openExistingSession(ctx context.Context, method, id, cwdParam 
 	s.mu.Lock()
 	s.sessions[id] = sess
 	s.mu.Unlock()
+	s.sendAvailableCommands(sess)
 
 	if replay {
 		sink.replay(ctrl.History())
@@ -472,6 +526,7 @@ func (s *service) sessionPrompt(ctx context.Context, raw json.RawMessage) (any, 
 	if text == "" {
 		return nil, &RPCError{Code: ErrInvalidParams, Message: "session/prompt: empty prompt"}
 	}
+	text = s.resolveSlashPrompt(ctx, sess, text)
 
 	runCtx, cancel, ok := sess.begin(ctx)
 	if !ok {
@@ -483,6 +538,11 @@ func (s *service) sessionPrompt(ctx context.Context, raw json.RawMessage) (any, 
 		sess.finish()
 		if err := s.applyPendingSessionConfig(ctx, sess); err != nil {
 			sess.sink.Emit(event.Event{Kind: event.Notice, Level: event.LevelWarn, Text: "session config switch failed after turn: " + err.Error()})
+			if isSessionConfigActiveWorkError(err) {
+				if current, stateErr := s.configStateForSession(ctx, sess); stateErr == nil {
+					sess.sink.send(configOptionUpdate{SessionUpdate: "config_option_update", ConfigOptions: current.ConfigOptions})
+				}
+			}
 		}
 		cancel()
 	}()
@@ -601,14 +661,18 @@ func (s *service) rebuildSession(ctx context.Context, sess *acpSession, cfgState
 		sess.mu.Unlock()
 		return &RPCError{Code: ErrInvalidRequest, Message: "session config: session is deleted"}
 	}
-	if sess.running || sess.ctrl.Running() {
+	status := sess.ctrl.RuntimeStatus()
+	if status.PendingPrompt {
+		sess.mu.Unlock()
+		return sessionConfigActiveWorkError("answer pending prompts before switching config")
+	}
+	if !sess.running && !status.Running && status.BackgroundJobs > 0 {
+		sess.mu.Unlock()
+		return sessionConfigActiveWorkError("stop background jobs before switching config")
+	}
+	if sess.running || status.Running {
 		pending := cloneSessionConfigState(cfgState)
-		sess.model = cfgState.Model
-		sess.effortOverride = cloneStringPtr(cfgState.EffortOverride)
 		sess.pendingConfig = &pending
-		if sess.transcript != "" && sessionFileExists(sess.transcript) {
-			_ = saveACPMeta(sess.transcript, sess.metaLocked())
-		}
 		sess.mu.Unlock()
 		sess.sink.send(configOptionUpdate{SessionUpdate: "config_option_update", ConfigOptions: cfgState.ConfigOptions})
 		return nil
@@ -639,12 +703,14 @@ func (s *service) rebuildSession(ctx context.Context, sess *acpSession, cfgState
 	}
 	newCtrl.EnableInteractiveApproval()
 	sink.bindApprove(newCtrl.Approve)
-	if len(carried) > 0 {
-		newCtrl.Resume(&agent.Session{Messages: carried}, prevPath)
-	} else if prevPath != "" {
-		newCtrl.SetSessionPath(prevPath)
+	sink.bindAnswer(newCtrl.AnswerQuestion)
+	newCtrl.AdoptHistory(carried, prevPath)
+	// InheritLifecycleFrom wires two concrete controllers' turn/hook state; it's a
+	// construction concern, not part of the driving port. cur is always the
+	// *control.Controller the factory built for this session, so this is safe.
+	if prev, ok := cur.(*control.Controller); ok {
+		newCtrl.InheritLifecycleFrom(prev)
 	}
-	newCtrl.InheritLifecycleFrom(cur)
 
 	sess.ctrl = newCtrl
 	sess.model = cfgState.Model
@@ -655,6 +721,7 @@ func (s *service) rebuildSession(ctx context.Context, sess *acpSession, cfgState
 	sess.mu.Unlock()
 
 	cur.ReleaseResources()
+	s.sendAvailableCommands(sess)
 	sink.send(configOptionUpdate{SessionUpdate: "config_option_update", ConfigOptions: cfgState.ConfigOptions})
 	return nil
 }
@@ -673,15 +740,36 @@ func (s *service) applyPendingSessionConfig(ctx context.Context, sess *acpSessio
 	sess.mu.Unlock()
 
 	if err := s.rebuildSession(ctx, sess, cfgState); err != nil {
-		sess.mu.Lock()
-		if !sess.deleted && sess.pendingConfig == nil {
-			pending := cloneSessionConfigState(cfgState)
-			sess.pendingConfig = &pending
+		if !isSessionConfigActiveWorkError(err) {
+			sess.mu.Lock()
+			if !sess.deleted && sess.pendingConfig == nil {
+				pending := cloneSessionConfigState(cfgState)
+				sess.pendingConfig = &pending
+			}
+			sess.mu.Unlock()
 		}
-		sess.mu.Unlock()
 		return err
 	}
 	return nil
+}
+
+type activeSessionConfigWorkError struct {
+	*RPCError
+}
+
+func (e *activeSessionConfigWorkError) Unwrap() error {
+	return e.RPCError
+}
+
+func sessionConfigActiveWorkError(message string) error {
+	return &activeSessionConfigWorkError{
+		RPCError: &RPCError{Code: ErrInvalidRequest, Message: "session config: " + message},
+	}
+}
+
+func isSessionConfigActiveWorkError(err error) bool {
+	var activeErr *activeSessionConfigWorkError
+	return errors.As(err, &activeErr)
 }
 
 // sessionClose releases an active session. Unknown sessions are accepted as a
@@ -765,19 +853,34 @@ func (s *service) sessionDelete(_ context.Context, raw json.RawMessage) (any, er
 	}
 
 	path := ""
+	var destroy control.SessionDestroyHandle
+	var delayed bool
 	if sess := s.takeSession(p.SessionID); sess != nil {
 		sess.deleteAndWait()
-		sess.ctrl.Close()
 		path = sess.transcript
+		destroy = sess.ctrl.BeginDestroySession(path)
+		if result := destroy.Wait(); result.HasTimedOut() {
+			if err := agent.MarkCleanupPending(path, "delete"); err != nil {
+				go delayedDeleteSessionFiles(path, destroy)
+				sess.ctrl.CloseAfterDestroy()
+				return nil, &RPCError{Code: ErrInternal, Message: "session/delete: " + err.Error()}
+			}
+			go delayedDeleteSessionFiles(path, destroy)
+			delayed = true
+		}
+		sess.ctrl.CloseAfterDestroy()
 	}
 	if path == "" {
 		if dir := s.sessionDir(); dir != "" {
 			path = transcriptPath(dir, p.SessionID)
 		}
 	}
-	if path != "" {
+	if path != "" && !delayed {
 		if err := deleteSessionFiles(path); err != nil {
 			return nil, &RPCError{Code: ErrInternal, Message: "session/delete: " + err.Error()}
+		}
+		if destroy.Finish != nil {
+			destroy.Finish()
 		}
 	}
 	return SessionDeleteResult{}, nil
@@ -1029,6 +1132,100 @@ func (s *acpSession) info() SessionInfo {
 	return meta.info(extra)
 }
 
+func (s *service) sendAvailableCommands(sess *acpSession) {
+	if sess == nil || sess.ctrl == nil {
+		return
+	}
+	cmds := availableCommandsFor(sess.ctrl)
+	if len(cmds) == 0 {
+		return
+	}
+	sess.sink.send(availableCommandsUpdate{
+		SessionUpdate:     "available_commands_update",
+		AvailableCommands: cmds,
+	})
+}
+
+func availableCommandsFor(ctrl acpController) []AvailableCommand {
+	if ctrl == nil {
+		return nil
+	}
+	byName := map[string]AvailableCommand{}
+	for _, cmd := range ctrl.Commands() {
+		name := strings.TrimSpace(cmd.Name)
+		if name == "" {
+			continue
+		}
+		desc := strings.TrimSpace(cmd.Description)
+		if desc == "" {
+			desc = "Run the " + name + " command"
+		}
+		ac := AvailableCommand{Name: name, Description: desc}
+		if hint := strings.TrimSpace(cmd.ArgHint); hint != "" {
+			ac.Input = &AvailableCommandInput{Hint: hint}
+		}
+		byName[name] = ac
+	}
+	for _, sk := range ctrl.Skills() {
+		name := strings.TrimSpace(sk.Name)
+		if name == "" {
+			continue
+		}
+		if _, exists := byName[name]; exists {
+			continue
+		}
+		desc := strings.TrimSpace(sk.Description)
+		if desc == "" {
+			desc = "Run the " + name + " skill"
+		}
+		byName[name] = AvailableCommand{
+			Name:        name,
+			Description: desc,
+			Input:       &AvailableCommandInput{Hint: "instructions"},
+		}
+	}
+	if host := ctrl.Host(); host != nil {
+		for _, prompt := range host.Prompts() {
+			name := strings.TrimSpace(prompt.Name)
+			if name == "" {
+				continue
+			}
+			desc := strings.TrimSpace(prompt.Description)
+			if desc == "" {
+				desc = "Run the " + name + " MCP prompt"
+			}
+			ac := AvailableCommand{Name: name, Description: desc}
+			if len(prompt.Args) > 0 {
+				ac.Input = &AvailableCommandInput{Hint: "arguments"}
+			}
+			byName[name] = ac
+		}
+	}
+	out := make([]AvailableCommand, 0, len(byName))
+	for _, cmd := range byName {
+		out = append(out, cmd)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out
+}
+
+func (s *service) resolveSlashPrompt(ctx context.Context, sess *acpSession, text string) string {
+	line := strings.TrimSpace(text)
+	if sess == nil || sess.ctrl == nil || !strings.HasPrefix(line, "/") {
+		return text
+	}
+	if sent, ok := sess.ctrl.CustomCommand(line); ok {
+		return sent
+	}
+	if sent, ok := sess.ctrl.RunSkill(line); ok {
+		return sent
+	}
+	if sent, ok, err := sess.ctrl.MCPPrompt(ctx, line); err == nil && ok {
+		return sent
+	}
+	return text
+}
+
 type acpSessionMeta struct {
 	SessionID      string    `json:"sessionId"`
 	Cwd            string    `json:"cwd"`
@@ -1161,6 +1358,9 @@ func listACPMetas(dir string) ([]acpSessionMeta, error) {
 		}
 		id := strings.TrimSuffix(e.Name(), ".acp.json")
 		sessionPath := transcriptPath(dir, id)
+		if agent.IsCleanupPending(sessionPath) {
+			continue
+		}
 		if !sessionFileExists(sessionPath) {
 			continue
 		}
@@ -1267,7 +1467,7 @@ func parseSessionUpdatedAt(s string) time.Time {
 func deleteSessionFiles(sessionPath string) error {
 	paths := []string{
 		sessionPath,
-		sessionPath + ".meta",
+		store.SessionMeta(sessionPath),
 		acpMetaPath(sessionPath),
 	}
 	for _, path := range paths {
@@ -1286,18 +1486,37 @@ func deleteSessionFiles(sessionPath string) error {
 	if err := agent.DeleteSubagentsByParent(filepath.Dir(sessionPath), agent.BranchID(sessionPath)); err != nil {
 		return err
 	}
-	return nil
+	if err := jobs.RemoveArtifacts(sessionPath); err != nil {
+		return err
+	}
+	return agent.ClearCleanupPending(sessionPath)
+}
+
+// ReconcileCleanupPending retries delayed ACP session cleanup left by a previous
+// process, including ACP's own metadata sidecar.
+func ReconcileCleanupPending(dir string) error {
+	return agent.ReconcileCleanupPending(dir, func(item agent.CleanupPendingInfo) error {
+		return deleteSessionFiles(item.SessionPath)
+	})
+}
+
+func delayedDeleteSessionFiles(sessionPath string, destroy control.SessionDestroyHandle) {
+	if destroy.WaitAll != nil {
+		destroy.WaitAll()
+	}
+	if err := deleteSessionFiles(sessionPath); err != nil {
+		slog.Warn("acp: delayed session delete failed", "path", sessionPath, "err", err)
+	}
+	if destroy.Finish != nil {
+		destroy.Finish()
+	}
 }
 
 func checkpointPath(sessionPath string) string {
-	if sessionPath == "" {
-		return ""
-	}
-	return strings.TrimSuffix(sessionPath, ".jsonl") + ".ckpt"
+	return store.SessionCheckpointDir(sessionPath)
 }
 
-// mcpSpecs converts ACP stdio MCP server declarations to plugin.Spec. ACP's
-// session/new only carries stdio servers (the agent advertises http/sse off).
+// mcpSpecs converts ACP MCP server declarations to plugin.Spec.
 func mcpSpecs(in []MCPServerSpec, cwd string) ([]plugin.Spec, error) {
 	if len(in) == 0 {
 		return nil, nil
@@ -1308,25 +1527,45 @@ func mcpSpecs(in []MCPServerSpec, cwd string) ([]plugin.Spec, error) {
 		if typ == "" {
 			typ = "stdio"
 		}
-		if typ != "stdio" {
-			return nil, fmt.Errorf("MCP server %q uses unsupported transport %q", m.Name, m.Type)
-		}
 		if strings.TrimSpace(m.Name) == "" {
 			return nil, fmt.Errorf("MCP server name is required")
 		}
-		if strings.TrimSpace(m.Command) == "" {
-			return nil, fmt.Errorf("MCP server %q command is required", m.Name)
+		switch typ {
+		case "stdio":
+			if strings.TrimSpace(m.Command) == "" {
+				return nil, fmt.Errorf("MCP server %q command is required", m.Name)
+			}
+		case "http", "streamable-http", "streamable_http":
+			if strings.TrimSpace(m.URL) == "" {
+				return nil, fmt.Errorf("MCP server %q url is required", m.Name)
+			}
+			typ = "http"
+		default:
+			return nil, fmt.Errorf("MCP server %q uses unsupported transport %q", m.Name, m.Type)
 		}
 		out = append(out, plugin.Spec{
-			Name:    m.Name,
+			Name:    strings.TrimSpace(m.Name),
 			Type:    typ,
-			Command: m.Command,
-			Args:    m.Args,
-			Env:     map[string]string(m.Env),
+			Command: strings.TrimSpace(m.Command),
+			Args:    append([]string(nil), m.Args...),
+			Env:     mapString(m.Env),
+			URL:     strings.TrimSpace(m.URL),
+			Headers: mapString(m.Headers),
 			Dir:     cwd,
 		})
 	}
 	return out, nil
+}
+
+func mapString(in map[string]string) map[string]string {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
 }
 
 // newSessionID returns a random RFC 4122 v4 UUID string used to address a session.

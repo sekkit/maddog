@@ -3,7 +3,7 @@ import { ChevronRight } from "lucide-react";
 import { CodeViewer } from "./CodeViewer";
 import { DiffView } from "./DiffView";
 import { useT } from "../lib/i18n";
-import { diffsFor, subjectOf, summarize } from "../lib/tools";
+import { diffsFor, languageForToolArgs, subjectOf, summarize, summarizeFileDiff } from "../lib/tools";
 import { useShellExpand } from "../lib/shellExpand";
 import { useGSAPCollapse } from "../lib/useGSAPCollapse";
 import type { Item } from "../lib/useController";
@@ -54,7 +54,7 @@ export function rawToolResultNoteKey(rawUnavailable?: boolean): "tool.rawUnavail
 // ToolCard renders one tool call. `subcalls` are sub-agent calls nested under a
 // `task` card (their ParentID points at this call); they render inline, live, so
 // the sub-agent's work is visible as it happens.
-export const ToolCard = memo(function ToolCard({ item, subcalls }: { item: ToolItem; subcalls?: ToolItem[] }) {
+export const ToolCard = memo(function ToolCard({ item, subcalls, tabId, displayName }: { item: ToolItem; subcalls?: ToolItem[]; tabId?: string; displayName?: string }) {
   const t = useT();
   const nested = subcalls ?? [];
   const hasNested = nested.length > 0;
@@ -79,6 +79,7 @@ export const ToolCard = memo(function ToolCard({ item, subcalls }: { item: ToolI
   const effectiveArgs = fullData?.args ?? item.args;
   const effectiveOutput = fullData?.output ?? item.output;
   const rawUnavailableNote = rawToolResultNoteKey(fullData?.rawUnavailable ?? item.rawUnavailable);
+  const previewDiff = item.fileDiff?.diff ? item.fileDiff : undefined;
   const diffs = diffsFor(item.name, effectiveArgs);
   const subject = subjectOf(item.name, effectiveArgs);
   // Reset cached fullData when the item identity changes (e.g. after rewind).
@@ -89,22 +90,23 @@ export const ToolCard = memo(function ToolCard({ item, subcalls }: { item: ToolI
   // edit diffs are the point of the card, so they're shown inline; everything
   // else folds its args/output away by default.  Open while running so the
   // user sees progress; closed by default once settled.
-  const hasArgsOrOutput = diffs.length === 0 && (!!effectiveArgs || !!effectiveOutput || item.dataArchived);
+  const hasArchivedOnDemandBody = Boolean(item.dataArchived && tabId);
+  const hasArgsOrOutput = !previewDiff && diffs.length === 0 && (!!effectiveArgs || !!effectiveOutput || hasArchivedOnDemandBody);
 
   // Shell output: split into preview + "show all" toggle.
   const shellOutput = item.isShell && effectiveOutput ? effectiveOutput : null;
   const shellPreview = shellOutput ? splitPreview(shellOutput, SHELL_PREVIEW_LINES) : null;
-  const hasBody = Boolean(diffs.length || hasNested || shellPreview || (!shellPreview && hasArgsOrOutput) || item.error);
+  const hasBody = Boolean(previewDiff || diffs.length || hasNested || shellPreview || (!shellPreview && hasArgsOrOutput) || item.error);
   useEffect(() => {
-    if (!open || !item.dataArchived || fullData) return;
+    if (!open || !item.dataArchived || fullData || !tabId) return;
     let cancelled = false;
     import("../lib/bridge").then(({ app }) =>
-      app.ToolResultForTab("", item.id).then((d) => {
+      app.ToolResultForTab(tabId, item.id).then((d) => {
         if (!cancelled && d) setFullData(d);
       }).catch(() => {}),
     );
     return () => { cancelled = true; };
-  }, [open, item.id, item.dataArchived, fullData]);
+  }, [open, item.id, item.dataArchived, fullData, tabId]);
 
   // Register this shell card's toggle with the global ShellExpand context so
   // Ctrl/Cmd+B can expand/collapse the most recent shell output. openRef keeps the
@@ -122,7 +124,7 @@ export const ToolCard = memo(function ToolCard({ item, subcalls }: { item: ToolI
     item.readOnly && !hasNested && item.status !== "error" && item.status !== "stopped";
 
   const duration = item.status === "running" ? "" : formatToolDuration(item.durationMs);
-  const summary = item.status === "running" ? "" : item.summary || summarize(item.name, effectiveArgs, effectiveOutput, item.error);
+  const summary = item.status === "running" ? "" : item.summary || summarizeFileDiff(previewDiff) || summarize(item.name, effectiveArgs, effectiveOutput, item.error);
   const compressionTokens = formatCompactCount(item.compression?.savedTokens);
   const compressionLabel = compressionTokens ? t("tool.compressedTokens", { tokens: compressionTokens }) : "";
   const compressionTitle = compressionTokens
@@ -147,7 +149,7 @@ export const ToolCard = memo(function ToolCard({ item, subcalls }: { item: ToolI
           {item.status === "error" && <span className="tool__status-icon tool__status-icon--err">✗</span>}
           {item.status === "done" && <span className="tool__status-icon tool__status-icon--ok">✓</span>}
           {item.status === "stopped" && <span className="tool__status-icon tool__status-icon--stopped">—</span>}
-          <span className="tool__name">{item.name}</span>
+          <span className="tool__name">{displayName ?? item.name}</span>
           {subject && <span className="tool__subject">{subject}</span>}
         </span>
         {profileText && <span className="tool__profile">{profileText}</span>}
@@ -159,16 +161,26 @@ export const ToolCard = memo(function ToolCard({ item, subcalls }: { item: ToolI
             <ChevronRight size={12} />
           </span>
         )}
+        {item.status !== "running" && (
+          <span
+            className={`tool__dot${item.status === "done" ? " tool__dot--ok" : ""}${item.status === "error" ? " tool__dot--err" : ""}${item.status === "stopped" ? " tool__dot--stopped" : ""}`}
+            aria-hidden="true"
+          />
+        )}
       </button>
 
       <div ref={toolBodyRef} className="tool__body">
 
-        {diffs.map((d, i) => (
-          <div key={i}>
-            {d.label && <div className="tool__difflabel">{d.label}</div>}
-            <DiffView original={d.original} modified={d.modified} language={d.lang} maxHeight={260} />
-          </div>
-        ))}
+        {previewDiff ? (
+          <DiffView diff={previewDiff.diff} language={languageForToolArgs(fullData?.args ?? item.args)} maxHeight={260} />
+        ) : (
+          diffs.map((d, i) => (
+            <div key={i}>
+              {d.label && <div className="tool__difflabel">{d.label}</div>}
+              <DiffView original={d.original} modified={d.modified} language={d.lang} maxHeight={260} />
+            </div>
+          ))
+        )}
 
         {hasNested && (
           <div className="tool__nested">
@@ -177,7 +189,7 @@ export const ToolCard = memo(function ToolCard({ item, subcalls }: { item: ToolI
               const roBatch: typeof nested = [];
               const flush = () => {
                 if (roBatch.length === 0) return;
-                out.push(<ReadOnlyBatch key={`rob-${roBatch[0].id}`} items={[...roBatch]} subcalls={new Map()} />);
+                out.push(<ReadOnlyBatch key={`rob-${roBatch[0].id}`} items={[...roBatch]} subcalls={new Map()} tabId={tabId} />);
                 roBatch.length = 0;
               };
               for (const c of nested) {
@@ -186,7 +198,7 @@ export const ToolCard = memo(function ToolCard({ item, subcalls }: { item: ToolI
                   continue;
                 }
                 flush();
-                out.push(<ToolCard key={c.id} item={c} />);
+                out.push(<ToolCard key={c.id} item={c} tabId={tabId} />);
               }
               flush();
               return out;

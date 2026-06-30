@@ -4,7 +4,7 @@
 import { z } from "zod";
 import type { Env } from "./env";
 import { html, redirect } from "./shell";
-import { renderGroup, renderStats, type Group } from "./stats";
+import { renderGroup, renderStats, type Group, type StatsModule } from "./stats";
 import { renderLogin, renderRegister, renderAccount } from "./auth_pages";
 import { renderUsers, renderAudit, type UserRow, type AuditRow } from "./admin";
 import {
@@ -76,9 +76,9 @@ const Ping = z.object({
   osVersion: z.string().max(128).optional(),
 });
 
-// Opt-in aggregate agent metrics: a per-launch snapshot of (signal, bucket)
-// counters. No install id, no content — just enumerated signals so the worker
-// table can never be polluted with arbitrary keys.
+// Opt-in aggregate desktop metrics: a per-launch snapshot of (signal, bucket)
+// counters. No install id, no content — just enumerated signals and bounded
+// buckets so the worker table can never be polluted with arbitrary keys.
 const METRIC_SIGNALS = [
   "finish_reason",
   "empty_final",
@@ -87,9 +87,47 @@ const METRIC_SIGNALS = [
   "tool_error",
   "compaction",
   "turns",
+  "client_surface",
+  "client_version",
+  "settings_language",
+  "settings_desktop_layout",
+  "settings_theme",
+  "settings_theme_style",
+  "settings_close_behavior",
+  "settings_display_mode",
+  "settings_auto_plan",
+  "settings_status_bar_style",
+  "settings_status_bar_items_count",
+  "settings_check_updates",
+  "settings_default_model",
+  "settings_planner_model",
+  "settings_subagent_model",
+  "settings_subagent_effort",
+  "settings_reasoning_language",
+  "settings_provider_count",
+  "settings_provider_access_count",
+  "settings_provider_access",
+  "settings_bot_enabled",
+  "settings_bot_model",
+  "settings_bot_tool_approval",
+  "settings_bot_allowlist",
+  "settings_bot_allow_all",
+  "settings_bot_qq_enabled",
+  "settings_bot_feishu_enabled",
+  "settings_bot_weixin_enabled",
+  "settings_bot_connection_count",
+  "settings_bot_connection_provider",
+  "settings_bot_connection_enabled",
+  "settings_bot_connection_status",
+  "settings_bot_connection_model",
+  "settings_bot_connection_approval",
 ] as const;
 
 const Metrics = z.object({
+  installId: z
+    .string()
+    .regex(/^[0-9a-f]{32}$/)
+    .optional(),
   version: z.string().min(1).max(64),
   os: z.string().min(1).max(32),
   counters: z
@@ -99,13 +137,13 @@ const Metrics = z.object({
         bucket: z
           .string()
           .min(1)
-          .max(32)
+          .max(96)
           .regex(/^[a-z0-9_]+$/),
         count: z.number().int().min(1).max(1_000_000),
       }),
     )
     .min(1)
-    .max(64),
+    .max(128),
 });
 
 type FingerprintInput = {
@@ -207,12 +245,37 @@ export function crashTitle(message: string): string {
   return head.slice(0, 200);
 }
 
+type SeverityInput = {
+  kind: string;
+  source: string;
+  label: string;
+  errorType: string;
+  errorMessage: string;
+  topFrame: string;
+};
+
+export function isOpaqueScriptErrorReport(input: SeverityInput): boolean {
+  return (
+    input.kind === "crash" &&
+    input.source === "frontend.global" &&
+    input.label === "window.error" &&
+    input.errorType === "string" &&
+    input.errorMessage.trim() === "Script error." &&
+    input.topFrame.trim() === ""
+  );
+}
+
 function severityForKind(kind: string): string {
   if (kind === "crash") return "high";
   if (kind === "performance") return "medium";
   if (kind === "bot") return "medium";
   if (kind === "exception") return "medium";
   return "low";
+}
+
+export function severityForReport(input: SeverityInput): string {
+  if (isOpaqueScriptErrorReport(input)) return "low";
+  return severityForKind(input.kind);
 }
 
 async function sha256Hex(s: string): Promise<string> {
@@ -270,7 +333,7 @@ async function handleReport(request: Request, env: Env): Promise<Response> {
   const errorType = r.errorType ?? "";
   const buildCommit = r.buildCommit ?? "";
   const channel = r.channel ?? "";
-  const severity = severityForKind(r.kind);
+  const severity = severityForReport({ kind: r.kind, source, label, errorType, errorMessage, topFrame });
   const prior = await env.DB.prepare("SELECT status FROM groups WHERE fingerprint = ?1")
     .bind(fingerprint)
     .first<{ status: string }>();
@@ -392,6 +455,19 @@ async function handleMetrics(request: Request, env: Env): Promise<Response> {
        count = count + ?5`,
   );
   await env.DB.batch(m.counters.map((c) => upsert.bind(m.version, m.os, c.signal, c.bucket, c.count)));
+  if (m.installId) {
+    const userUpsert = env.DB.prepare(
+      `INSERT INTO metric_users (date, version, os, signal, bucket, install_id)
+       VALUES (date('now'), ?1, ?2, ?3, ?4, ?5)
+       ON CONFLICT (date, signal, bucket, install_id) DO UPDATE SET
+         version = ?1, os = ?2`,
+    );
+    try {
+      await env.DB.batch(m.counters.map((c) => userUpsert.bind(m.version, m.os, c.signal, c.bucket, m.installId)));
+    } catch (err) {
+      console.warn("metric_users write failed", err);
+    }
+  }
 
   return new Response("ok", { status: 202 });
 }
@@ -491,10 +567,13 @@ type StatsFilters = {
   platform: string;
   newLatest: boolean;
   regressed: boolean;
+  windowDays: 7 | 30;
+  preferenceMode: "users" | "opens";
 };
 
 function statsFilters(url: URL): StatsFilters {
   const status = url.searchParams.get("status") ?? "";
+  const windowParam = url.searchParams.get("window") ?? "";
   return {
     status: ["open", "resolved", "ignored"].includes(status) ? status : "",
     source: (url.searchParams.get("source") ?? "").slice(0, 32),
@@ -503,6 +582,8 @@ function statsFilters(url: URL): StatsFilters {
     platform: (url.searchParams.get("platform") ?? "").slice(0, 80),
     newLatest: url.searchParams.get("new") === "latest",
     regressed: url.searchParams.get("regressed") === "1",
+    windowDays: windowParam === "7d" ? 7 : 30,
+    preferenceMode: url.searchParams.get("prefs") === "opens" ? "opens" : "users",
   };
 }
 
@@ -520,10 +601,22 @@ async function crashGroups(env: Env, filters: StatsFilters, latestVersion: strin
   if (filters.platform) add("last_os || ' ' || last_arch = ?", filters.platform);
   if (filters.newLatest && latestVersion) add("first_version = ?", latestVersion);
   if (filters.regressed) where.push("regressed_at <> ''");
+  let latestOrder = "";
+  if (latestVersion) {
+    latestOrder = `CASE WHEN first_version = ?${binds.length + 1} THEN 0 ELSE 1 END,`;
+    binds.push(latestVersion);
+  }
   const sql = `SELECT fingerprint, kind, count, first_version, last_version, substr(last_seen, 1, 10) AS seen,
       status, title, source, label, error_type, top_frame, severity, last_os, last_arch, regressed_at
     FROM groups ${where.length ? `WHERE ${where.join(" AND ")}` : ""}
-    ORDER BY last_seen DESC LIMIT 50`;
+    ORDER BY
+      CASE WHEN status = 'open' THEN 0 ELSE 1 END,
+      CASE WHEN regressed_at <> '' THEN 0 ELSE 1 END,
+      ${latestOrder}
+      CASE severity WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 ELSE 3 END,
+      count DESC,
+      last_seen DESC
+    LIMIT 50`;
   const stmt = env.DB.prepare(sql);
   const query = binds.length ? stmt.bind(...binds) : stmt;
   return query.all<{
@@ -590,25 +683,117 @@ async function latestObservedVersion(env: Env): Promise<string> {
   return newestReleaseVersion(rows.results.map((r) => r.version));
 }
 
-async function handleStats(request: Request, env: Env, user: User): Promise<Response> {
+type OverviewCounts = {
+  latestAdoptionPct: number | null;
+  openReports: number;
+  newLatestReports: number;
+  regressedReports: number;
+  criticalOpenReports: number;
+};
+
+async function latestAdoptionPct(env: Env, latestVersion: string, days: 7 | 30): Promise<number | null> {
+  if (!latestVersion) return null;
+  const row = await env.DB.prepare(
+    `SELECT
+      COUNT(DISTINCT install_id) AS total_installs,
+      COUNT(DISTINCT CASE WHEN version = ?1 THEN install_id END) AS latest_installs
+    FROM pings WHERE date >= date('now', '${currentWindowSince(days)}')`,
+  )
+    .bind(latestVersion)
+    .first<{ total_installs: number; latest_installs: number }>();
+  const total = Number(row?.total_installs ?? 0);
+  if (!total) return null;
+  return (Number(row?.latest_installs ?? 0) / total) * 100;
+}
+
+async function diagnosticOverview(env: Env, latestVersion: string, days: 7 | 30): Promise<OverviewCounts> {
+  const diagnosticCounts = latestVersion
+    ? env.DB.prepare(
+        `SELECT
+          SUM(CASE WHEN status = 'open' THEN 1 ELSE 0 END) AS open_reports,
+          SUM(CASE WHEN first_version = ?1 THEN 1 ELSE 0 END) AS new_latest_reports,
+          SUM(CASE WHEN regressed_at <> '' THEN 1 ELSE 0 END) AS regressed_reports,
+          SUM(CASE WHEN status = 'open' AND severity IN ('critical', 'high') THEN 1 ELSE 0 END) AS critical_open_reports
+        FROM groups`,
+      )
+        .bind(latestVersion)
+        .first<{ open_reports: number; new_latest_reports: number; regressed_reports: number; critical_open_reports: number }>()
+    : env.DB.prepare(
+        `SELECT
+          SUM(CASE WHEN status = 'open' THEN 1 ELSE 0 END) AS open_reports,
+          0 AS new_latest_reports,
+          SUM(CASE WHEN regressed_at <> '' THEN 1 ELSE 0 END) AS regressed_reports,
+          SUM(CASE WHEN status = 'open' AND severity IN ('critical', 'high') THEN 1 ELSE 0 END) AS critical_open_reports
+        FROM groups`,
+      ).first<{ open_reports: number; new_latest_reports: number; regressed_reports: number; critical_open_reports: number }>();
+  const [row, adoptionPct] = await Promise.all([
+    diagnosticCounts,
+    latestAdoptionPct(env, latestVersion, days),
+  ]);
+  return {
+    latestAdoptionPct: adoptionPct,
+    openReports: Number(row?.open_reports ?? 0),
+    newLatestReports: Number(row?.new_latest_reports ?? 0),
+    regressedReports: Number(row?.regressed_reports ?? 0),
+    criticalOpenReports: Number(row?.critical_open_reports ?? 0),
+  };
+}
+
+function currentWindowSince(days: 7 | 30): string {
+  return `-${days - 1} day`;
+}
+
+function previousWindowSince(days: 7 | 30): string {
+  return `-${days * 2 - 1} day`;
+}
+
+function previousWindowUntil(days: 7 | 30): string {
+  return currentWindowSince(days);
+}
+
+async function metricRows(env: Env, days: 7 | 30, previous = false): Promise<{ signal: string; bucket: string; total: number }[]> {
+  const where = previous
+    ? `date >= date('now', '${previousWindowSince(days)}') AND date < date('now', '${previousWindowUntil(days)}')`
+    : `date >= date('now', '${currentWindowSince(days)}')`;
+  const rows = await env.DB.prepare(
+    `SELECT signal, bucket, SUM(count) AS total FROM metrics WHERE ${where} GROUP BY signal, bucket ORDER BY signal, total DESC`,
+  ).all<{ signal: string; bucket: string; total: number }>();
+  return rows.results;
+}
+
+async function metricUserRows(env: Env, days: 7 | 30): Promise<{ signal: string; bucket: string; total: number }[]> {
+  try {
+    const rows = await env.DB.prepare(
+      `SELECT signal, bucket, COUNT(DISTINCT install_id) AS total FROM metric_users WHERE date >= date('now', '${currentWindowSince(days)}') GROUP BY signal, bucket ORDER BY signal, total DESC`,
+    ).all<{ signal: string; bucket: string; total: number }>();
+    return rows.results;
+  } catch (err) {
+    console.warn("metric_users query failed", err);
+    return [];
+  }
+}
+
+async function handleStats(request: Request, env: Env, user: User, activeModule: StatsModule): Promise<Response> {
   const url = new URL(request.url);
   const filters = statsFilters(url);
   const latestVersion = await latestObservedVersion(env);
-  const [daily, versions, platforms, crashes, metrics, sources] = await Promise.all([
+  const days = filters.windowDays;
+  const [daily, versions, platforms, crashes, metrics, previousMetrics, metricUsers, sources, overview] = await Promise.all([
     env.DB.prepare(
-      "SELECT date, COUNT(*) AS users, SUM(opens) AS opens FROM pings WHERE date >= date('now', '-29 day') GROUP BY date",
+      `SELECT date, COUNT(*) AS users, SUM(opens) AS opens FROM pings WHERE date >= date('now', '${currentWindowSince(days)}') GROUP BY date`,
     ).all<{ date: string; users: number; opens: number }>(),
     env.DB.prepare(
-      "SELECT version AS label, COUNT(DISTINCT install_id) AS users FROM pings WHERE date >= date('now', '-6 day') GROUP BY label ORDER BY users DESC LIMIT 15",
+      `SELECT version AS label, COUNT(DISTINCT install_id) AS users FROM pings WHERE date >= date('now', '${currentWindowSince(days)}') GROUP BY label ORDER BY users DESC LIMIT 15`,
     ).all<{ label: string; users: number }>(),
     env.DB.prepare(
-      "SELECT os || ' ' || arch AS label, COUNT(DISTINCT install_id) AS users FROM pings WHERE date >= date('now', '-6 day') GROUP BY label ORDER BY users DESC",
+      `SELECT os || ' ' || arch AS label, COUNT(DISTINCT install_id) AS users FROM pings WHERE date >= date('now', '${currentWindowSince(days)}') GROUP BY label ORDER BY users DESC`,
     ).all<{ label: string; users: number }>(),
     crashGroups(env, filters, latestVersion),
-    env.DB.prepare(
-      "SELECT signal, bucket, SUM(count) AS total FROM metrics WHERE date >= date('now', '-6 day') GROUP BY signal, bucket ORDER BY signal, total DESC",
-    ).all<{ signal: string; bucket: string; total: number }>(),
+    metricRows(env, days),
+    metricRows(env, days, true),
+    metricUserRows(env, days),
     env.DB.prepare("SELECT source AS label, COUNT(*) AS users FROM groups GROUP BY source ORDER BY users DESC").all<{ label: string; users: number }>(),
+    diagnosticOverview(env, latestVersion, days),
   ]);
   return html(
     renderStats(
@@ -617,12 +802,16 @@ async function handleStats(request: Request, env: Env, user: User): Promise<Resp
         versions: versions.results,
         platforms: platforms.results,
         crashes: crashes.results,
-        metrics: metrics.results,
+        metrics,
+        previousMetrics,
+        metricUsers,
         sources: sources.results,
+        overview,
         latestVersion,
         filters,
       },
       user,
+      activeModule,
     ),
   );
 }
@@ -782,7 +971,9 @@ export default {
       return user ? handleAccountPassword(request, env, user) : redirect("/login");
 
     const groupMatch = path.match(/^\/stats\/group\/([0-9a-f]{64})$/);
-    if (path === "/stats" && method === "GET") return requireViewer(user) ?? handleStats(request, env, user as User);
+    const statsModuleMatch = path.match(/^\/stats\/(diagnostics|usage|preferences|health)$/);
+    if ((path === "/stats" || statsModuleMatch) && method === "GET")
+      return requireViewer(user) ?? handleStats(request, env, user as User, (statsModuleMatch?.[1] as StatsModule | undefined) ?? "usage");
     if (groupMatch && method === "GET") return requireViewer(user) ?? handleGroup(env, groupMatch[1], user as User);
     if (groupMatch && method === "POST") {
       if (user?.role !== "admin") return new Response("forbidden", { status: 403 });

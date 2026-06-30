@@ -22,11 +22,12 @@ func credentialsPath() string {
 // existing KEY line, else appending), and applies it to the running process so a
 // rebuild picks it up without a restart.
 func upsertDotEnv(key, value string) error {
-	return upsertEnvFile(credentialsPath(), key, value)
+	_, err := config.SetCredential(key, value)
+	return err
 }
 
 func removeDotEnv(key string) error {
-	return removeEnvFile(credentialsPath(), key)
+	return config.RemoveCredential(key)
 }
 
 // upsertEnvFile merges KEY=value into a KEY=value file at path, preserving

@@ -4,20 +4,21 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
+	"slices"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/BurntSushi/toml"
 )
 
 func TestSetDefaultModel(t *testing.T) {
 	c := Default()
-	if err := c.SetDefaultModel("mimo-pro"); err != nil {
+	if err := c.SetDefaultModel("deepseek-pro"); err != nil {
 		t.Fatalf("set valid default: %v", err)
 	}
-	if c.DefaultModel != "mimo-pro" {
-		t.Errorf("default = %q, want mimo-pro", c.DefaultModel)
+	if c.DefaultModel != "deepseek-pro" {
+		t.Errorf("default = %q, want deepseek-pro", c.DefaultModel)
 	}
 	if err := c.SetDefaultModel("nope"); err == nil {
 		t.Error("expected error for unknown provider")
@@ -25,13 +26,13 @@ func TestSetDefaultModel(t *testing.T) {
 	// "provider/model" form is also accepted: the /model picker stores the
 	// full ref so a user can land on a non-default model under the same
 	// provider across restarts.
-	if err := c.SetDefaultModel("mimo-pro/mimo-v2.5-pro"); err != nil {
+	if err := c.SetDefaultModel("deepseek-pro/deepseek-v4-pro"); err != nil {
 		t.Fatalf("set provider/model default: %v", err)
 	}
-	if c.DefaultModel != "mimo-pro/mimo-v2.5-pro" {
-		t.Errorf("default = %q, want mimo-pro/mimo-v2.5-pro", c.DefaultModel)
+	if c.DefaultModel != "deepseek-pro/deepseek-v4-pro" {
+		t.Errorf("default = %q, want deepseek-pro/deepseek-v4-pro", c.DefaultModel)
 	}
-	if err := c.SetDefaultModel("mimo-pro/missing"); err == nil {
+	if err := c.SetDefaultModel("deepseek-pro/missing"); err == nil {
 		t.Error("expected error for unknown model under known provider")
 	}
 	if err := c.SetDefaultModel(""); err == nil {
@@ -73,6 +74,25 @@ func TestUIThemeStyleNormalizes(t *testing.T) {
 		c.UI.ThemeStyle = tt.in
 		if got := c.UIThemeStyle(); got != tt.want {
 			t.Errorf("UIThemeStyle(%q) = %q, want %q", tt.in, got, tt.want)
+		}
+	}
+}
+
+func TestUICursorShapeNormalizes(t *testing.T) {
+	c := Default()
+	for _, tt := range []struct {
+		in   string
+		want string
+	}{
+		{"", "underline"},
+		{"UNDERLINE", "underline"},
+		{" block ", "block"},
+		{"bar", "bar"},
+		{"unknown", "underline"},
+	} {
+		c.UI.CursorShape = tt.in
+		if got := c.UICursorShape(); got != tt.want {
+			t.Errorf("UICursorShape(%q) = %q, want %q", tt.in, got, tt.want)
 		}
 	}
 }
@@ -149,8 +169,8 @@ func TestDesktopPreferencesAreSeparateFromCLI(t *testing.T) {
 }
 
 func TestDesktopLayoutStyleNormalizes(t *testing.T) {
-	if got := Default().DesktopLayoutStyle(); got != "classic" {
-		t.Fatalf("default desktop layout style = %q, want classic", got)
+	if got := Default().DesktopLayoutStyle(); got != "workbench" {
+		t.Fatalf("default desktop layout style = %q, want workbench", got)
 	}
 	for _, tt := range []struct {
 		in      string
@@ -161,7 +181,9 @@ func TestDesktopLayoutStyleNormalizes(t *testing.T) {
 		{"classic", "classic", false},
 		{" workbench ", "workbench", false},
 		{"workspace", "workbench", false},
-		{"later", "classic", true},
+		{"creation", "creation", false},
+		{" Creation ", "creation", false},
+		{"later", "workbench", true},
 	} {
 		c := Default()
 		if err := c.SetDesktopLayoutStyle(tt.in); (err != nil) != tt.wantErr {
@@ -386,6 +408,43 @@ func TestSetAutoPlan(t *testing.T) {
 	}
 }
 
+func TestSetDesktopDefaultToolApprovalMode(t *testing.T) {
+	c := Default()
+	for _, mode := range []string{"ask", "auto", "yolo"} {
+		if err := c.SetDesktopDefaultToolApprovalMode(mode); err != nil {
+			t.Fatalf("SetDesktopDefaultToolApprovalMode(%q): %v", mode, err)
+		}
+		if c.DesktopDefaultToolApprovalMode() != mode {
+			t.Fatalf("desktop default tool approval mode = %q, want %q", c.DesktopDefaultToolApprovalMode(), mode)
+		}
+	}
+	if err := c.SetDesktopDefaultToolApprovalMode("full-access"); err != nil {
+		t.Fatalf("legacy full-access should be accepted: %v", err)
+	}
+	if c.DesktopDefaultToolApprovalMode() != "yolo" {
+		t.Fatalf("legacy full-access should save as yolo, got %q", c.DesktopDefaultToolApprovalMode())
+	}
+	if err := c.SetDesktopDefaultToolApprovalMode("maybe"); err == nil {
+		t.Fatal("expected error for invalid desktop default tool approval mode")
+	}
+}
+
+func TestSetMemoryCompilerEnabled(t *testing.T) {
+	c := Default()
+	if err := c.SetMemoryCompilerEnabled(false); err != nil {
+		t.Fatalf("SetMemoryCompilerEnabled(false): %v", err)
+	}
+	if c.MemoryCompilerEnabled() {
+		t.Fatal("memory compiler explicit false = true, want false")
+	}
+	if err := c.SetMemoryCompilerEnabled(true); err != nil {
+		t.Fatalf("SetMemoryCompilerEnabled(true): %v", err)
+	}
+	if !c.MemoryCompilerEnabled() {
+		t.Fatal("memory compiler explicit true = false, want true")
+	}
+}
+
 func TestSetUIShortcutLayout(t *testing.T) {
 	c := Default()
 	if got := c.UIShortcutLayout(); got != "classic" {
@@ -591,8 +650,9 @@ func TestResolveModelPreservesProviderEffort(t *testing.T) {
 	}
 }
 
-func TestEffectiveVisionForOfficialMimoModels(t *testing.T) {
+func TestEffectiveVisionForMimoEndpointModels(t *testing.T) {
 	c := Default()
+	c.Providers = append(c.Providers, legacyMimoCustomProvider("mimo-api"))
 	c.Desktop.ProviderAccess = []string{"mimo-api"}
 	normalizeDesktopOfficialProviderAccess(c)
 
@@ -634,6 +694,38 @@ func TestEffectiveVisionDoesNotInferCustomMimoProxy(t *testing.T) {
 	custom.Vision = true
 	if !EffectiveVision(custom) {
 		t.Fatalf("explicit vision=true should still enable custom providers")
+	}
+}
+
+func TestEffectiveVisionUsesPerModelVisionList(t *testing.T) {
+	c := &Config{Providers: []ProviderEntry{{
+		Name:         "custom",
+		Kind:         "openai",
+		BaseURL:      "https://proxy.example.com/v1",
+		Models:       []string{"text-only", "qwen-vl-plus"},
+		Default:      "text-only",
+		VisionModels: []string{"qwen-vl-plus"},
+	}}}
+
+	textOnly, ok := c.ResolveModel("custom/text-only")
+	if !ok {
+		t.Fatal("ResolveModel did not find custom/text-only")
+	}
+	if EffectiveVision(textOnly) {
+		t.Fatalf("text-only should remain text-only when not listed in vision_models")
+	}
+
+	vision, ok := c.ResolveModel("custom/qwen-vl-plus")
+	if !ok {
+		t.Fatal("ResolveModel did not find custom/qwen-vl-plus")
+	}
+	if !EffectiveVision(vision) {
+		t.Fatalf("model listed in vision_models should enable image input")
+	}
+
+	textOnly.Vision = true
+	if !EffectiveVision(textOnly) {
+		t.Fatalf("provider-level vision=true should still enable every selected model")
 	}
 }
 
@@ -803,6 +895,15 @@ func TestPluginMutators(t *testing.T) {
 	if err := c.UpsertPlugin(PluginEntry{Name: "bad", Type: "carrier-pigeon", Command: "x"}); err == nil {
 		t.Error("unknown transport should error")
 	}
+	if err := c.UpsertPlugin(PluginEntry{Name: "bad", Command: "x", CallTimeoutSeconds: -1}); err == nil {
+		t.Error("negative call_timeout_seconds should error")
+	}
+	if err := c.UpsertPlugin(PluginEntry{Name: "bad", Command: "x", ToolTimeoutSeconds: map[string]int{"generate": -1}}); err == nil {
+		t.Error("negative tool_timeout_seconds should error")
+	}
+	if err := c.UpsertPlugin(PluginEntry{Name: "bad", Command: "x", ToolTimeoutSeconds: map[string]int{" ": 1}}); err == nil {
+		t.Error("empty tool_timeout_seconds key should error")
+	}
 
 	// Replace in place.
 	if err := c.UpsertPlugin(PluginEntry{Name: "ex", Command: "other-cmd"}); err != nil {
@@ -906,10 +1007,10 @@ func TestPluginResolvedTierDefaultsToBackground(t *testing.T) {
 		want string
 	}{
 		{name: "empty", tier: "", want: "background"},
-		{name: "explicit lazy", tier: "lazy", want: "lazy"},
+		{name: "legacy lazy", tier: "lazy", want: "background"},
 		{name: "background", tier: "background", want: "background"},
 		{name: "eager", tier: "eager", want: "eager"},
-		{name: "unknown", tier: "startup", want: "lazy"},
+		{name: "unknown", tier: "startup", want: "background"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got := (PluginEntry{Name: "mcp", Command: "mcp-server", Tier: tc.tier}).ResolvedTier()
@@ -964,7 +1065,7 @@ func TestClearPluginAuthentication(t *testing.T) {
 // re-decodes the file to confirm the changes survived a write/read cycle.
 func TestSaveToRoundTrips(t *testing.T) {
 	c := Default()
-	if err := c.SetDefaultModel("mimo-pro"); err != nil {
+	if err := c.SetDefaultModel("deepseek-pro"); err != nil {
 		t.Fatal(err)
 	}
 	if err := c.SetPlannerModel("deepseek-pro"); err != nil {
@@ -1006,7 +1107,7 @@ func TestSaveToRoundTrips(t *testing.T) {
 	if _, err := toml.DecodeFile(path, &got); err != nil {
 		t.Fatalf("saved file does not parse: %v", err)
 	}
-	if got.DefaultModel != "mimo-pro" {
+	if got.DefaultModel != "deepseek-pro" {
 		t.Errorf("default_model = %q", got.DefaultModel)
 	}
 	if got.Agent.PlannerModel != "deepseek-pro" {
@@ -1053,6 +1154,11 @@ func TestSaveToScopesUserAndProjectFiles(t *testing.T) {
 	if !strings.Contains(string(userBody), "[desktop]") {
 		t.Fatalf("user config should include desktop preferences:\n%s", userBody)
 	}
+	if info, err := os.Stat(userPath); err != nil {
+		t.Fatalf("stat user config: %v", err)
+	} else if runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
+		t.Fatalf("user config mode = %o, want 600", info.Mode().Perm())
+	}
 
 	projectPath := filepath.Join(t.TempDir(), "maddog.toml")
 	if err := c.SaveTo(projectPath); err != nil {
@@ -1062,8 +1168,391 @@ func TestSaveToScopesUserAndProjectFiles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read project config: %v", err)
 	}
-	if strings.Contains(string(projectBody), "[desktop]") || strings.Contains(string(projectBody), "close_behavior") {
+	if strings.Contains(string(projectBody), "[desktop]") ||
+		strings.Contains(string(projectBody), "close_behavior") ||
+		strings.Contains(string(projectBody), "default_tool_approval_mode") {
 		t.Fatalf("project config should not include desktop preferences:\n%s", projectBody)
+	}
+	if info, err := os.Stat(projectPath); err != nil {
+		t.Fatalf("stat project config: %v", err)
+	} else if runtime.GOOS != "windows" && info.Mode().Perm() != 0o644 {
+		t.Fatalf("project config mode = %o, want 644", info.Mode().Perm())
+	}
+}
+
+func TestLoadForRootKeepsOfficialProviderAliasesDistinct(t *testing.T) {
+	isolateUserConfigHome(t)
+	root := t.TempDir()
+	userPath := UserConfigPath()
+	if err := os.MkdirAll(filepath.Dir(userPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(userPath, []byte(`
+config_version = 2
+default_model = "deepseek/deepseek-v4-flash"
+
+[desktop]
+provider_access = ["deepseek"]
+
+[[providers]]
+name = "deepseek"
+kind = "openai"
+base_url = "https://api.deepseek.com"
+models = ["deepseek-v4-flash", "deepseek-v4-pro"]
+default = "deepseek-v4-flash"
+api_key_env = "USER_DEEPSEEK_KEY"
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "maddog.toml"), []byte(`
+[[providers]]
+name = "deepseek-flash"
+kind = "openai"
+base_url = "https://api.deepseek.com"
+model = "deepseek-v4-flash"
+api_key_env = "PROJECT_DEEPSEEK_KEY"
+effort = "max"
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := LoadForRoot(root)
+	if err != nil {
+		t.Fatalf("LoadForRoot: %v", err)
+	}
+	userProvider, ok := cfg.Provider("deepseek")
+	if !ok {
+		t.Fatalf("user deepseek provider missing: %+v", cfg.Providers)
+	}
+	if userProvider.APIKeyEnv != "USER_DEEPSEEK_KEY" {
+		t.Fatalf("deepseek provider = %+v, want user provider preserved", userProvider)
+	}
+	projectProvider, ok := cfg.Provider("deepseek-flash")
+	if !ok {
+		t.Fatalf("project deepseek-flash provider missing: %+v", cfg.Providers)
+	}
+	if projectProvider.APIKeyEnv != "PROJECT_DEEPSEEK_KEY" || projectProvider.Effort != "max" {
+		t.Fatalf("deepseek-flash provider = %+v, want project provider preserved", projectProvider)
+	}
+}
+
+func TestLoadForRootKeepsUserProviderOverSameNamedProjectProvider(t *testing.T) {
+	isolateUserConfigHome(t)
+	root := t.TempDir()
+	userPath := UserConfigPath()
+	if err := os.MkdirAll(filepath.Dir(userPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(userPath, []byte(`
+[[providers]]
+name = "shared"
+kind = "openai"
+base_url = "https://global.example/v1"
+model = "global-model"
+api_key_env = "GLOBAL_SHARED_KEY"
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "maddog.toml"), []byte(`
+[[providers]]
+name = "shared"
+kind = "openai"
+base_url = "https://project.example/v1"
+model = "project-model"
+api_key_env = "PROJECT_SHARED_KEY"
+
+[[providers]]
+name = "project-only"
+kind = "openai"
+base_url = "https://project.example/v1"
+model = "project-only-model"
+api_key_env = "PROJECT_ONLY_KEY"
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := LoadForRoot(root)
+	if err != nil {
+		t.Fatalf("LoadForRoot: %v", err)
+	}
+	shared, ok := cfg.Provider("shared")
+	if !ok {
+		t.Fatalf("shared provider missing: %+v", cfg.Providers)
+	}
+	if shared.BaseURL != "https://global.example/v1" || shared.APIKeyEnv != "GLOBAL_SHARED_KEY" || shared.Model != "global-model" {
+		t.Fatalf("shared provider = %+v, want global provider to win over project provider", shared)
+	}
+	if _, ok := cfg.Provider("project-only"); !ok {
+		t.Fatalf("project-only provider missing: %+v", cfg.Providers)
+	}
+}
+
+func TestLoadForRootKeepsGlobalAgentStepLimitsOverProject(t *testing.T) {
+	isolateUserConfigHome(t)
+	root := t.TempDir()
+	userPath := UserConfigPath()
+	if err := os.MkdirAll(filepath.Dir(userPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(userPath, []byte(`
+[agent]
+max_steps = 17
+planner_max_steps = 9
+temperature = 0.4
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "maddog.toml"), []byte(`
+default_model = "deepseek-pro"
+
+[agent]
+max_steps = 3
+planner_max_steps = 4
+temperature = 0.8
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := LoadForRoot(root)
+	if err != nil {
+		t.Fatalf("LoadForRoot: %v", err)
+	}
+	if cfg.Agent.MaxSteps != 17 || cfg.Agent.PlannerMaxSteps != 9 {
+		t.Fatalf("agent steps = max:%d planner:%d, want global 17/9", cfg.Agent.MaxSteps, cfg.Agent.PlannerMaxSteps)
+	}
+	if cfg.Agent.Temperature != 0.8 {
+		t.Fatalf("agent temperature = %v, want project override to keep working for other agent settings", cfg.Agent.Temperature)
+	}
+	if cfg.DefaultModel != "deepseek-pro" {
+		t.Fatalf("default_model = %q, want project config to keep overriding unrelated fields", cfg.DefaultModel)
+	}
+}
+
+func TestLoadForRootIgnoresProjectAgentStepLimitsWithoutUserConfig(t *testing.T) {
+	isolateUserConfigHome(t)
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "maddog.toml"), []byte(`
+[agent]
+max_steps = 3
+planner_max_steps = 4
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := LoadForRoot(root)
+	if err != nil {
+		t.Fatalf("LoadForRoot: %v", err)
+	}
+	if cfg.Agent.MaxSteps != 0 || cfg.Agent.PlannerMaxSteps != 0 {
+		t.Fatalf("agent steps = max:%d planner:%d, want built-in global defaults 0/0", cfg.Agent.MaxSteps, cfg.Agent.PlannerMaxSteps)
+	}
+}
+
+func TestSaveForRootPreservesShadowedProjectProvider(t *testing.T) {
+	isolateUserConfigHome(t)
+	root := t.TempDir()
+	userPath := UserConfigPath()
+	if err := os.MkdirAll(filepath.Dir(userPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(userPath, []byte(`
+[[providers]]
+name = "shared"
+kind = "openai"
+base_url = "https://global.example/v1"
+model = "global-model"
+api_key_env = "GLOBAL_SHARED_KEY"
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	projectPath := filepath.Join(root, "maddog.toml")
+	if err := os.WriteFile(projectPath, []byte(`
+[[providers]]
+name = "shared"
+kind = "openai"
+base_url = "https://project.example/v1"
+model = "project-model"
+api_key_env = "PROJECT_SHARED_KEY"
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := LoadForRoot(root)
+	if err != nil {
+		t.Fatalf("LoadForRoot: %v", err)
+	}
+	if err := cfg.SaveForRoot(root); err != nil {
+		t.Fatalf("SaveForRoot: %v", err)
+	}
+	var saved Config
+	if _, err := toml.DecodeFile(projectPath, &saved); err != nil {
+		t.Fatalf("saved project config does not parse: %v", err)
+	}
+	shared, ok := saved.Provider("shared")
+	if !ok {
+		t.Fatalf("saved project provider missing: %+v", saved.Providers)
+	}
+	if shared.BaseURL != "https://project.example/v1" || shared.APIKeyEnv != "PROJECT_SHARED_KEY" {
+		t.Fatalf("saved provider = %+v, want original project provider", shared)
+	}
+}
+
+func TestSaveForRootDoesNotWriteUserProvidersIntoProjectConfig(t *testing.T) {
+	isolateUserConfigHome(t)
+	root := t.TempDir()
+	userPath := UserConfigPath()
+	if err := os.MkdirAll(filepath.Dir(userPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(userPath, []byte(`
+config_version = 2
+
+[[providers]]
+name = "global"
+kind = "openai"
+base_url = "https://global.example/v1"
+model = "global-model"
+api_key_env = "GLOBAL_KEY"
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	projectPath := filepath.Join(root, "maddog.toml")
+	if err := os.WriteFile(projectPath, []byte(`
+config_version = 2
+default_model = "project-local/project-model"
+
+[[providers]]
+name = "project-local"
+kind = "openai"
+base_url = "https://project.example/v1"
+model = "project-model"
+api_key_env = "PROJECT_KEY"
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := LoadForRoot(root)
+	if err != nil {
+		t.Fatalf("LoadForRoot: %v", err)
+	}
+	if _, ok := cfg.Provider("global"); !ok {
+		t.Fatal("runtime config should include user provider before saving")
+	}
+	if _, ok := cfg.Provider("project-local"); !ok {
+		t.Fatal("runtime config should include project provider before saving")
+	}
+	if err := cfg.SaveForRoot(root); err != nil {
+		t.Fatalf("SaveForRoot: %v", err)
+	}
+
+	var got Config
+	if _, err := toml.DecodeFile(projectPath, &got); err != nil {
+		t.Fatalf("saved project config does not parse: %v", err)
+	}
+	if _, ok := got.Provider("global"); ok {
+		t.Fatalf("user provider leaked into project config: %+v", got.Providers)
+	}
+	if _, ok := got.Provider("project-local"); !ok {
+		t.Fatalf("project provider missing after save: %+v", got.Providers)
+	}
+}
+
+func TestSaveToExistingProjectPersistsTopLevelDelta(t *testing.T) {
+	projectPath := filepath.Join(t.TempDir(), "maddog.toml")
+	if err := os.WriteFile(projectPath, []byte("[permissions]\nallow = [\"Bash(go test:*)\"]\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg := Default()
+	cfg.ConfigVersion = 2
+	if err := cfg.SetDefaultModel("deepseek-pro"); err != nil {
+		t.Fatal(err)
+	}
+	if err := cfg.SaveTo(projectPath); err != nil {
+		t.Fatalf("SaveTo: %v", err)
+	}
+	body, err := os.ReadFile(projectPath)
+	if err != nil {
+		t.Fatalf("read project config: %v", err)
+	}
+	if !strings.Contains(string(body), `default_model = "deepseek-pro"`) {
+		t.Fatalf("project config dropped top-level default_model delta:\n%s", body)
+	}
+	if !strings.Contains(string(body), "config_version = 2") {
+		t.Fatalf("project config dropped top-level config_version delta:\n%s", body)
+	}
+	var got Config
+	if _, err := toml.DecodeFile(projectPath, &got); err != nil {
+		t.Fatalf("saved project config does not parse: %v", err)
+	}
+	if got.DefaultModel != "deepseek-pro" {
+		t.Fatalf("default_model = %q, want deepseek-pro", got.DefaultModel)
+	}
+	if got.ConfigVersion != 2 {
+		t.Fatalf("config_version = %d, want 2", got.ConfigVersion)
+	}
+}
+
+func TestSaveToExistingProjectRemovesPluginDelta(t *testing.T) {
+	projectPath := filepath.Join(t.TempDir(), "maddog.toml")
+	cfg := Default()
+	if err := cfg.UpsertPlugin(PluginEntry{Name: "ed", Type: "http", URL: "https://mcp.example.com/mcp", Headers: map[string]string{"Authorization": "Bearer token"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := cfg.SaveTo(projectPath); err != nil {
+		t.Fatalf("initial SaveTo: %v", err)
+	}
+	if !cfg.RemovePlugin("ed") {
+		t.Fatal("RemovePlugin should report changed")
+	}
+	if err := cfg.SaveTo(projectPath); err != nil {
+		t.Fatalf("SaveTo after remove: %v", err)
+	}
+	body, err := os.ReadFile(projectPath)
+	if err != nil {
+		t.Fatalf("read project config: %v", err)
+	}
+	if strings.Contains(string(body), "[[plugins]]") || strings.Contains(string(body), "[plugins.headers]") || strings.Contains(string(body), "Authorization") {
+		t.Fatalf("removed plugin should not remain in project config:\n%s", body)
+	}
+	var got Config
+	if _, err := toml.DecodeFile(projectPath, &got); err != nil {
+		t.Fatalf("saved project config does not parse: %v", err)
+	}
+	if len(got.Plugins) != 0 {
+		t.Fatalf("plugins = %+v, want none", got.Plugins)
+	}
+}
+
+func TestSaveForRootDoesNotWriteUserAgentSettingsIntoProjectConfig(t *testing.T) {
+	isolateUserConfigHome(t)
+	root := t.TempDir()
+	userPath := UserConfigPath()
+	if err := os.MkdirAll(filepath.Dir(userPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(userPath, []byte("[agent]\ntemperature = 0.42\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	projectPath := filepath.Join(root, "maddog.toml")
+	if err := os.WriteFile(projectPath, []byte("[permissions]\nallow = [\"Bash(go test:*)\"]\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadForRoot(root)
+	if err != nil {
+		t.Fatalf("LoadForRoot: %v", err)
+	}
+	if cfg.Agent.Temperature != 0.42 {
+		t.Fatalf("runtime temperature = %v, want merged user config", cfg.Agent.Temperature)
+	}
+	if err := cfg.SaveForRoot(root); err != nil {
+		t.Fatalf("SaveForRoot: %v", err)
+	}
+	body, err := os.ReadFile(projectPath)
+	if err != nil {
+		t.Fatalf("read project config: %v", err)
+	}
+	if strings.Contains(string(body), "temperature") {
+		t.Fatalf("user agent setting leaked into project config:\n%s", body)
 	}
 }
 

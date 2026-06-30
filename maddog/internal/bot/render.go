@@ -23,7 +23,7 @@ type renderSink struct {
 	userID     string
 	replyTo    string
 	logger     *slog.Logger
-	ctrl       *control.Controller
+	ctrl       botController
 	onApproval func(event.Approval)
 	onAsk      func(event.Ask)
 

@@ -2,11 +2,7 @@ VERSION := $(shell git describe --tags --always 2>/dev/null || echo dev)
 LDFLAGS := -s -w -X main.version=$(VERSION)
 GOEXE := $(shell go env GOEXE)
 
-# CodeGraph release pinned for the bundled MCP server / e2e test. Bump together
-# with any change to the integration in internal/codegraph.
-CODEGRAPH_VERSION := v0.9.7
-
-.PHONY: build vet fmt test hooks cross clean e2e-codegraph
+.PHONY: build vet fmt test hooks cross clean
 
 build:
 	CGO_ENABLED=0 go build -ldflags "$(LDFLAGS)" -o bin/maddog$(GOEXE) ./cmd/maddog

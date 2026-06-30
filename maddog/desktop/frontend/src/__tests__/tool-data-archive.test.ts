@@ -1,9 +1,9 @@
 // Run: tsx src/__tests__/tool-data-archive.test.ts
 //
-// Verifies that the tool_result reducer archives ALL completed tools
-// immediately: args are trimmed to 200 chars, output is set to undefined,
-// and the dataArchived flag is set. Collapsed cards only keep tool name
-// + command in memory; full data is loaded on demand via the backend.
+// Verifies that the tool_result reducer archives completed tools immediately:
+// output is dropped, dataArchived is set, and most args are trimmed to 200
+// chars. For todo_write, only the latest successful top-level snapshot keeps
+// full JSON because the bottom task panel parses that canonical entry directly.
 
 import { initialState, reducer } from "../lib/useController";
 import type { Item } from "../lib/useController";
@@ -50,6 +50,15 @@ function addTools(state: TestState, count: number, argsLen = 5000, outputLen = 1
 
 function toolItems(s: TestState): ToolItem[] {
   return s.items.filter((it): it is ToolItem => it.kind === "tool");
+}
+
+function todoArgs(label: string, active = 0): string {
+  return JSON.stringify({
+    todos: Array.from({ length: 8 }, (_, i) => ({
+      content: `${label} task ${i} ${"x".repeat(30)}`,
+      status: i === active ? "in_progress" : "pending",
+    })),
+  });
 }
 
 console.log("\ntool data archiving on tool_result");

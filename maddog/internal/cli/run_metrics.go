@@ -99,6 +99,48 @@ func (s *metricsSink) Emit(e event.Event) {
 	s.inner.Emit(e)
 }
 
+func (s *metricsSink) recordMemoryCompilerStats(m *event.MemoryCompilerStats) {
+	if s == nil || m == nil {
+		return
+	}
+	detail := RunMemoryCompilerMetrics{
+		Injected:         m.Injected,
+		UsefulIR:         m.UsefulIR,
+		CompiledTokens:   m.CompiledTokens,
+		IROverheadTokens: m.IROverheadTokens,
+		MemoryReferences: m.MemoryReferences,
+		Constraints:      m.Constraints,
+		RiskNotes:        m.RiskNotes,
+		ExecutionSteps:   m.ExecutionSteps,
+		TotalNodes:       m.TotalNodes,
+		HighSignalNodes:  m.HighSignalNodes,
+		ToolResultNodes:  m.ToolResultNodes,
+		DecisionNodes:    m.DecisionNodes,
+		StrategyCount:    m.StrategyCount,
+		LearningCount:    m.LearningCount,
+	}
+	s.m.MemoryCompilerTurns++
+	if detail.Injected {
+		s.m.MemoryCompilerInjectedTurns++
+	}
+	if detail.UsefulIR {
+		s.m.MemoryCompilerUsefulIRTurns++
+	}
+	s.m.MemoryCompilerCompiledTokens += detail.CompiledTokens
+	s.m.MemoryCompilerIROverheadTokens += detail.IROverheadTokens
+	s.m.MemoryCompilerMemoryReferences += detail.MemoryReferences
+	s.m.MemoryCompilerConstraints += detail.Constraints
+	s.m.MemoryCompilerRiskNotes += detail.RiskNotes
+	s.m.MemoryCompilerExecutionSteps += detail.ExecutionSteps
+	s.m.MemoryCompilerTotalNodes = detail.TotalNodes
+	s.m.MemoryCompilerHighSignalNodes = detail.HighSignalNodes
+	s.m.MemoryCompilerToolResultNodes = detail.ToolResultNodes
+	s.m.MemoryCompilerDecisionNodes = detail.DecisionNodes
+	s.m.MemoryCompilerStrategyCount = detail.StrategyCount
+	s.m.MemoryCompilerLearningCount = detail.LearningCount
+	s.m.MemoryCompilerTurnDetails = append(s.m.MemoryCompilerTurnDetails, detail)
+}
+
 func (s *metricsSink) RecordReadinessAudit(a evidence.ReadinessAudit) {
 	if s == nil {
 		return

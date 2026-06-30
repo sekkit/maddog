@@ -20,8 +20,16 @@ on:
     tags: ['npm-v*']
   workflow_dispatch:
     inputs:
+      channel:
+        description: "Publish channel"
+        required: true
+        default: canary
+        type: choice
+        options:
+          - canary
+          - stable
       base_version:
-        description: "canary: intended next stable version, e.g. 1.5.0"
+        description: "Version to publish. Canary appends -canary.<run_number>; stable publishes exactly this version."
         required: true
         type: string
 
@@ -33,7 +41,7 @@ jobs:
     name: cache hit guard
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
@@ -44,11 +52,12 @@ jobs:
     name: publish npm packages
     needs: cache-guard
     runs-on: ubuntu-latest
-    # A tag push (npm-v*) publishes a stable/next release and goes through the
-    # `release` environment (esengine approves); a canary dispatch runs free.
-    environment: ${{ github.event_name == 'workflow_dispatch' && 'canary' || 'release' }}
+    # A tag push (npm-v*) or manual stable dispatch publishes a stable/next
+    # release and goes through the `release` environment (esengine approves);
+    # canary dispatches run free.
+    environment: ${{ github.event_name == 'workflow_dispatch' && inputs.channel == 'canary' && 'canary' || 'release' }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
@@ -57,14 +66,19 @@ jobs:
         with:
           node-version: '22'
           registry-url: 'https://registry.npmjs.org'
-      # Tag push uses the npm-v* tag; a canary dispatch synthesizes a
-      # <base>-canary.<run_number> version. build.mjs strips the leading `npm-`/`v`.
+      # Tag push uses the npm-v* tag. A canary dispatch synthesizes a
+      # <base>-canary.<run_number> version; a manual stable dispatch publishes
+      # the requested semver exactly. build.mjs strips the leading `npm-`/`v`.
       - name: Resolve version
         id: ver
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             base="${{ inputs.base_version }}"; base="${base#v}"
-            echo "arg=v${base}-canary.${{ github.run_number }}" >> "$GITHUB_OUTPUT"
+            if [ "${{ inputs.channel }}" = "canary" ]; then
+              echo "arg=v${base}-canary.${{ github.run_number }}" >> "$GITHUB_OUTPUT"
+            else
+              echo "arg=v${base}" >> "$GITHUB_OUTPUT"
+            fi
           else
             echo "arg=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
           fi

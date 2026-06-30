@@ -110,7 +110,8 @@ func saveAccount(accountID string, account savedAccount) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, data, 0o600)
+	// Atomic write: a truncated credentials file silently breaks login.
+	return fileutil.AtomicWriteFile(path, data, 0o600)
 }
 
 func Login(ctx context.Context, out io.Writer, timeout time.Duration) (*LoginResult, error) {

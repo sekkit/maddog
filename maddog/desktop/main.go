@@ -9,6 +9,7 @@ package main
 import (
 	"embed"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/wailsapp/wails/v2"
@@ -59,11 +60,21 @@ func windowsWebview2GPUDisabled() bool {
 	return channel == "canary"
 }
 
-func main() {
-	if len(os.Args) > 1 && os.Args[1] == "builtin-mcp" {
-		os.Exit(builtinmcp.RunCommand(os.Args[2:], os.Stdin, os.Stdout, os.Stderr, version))
+func linuxWebviewGpuPolicy(pattern string) linux.WebviewGpuPolicy {
+	matches, err := filepath.Glob(pattern)
+	if err == nil {
+		for _, path := range matches {
+			f, err := os.OpenFile(path, os.O_RDWR, 0)
+			if err == nil {
+				_ = f.Close()
+				return linux.WebviewGpuPolicyOnDemand
+			}
+		}
 	}
+	return linux.WebviewGpuPolicyNever
+}
 
+func main() {
 	app := NewApp()
 
 	// Restore saved window size, or fall back to the default.
@@ -126,9 +137,10 @@ func main() {
 			// WebKitGTK GPU compositing is inconsistent across distros/drivers and
 			// is the one real cross-platform rough edge for a Go+webview stack:
 			// "always" can yield blank or flickering webviews on some setups, so
-			// we let the webview decide on demand. Users still hitting artifacts
-			// can fall back to WEBKIT_DISABLE_COMPOSITING_MODE=1 (see README).
-			WebviewGpuPolicy: linux.WebviewGpuPolicyOnDemand,
+			// we let the webview decide on demand when a render node is usable, and
+			// disable acceleration when remote/software-rendered sessions cannot
+			// access /dev/dri.
+			WebviewGpuPolicy: linuxWebviewGpuPolicy(linuxDRIRenderNodeGlob),
 		},
 	})
 	if err != nil {

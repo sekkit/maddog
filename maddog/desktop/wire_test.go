@@ -2,7 +2,6 @@ package main
 
 import (
 	"encoding/json"
-	"errors"
 	"strings"
 	"testing"
 
@@ -10,46 +9,8 @@ import (
 	"maddog/internal/provider"
 )
 
-// --- toWire ---
-
-func TestToWireText(t *testing.T) {
-	e := event.Event{Kind: event.Text, Text: "hello"}
-	w := toWire(e)
-	if w.Kind != "text" || w.Text != "hello" {
-		t.Errorf("text wire = %+v", w)
-	}
-}
-
-func TestToWireReasoning(t *testing.T) {
-	e := event.Event{Kind: event.Reasoning, Text: "thinking..."}
-	w := toWire(e)
-	if w.Kind != "reasoning" || w.Text != "thinking..." {
-		t.Errorf("reasoning wire = %+v", w)
-	}
-}
-
-func TestToWireNoticeInfo(t *testing.T) {
-	e := event.Event{Kind: event.Notice, Level: event.LevelInfo, Text: "info"}
-	w := toWire(e)
-	if w.Kind != "notice" || w.Level != "info" {
-		t.Errorf("notice info = %+v", w)
-	}
-}
-
-func TestToWireNoticeWarn(t *testing.T) {
-	e := event.Event{Kind: event.Notice, Level: event.LevelWarn, Text: "warn"}
-	w := toWire(e)
-	if w.Level != "warn" {
-		t.Errorf("notice warn level = %q", w.Level)
-	}
-}
-
-func TestToWireRetrying(t *testing.T) {
-	e := event.Event{Kind: event.Retrying, RetryAttempt: 3, RetryMax: 10}
-	w := toWire(e)
-	if w.Kind != "retrying" || w.RetryAttempt != 3 || w.RetryMax != 10 {
-		t.Errorf("retrying wire = %+v", w)
-	}
+func TestWireEventTabPreservesSharedRetryingFields(t *testing.T) {
+	w := toWireTab(event.Event{Kind: event.Retrying, RetryAttempt: 3, RetryMax: 10}, "tab-1")
 	b, err := json.Marshal(w)
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
@@ -123,13 +84,12 @@ func TestToWireUsage(t *testing.T) {
 		},
 		SessionHit:  800,
 		SessionMiss: 200,
+	}, "tab-1")
+	if w.Kind != "usage" || w.TabID != "tab-1" {
+		t.Fatalf("tab wire = %+v", w)
 	}
-	w := toWire(e)
-	if w.Usage == nil || w.Usage.PromptTokens != 100 || w.Usage.TotalTokens != 150 {
-		t.Errorf("usage = %+v", w.Usage)
-	}
-	if w.Usage.SessionCacheHitTokens != 800 || w.Usage.SessionCacheMissTokens != 200 {
-		t.Errorf("session cache = hit:%d miss:%d", w.Usage.SessionCacheHitTokens, w.Usage.SessionCacheMissTokens)
+	if w.SessionHitTokens != 800 || w.SessionMissTokens != 200 {
+		t.Fatalf("session tokens = hit:%d miss:%d", w.SessionHitTokens, w.SessionMissTokens)
 	}
 	if w.Usage.Profile == nil || w.Usage.Profile.Role != "default" || w.Usage.Profile.Model != "icodeeasy/gpt-4o-mini" {
 		t.Errorf("usage profile = %+v", w.Usage.Profile)
@@ -160,11 +120,19 @@ func TestToWireProviderStatus(t *testing.T) {
 	}
 }
 
-func TestToWireUsageWithPricing(t *testing.T) {
-	e := event.Event{
-		Kind:    event.Usage,
-		Usage:   &provider.Usage{CacheHitTokens: 1_000_000, CacheMissTokens: 0, CompletionTokens: 0},
-		Pricing: &provider.Pricing{CacheHit: 1.0, Input: 2.0, Output: 10.0},
+func TestWireEventTabPreservesMaddogRuntimeEvents(t *testing.T) {
+	w := toWireTab(event.Event{
+		Kind:  event.Advisor,
+		Level: event.LevelWarn,
+		Text:  "advisor consulted",
+		Advisor: event.AdvisorConsultation{
+			Advice:            "inspect the failing command",
+			UsesThisSession:   2,
+			MaxUsesPerSession: 10,
+		},
+	}, "tab-1")
+	if w.Kind != "advisor" || w.Level != "warn" || w.Advisor == nil {
+		t.Fatalf("advisor tab wire = %+v", w)
 	}
 	w := toWire(e)
 	if w.Usage == nil || w.Usage.Cost != 1.0 || w.Usage.CostUSD != 1.0 {
@@ -275,25 +243,5 @@ func TestToWireAdvisor(t *testing.T) {
 	}
 	if w.Advisor.Question != "what now?" || w.Advisor.Advice != "stop and inspect the failing command" {
 		t.Fatalf("advisor payload = %+v", w.Advisor)
-	}
-	if w.Advisor.UsesThisSession != 2 || w.Advisor.RemainingThisSession != 8 {
-		t.Fatalf("advisor budget = %+v", w.Advisor)
-	}
-}
-
-// --- wireEvent JSON round-trip ---
-
-func TestWireEventJSON(t *testing.T) {
-	w := wireEvent{Kind: "text", Text: "hello"}
-	b, err := json.Marshal(w)
-	if err != nil {
-		t.Fatalf("marshal: %v", err)
-	}
-	var decoded wireEvent
-	if err := json.Unmarshal(b, &decoded); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
-	if decoded.Kind != "text" || decoded.Text != "hello" {
-		t.Errorf("round-trip = %+v", decoded)
 	}
 }

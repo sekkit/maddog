@@ -60,6 +60,9 @@
   two models together (executor + planner) in separate, cache-stable sessions.
 - **Plugin-driven.** External tools run as subprocesses over stdio JSON-RPC
   (MCP-compatible). Built-in tools self-register at compile time.
+- **Cache-aware context maintenance.** Startup injects a small stable environment
+  summary, stale tool output is snipped/pruned before summary compaction, and the
+  built-in tool schema contract is documented for regression review.
 - **Zero-friction distribution.** `CGO_ENABLED=0` single binary; cross-compile
   to six targets with one command. The only dependency is a TOML parser.
 

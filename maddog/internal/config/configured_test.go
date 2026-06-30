@@ -2,9 +2,9 @@ package config
 
 import "testing"
 
-// TestProviderConfigured verifies Configured tracks whether the api_key_env
-// resolves to a non-empty value — the same key check Validate enforces at build
-// time, so model pickers can filter on it.
+// TestProviderConfigured verifies Configured tracks whether the provider can be
+// selected. Providers with no api_key_env are explicit no-auth providers; if an
+// env var is configured, it must resolve to a non-empty value.
 func TestProviderConfigured(t *testing.T) {
 	t.Setenv("MADDOG_TEST_KEY", "secret")
 	t.Setenv("MADDOG_TEST_TOKEN", "token")

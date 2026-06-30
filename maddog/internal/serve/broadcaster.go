@@ -26,7 +26,7 @@ func NewBroadcaster() *Broadcaster {
 // a subscriber whose buffer is full rather than blocking. A marshal failure is
 // dropped silently — one bad event shouldn't stall the stream.
 func (b *Broadcaster) Emit(e event.Event) {
-	data, err := json.Marshal(toWire(e))
+	data, err := json.Marshal(eventwire.ToWire(e))
 	if err != nil {
 		return
 	}

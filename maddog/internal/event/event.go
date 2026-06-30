@@ -207,6 +207,7 @@ type Approval struct {
 	ID      string
 	Tool    string
 	Subject string
+	Reason  string // optional annotation explaining why approval is needed
 }
 
 // AskOption is one choice the user can pick for an AskQuestion.
@@ -243,6 +244,21 @@ type Compaction struct {
 	Archive  string // Done: path the dropped originals were archived to ("" if none)
 }
 
+// GuardianResult carries the outcome of a guardian sub-agent safety review.
+// Emitted with Kind=GuardianAssessment after each review completes.
+type GuardianResult struct {
+	ID                string            // unique review id
+	Tool              string            // tool being reviewed (e.g. "bash")
+	Subject           string            // call subject (e.g. "rm -rf /tmp/build")
+	Outcome           string            // "allow" | "deny"
+	RiskLevel         string            // "low" | "medium" | "high" | "critical"
+	UserAuthorization string            // "unknown" | "low" | "medium" | "high"
+	Rationale         string            // one-sentence reason
+	DurationMs        int64             // wall-clock review time
+	Usage             *provider.Usage   // guardian review token telemetry
+	Pricing           *provider.Pricing // for cost display (nil = omit cost)
+}
+
 // AskAnswer is the user's reply to one AskQuestion: the chosen option label(s)
 // (a free-typed answer is carried as a single Selected entry).
 type AskAnswer struct {
@@ -264,6 +280,15 @@ type CacheDiagnostics struct {
 	CacheMissTokens     int
 	CacheHitTokens      int
 }
+
+const (
+	UsageSourceExecutor   = "executor"
+	UsageSourcePlanner    = "planner"
+	UsageSourceSubagent   = "subagent"
+	UsageSourceCompaction = "compaction"
+	UsageSourceClassifier = "classifier"
+	UsageSourceTitle      = "title"
+)
 
 // Event is one increment in a turn's event stream. Read the field(s) documented
 // for Kind; the others are zero.

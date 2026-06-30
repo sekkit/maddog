@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { MouseEvent as ReactMouseEvent } from "react";
 import { Archive, Pencil, Search, Trash2, RotateCcw } from "lucide-react";
 import { t, useT } from "../lib/i18n";
-import { sessionActivityTime } from "../lib/session";
+import { historySessionDisplayTitle, sessionActivityTime } from "../lib/session";
 import type { HistoryMessage, SessionMeta } from "../lib/types";
 import { historyMessagesToItems, type Item } from "../lib/useController";
 import { Transcript } from "./Transcript";
@@ -83,7 +83,7 @@ export function HistoryPanel({
       setEditing(null);
       setPreview({
         path: s.path,
-        title: sessionDisplayTitle(s, tr("history.emptySession")),
+        title: historySessionDisplayTitle(s, tr("history.emptySession")),
         meta: sessionMetaLine(s, tr, isTrash),
         messages: [],
         loading: true,
@@ -464,8 +464,9 @@ export function HistoryPanel({
                               if (!isTrash && !running) onResume(s);
                             }}
                           >
-                            <div className="hist-item__preview">{sessionDisplayTitle(s, tr("history.emptySession"))}</div>
+                            <div className="hist-item__preview">{historySessionDisplayTitle(s, tr("history.emptySession"))}</div>
                             <div className="hist-item__meta">
+                              {!isTrash && isChannelSession(s) && <span className="hist-item__badge hist-item__badge--open">{tr("history.channel")}</span>}
                               {!isTrash && s.current && <span className="hist-item__badge hist-item__badge--current">{tr("history.current")}</span>}
                               {!isTrash && !s.current && s.open && <span className="hist-item__badge hist-item__badge--open">{tr("history.open")}</span>}
                               {isTrash && <span className="hist-item__badge hist-item__badge--deleted">{tr("history.deleted")}</span>}
@@ -598,8 +599,14 @@ function sessionScope(s: SessionMeta): "project" | "global" {
   return s.scope === "project" ? "project" : "global";
 }
 
+function isChannelSession(s: SessionMeta): boolean {
+  return s.kind === "channel" || s.sessionSource === "auto";
+}
+
 function sessionLocation(s: SessionMeta, tr: ReturnType<typeof useT>): string {
-  if (s.topicTitle) return s.topicTitle;
+  if (isChannelSession(s)) {
+    return [s.channelLabel || s.channel || tr("history.channel"), s.remoteId].filter(Boolean).join(" · ");
+  }
   if (s.workspaceRoot) {
     const parts = s.workspaceRoot.split(/[\\/]/).filter(Boolean);
     return parts[parts.length - 1] || s.workspaceRoot;
@@ -607,14 +614,11 @@ function sessionLocation(s: SessionMeta, tr: ReturnType<typeof useT>): string {
   return sessionScope(s) === "project" ? tr("history.filterProject") : tr("history.filterGlobal");
 }
 
-function sessionDisplayTitle(s: SessionMeta, fallback: string): string {
-  return s.title || s.preview || fallback;
-}
-
 function sessionMetaLine(s: SessionMeta, tr: ReturnType<typeof useT>, isTrash = false): string {
   const time = timeLabel(isTrash ? s.deletedAt || sessionActivityTime(s) : sessionActivityTime(s));
   const suffix = isTrash && s.deletedAt ? ` · ${tr("history.deleted")}` : "";
-  return `${tr(s.turns === 1 ? "history.turnOne" : "history.turnOther", { n: s.turns })} · ${time}${suffix}`;
+  const prefix = isChannelSession(s) ? `${tr("history.channelReadOnly")} · ` : "";
+  return `${prefix}${tr(s.turns === 1 ? "history.turnOne" : "history.turnOther", { n: s.turns })} · ${time}${suffix}`;
 }
 
 function previewMessagesToItems(messages: HistoryMessage[]): Item[] {

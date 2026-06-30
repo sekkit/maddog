@@ -147,9 +147,17 @@
   fetch("https://dl.maddog.io/latest/latest.json", { cache: "no-cache" })
     .then((r) => (r.ok ? r.json() : null))
     .then((d) => {
-      const v = String((d && d.version) || "").replace(/^v/, "");
-      if (!v) return;
+      const rawVersion = String((d && d.version) || "");
+      const versionMatch = rawVersion.match(/^v?(\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?)$/);
+      if (!versionMatch) return;
+      const v = versionMatch[1];
+      const desktopBase = "https://dl.maddog.io/desktop-v" + v;
       document.querySelectorAll(".rxv").forEach((e) => { e.textContent = v; });
+      desktopAssets.forEach((asset) => {
+        document.querySelectorAll('[data-desktop-asset="' + asset + '"]').forEach((a) => {
+          a.href = desktopBase + "/" + asset;
+        });
+      });
       document.querySelectorAll("a.rxnotes").forEach((a) => {
         a.href = a.href.replace(/releases\/tag\/v[^/]*$/, "releases/tag/v" + v);
       });

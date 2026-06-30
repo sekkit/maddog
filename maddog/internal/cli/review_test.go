@@ -1,8 +1,12 @@
 package cli
 
 import (
+	"context"
+	"encoding/json"
 	"strings"
 	"testing"
+
+	"maddog/internal/skill"
 )
 
 func TestBuildReviewTask(t *testing.T) {

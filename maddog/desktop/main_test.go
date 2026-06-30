@@ -2,7 +2,10 @@ package main
 
 import (
 	"os"
+	"path/filepath"
 	"testing"
+
+	"github.com/wailsapp/wails/v2/pkg/options/linux"
 )
 
 // TestMain isolates os.UserConfigDir() for the whole package. On Windows it
@@ -14,6 +17,12 @@ func TestMain(m *testing.M) {
 	if err != nil {
 		os.Exit(1)
 	}
+	os.Setenv("HOME", dir)
+	os.Setenv("MADDOG_CREDENTIALS_STORE", "file")
+	os.Setenv("USERPROFILE", dir)
+	os.Setenv("XDG_CONFIG_HOME", dir+"/config")
+	os.Setenv("MADDOG_STATE_HOME", dir+"/state")
+	os.Setenv("MADDOG_CACHE_HOME", dir+"/cache")
 	os.Setenv("AppData", dir)
 	code := m.Run()
 	os.RemoveAll(dir)
@@ -53,5 +62,35 @@ func TestWindowsWebview2GPUDisabled(t *testing.T) {
 				t.Fatalf("windowsWebview2GPUDisabled() = %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestLinuxWebviewGpuPolicyDisablesGpuWithoutAccessibleRenderNode(t *testing.T) {
+	glob := filepath.Join(t.TempDir(), "renderD*")
+
+	if got := linuxWebviewGpuPolicy(glob); got != linux.WebviewGpuPolicyNever {
+		t.Fatalf("linuxWebviewGpuPolicy() = %v, want %v", got, linux.WebviewGpuPolicyNever)
+	}
+}
+
+func TestLinuxWebviewGpuPolicyDisablesGpuForInaccessibleRenderNode(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dir, "renderD128"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := linuxWebviewGpuPolicy(filepath.Join(dir, "renderD*")); got != linux.WebviewGpuPolicyNever {
+		t.Fatalf("linuxWebviewGpuPolicy() = %v, want %v", got, linux.WebviewGpuPolicyNever)
+	}
+}
+
+func TestLinuxWebviewGpuPolicyKeepsOnDemandWithAccessibleRenderNode(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "renderD128"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := linuxWebviewGpuPolicy(filepath.Join(dir, "renderD*")); got != linux.WebviewGpuPolicyOnDemand {
+		t.Fatalf("linuxWebviewGpuPolicy() = %v, want %v", got, linux.WebviewGpuPolicyOnDemand)
 	}
 }

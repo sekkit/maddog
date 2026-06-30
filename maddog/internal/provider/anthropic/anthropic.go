@@ -139,6 +139,7 @@ func (c *client) sendOpts() provider.SendOptions {
 	return provider.SendOptions{
 		Provider:   c.name,
 		KeyEnv:     c.keyEnv,
+		KeySource:  c.keySource,
 		KeyPresent: c.apiKey != "",
 		RetryAuth:  c.authed.Load(),
 	}
@@ -186,7 +187,7 @@ func (c *client) Stream(ctx context.Context, req provider.Request) (<-chan provi
 	c.authed.Store(true)
 
 	out := make(chan provider.Chunk)
-	go c.readStream(resp, out)
+	go c.readStream(ctx, resp, out)
 	return out, nil
 }
 
@@ -430,7 +431,7 @@ func nativeContentBlocks(raw []json.RawMessage) []contentBlock {
 // and a complete ChunkToolCall when the block closes; usage is assembled from
 // message_start (input/cache) + message_delta (output + stop_reason) and emitted
 // once before ChunkDone.
-func (c *client) readStream(resp *http.Response, out chan<- provider.Chunk) {
+func (c *client) readStream(ctx context.Context, resp *http.Response, out chan<- provider.Chunk) {
 	defer resp.Body.Close()
 	defer close(out)
 
@@ -451,6 +452,9 @@ func (c *client) readStream(resp *http.Response, out chan<- provider.Chunk) {
 		defer idle.Stop()
 		for {
 			select {
+			case <-ctx.Done():
+				resp.Body.Close()
+				return
 			case <-idle.C:
 				stalled.Store(true)
 				resp.Body.Close()
@@ -468,6 +472,10 @@ func (c *client) readStream(resp *http.Response, out chan<- provider.Chunk) {
 			}
 		}
 	}()
+
+	send := func(chunk provider.Chunk) bool {
+		return sendChunk(ctx, out, chunk)
+	}
 
 	tools := map[int]*provider.ToolCall{} // tool_use blocks, keyed by content index
 	textBlocks := map[int]*strings.Builder{}
@@ -499,7 +507,7 @@ func (c *client) readStream(resp *http.Response, out chan<- provider.Chunk) {
 
 		var ev streamEvent
 		if err := json.Unmarshal([]byte(data), &ev); err != nil {
-			out <- provider.Chunk{Type: provider.ChunkError, Err: fmt.Errorf("%s: decode stream: %w", c.name, err)}
+			send(provider.Chunk{Type: provider.ChunkError, Err: fmt.Errorf("%s: decode stream: %w", c.name, err)})
 			return
 		}
 
@@ -545,11 +553,15 @@ func (c *client) readStream(resp *http.Response, out chan<- provider.Chunk) {
 				}
 			case "thinking_delta":
 				if ev.Delta.Thinking != "" {
-					out <- provider.Chunk{Type: provider.ChunkReasoning, Text: ev.Delta.Thinking}
+					if !send(provider.Chunk{Type: provider.ChunkReasoning, Text: ev.Delta.Thinking}) {
+						return
+					}
 				}
 			case "signature_delta":
 				if ev.Delta.Signature != "" {
-					out <- provider.Chunk{Type: provider.ChunkReasoning, Signature: ev.Delta.Signature}
+					if !send(provider.Chunk{Type: provider.ChunkReasoning, Signature: ev.Delta.Signature}) {
+						return
+					}
 				}
 			case "input_json_delta":
 				if tc := tools[ev.Index]; tc != nil {
@@ -600,12 +612,15 @@ func (c *client) readStream(resp *http.Response, out chan<- provider.Chunk) {
 		}
 	}
 
+	if ctx.Err() != nil {
+		return
+	}
 	if stalled.Load() {
-		out <- provider.Chunk{Type: provider.ChunkError, Err: fmt.Errorf("%s: stream stalled — no data for %s, connection likely dropped", c.name, idleTimeout)}
+		send(provider.Chunk{Type: provider.ChunkError, Err: fmt.Errorf("%s: stream stalled — no data for %s, connection likely dropped", c.name, idleTimeout)})
 		return
 	}
 	if err := scanner.Err(); err != nil {
-		out <- provider.Chunk{Type: provider.ChunkError, Err: fmt.Errorf("%s: read stream: %w", c.name, err)}
+		send(provider.Chunk{Type: provider.ChunkError, Err: fmt.Errorf("%s: read stream: %w", c.name, err)})
 		return
 	}
 
@@ -615,16 +630,32 @@ func (c *client) readStream(resp *http.Response, out chan<- provider.Chunk) {
 		}
 	}
 	if haveUsage {
-		out <- provider.Chunk{Type: provider.ChunkUsage, Usage: &provider.Usage{
+		if !send(provider.Chunk{Type: provider.ChunkUsage, Usage: &provider.Usage{
 			PromptTokens:     inTok + cacheCreate + cacheRead,
 			CompletionTokens: outTok,
 			TotalTokens:      inTok + cacheCreate + cacheRead + outTok,
 			CacheHitTokens:   cacheRead,
 			CacheMissTokens:  inTok + cacheCreate, // uncached input + cache writes (billed ≥1×)
 			FinishReason:     mapStopReason(stopReason),
-		}}
+		}}) {
+			return
+		}
 	}
-	out <- provider.Chunk{Type: provider.ChunkDone}
+	send(provider.Chunk{Type: provider.ChunkDone})
+}
+
+func sendChunk(ctx context.Context, out chan<- provider.Chunk, chunk provider.Chunk) bool {
+	select {
+	case out <- chunk:
+		return true
+	default:
+	}
+	select {
+	case <-ctx.Done():
+		return false
+	case out <- chunk:
+		return true
+	}
 }
 
 // mapStopReason translates Anthropic stop reasons to the OpenAI-style finish
