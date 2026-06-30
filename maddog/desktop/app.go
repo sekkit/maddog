@@ -4132,6 +4132,13 @@ func (a *App) Capabilities() CapabilitiesView {
 	return out
 }
 
+// MCPServers exposes just the MCP server projection for the dedicated settings
+// page. Keep this as a thin wrapper around the drawer projection so Wails
+// bindings stay aligned with the frontend bridge contract.
+func (a *App) MCPServers() []ServerView {
+	return a.mcpServersView()
+}
+
 func (a *App) mcpServersView() []ServerView {
 	out := []ServerView{}
 	a.mu.RLock()
