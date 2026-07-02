@@ -13,7 +13,9 @@ import (
 	"time"
 
 	"golang.org/x/text/encoding/simplifiedchinese"
+	"maddog/internal/checkpoint"
 	"maddog/internal/config"
+	"maddog/internal/control"
 )
 
 // --- workspaceStatePath ---

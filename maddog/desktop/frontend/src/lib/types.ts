@@ -109,6 +109,7 @@ export interface WireUsage {
   reasoningTokens?: number;
   profile?: WireProfile;
   providerStatus?: WireProviderStatus;
+  cacheDiagnostics?: WireCacheDiagnostics;
   // Session-cumulative cache tokens — the status bar shows the aggregate
   // hit-rate (Σhit/Σ(hit+miss)), steadier than the single-turn cacheHitTokens.
   sessionCacheHitTokens: number;

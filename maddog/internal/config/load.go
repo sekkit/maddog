@@ -39,10 +39,20 @@ func LoadForRoot(root string) (*Config, error) {
 	}
 
 	var tomlSources []string
+	var globalCodegraph CodegraphConfig
+	globalCodegraphDefined := false
 	if uc := userConfigLoadPath(); uc != "" {
 		tomlSources = append(tomlSources, uc)
 		if err := mergeRuntimeTOMLFile(cfg, uc); err != nil {
 			return nil, err
+		}
+		defined, err := tomlCodegraphDefined(uc)
+		if err != nil {
+			return nil, err
+		}
+		if defined {
+			globalCodegraph = cfg.Codegraph
+			globalCodegraphDefined = true
 		}
 	}
 	globalMaxSteps := cfg.Agent.MaxSteps
@@ -59,6 +69,9 @@ func LoadForRoot(root string) (*Config, error) {
 	cfg.Agent.MaxSteps = globalMaxSteps
 	cfg.Agent.PlannerMaxSteps = globalPlannerMaxSteps
 	cfg.Agent.MemoryCompiler = globalMemoryCompiler
+	if globalCodegraphDefined {
+		cfg.Codegraph = globalCodegraph
+	}
 	// toml.DecodeFile replaces [[plugins]] wholesale, so cfg.Plugins now holds
 	// only the last file's. Re-merge by name across all sources (later wins) so a
 	// project maddog.toml doesn't drop the global config's MCP servers.
@@ -362,6 +375,18 @@ func mergeTOMLProviderAccess(paths []string) ([]string, bool, error) {
 	return merged, saw, nil
 }
 
+func tomlCodegraphDefined(path string) (bool, error) {
+	if _, err := os.Stat(path); err != nil {
+		return false, nil
+	}
+	var f Config
+	meta, err := toml.DecodeFile(path, &f)
+	if err != nil {
+		return false, fmt.Errorf("config %s: %w", path, err)
+	}
+	return meta.IsDefined("codegraph"), nil
+}
+
 // LoadForEdit returns a config to seed the `maddog setup` wizard when reconfiguring:
 // the built-in defaults with the file at path (if present) decoded on top, so a
 // reconfigure preserves the user's existing providers and agent settings instead
@@ -463,6 +488,7 @@ func normalizeLegacyMCPTiers(c *Config) {
 	if c == nil {
 		return
 	}
+	c.Codegraph.Tier = ""
 	for i := range c.Plugins {
 		c.Plugins[i].Tier = ""
 	}
@@ -493,7 +519,7 @@ func stripLegacyMCPTierLines(raw string) (string, bool) {
 		if header := tomlSectionHeader(line); header != "" {
 			section = header
 		}
-		if section == "plugins" && isTOMLKeyAssignment(line, "tier") {
+		if (section == "codegraph" || section == "plugins") && isTOMLKeyAssignment(line, "tier") {
 			changed = true
 			continue
 		}

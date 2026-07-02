@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"maddog/internal/agent"
+	"maddog/internal/config"
 	"maddog/internal/control"
 	"maddog/internal/event"
 	"maddog/internal/provider"

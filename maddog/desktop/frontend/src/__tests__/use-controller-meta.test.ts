@@ -1,7 +1,7 @@
 // Run: tsx src/__tests__/use-controller-meta.test.ts
 
 import { foregroundRunningFromRuntimeMeta, initialState, metaFromTab, reducer, sameMeta, shouldReconcileStaleTurn } from "../lib/useController";
-import type { Meta, TabMeta, WireUsage } from "../lib/types";
+import type { Meta, TabMeta } from "../lib/types";
 
 type LooseTabMeta = Omit<TabMeta, "toolApprovalMode"> & { toolApprovalMode?: TabMeta["toolApprovalMode"] | "" };
 
@@ -65,21 +65,6 @@ function tab(overrides: Partial<LooseTabMeta> = {}): TabMeta {
   } as TabMeta;
 }
 
-function usage(source: string): WireUsage {
-  return {
-    promptTokens: 100,
-    completionTokens: 20,
-    totalTokens: 120,
-    cacheHitTokens: 80,
-    cacheMissTokens: 20,
-    sessionCacheHitTokens: 80,
-    sessionCacheMissTokens: 20,
-    source,
-    cost: 0.001,
-    currency: "$",
-  };
-}
-
 console.log("\nuse controller meta");
 
 {
@@ -88,6 +73,11 @@ console.log("\nuse controller meta");
   eq(sameMeta(meta({ workspacePath: "/repo" }), meta({ workspacePath: "/other" })), false, "workspace path changes invalidate meta equality");
   eq(sameMeta(meta({ gitBranch: "main" }), meta({ gitBranch: "feature" })), false, "git branch changes invalidate meta equality");
   eq(sameMeta(meta({ imageInputEnabled: true }), meta({ imageInputEnabled: false })), false, "image input capability changes invalidate meta equality");
+}
+
+{
+  eq(foregroundRunningFromRuntimeMeta({ running: true, cancellable: true }), true, "cancellable runtime is foreground-running");
+  eq(foregroundRunningFromRuntimeMeta({ running: true, pendingPrompt: false, backgroundJobs: 1 }), false, "background jobs without prompt are not foreground-running");
 }
 
 {

@@ -608,7 +608,7 @@ func TestSettingsProviderProfilesWarnOnDanglingFrontierRef(t *testing.T) {
 }
 
 func TestOfficialMimoAPITemplateIncludesVisionModels(t *testing.T) {
-	entries, keyEnv, err := officialProviderTemplate("mimo-api")
+	entries, keyEnv, err := officialProviderTemplate("mimo-api", "")
 	if err != nil {
 		t.Fatalf("officialProviderTemplate: %v", err)
 	}

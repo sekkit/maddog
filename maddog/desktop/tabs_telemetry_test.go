@@ -95,8 +95,18 @@ func TestWorkspaceTabAggregatesSessionUsageTelemetry(t *testing.T) {
 	if context.CacheHitTokens != 70 || context.CacheMissTokens != 30 {
 		t.Fatalf("context usage cache tokens = hit %d miss %d, want 70/30", context.CacheHitTokens, context.CacheMissTokens)
 	}
-	if panel := app.ContextPanel("tab"); panel.TotalTokens != 140 {
+	panel := app.ContextPanel("tab")
+	if panel.TotalTokens != 140 {
 		t.Fatalf("context panel total tokens = %d, want 140", panel.TotalTokens)
+	}
+	if panel.SessionCompletionTokens != 40 {
+		t.Fatalf("context panel session completion tokens = %d, want 40", panel.SessionCompletionTokens)
+	}
+	if panel.SessionCacheHitTokens != 70 || panel.SessionCacheMissTokens != 30 {
+		t.Fatalf("context panel session cache tokens = hit %d miss %d, want 70/30", panel.SessionCacheHitTokens, panel.SessionCacheMissTokens)
+	}
+	if panel.Sources[event.UsageSourceSubagent].CompletionTokens != 40 {
+		t.Fatalf("context panel source stats = %+v, want subagent completion tokens", panel.Sources)
 	}
 }
 
@@ -133,7 +143,7 @@ func TestContextPanelIncludesToolCompressionTelemetry(t *testing.T) {
 	}
 }
 
-func TestContextPanelCompressionTelemetryResetsPerTurn(t *testing.T) {
+func TestContextPanelCompressionTelemetryAccumulatesAcrossTurns(t *testing.T) {
 	tab := &WorkspaceTab{ID: "tab"}
 	app := &App{tabs: map[string]*WorkspaceTab{"tab": tab}}
 	sink := &tabEventSink{tabID: "tab", app: app}
@@ -159,8 +169,8 @@ func TestContextPanelCompressionTelemetryResetsPerTurn(t *testing.T) {
 	sink.Emit(event.Event{Kind: event.TurnDone})
 
 	second := app.ContextPanel("tab")
-	if second.CompressionEvents != 1 || second.CompressionRawTokens != 200 || second.CompressionCompressedTokens != 50 || second.CompressionSavedTokens != 150 {
-		t.Fatalf("second turn compression = events:%d raw:%d compressed:%d saved:%d, want latest turn 1/200/50/150",
+	if second.CompressionEvents != 2 || second.CompressionRawTokens != 1200 || second.CompressionCompressedTokens != 300 || second.CompressionSavedTokens != 900 {
+		t.Fatalf("second turn compression = events:%d raw:%d compressed:%d saved:%d, want session total 2/1200/300/900",
 			second.CompressionEvents, second.CompressionRawTokens, second.CompressionCompressedTokens, second.CompressionSavedTokens)
 	}
 }

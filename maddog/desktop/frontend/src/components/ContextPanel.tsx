@@ -406,7 +406,7 @@ export function ContextPanel({
   // Session-cumulative values for the metrics cards (方案A: 纯前端改数据源)
   const sessionCacheHit = info?.sessionCacheHitTokens ?? usage?.sessionCacheHitTokens ?? context?.cacheHitTokens ?? 0;
   const sessionCacheMiss = info?.sessionCacheMissTokens ?? usage?.sessionCacheMissTokens ?? context?.cacheMissTokens ?? 0;
-  const sessionCompletion = info?.sessionCompletionTokens ?? 0;
+  const sessionCompletion = info?.sessionCompletionTokens ?? usage?.completionTokens ?? 0;
   const sessionCacheHitMetric = formatMetricTokens(sessionCacheHit, locale);
   const sessionCacheMissMetric = formatMetricTokens(sessionCacheMiss, locale);
   const sessionCompletionMetric = formatMetricTokens(sessionCompletion, locale);

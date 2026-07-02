@@ -5,6 +5,8 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/BurntSushi/toml"
+
 	"maddog/internal/provider"
 )
 

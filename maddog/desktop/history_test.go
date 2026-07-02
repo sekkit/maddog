@@ -6,12 +6,14 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf8"
 
 	"maddog/internal/agent"
 	"maddog/internal/control"
 	"maddog/internal/event"
 	"maddog/internal/provider"
+	"maddog/internal/tool"
 )
 
 func TestHistoryMessagesIncludeAssistantReasoning(t *testing.T) {
@@ -167,6 +169,7 @@ func TestHistoryPageFromProviderMessagesWindowsVisibleUsers(t *testing.T) {
 		func(content string) string { return content },
 		nil,
 		map[int]int{1: 0, 5: 2, 8: 3},
+		map[int]int64{2: 1_800_000_002_000, 3: 1_800_000_003_000},
 		0,
 		2,
 	)
@@ -182,6 +185,9 @@ func TestHistoryPageFromProviderMessagesWindowsVisibleUsers(t *testing.T) {
 	if latest.Messages[0].CheckpointTurn == nil || *latest.Messages[0].CheckpointTurn != 2 {
 		t.Fatalf("second user checkpoint = %v, want 2", latest.Messages[0].CheckpointTurn)
 	}
+	if latest.Messages[0].CreatedAt != 1_800_000_002_000 || latest.Messages[1].CreatedAt != 1_800_000_002_000 || latest.Messages[2].CreatedAt != 1_800_000_002_000 {
+		t.Fatalf("second turn message times = [%d %d %d], want checkpoint time", latest.Messages[0].CreatedAt, latest.Messages[1].CreatedAt, latest.Messages[2].CreatedAt)
+	}
 	if latest.Messages[2].Role != "notice" || !strings.Contains(latest.Messages[2].Content, "update the plan") {
 		t.Fatalf("steer message = %+v, want notice in second turn window", latest.Messages[2])
 	}
@@ -191,12 +197,16 @@ func TestHistoryPageFromProviderMessagesWindowsVisibleUsers(t *testing.T) {
 	if latest.Messages[3].CheckpointTurn == nil || *latest.Messages[3].CheckpointTurn != 3 {
 		t.Fatalf("third user checkpoint = %v, want 3", latest.Messages[3].CheckpointTurn)
 	}
+	if latest.Messages[3].CreatedAt != 1_800_000_003_000 || latest.Messages[4].CreatedAt != 1_800_000_003_000 {
+		t.Fatalf("third turn message times = [%d %d], want checkpoint time", latest.Messages[3].CreatedAt, latest.Messages[4].CreatedAt)
+	}
 
 	older := historyPageFromProviderMessages(
 		msgs,
 		func(content string) string { return content },
 		nil,
 		map[int]int{1: 0, 5: 2, 8: 3},
+		map[int]int64{0: 1_800_000_000_000, 2: 1_800_000_002_000, 3: 1_800_000_003_000},
 		latest.StartTurn,
 		2,
 	)
@@ -205,6 +215,45 @@ func TestHistoryPageFromProviderMessagesWindowsVisibleUsers(t *testing.T) {
 	}
 	if len(older.Messages) != 4 || older.Messages[0].Role != "system" || older.Messages[1].Content != "first" || older.Messages[3].Content != "hidden continuation" {
 		t.Fatalf("older page messages = %+v, want prelude and first visible turn", older.Messages)
+	}
+	if older.Messages[0].CreatedAt != 0 || older.Messages[1].CreatedAt != 1_800_000_000_000 || older.Messages[2].CreatedAt != 1_800_000_000_000 || older.Messages[3].CreatedAt != 1_800_000_000_000 {
+		t.Fatalf("older page message times = [%d %d %d %d], want first checkpoint time after prelude", older.Messages[0].CreatedAt, older.Messages[1].CreatedAt, older.Messages[2].CreatedAt, older.Messages[3].CreatedAt)
+	}
+}
+
+func TestPreviewEventSessionMessagesPreserveRecordTimes(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "events.jsonl")
+	body := strings.Join([]string{
+		`{"kind":"user.message","time":"2026-07-03T01:02:03.456Z","text":"inspect dashboard logs"}`,
+		`{"kind":"model.final","createdAt":1800000000123,"content":"done","toolCalls":[{"id":"call_1","name":"ContextPanel","arguments":"{}"}]}`,
+		`{"kind":"tool.result","timestamp":1800000001,"callId":"call_1","output":"ok"}`,
+	}, "\n") + "\n"
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got, ok, err := previewEventSessionMessages(path)
+	if err != nil {
+		t.Fatalf("previewEventSessionMessages: %v", err)
+	}
+	if !ok {
+		t.Fatal("previewEventSessionMessages ok = false, want true")
+	}
+	if len(got) != 3 {
+		t.Fatalf("history length = %d, want 3: %+v", len(got), got)
+	}
+	wantUserAt, err := time.Parse(time.RFC3339Nano, "2026-07-03T01:02:03.456Z")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got[0].CreatedAt != wantUserAt.UnixMilli() {
+		t.Fatalf("user createdAt = %d, want RFC3339 millis", got[0].CreatedAt)
+	}
+	if got[1].CreatedAt != 1_800_000_000_123 {
+		t.Fatalf("assistant createdAt = %d, want numeric millis", got[1].CreatedAt)
+	}
+	if got[2].CreatedAt != 1_800_000_001_000 {
+		t.Fatalf("tool createdAt = %d, want seconds normalized to millis", got[2].CreatedAt)
 	}
 }
 

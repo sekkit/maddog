@@ -3505,6 +3505,7 @@ export default function App() {
                 />
               ) : rightDockMode === "dashboard" ? (
                 <DashboardPanel
+                  tabId={activeTabId}
                   context={state.context}
                   usage={state.usage}
                   providerStatus={state.providerStatus}
@@ -3514,6 +3515,7 @@ export default function App() {
                   sessionTurns={sessionTurns}
                   turnTokens={state.turnTotalTokens}
                   turnCost={state.turnCost}
+                  balance={state.balance}
                   refreshKey={dockRefreshKey}
                   onOpenSettings={() => {
                     closeTransientOverlays();

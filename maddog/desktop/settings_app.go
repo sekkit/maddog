@@ -169,37 +169,39 @@ type BotSettingsView struct {
 
 // SettingsView is the whole Settings panel payload.
 type SettingsView struct {
-	DefaultModel        string          `json:"defaultModel"`
-	PlannerModel        string          `json:"plannerModel"`
-	SubagentModel       string          `json:"subagentModel"`
-	SubagentEffort      string          `json:"subagentEffort"`
-	FrontierModel       string          `json:"frontierModel"`
-	UpgradeEnabled      bool            `json:"upgradeEnabled"`
-	UpgradeThreshold    int             `json:"upgradeThreshold"`
-	FrontierBudget      int64           `json:"frontierBudget"`
-	AutoPlan            string          `json:"autoPlan"`
-	Providers           []ProviderView  `json:"providers"`
-	OfficialProviders   []ProviderView  `json:"officialProviders"`
-	ProviderWarnings    []string        `json:"providerWarnings"`
-	Permissions         PermissionsView `json:"permissions"`
-	Sandbox             SandboxView     `json:"sandbox"`
-	Network             NetworkView     `json:"network"`
-	Agent               AgentView       `json:"agent"`
-	Bot                 BotSettingsView `json:"bot"`
-	DesktopLanguage     string          `json:"desktopLanguage"`
-	DesktopLayoutStyle  string          `json:"desktopLayoutStyle"`
-	DesktopWindowChrome string          `json:"desktopWindowChrome"`
-	DesktopTheme        string          `json:"desktopTheme"`
-	DesktopThemeStyle   string          `json:"desktopThemeStyle"`
-	CloseBehavior       string          `json:"closeBehavior"`
-	DisplayMode         string          `json:"displayMode"`
-	StatusBarStyle      string          `json:"statusBarStyle"`
-	StatusBarItems      []string        `json:"statusBarItems"`
-	CheckUpdates        bool            `json:"checkUpdates"`
-	Telemetry           bool            `json:"telemetry"`
-	Metrics             bool            `json:"metrics"`
-	ExpandThinking      bool            `json:"expandThinking"`
-	ConfigPath          string          `json:"configPath"`
+	DefaultModel            string          `json:"defaultModel"`
+	PlannerModel            string          `json:"plannerModel"`
+	SubagentModel           string          `json:"subagentModel"`
+	SubagentEffort          string          `json:"subagentEffort"`
+	FrontierModel           string          `json:"frontierModel"`
+	UpgradeEnabled          bool            `json:"upgradeEnabled"`
+	UpgradeThreshold        int             `json:"upgradeThreshold"`
+	FrontierBudget          int64           `json:"frontierBudget"`
+	AutoPlan                string          `json:"autoPlan"`
+	DefaultToolApprovalMode string          `json:"defaultToolApprovalMode"`
+	MemoryCompiler          bool            `json:"memoryCompilerEnabled"`
+	Providers               []ProviderView  `json:"providers"`
+	OfficialProviders       []ProviderView  `json:"officialProviders"`
+	ProviderWarnings        []string        `json:"providerWarnings"`
+	Permissions             PermissionsView `json:"permissions"`
+	Sandbox                 SandboxView     `json:"sandbox"`
+	Network                 NetworkView     `json:"network"`
+	Agent                   AgentView       `json:"agent"`
+	Bot                     BotSettingsView `json:"bot"`
+	DesktopLanguage         string          `json:"desktopLanguage"`
+	DesktopLayoutStyle      string          `json:"desktopLayoutStyle"`
+	DesktopWindowChrome     string          `json:"desktopWindowChrome"`
+	DesktopTheme            string          `json:"desktopTheme"`
+	DesktopThemeStyle       string          `json:"desktopThemeStyle"`
+	CloseBehavior           string          `json:"closeBehavior"`
+	DisplayMode             string          `json:"displayMode"`
+	StatusBarStyle          string          `json:"statusBarStyle"`
+	StatusBarItems          []string        `json:"statusBarItems"`
+	CheckUpdates            bool            `json:"checkUpdates"`
+	Telemetry               bool            `json:"telemetry"`
+	Metrics                 bool            `json:"metrics"`
+	ExpandThinking          bool            `json:"expandThinking"`
+	ConfigPath              string          `json:"configPath"`
 	// ProviderKinds lists the provider implementations the kernel actually
 	// registered (provider.Kinds()), so the editor's "kind" picker offers only
 	// kinds that resolve — selecting an unregistered one would fail the rebuild.
@@ -348,11 +350,35 @@ func providerCredentialStatus(p config.ProviderEntry) string {
 	return "none"
 }
 
+func providerBaseURLIsLoopback(baseURL string) bool {
+	u, err := url.Parse(strings.TrimSpace(baseURL))
+	if err != nil {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(u.Hostname())) {
+	case "localhost", "127.0.0.1", "::1":
+		return true
+	default:
+		return false
+	}
+}
+
 func providerRequiresCredential(p config.ProviderEntry) bool {
+	if providerBaseURLIsLoopback(p.BaseURL) {
+		return false
+	}
 	if p.AuthEnvName() != "" {
 		return true
 	}
+	switch officialProviderHost(p.BaseURL) {
+	case "api.deepseek.com", "api.openai.com", "api.anthropic.com":
+		return true
+	}
 	return p.NormalizedAuthType() == provider.AuthTypeWorkloadIdentity && strings.TrimSpace(p.IdentityFile) != ""
+}
+
+func providerSelectableForDesktop(p config.ProviderEntry) bool {
+	return p.Configured() || !providerRequiresCredential(p)
 }
 
 func providerViewFromEntry(p config.ProviderEntry, builtIn, added bool) ProviderView {
@@ -375,8 +401,17 @@ func providerViewFromEntryForRootWithResolver(p config.ProviderEntry, builtIn, a
 	}
 	credentialEnv := p.AuthEnvName()
 	key := resolver.ResolveGlobalFirst(credentialEnv)
+	if !key.Set {
+		key = config.ResolveCredentialForRoot(root, credentialEnv)
+	}
 	requiresKey := providerRequiresCredential(p)
 	configured := p.Configured() || key.Set || !requiresKey
+	credentialStatus := "none"
+	if key.Set || p.Configured() {
+		credentialStatus = "configured"
+	} else if requiresKey {
+		credentialStatus = "missing"
+	}
 	return ProviderView{
 		Name: p.Name, BuiltIn: builtIn, Added: added, Kind: p.Kind, BaseURL: p.BaseURL, ChatURL: p.ChatURL,
 		Models: nonNil(models), VisionModels: nonNil(providerVisionModels(models, visionModels)), VisionModelsSet: visionModelsSet,
@@ -409,7 +444,7 @@ func providerViewFromEntryForRootWithResolver(p config.ProviderEntry, builtIn, a
 		Roles:              []string{},
 		Gateway:            providerProfileGateway(p),
 		AuthMode:           p.NormalizedAuthType(),
-		CredentialStatus:   providerCredentialStatus(p),
+		CredentialStatus:   credentialStatus,
 		CredentialEnv:      credentialEnv,
 	}
 }
@@ -469,7 +504,7 @@ func providerHasRole(roles []string, role string) bool {
 
 func annotateProviderProfile(view ProviderView, p config.ProviderEntry, roles []string, frontierBudget int64) ProviderView {
 	view.Roles = nonNil(roles)
-	configured := p.Configured()
+	configured := providerSelectableForDesktop(p)
 	if providerHasRole(view.Roles, "frontier") {
 		view.FrontierBudget = frontierBudget
 		view.FrontierEligible = configured
@@ -582,19 +617,21 @@ func (a *App) Settings() SettingsView {
 				ContextCompressionThresholdBytes: config.DefaultContextCompressionThresholdBytes,
 				ContextCompressionMaxBytes:       config.DefaultContextCompressionMaxBytes,
 			},
-			Bot:                botSettingsView(config.BotConfig{}),
-			AutoPlan:           "off",
-			DesktopLayoutStyle: "workbench",
-			DesktopTheme:       "light",
-			DesktopThemeStyle:  "graphite",
-			CloseBehavior:      "background",
-			DisplayMode:        "standard",
-			StatusBarStyle:     "text",
-			StatusBarItems:     config.DefaultDesktopStatusBarItems(),
-			CheckUpdates:       true,
-			Telemetry:          true,
-			Metrics:            false,
-			ExpandThinking:     false,
+			Bot:                     botSettingsView(config.BotConfig{}),
+			AutoPlan:                "off",
+			DefaultToolApprovalMode: "ask",
+			MemoryCompiler:          true,
+			DesktopLayoutStyle:      "workbench",
+			DesktopTheme:            "light",
+			DesktopThemeStyle:       "graphite",
+			CloseBehavior:           "background",
+			DisplayMode:             "standard",
+			StatusBarStyle:          "text",
+			StatusBarItems:          config.DefaultDesktopStatusBarItems(),
+			CheckUpdates:            true,
+			Telemetry:               true,
+			Metrics:                 false,
+			ExpandThinking:          false,
 		}
 	}
 	ctrl := a.activeCtrl()
@@ -607,18 +644,20 @@ func (a *App) Settings() SettingsView {
 		shell = "auto"
 	}
 	v := SettingsView{
-		DefaultModel:      cfg.DefaultModel,
-		PlannerModel:      cfg.Agent.PlannerModel,
-		SubagentModel:     cfg.Agent.SubagentModel,
-		SubagentEffort:    cfg.Agent.SubagentEffort,
-		FrontierModel:     cfg.Agent.FrontierModel,
-		UpgradeEnabled:    cfg.Agent.UpgradeEnabled,
-		UpgradeThreshold:  cfg.Agent.UpgradeThreshold,
-		FrontierBudget:    cfg.Agent.FrontierBudget,
-		AutoPlan:          desktopAutoPlanMode(cfg.Agent.AutoPlan),
-		Providers:         []ProviderView{},
-		OfficialProviders: []ProviderView{},
-		ProviderWarnings:  []string{},
+		DefaultModel:            cfg.DefaultModel,
+		PlannerModel:            cfg.Agent.PlannerModel,
+		SubagentModel:           cfg.Agent.SubagentModel,
+		SubagentEffort:          cfg.Agent.SubagentEffort,
+		FrontierModel:           cfg.Agent.FrontierModel,
+		UpgradeEnabled:          cfg.Agent.UpgradeEnabled,
+		UpgradeThreshold:        cfg.Agent.UpgradeThreshold,
+		FrontierBudget:          cfg.Agent.FrontierBudget,
+		AutoPlan:                desktopAutoPlanMode(cfg.Agent.AutoPlan),
+		DefaultToolApprovalMode: cfg.DesktopDefaultToolApprovalMode(),
+		MemoryCompiler:          cfg.MemoryCompilerEnabled(),
+		Providers:               []ProviderView{},
+		OfficialProviders:       []ProviderView{},
+		ProviderWarnings:        []string{},
 		Permissions: PermissionsView{
 			Mode:  orDefault(cfg.Permissions.Mode, "ask"),
 			Allow: nonNil(cfg.Permissions.Allow),
@@ -1301,7 +1340,7 @@ func (a *App) applyAutoPlanToLiveControllers(fallback string) {
 
 func officialProviderTemplate(kind, pricingLanguage string) ([]config.ProviderEntry, string, error) {
 	switch strings.ToLower(strings.TrimSpace(kind)) {
-	case "deepseek", "deepseek-official":
+	case "deepseek", "deepseek-official", "mimo-api":
 		return []config.ProviderEntry{{
 			Name:          "deepseek",
 			Kind:          "openai",
@@ -2048,6 +2087,7 @@ func (a *App) SetDesktopAppearance(theme, style string) error {
 // rebuild the active controller and must stay out of provider-visible requests.
 func (a *App) SetDesktopLayoutStyle(style string) error {
 	normalized := ""
+	applySingleSurfacePolicy := singleSurfaceLayoutStyle(style)
 	if err := a.applyConfigOnly(func(c *config.Config) error {
 		if err := c.SetDesktopLayoutStyle(style); err != nil {
 			return err
@@ -2057,7 +2097,7 @@ func (a *App) SetDesktopLayoutStyle(style string) error {
 	}); err != nil {
 		return err
 	}
-	if singleSurfaceLayoutStyle(normalized) {
+	if applySingleSurfacePolicy || singleSurfaceLayoutStyle(normalized) {
 		return a.applySingleSurfaceTabPolicy()
 	}
 	return nil

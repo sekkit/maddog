@@ -667,6 +667,44 @@ func TestRenderCodeIntelligenceToolKeysRoundTripWhenQuoted(t *testing.T) {
 	}
 }
 
+func TestRenderHyperGraphRAGCodeIntelligenceBackendRoundTrip(t *testing.T) {
+	c := Default()
+	c.CodeIntelligence.Backends = []CodeIntelligenceBackendConfig{{
+		Name:    "project-hypergraph",
+		Kind:    "hypergraphrag",
+		Command: "maddog-hypergraphrag",
+		Args:    []string{"--workdir", ".maddog/hypergraph"},
+		Enabled: boolPtr(false),
+		Env: map[string]string{
+			"OPENAI_API_KEY": "${OPENAI_API_KEY}",
+		},
+	}}
+
+	rendered := RenderTOML(c)
+	for _, want := range []string{
+		`kind = "hypergraphrag"`,
+		`command = "maddog-hypergraphrag"`,
+		`args = ["--workdir", ".maddog/hypergraph"]`,
+		`[code_intelligence.backends.env]`,
+		`OPENAI_API_KEY = "${OPENAI_API_KEY}"`,
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("rendered config missing %q:\n%s", want, rendered)
+		}
+	}
+	var got Config
+	if _, err := toml.Decode(rendered, &got); err != nil {
+		t.Fatalf("decode rendered TOML: %v\n---\n%s", err, rendered)
+	}
+	backend := got.CodeIntelligence.Backends[0]
+	if backend.Kind != "hypergraphrag" || backend.Command != "maddog-hypergraphrag" || len(backend.Args) != 2 || backend.Env["OPENAI_API_KEY"] != "${OPENAI_API_KEY}" {
+		t.Fatalf("HyperGraphRAG backend did not round-trip: %+v", backend)
+	}
+	if backend.Enabled == nil || *backend.Enabled {
+		t.Fatalf("enabled should round-trip false, got %+v", backend.Enabled)
+	}
+}
+
 func BenchmarkRenderTOMLWithLSPServers(b *testing.B) {
 	cfg := Default()
 	cfg.LSP.Servers = make(map[string]LSPServer, 64)

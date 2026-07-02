@@ -51,8 +51,6 @@ function renderStatusBar(): string {
           },
         },
         running: false,
-        collaborationMode: "normal",
-        toolApprovalMode: "ask",
         turnCost: 0.125,
         cost: 0.125,
         currency: "$",
@@ -71,8 +69,37 @@ function renderStatusBarWithoutUsage(): string {
       createElement(StatusBar, {
         context: { used: 0, window: 128_000, sessionTokens: 0 },
         running: false,
-        collaborationMode: "normal",
-        toolApprovalMode: "ask",
+        modelLabel: "default/gpt-4o-mini",
+        items: ["provider", "frontier_budget"],
+      }),
+    ),
+  );
+}
+
+function renderStatusBarWithDefaultBudgetSnapshot(): string {
+  return renderToStaticMarkup(
+    createElement(
+      LocaleProvider,
+      null,
+      createElement(StatusBar, {
+        context: { used: 0, window: 128_000, sessionTokens: 0 },
+        usage: {
+          promptTokens: 100,
+          completionTokens: 20,
+          totalTokens: 120,
+          cacheHitTokens: 80,
+          cacheMissTokens: 20,
+          sessionCacheHitTokens: 800,
+          sessionCacheMissTokens: 200,
+          profile: {
+            role: "default",
+            model: "openai/gpt-4o-mini",
+            budgetUsed: 2,
+            budgetLimit: 10,
+            budgetRemaining: 8,
+          },
+        },
+        running: false,
         modelLabel: "default/gpt-4o-mini",
         items: ["provider", "frontier_budget"],
       }),
@@ -95,8 +122,6 @@ function renderStatusBarWithProviderStatusOnly(): string {
           lastError: "openai: status 429",
         },
         running: false,
-        collaborationMode: "normal",
-        toolApprovalMode: "ask",
         modelLabel: "default/gpt-4o-mini",
         items: ["provider_health", "rate_limit"],
       }),
@@ -135,8 +160,6 @@ function renderStatusBarWithNewerProviderStatus(): string {
           lastError: "openai: status 429",
         },
         running: false,
-        collaborationMode: "normal",
-        toolApprovalMode: "ask",
         modelLabel: "default/gpt-4o-mini",
         items: ["provider_health", "rate_limit"],
       }),
@@ -167,6 +190,9 @@ const emptyHtml = renderStatusBarWithoutUsage();
 check("provider item does not invent latest usage before a request", !emptyHtml.includes("default · default/gpt-4o-mini"));
 check("provider item shows empty marker without usage profile", emptyHtml.includes("stat__value--empty") && emptyHtml.includes(">-<"));
 check("non-frontier budget stays empty when no frontier usage exists", emptyHtml.includes("data-statusbar-item=\"frontier_budget\"") && emptyHtml.includes(">-<"));
+
+const defaultBudgetHtml = renderStatusBarWithDefaultBudgetSnapshot();
+check("frontier budget item shows default-role budget snapshot", defaultBudgetHtml.includes("data-statusbar-item=\"frontier_budget\"") && defaultBudgetHtml.includes("8 / 10"));
 
 const statusOnlyHtml = renderStatusBarWithProviderStatusOnly();
 check("provider health item can show failed status without usage tokens", statusOnlyHtml.includes("rate_limited"));

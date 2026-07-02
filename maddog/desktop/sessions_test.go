@@ -8,6 +8,8 @@ import (
 	"testing"
 
 	"maddog/internal/agent"
+	"maddog/internal/jobs"
+	"maddog/internal/store"
 )
 
 func occupyReadFileWithTimeoutSlots(t *testing.T) func() {

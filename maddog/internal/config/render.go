@@ -670,8 +670,20 @@ func renderCodeIntelligenceConfig(b *strings.Builder, c CodeIntelligenceConfig) 
 		if backend.Server != "" {
 			fmt.Fprintf(b, "server = %q\n", backend.Server)
 		}
+		if backend.Command != "" {
+			fmt.Fprintf(b, "command = %q\n", backend.Command)
+		}
+		if len(backend.Args) > 0 {
+			fmt.Fprintf(b, "args = %s\n", renderStringArray(backend.Args))
+		}
 		if backend.Enabled != nil {
 			fmt.Fprintf(b, "enabled = %v\n", *backend.Enabled)
+		}
+		if len(backend.Env) > 0 {
+			b.WriteString("[code_intelligence.backends.env]\n")
+			for _, key := range sortedMapKeys(backend.Env) {
+				fmt.Fprintf(b, "%s = %q\n", renderTOMLKey(key), backend.Env[key])
+			}
 		}
 		if len(backend.Tools) > 0 {
 			b.WriteString("[code_intelligence.backends.tools]\n")

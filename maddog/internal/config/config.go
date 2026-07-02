@@ -557,6 +557,9 @@ type CodeIntelligenceBackendConfig struct {
 	Kind    string            `toml:"kind"`
 	Server  string            `toml:"server"`
 	Enabled *bool             `toml:"enabled"`
+	Command string            `toml:"command"`
+	Args    []string          `toml:"args"`
+	Env     map[string]string `toml:"env"`
 	Tools   map[string]string `toml:"tools"`
 }
 
@@ -1103,7 +1106,7 @@ type MemoryCompilerConfig struct {
 }
 
 func (c *Config) MemoryCompilerEnabled() bool {
-	return c != nil && c.Agent.MemoryCompiler.Enabled != nil && *c.Agent.MemoryCompiler.Enabled
+	return c == nil || c.Agent.MemoryCompiler.Enabled == nil || *c.Agent.MemoryCompiler.Enabled
 }
 
 type ContextCompressionConfig struct {

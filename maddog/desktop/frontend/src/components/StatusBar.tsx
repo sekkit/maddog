@@ -72,9 +72,9 @@ function formatProviderProfile(usage: WireUsage | undefined): string {
 function formatFrontierBudget(usage: WireUsage | undefined): string {
   const profile = usage?.profile;
   const limit = profile?.budgetLimit ?? 0;
-  if (profile?.role !== "frontier" || limit <= 0) return "-";
-  const used = Math.max(0, profile.budgetUsed ?? 0);
-  const remaining = Math.max(0, profile.budgetRemaining ?? limit - used);
+  if (limit <= 0) return "-";
+  const used = Math.max(0, profile?.budgetUsed ?? 0);
+  const remaining = Math.max(0, profile?.budgetRemaining ?? limit - used);
   return `${remaining.toLocaleString()} / ${limit.toLocaleString()}`;
 }
 

@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"maddog/internal/agent"
+	"maddog/internal/boot"
 	"maddog/internal/codegraph"
 	"maddog/internal/config"
 	"maddog/internal/control"
@@ -27,6 +28,7 @@ import (
 	"maddog/internal/memory"
 	"maddog/internal/plugin"
 	"maddog/internal/provider"
+	"maddog/internal/tool"
 )
 
 func desktopMCPHTTPServer(t *testing.T) *httptest.Server {
@@ -3641,8 +3643,8 @@ func TestCapabilitiesShowsDefaultCodegraphEnabled(t *testing.T) {
 		t.Fatalf("background MCP did not auto-connect; connecting=%v failures=%+v", sharedHost.ConnectingServers(), sharedHost.Failures())
 	}
 
-	app := NewApp()
-	app.tabs = map[string]*WorkspaceTab{
+	app2 := NewApp()
+	app2.tabs = map[string]*WorkspaceTab{
 		"test": {
 			ID:            "test",
 			Scope:         "global",
@@ -3653,11 +3655,11 @@ func TestCapabilitiesShowsDefaultCodegraphEnabled(t *testing.T) {
 			disabledMCP:   map[string]ServerView{},
 		},
 	}
-	app.activeTabID = "test"
+	app2.activeTabID = "test"
 
-	view := app.MCPServers()
-	if len(view) != 1 || view[0].Name != "h" || view[0].Status != "connected" || view[0].StartIntent != "automatic" || view[0].RuntimeState != "ready" || view[0].Tools != 1 {
-		t.Fatalf("MCPServers() = %+v, want h connected automatic ready with one tool", view)
+	servers := app2.MCPServers()
+	if len(servers) != 1 || servers[0].Name != "h" || servers[0].Status != "connected" || servers[0].StartIntent != "automatic" || servers[0].RuntimeState != "ready" || servers[0].Tools != 1 {
+		t.Fatalf("MCPServers() = %+v, want h connected automatic ready with one tool", servers)
 	}
 }
 
@@ -4643,18 +4645,11 @@ tier = "lazy"
 	}
 
 	app := NewApp()
-	app.setTestCtrl(newBackgroundJobController(t, "mcp-tier-job"), "")
+	app.setTestCtrl(control.New(control.Options{Host: plugin.NewHost()}), "")
+	defer app.activeCtrl().Close()
 
-	err := app.SetMCPServerTier("broken", "background")
-	if err == nil || !strings.Contains(err.Error(), "stop background jobs") {
-		t.Fatalf("SetMCPServerTier with background job error = %v, want active-work guard", err)
-	}
-	data, readErr := os.ReadFile(config.UserConfigPath())
-	if readErr != nil {
-		t.Fatalf("read config: %v", readErr)
-	}
-	if cfg.Codegraph.Enabled {
-		t.Fatal("codegraph enabled = true, want false after disabling")
+	if err := app.SetCodeIntelligenceBackendEnabled("codegraph", false); err != nil {
+		t.Fatalf("SetCodeIntelligenceBackendEnabled(codegraph,false): %v", err)
 	}
 	userCfg := config.LoadForEdit(config.UserConfigPath())
 	if userCfg.Codegraph.Enabled {
@@ -4669,7 +4664,9 @@ tier = "lazy"
 			return
 		}
 	}
-	t.Fatalf("codegraph missing from Capabilities: %+v", view.Servers)
+	if backend := findCodeIntelligenceBackendForTest(view, "codegraph"); backend == nil || backend.Enabled || backend.Status != "disabled" {
+		t.Fatalf("codegraph disabled backend = %+v, servers = %+v", backend, view.Servers)
+	}
 }
 
 func TestCodeIntelligenceBackendManagementMethods(t *testing.T) {

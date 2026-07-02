@@ -52,15 +52,6 @@ function toolItems(s: TestState): ToolItem[] {
   return s.items.filter((it): it is ToolItem => it.kind === "tool");
 }
 
-function todoArgs(label: string, active = 0): string {
-  return JSON.stringify({
-    todos: Array.from({ length: 8 }, (_, i) => ({
-      content: `${label} task ${i} ${"x".repeat(30)}`,
-      status: i === active ? "in_progress" : "pending",
-    })),
-  });
-}
-
 console.log("\ntool data archiving on tool_result");
 
 // ── Test 1: Every completed tool is archived immediately ──

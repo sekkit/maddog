@@ -67,6 +67,62 @@ func TestBackendRegistryIncludesExternalMCPBackend(t *testing.T) {
 	}
 }
 
+func TestBackendRegistryIncludesHyperGraphRAGBackend(t *testing.T) {
+	enabled := true
+	cfg := config.Default()
+	cfg.CodeIntelligence.Backends = []config.CodeIntelligenceBackendConfig{{
+		Name:    "project-hypergraph",
+		Kind:    "hypergraphrag",
+		Command: "maddog-hypergraphrag",
+		Args:    []string{"--workdir", ".maddog/hypergraph"},
+		Enabled: &enabled,
+		Env: map[string]string{
+			"OPENAI_API_KEY": "${OPENAI_API_KEY}",
+		},
+	}}
+
+	reg := NewBackendRegistry(cfg)
+	got, ok := reg.Backend("project-hypergraph")
+	if !ok {
+		t.Fatalf("HyperGraphRAG backend missing from registry: %+v invalid=%+v", reg.Backends(), reg.InvalidBackends())
+	}
+	if got.Kind != BackendKindHyperGraphRAG {
+		t.Fatalf("kind = %q, want %q", got.Kind, BackendKindHyperGraphRAG)
+	}
+	if got.Health.Status != BackendHealthDegraded {
+		t.Fatalf("health = %q, want degraded until sidecar health is checked", got.Health.Status)
+	}
+	if got.Command != "maddog-hypergraphrag" || len(got.Args) != 2 || got.Args[1] != ".maddog/hypergraph" {
+		t.Fatalf("sidecar command not preserved: %+v", got)
+	}
+	if !got.Capabilities.SemanticSearch || !got.Capabilities.ContextPack || !got.Capabilities.Health {
+		t.Fatalf("capabilities = %+v, want semantic/context/health", got.Capabilities)
+	}
+	if len(got.ToolMapping) != 0 {
+		t.Fatalf("HyperGraphRAG sidecar should not require MCP tool mapping, got %+v", got.ToolMapping)
+	}
+}
+
+func TestBackendRegistryRejectsHyperGraphRAGWithoutCommand(t *testing.T) {
+	cfg := config.Default()
+	cfg.CodeIntelligence.Backends = []config.CodeIntelligenceBackendConfig{{
+		Name: "project-hypergraph",
+		Kind: "hypergraphrag",
+	}}
+
+	reg := NewBackendRegistry(cfg)
+	if _, ok := reg.Backend("project-hypergraph"); ok {
+		t.Fatal("HyperGraphRAG backend without command should not be registered as usable")
+	}
+	invalid := reg.InvalidBackends()
+	if len(invalid) != 1 || invalid[0].ID != "project-hypergraph" {
+		t.Fatalf("InvalidBackends = %+v, want project-hypergraph", invalid)
+	}
+	if invalid[0].Health.Status != BackendHealthInvalid || !strings.Contains(invalid[0].Health.Error, "command") {
+		t.Fatalf("invalid health = %+v, want missing command error", invalid[0].Health)
+	}
+}
+
 func TestBackendRegistryMarksInvalidExternalBackend(t *testing.T) {
 	enabled := true
 	cfg := config.Default()
