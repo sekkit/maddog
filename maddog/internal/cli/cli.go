@@ -1109,19 +1109,18 @@ func fetchModelListCompat(ctx context.Context, baseURL, apiKey string) ([]string
 		return nil, err
 	}
 	var lastErr error
-	var firstHardErr error
 	for _, u := range candidates {
 		models, err := openai.FetchModels(ctx, u, apiKey)
 		if err == nil {
 			return models, nil
 		}
 		lastErr = err
-		if !openai.IsModelFetchEndpointMiss(err) && firstHardErr == nil {
-			firstHardErr = err
+		// An endpoint-miss is not a hard error — try the next candidate.
+		// Anything else (auth, 5xx, bad TLS) bubbles up immediately because
+		// retrying it on a sibling URL won't help.
+		if !openai.IsModelFetchEndpointMiss(err) {
+			return nil, err
 		}
-	}
-	if firstHardErr != nil {
-		return nil, firstHardErr
 	}
 	if lastErr != nil {
 		slog.Debug("model-list probe: all candidates missed", "base_url", baseURL, "err", lastErr)

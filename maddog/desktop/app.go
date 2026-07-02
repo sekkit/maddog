@@ -3564,15 +3564,14 @@ func firstNonEmpty(values ...string) string {
 // ContextInfo is the prompt-vs-window gauge payload plus session totals. Used
 // and Window both zero means no context-window data yet.
 type ContextInfo struct {
-	Used            int                         `json:"used"`
-	Window          int                         `json:"window"`
-	SessionTokens   int                         `json:"sessionTokens"`
-	CompactRatio    float64                     `json:"compactRatio,omitempty"`
-	SessionCost     float64                     `json:"sessionCost,omitempty"`
-	SessionCurrency string                      `json:"sessionCurrency,omitempty"`
-	CacheHitTokens  int                         `json:"cacheHitTokens,omitempty"`
-	CacheMissTokens int                         `json:"cacheMissTokens,omitempty"`
-	Sources         map[string]usageSourceStats `json:"sources,omitempty"`
+	Used            int     `json:"used"`
+	Window          int     `json:"window"`
+	SessionTokens   int     `json:"sessionTokens"`
+	CompactRatio    float64 `json:"compactRatio,omitempty"`
+	SessionCost     float64 `json:"sessionCost,omitempty"`
+	SessionCurrency string  `json:"sessionCurrency,omitempty"`
+	CacheHitTokens  int     `json:"cacheHitTokens,omitempty"`
+	CacheMissTokens int     `json:"cacheMissTokens,omitempty"`
 }
 
 // ContextUsage returns the latest context-window gauge numbers.
@@ -3597,7 +3596,6 @@ func (a *App) ContextUsageForTab(tabID string) ContextInfo {
 		info.SessionCurrency = snap.Usage.SessionCurrency
 		info.CacheHitTokens = snap.Usage.CacheHitTokens
 		info.CacheMissTokens = snap.Usage.CacheMissTokens
-		info.Sources = snap.Usage.Sources
 	}
 	if ctrl == nil {
 		return info
@@ -4130,13 +4128,6 @@ func (a *App) Capabilities() CapabilitiesView {
 	out.SkillRoots = a.cachedSkillRootsView()
 	out.SkillCandidates = skillCandidateViews(tab.WorkspaceRoot)
 	return out
-}
-
-// MCPServers exposes just the MCP server projection for the dedicated settings
-// page. Keep this as a thin wrapper around the drawer projection so Wails
-// bindings stay aligned with the frontend bridge contract.
-func (a *App) MCPServers() []ServerView {
-	return a.mcpServersView()
 }
 
 func (a *App) mcpServersView() []ServerView {
@@ -5851,7 +5842,11 @@ func (a *App) SetModelForTab(tabID, name string) error {
 	newCtrl.SetGoal(tab.goal)
 
 	path := agent.ContinueSessionPath(prevPath, newCtrl.SessionDir(), newCtrl.Label())
-	resumeWithFreshSystemPrompt(newCtrl, carried, path)
+	if len(carried) > 0 {
+		newCtrl.Resume(&agent.Session{Messages: carried}, path)
+	} else if path != "" {
+		newCtrl.SetSessionPath(path)
+	}
 	a.persistTabSessionPath(tab, path)
 	return nil
 }
@@ -5943,7 +5938,11 @@ func (a *App) SetEffortForTab(tabID, level string) error {
 	applyTabToolApprovalModeToController(newCtrl, tab.toolApprovalMode)
 	newCtrl.SetGoal(tab.goal)
 	path := agent.ContinueSessionPath(prevPath, newCtrl.SessionDir(), newCtrl.Label())
-	resumeWithFreshSystemPrompt(newCtrl, carried, path)
+	if len(carried) > 0 {
+		newCtrl.Resume(&agent.Session{Messages: carried}, path)
+	} else if path != "" {
+		newCtrl.SetSessionPath(path)
+	}
 	a.persistTabSessionPath(tab, path)
 	return nil
 }
@@ -6017,7 +6016,11 @@ func (a *App) SetTokenModeForTab(tabID, mode string) error {
 	applyTabToolApprovalModeToController(newCtrl, tab.toolApprovalMode)
 	newCtrl.SetGoal(tab.goal)
 	path := agent.ContinueSessionPath(prevPath, newCtrl.SessionDir(), newCtrl.Label())
-	resumeWithFreshSystemPrompt(newCtrl, carried, path)
+	if len(carried) > 0 {
+		newCtrl.Resume(&agent.Session{Messages: carried}, path)
+	} else if path != "" {
+		newCtrl.SetSessionPath(path)
+	}
 	a.persistTabSessionPath(tab, path)
 	return nil
 }

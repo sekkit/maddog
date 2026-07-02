@@ -2067,19 +2067,6 @@ function AddServerForm({
   );
 }
 
-async function loadMCPServers(): Promise<ServerView[]> {
-	const mcpServers = (app as unknown as { MCPServers?: () => Promise<ServerView[]> }).MCPServers;
-	if (typeof mcpServers === "function") {
-		try {
-			return await mcpServers();
-		} catch {
-			/* fall through to the compatibility path below */
-		}
-	}
-	const capabilities = await app.Capabilities().catch(() => ({ servers: [] as ServerView[] }));
-	return capabilities.servers ?? [];
-}
-
 // MCPServersSettingsPage is a self-contained MCP servers management page
 // embedded inside the settings centre.
 export function MCPServersSettingsPage() {
@@ -2107,7 +2094,7 @@ export function MCPServersSettingsPage() {
 		} else {
 			setServers(null);
 		}
-		const next = normalizeServerViews(await loadMCPServers());
+		const next = normalizeServerViews(await app.MCPServers().catch(() => []));
 		mcpSettingsSnapshot = { key, value: next };
 		setServers(next);
 	}, []);

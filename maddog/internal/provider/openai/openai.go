@@ -72,8 +72,6 @@ func New(cfg provider.Config) (provider.Provider, error) {
 	}
 	protocol, _ := cfg.Extra["reasoning_protocol"].(string)
 	protocol = normalizeReasoningProtocol(protocol)
-	chatURL, _ := cfg.Extra["chat_url"].(string)
-	chatURL = normalizeChatURL(cfg.BaseURL, chatURL)
 	vision, _ := cfg.Extra["vision"].(bool)
 	visionDetail, _ := cfg.Extra["vision_detail"].(string)
 	visionDetail = strings.ToLower(strings.TrimSpace(visionDetail))
@@ -129,7 +127,6 @@ func New(cfg provider.Config) (provider.Provider, error) {
 		keySource:    keySource,
 		auth:         auth,
 		baseURL:      strings.TrimRight(cfg.BaseURL, "/"),
-		chatURL:      chatURL,
 		model:        cfg.Model,
 		deepseek:     deepseek,
 		minimax:      minimax,
@@ -158,7 +155,6 @@ type client struct {
 	keySource    string // human-readable source of keyEnv, when known
 	auth         provider.AuthConfig
 	baseURL      string
-	chatURL      string
 	model        string
 	http         *http.Client
 	authed       atomic.Bool
@@ -191,13 +187,6 @@ func normalizeReasoningProtocol(raw string) string {
 	default:
 		return ""
 	}
-}
-
-func normalizeChatURL(baseURL, chatURL string) string {
-	if trimmed := strings.TrimRight(strings.TrimSpace(chatURL), "/"); trimmed != "" {
-		return trimmed
-	}
-	return strings.TrimRight(strings.TrimSpace(baseURL), "/") + "/chat/completions"
 }
 
 func normalizeWireAPI(raw string) string {
@@ -233,7 +222,7 @@ func (c *client) Stream(ctx context.Context, req provider.Request) (<-chan provi
 		if err != nil {
 			return nil, err
 		}
-		httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.chatURL, bytes.NewReader(body))
+		httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/chat/completions", bytes.NewReader(body))
 		if err != nil {
 			return nil, err
 		}
@@ -381,10 +370,7 @@ func (c *client) streamWithReconnect(ctx context.Context, resp *http.Response, n
 			return
 		}
 		if !provider.IsConnReset(err) {
-			// Use a fresh context for the final error chunk: the caller's ctx
-			// may already be cancelled, and sendChunk's second select would race
-			// <-ctx.Done() against the channel send and sometimes drop the error.
-			sendChunk(context.Background(), out, provider.Chunk{Type: provider.ChunkError, Err: err})
+			sendChunk(ctx, out, provider.Chunk{Type: provider.ChunkError, Err: err})
 			return
 		}
 		if emitted {

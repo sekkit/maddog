@@ -1014,7 +1014,6 @@ func backfillOfficialContextWindow(e *ProviderEntry, fallback int) {
 func officialProviderFromLegacy(entry ProviderEntry, old *ProviderEntry) ProviderEntry {
 	entry.Kind = old.Kind
 	entry.BaseURL = old.BaseURL
-	entry.ChatURL = old.ChatURL
 	entry.ModelsURL = old.ModelsURL
 	entry.APIKeyEnv = old.APIKeyEnv
 	entry.BalanceURL = old.BalanceURL

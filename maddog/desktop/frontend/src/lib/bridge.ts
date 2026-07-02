@@ -309,7 +309,6 @@ export interface AppBindings {
   SetDesktopLanguage(lang: string): Promise<void>;
   SetDesktopAppearance(theme: string, style: string): Promise<void>;
   SetDesktopLayoutStyle(style: string): Promise<void>;
-  SetDesktopWindowChrome(chrome: string): Promise<void>;
   SetDesktopCheckUpdates(enabled: boolean): Promise<void>;
   SetDesktopTelemetry(enabled: boolean): Promise<void>;
   SetDesktopMetrics(enabled: boolean): Promise<void>;
@@ -392,9 +391,6 @@ interface WailsRuntime {
   WindowGetSize?(): Promise<{ w: number; h: number }>;
   WindowGetPosition?(): Promise<{ x: number; y: number }>;
   WindowIsMaximised?(): Promise<boolean>;
-  WindowMinimise?(): void;
-  WindowToggleMaximise?(): void;
-  Quit?(): void;
   ClipboardSetText?(text: string): Promise<boolean>;
   // Native OS file drop (desktop only); useDropTarget gates delivery to elements
   // carrying the --wails-drop-target CSS property. Absent in the browser dev mock.
@@ -1077,7 +1073,6 @@ function makeMockApp(): AppBindings {
     },
     desktopLanguage: "",
     desktopLayoutStyle: "workbench",
-    desktopWindowChrome: "native",
     desktopTheme: "auto",
     desktopThemeStyle: "graphite",
     closeBehavior: "background",
@@ -2718,12 +2713,11 @@ function makeMockApp(): AppBindings {
       return this.SaveDoc(path, body);
     },
     async DesktopStartupSettings() {
-      const { bot, desktopLanguage, desktopLayoutStyle, desktopWindowChrome, desktopTheme, desktopThemeStyle, displayMode, statusBarStyle, statusBarItems, checkUpdates } = settings;
+      const { bot, desktopLanguage, desktopLayoutStyle, desktopTheme, desktopThemeStyle, displayMode, statusBarStyle, statusBarItems, checkUpdates } = settings;
       return JSON.parse(JSON.stringify({
         bot,
         desktopLanguage,
         desktopLayoutStyle,
-        desktopWindowChrome,
         desktopTheme,
         desktopThemeStyle,
         displayMode,
@@ -2962,10 +2956,7 @@ function makeMockApp(): AppBindings {
           settings.desktopThemeStyle = style;
         },
         async SetDesktopLayoutStyle(style: string) {
-          settings.desktopLayoutStyle = style === "creation" ? "creation" : "workbench";
-        },
-        async SetDesktopWindowChrome(chrome: string) {
-          settings.desktopWindowChrome = chrome === "custom" ? "custom" : "native";
+          settings.desktopLayoutStyle = style === "workbench" || style === "creation" ? style : "classic";
         },
         async SetDesktopCheckUpdates(enabled: boolean) {
           settings.checkUpdates = enabled;

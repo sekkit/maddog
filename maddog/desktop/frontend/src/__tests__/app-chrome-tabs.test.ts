@@ -12,7 +12,6 @@ const projectTreeSource = readFileSync(resolve(testDir, "../components/ProjectTr
 const topicShortcutsSource = readFileSync(resolve(testDir, "../lib/topicShortcuts.ts"), "utf8");
 const transcriptSource = readFileSync(resolve(testDir, "../components/Transcript.tsx"), "utf8");
 const layoutStoreSource = readFileSync(resolve(testDir, "../store/layout.ts"), "utf8");
-const desktopMainSource = readFileSync(resolve(testDir, "../../../main.go"), "utf8");
 const stylesSource = readFileSync(resolve(testDir, "../styles.css"), "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
 
 let passed = 0;
@@ -71,34 +70,6 @@ ok(
 );
 
 ok(
-  /Frameless:\s*customWindowChrome/.test(desktopMainSource) &&
-    /DesktopUsesCustomWindowChrome/.test(desktopMainSource) &&
-    !/DisableFramelessWindowDecorations:\s*true/.test(desktopMainSource) &&
-    /macTitleBar\(customWindowChrome\)/.test(desktopMainSource),
-  "desktop shell can switch between native frame and custom frameless chrome",
-);
-
-ok(
-  /customWindowChrome/.test(appChromeSource) &&
-    /showWindowsPreviewControls = !customWindowChrome && browserPreviewChrome && platform === "windows"/.test(appChromeSource),
-  "AppChrome uses native frame by default and self-drawn controls only in custom chrome mode",
-);
-
-ok(
-  /window\.runtime\?\.WindowMinimise\?\.\(\);/.test(appChromeSource) &&
-    /window\.runtime\?\.WindowToggleMaximise\?\.\(\);/.test(appChromeSource) &&
-    /window\.runtime\?\.Quit\?\.\(\);/.test(appChromeSource),
-  "AppChrome window controls call Wails runtime window APIs",
-);
-
-for (const control of ["minimize", "maximize", "close"]) {
-  ok(
-    new RegExp(`<button[\\s\\S]*app-chrome__window-control--${control}[\\s\\S]*type="button"`).test(appChromeSource),
-    `AppChrome renders ${control} as an interactive window button`,
-  );
-}
-
-ok(
   /const WORKSPACE_PANEL_DEFAULT_OPEN = false;/.test(layoutStoreSource) &&
     /workspacePanelOpen:\s*WORKSPACE_PANEL_DEFAULT_OPEN/.test(layoutStoreSource),
   "right dock starts collapsed on launch",
@@ -150,26 +121,8 @@ ok(
 );
 
 ok(
-  /function normalizeDesktopLayoutStyle\(style: string \| undefined\): DesktopLayoutStyle \{\s*if \(style === "creation"\) return "creation";\s*return "workbench";\s*\}/.test(appSource),
-  "legacy or missing desktop layout preferences open in the v1.13 workbench layout",
-);
-
-ok(
-  /className="sidebar__brand-wordmark">Maddog<\/span>/.test(appSource) &&
-    finalDeclaration(".sidebar--workbench .sidebar__brand-wordmark", "letter-spacing") === "0",
-  "workbench sidebar shows a compact Maddog wordmark like the v1.13 reference",
-);
-
-ok(
   /\{!appChromeHidden && \(/.test(appSource),
   "workbench skips rendering the top AppChrome row",
-);
-
-ok(
-  /import \{ AppChrome, WindowControls \} from "\.\/components\/AppChrome";/.test(appSource) &&
-    /\{appChromeHidden && customWindowChrome && <span className="app-window-drag-rail" aria-hidden="true" \/>\}/.test(appSource) &&
-    /\{appChromeHidden && customWindowChrome && <WindowControls platform=\{desktopPlatform\} className="app-window-controls--overlay" \/>\}/.test(appSource),
-  "workbench and creation layouts show custom controls only when custom window chrome is enabled",
 );
 
 ok(
@@ -334,20 +287,6 @@ ok(
     finalDeclaration(".workbench-dock__tabs", "--wails-draggable") === "no-drag" &&
     finalDeclaration(".workbench-dock__tab", "--wails-draggable") === "no-drag",
   "maximized workbench dock keeps a draggable title region while tabs remain clickable",
-);
-
-ok(
-  /<span className="app-chrome__drag-rail" aria-hidden="true" \/>/.test(appChromeSource) &&
-    finalDeclaration(".app-window-drag-rail", "--wails-draggable") === "drag" &&
-    finalDeclaration(".app-window-drag-rail", "-webkit-app-region") === "drag" &&
-    finalDeclaration(".app--windows .app-chrome--tabs .app-chrome__drag-rail", "--wails-draggable") === "drag" &&
-    finalDeclaration(".app--windows .app-chrome--native-tabs .tabbar", "--wails-draggable") === "drag" &&
-    finalDeclaration(".app--windows .app-chrome--native-tabs .tabbar *", "--wails-draggable") === "drag" &&
-    finalDeclaration(".app--windows .app-chrome--native-tabs .tabbar__tab", "--wails-draggable") === "no-drag" &&
-    finalDeclaration(".app--windows .app-chrome--native-tabs .tabbar__new", "--wails-draggable") === "no-drag" &&
-    finalDeclaration(".app-chrome__window-controls", "--wails-draggable") === "no-drag" &&
-    finalDeclaration(".app-chrome__window-controls", "-webkit-app-region") === "no-drag",
-  "custom frameless chrome keeps draggable rails while window controls stay clickable",
 );
 
 for (const selector of [

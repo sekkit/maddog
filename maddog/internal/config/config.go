@@ -97,8 +97,7 @@ type UIConfig struct {
 // language, terminal colours, or provider-visible prompt/request data.
 type DesktopConfig struct {
 	Language                string   `toml:"language"`                   // auto|en|zh; empty/auto = browser/OS auto-detect
-	LayoutStyle             string   `toml:"layout_style"`               // workbench|creation; classic is a legacy alias for workbench
-	WindowChrome            string   `toml:"window_chrome"`              // native|custom; custom uses frameless self-drawn window controls
+	LayoutStyle             string   `toml:"layout_style"`               // classic|workbench|creation; desktop layout style
 	Theme                   string   `toml:"theme"`                      // auto|dark|light; empty resolves to auto
 	ThemeStyle              string   `toml:"theme_style"`                // graphite|aurora|slate|carbon|nocturne|amber and legacy aliases
 	CloseBehavior           string   `toml:"close_behavior"`             // quit|background; desktop window close behavior
@@ -191,21 +190,14 @@ func normalizeThemeStyle(style string) string {
 
 func normalizeDesktopLayoutStyle(style string) string {
 	switch strings.ToLower(strings.TrimSpace(style)) {
-	case "classic", "workbench", "workspace":
+	case "classic":
+		return "classic"
+	case "workbench", "workspace":
 		return "workbench"
 	case "creation":
 		return "creation"
 	default:
 		return "workbench"
-	}
-}
-
-func normalizeDesktopWindowChrome(chrome string) string {
-	switch strings.ToLower(strings.TrimSpace(chrome)) {
-	case "custom", "frameless", "self-drawn", "self_drawn", "selfdrawn":
-		return "custom"
-	default:
-		return "native"
 	}
 }
 
@@ -253,24 +245,13 @@ func (c *Config) DesktopThemeStyle() string {
 	return normalizeThemeStyle(c.Desktop.ThemeStyle)
 }
 
-// DesktopLayoutStyle normalizes the desktop layout style. New installs and
-// legacy classic configs both resolve to the v1.13-aligned workbench layout.
+// DesktopLayoutStyle normalizes the desktop layout style. New installs default
+// to workbench; explicit classic remains respected.
 func (c *Config) DesktopLayoutStyle() string {
 	if strings.EqualFold(strings.TrimSpace(c.Desktop.ThemeStyle), "workbench") && strings.TrimSpace(c.Desktop.LayoutStyle) == "" {
 		return "workbench"
 	}
 	return normalizeDesktopLayoutStyle(c.Desktop.LayoutStyle)
-}
-
-// DesktopWindowChrome normalizes the native-vs-self-drawn desktop window chrome
-// choice. Native is the v1.13-aligned default; custom requires a restart because
-// Wails' Frameless option is set when the window is created.
-func (c *Config) DesktopWindowChrome() string {
-	return normalizeDesktopWindowChrome(c.Desktop.WindowChrome)
-}
-
-func (c *Config) DesktopUsesCustomWindowChrome() bool {
-	return c.DesktopWindowChrome() == "custom"
 }
 
 // DesktopCloseBehavior normalizes the desktop close-window preference. It falls
@@ -1152,7 +1133,6 @@ type ProviderEntry struct {
 	Name               string                       `toml:"name"`
 	Kind               string                       `toml:"kind"`
 	BaseURL            string                       `toml:"base_url"`
-	ChatURL            string                       `toml:"chat_url"`
 	Model              string                       `toml:"model"`      // a single model (back-compat)
 	Models             []string                     `toml:"models"`     // a vendor's model list (one base_url/key, many models)
 	ModelsURL          string                       `toml:"models_url"` // auto-fetch models from this URL on startup
@@ -2129,7 +2109,6 @@ func clearMixedMimoTokenPlanPrice(e *ProviderEntry) {
 func officialProviderFromLegacy(entry ProviderEntry, old *ProviderEntry) ProviderEntry {
 	entry.Kind = old.Kind
 	entry.BaseURL = old.BaseURL
-	entry.ChatURL = old.ChatURL
 	entry.ModelsURL = old.ModelsURL
 	entry.APIKeyEnv = old.APIKeyEnv
 	entry.AuthType = old.AuthType

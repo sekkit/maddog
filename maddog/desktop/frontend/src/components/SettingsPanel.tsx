@@ -703,28 +703,6 @@ function normalizeReasoningProtocol(protocol: string | undefined): string {
   return REASONING_PROTOCOLS.includes(protocol ?? "") ? protocol ?? "" : "";
 }
 
-export function providerEditorEffectiveKind(isNewCustomProvider: boolean, kind: string, kinds: string[]): string {
-  return isNewCustomProvider ? "openai" : (kind.trim() || kinds[0] || "openai");
-}
-
-function trimmedURL(value: string): string {
-  return value.trim().replace(/\/+$/, "");
-}
-
-export function providerChatURLPreview(baseUrl: string, chatUrl: string, fullURL: boolean): string {
-  if (fullURL) return trimmedURL(chatUrl);
-  const base = trimmedURL(baseUrl);
-  return base ? `${base}/chat/completions` : "";
-}
-
-export function providerBaseURLFromChatURL(chatUrl: string): string {
-  const full = trimmedURL(chatUrl);
-  for (const suffix of ["/chat/completions", "/responses", "/response"]) {
-    if (full.endsWith(suffix)) return trimmedURL(full.slice(0, -suffix.length));
-  }
-  return full;
-}
-
 function normalizeReasoningLanguage(lang: string | undefined): string {
   const v = String(lang ?? "").trim().toLowerCase();
   return v === "zh" || v === "en" ? v : "auto";
@@ -862,7 +840,6 @@ function normalizeProviderView(p: ProviderView): ProviderView {
     ...p,
     builtIn: Boolean(p.builtIn),
     added: Boolean(p.added),
-    chatUrl: p.chatUrl ?? "",
     models: asArray(p.models),
     visionModels,
     visionModelsConfigured: Boolean(p.visionModelsConfigured ?? visionModels.length > 0),
@@ -923,7 +900,6 @@ function normalizeSettingsView(view: SettingsView | null | undefined): SettingsV
     bypass: Boolean(view.autoApproveTools ?? view.bypass),
     desktopLanguage: normalizeLangPref(view.desktopLanguage),
     desktopLayoutStyle: normalizeDesktopLayoutStyle(view.desktopLayoutStyle),
-    desktopWindowChrome: normalizeDesktopWindowChrome(view.desktopWindowChrome),
     desktopTheme: normalizeThemePreference(view.desktopTheme),
     desktopThemeStyle: normalizeThemeStyleForTheme(view.desktopThemeStyle, normalizeThemePreference(view.desktopTheme)),
     closeBehavior: normalizeCloseBehavior(view.closeBehavior),
@@ -947,24 +923,16 @@ function normalizeDisplayMode(mode: string | undefined): DisplayMode {
   return mode === "standard" || mode === "compact" ? mode : "standard";
 }
 
-type DesktopLayoutStyle = "workbench" | "creation";
-type DesktopWindowChrome = "native" | "custom";
+type DesktopLayoutStyle = "classic" | "workbench" | "creation";
 
 function normalizeDesktopLayoutStyle(style: string | undefined): DesktopLayoutStyle {
+  if (style === "classic") return "classic";
   if (style === "creation") return "creation";
   return "workbench";
 }
 
 function desktopLayoutStyleLabel(style: DesktopLayoutStyle, t: ReturnType<typeof useT>): string {
   return t(`settings.desktopLayoutStyle.${style}`);
-}
-
-function normalizeDesktopWindowChrome(chrome: string | undefined): DesktopWindowChrome {
-  return chrome === "custom" ? "custom" : "native";
-}
-
-function desktopWindowChromeLabel(chrome: DesktopWindowChrome, t: ReturnType<typeof useT>): string {
-  return t(`settings.desktopWindowChrome.${chrome}`);
 }
 
 type StatusBarStyle = "icon" | "text";
@@ -1079,7 +1047,6 @@ function GeneralSection({ s, busy, apply, agentRunning }: SectionProps & { agent
   const memoryCompilerEnabled = s.memoryCompilerEnabled !== false;
   const languagePref = normalizeLangPref(s.desktopLanguage);
   const desktopLayoutStyle = normalizeDesktopLayoutStyle(s.desktopLayoutStyle);
-  const desktopWindowChrome = normalizeDesktopWindowChrome(s.desktopWindowChrome);
   const [genMusicPreset, setGenMusicPreset] = useState<GenerativePreset>(getGenerativePreset());
   const [soundPref, setSoundPref] = useState<SoundWavPref>(getSuccessPreference());
   const [attentionPref, setAttentionPref] = useState<SoundWavPref>(getAttentionPreference());
@@ -1252,7 +1219,7 @@ function GeneralSection({ s, busy, apply, agentRunning }: SectionProps & { agent
       </SettingsField>
       <SettingsField label={t("settings.desktopLayoutStyle")}>
         <div className="set-seg">
-          {(["workbench", "creation"] as const).map((style) => (
+          {(["classic", "workbench", "creation"] as const).map((style) => (
             <button
               key={style}
               className={`set-seg__btn${desktopLayoutStyle === style ? " set-seg__btn--on" : ""}`}
@@ -1260,20 +1227,6 @@ function GeneralSection({ s, busy, apply, agentRunning }: SectionProps & { agent
               onClick={() => void apply(() => app.SetDesktopLayoutStyle(style))}
             >
               {desktopLayoutStyleLabel(style, t)}
-            </button>
-          ))}
-        </div>
-      </SettingsField>
-      <SettingsField label={t("settings.desktopWindowChrome")} hint={t("settings.desktopWindowChromeHint")}>
-        <div className="set-seg">
-          {(["native", "custom"] as const).map((chrome) => (
-            <button
-              key={chrome}
-              className={`set-seg__btn${desktopWindowChrome === chrome ? " set-seg__btn--on" : ""}`}
-              disabled={busy}
-              onClick={() => void apply(() => app.SetDesktopWindowChrome(chrome))}
-            >
-              {desktopWindowChromeLabel(chrome, t)}
             </button>
           ))}
         </div>
@@ -4585,16 +4538,14 @@ function ProviderEditor({
 }) {
   const t = useT();
   const [name, setName] = useState(initial?.name ?? "");
-  const [kind, setKind] = useState(initial?.kind ?? "openai");
+  const [kind, setKind] = useState(initial?.kind ?? kinds[0] ?? "openai");
   const [baseUrl, setBaseUrl] = useState(initial?.baseUrl ?? "");
-  const [chatUrl, setChatUrl] = useState(initial?.chatUrl ?? "");
-  const [fullChatUrl, setFullChatUrl] = useState(Boolean((initial?.chatUrl ?? "").trim()));
   const [models, setModels] = useState((initial?.models ?? []).join(", "));
   const [visionModels, setVisionModels] = useState((initial?.visionModels ?? []).join(", "));
   const [visionModelsConfigured, setVisionModelsConfigured] = useState(
     Boolean(initial?.visionModelsConfigured ?? ((initial?.visionModels ?? []).length > 0)),
   );
-  const [modelsUrl, setModelsUrl] = useState(initial?.modelsUrl ?? "");
+  const [modelsUrl] = useState(initial?.modelsUrl ?? "");
   const [apiKeyEnv, setApiKeyEnv] = useState(initial?.apiKeyEnv ?? "");
   const [authType, setAuthType] = useState(normalizeAuthType(initial?.authType));
   const [authTokenEnv, setAuthTokenEnv] = useState(initial?.authTokenEnv ?? "");
@@ -4624,11 +4575,6 @@ function ProviderEditor({
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const builtIn = initial?.builtIn ?? false;
   const isNewCustomProvider = !initial;
-  const effectiveKind = providerEditorEffectiveKind(isNewCustomProvider, kind, kinds);
-  const effectiveBaseUrl = fullChatUrl ? providerBaseURLFromChatURL(chatUrl) : baseUrl.trim();
-  const effectiveChatUrl = fullChatUrl ? trimmedURL(chatUrl) : "";
-  const effectiveModelsUrl = modelsUrl.trim();
-  const previewChatUrl = providerChatURLPreview(baseUrl, chatUrl, fullChatUrl);
 
   // Offer the kinds the kernel actually registered; if the stored kind is a
   // legacy/unknown one, keep it as an option so editing doesn't silently change it.
@@ -4678,10 +4624,9 @@ function ProviderEditor({
         name: name.trim() || t("settings.newProviderDraftName"),
         builtIn: initial?.builtIn ?? false,
         added: initial?.added ?? true,
-        kind: effectiveKind,
-        baseUrl: effectiveBaseUrl,
-        chatUrl: effectiveChatUrl,
-        modelsUrl: effectiveModelsUrl,
+        kind: kind.trim() || kinds[0] || "openai",
+        baseUrl: baseUrl.trim(),
+        modelsUrl,
         models: [],
         visionModels: [],
         visionModelsConfigured: false,
@@ -4738,9 +4683,8 @@ function ProviderEditor({
       name: name.trim(),
       builtIn: initial?.builtIn ?? false,
       added: initial?.added ?? true,
-      kind: effectiveKind,
-      baseUrl: effectiveBaseUrl,
-      chatUrl: effectiveChatUrl,
+      kind: kind.trim() || kinds[0] || "openai",
+      baseUrl: baseUrl.trim(),
       models: ms,
       visionModels: vms,
       visionModelsConfigured: visionModelsConfigured || vms.length > 0,
@@ -4759,7 +4703,7 @@ function ProviderEditor({
       organizationId: organizationId.trim(),
       serviceAccountId: serviceAccountId.trim(),
       workspaceId: workspaceId.trim(),
-      modelsUrl: effectiveModelsUrl,
+      modelsUrl,
       keySet: Boolean(keyDraft.trim()) || (initial?.keySet ?? false),
       balanceUrl: balanceUrl.trim(),
       contextWindow: Number(ctx) || 0,
@@ -4810,7 +4754,7 @@ function ProviderEditor({
     .map((m) => m.trim())
     .filter(Boolean);
   const credentialEnv = authType === "api_key" ? apiKeyEnv : authTokenEnv;
-  const canFetch = Boolean(name.trim() && effectiveBaseUrl && (keyDraft.trim() || credentialEnv.trim()));
+  const canFetch = Boolean(name.trim() && baseUrl.trim() && (keyDraft.trim() || credentialEnv.trim()));
 
   const protocolField = (
     <select className="mem-select" value={kind} onChange={(e) => setKind(e.target.value)}>
@@ -4834,14 +4778,6 @@ function ProviderEditor({
           onChange={(e) => setApiKeyEnv(e.target.value)}
         />
         <div className="mem-hint">{t("settings.providerApiKeyEnvHint")}</div>
-        <label className="set-label">{t("settings.providerModelsUrl")}</label>
-        <input
-          className="mem-input"
-          placeholder={t("settings.providerModelsUrlPlaceholder")}
-          value={modelsUrl}
-          onChange={(e) => setModelsUrl(e.target.value)}
-        />
-        <div className="mem-hint">{t("settings.providerModelsUrlHint")}</div>
         <label className="set-label">{t("settings.authType")}</label>
         <select className="mem-select" value={authType} onChange={(e) => setAuthType(normalizeAuthType(e.target.value))}>
           {AUTH_TYPES.map((typ) => (
@@ -5005,44 +4941,8 @@ function ProviderEditor({
       <input className="mem-input" placeholder={t("settings.customProviderNamePlaceholder")} value={name} onChange={(e) => setName(e.target.value)} disabled={!!initial} />
       <label className="set-label">{t("settings.providerProtocol")}</label>
       {protocolField}
-      <div className="set-row">
-        <label className="set-label set-grow">
-          {t(fullChatUrl ? "settings.providerChatUrlLabel" : "settings.providerBaseUrlLabel")}
-        </label>
-        <label className="set-check">
-          <input
-            type="checkbox"
-            checked={fullChatUrl}
-            onChange={(e) => {
-              const checked = e.target.checked;
-              setFullChatUrl(checked);
-              if (checked && !chatUrl.trim()) {
-                setChatUrl(providerChatURLPreview(baseUrl, "", false));
-              } else if (!checked && !baseUrl.trim()) {
-                setBaseUrl(providerBaseURLFromChatURL(chatUrl));
-              }
-            }}
-          />
-          {t("settings.providerUseFullChatUrl")}
-        </label>
-      </div>
-      <input
-        className="mem-input"
-        placeholder={t(fullChatUrl ? "settings.providerChatUrlPlaceholder" : "settings.providerBaseUrl")}
-        value={fullChatUrl ? chatUrl : baseUrl}
-        onChange={(e) => {
-          const value = e.target.value;
-          if (fullChatUrl) {
-            setChatUrl(value);
-            setBaseUrl(providerBaseURLFromChatURL(value));
-          } else {
-            setBaseUrl(value);
-          }
-        }}
-      />
-      <div className="mem-hint">
-        {previewChatUrl ? t("settings.providerRequestPreview", { url: previewChatUrl }) : t("settings.providerRequestPreviewEmpty")}
-      </div>
+      <label className="set-label">{t("settings.providerBaseUrlLabel")}</label>
+      <input className="mem-input" placeholder={t("settings.providerBaseUrl")} value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} />
       {!initial && (
         <>
           <label className="set-label">{t("settings.providerKey")}</label>
@@ -5098,7 +4998,7 @@ function ProviderEditor({
         <button className="btn btn--small" onClick={onCancel} disabled={busy}>
           {t("common.cancel")}
         </button>
-        <button className="btn btn--primary btn--small" onClick={() => void save()} disabled={busy || !name.trim() || !effectiveBaseUrl || !models.trim()}>
+        <button className="btn btn--primary btn--small" onClick={() => void save()} disabled={busy || !name.trim() || !baseUrl.trim() || !models.trim()}>
           {t("common.save")}
         </button>
       </div>

@@ -469,7 +469,6 @@ export interface ContextInfo {
   sessionCurrency?: string;
   cacheHitTokens?: number;
   cacheMissTokens?: number;
-  sources?: Record<string, UsageSourceStats>;
 }
 
 export interface Meta {
@@ -882,7 +881,6 @@ export interface ProviderView {
   added: boolean;
   kind: string;
   baseUrl: string;
-  chatUrl?: string; // optional full chat completions URL; empty derives from baseUrl
   models: string[];
   visionModels: string[]; // subset of models that accepts image input
   visionModelsConfigured: boolean; // true when an empty list is an explicit choice
@@ -1152,8 +1150,7 @@ export interface SettingsView {
   agent: AgentView;
   bot: BotSettingsView;
   desktopLanguage: string; // "" | "en" | "zh"; empty = auto
-  desktopLayoutStyle: string; // "workbench" | "creation"; "classic" legacy configs open as workbench
-  desktopWindowChrome: string; // "native" | "custom"; custom uses self-drawn controls after restart
+  desktopLayoutStyle: string; // "classic" | "workbench" | "creation"
   desktopTheme: string; // "auto" | "dark" | "light"
   desktopThemeStyle: string;
   closeBehavior: string; // "background" | "quit"
@@ -1174,8 +1171,7 @@ export interface SettingsView {
 export interface DesktopStartupSettingsView {
   bot: BotSettingsView;
   desktopLanguage: string; // "" | "en" | "zh"; empty = auto
-  desktopLayoutStyle: string; // "workbench" | "creation"; "classic" legacy configs open as workbench
-  desktopWindowChrome: string; // "native" | "custom"
+  desktopLayoutStyle: string; // "classic" | "workbench"
   desktopTheme: string; // "auto" | "dark" | "light"
   desktopThemeStyle: string;
   displayMode: string;   // "standard" | "compact"

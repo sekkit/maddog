@@ -77,11 +77,3 @@ func (s *Session) HasContent() bool {
 	}
 	return false
 }
-
-// HasSystemMessage reports whether the session starts with a system message,
-// which carries the agent's stable identity and behaviour contract.
-func (s *Session) HasSystemMessage() bool {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return len(s.Messages) > 0 && s.Messages[0].Role == provider.RoleSystem
-}

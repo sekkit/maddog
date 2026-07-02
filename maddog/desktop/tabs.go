@@ -130,8 +130,9 @@ type sessionUsageStats struct {
 	CompressionSavedTokens      int                         `json:"compressionSavedTokens,omitempty"`
 	Sources                     map[string]usageSourceStats `json:"sources,omitempty"`
 
-	activeTurnStartedAt int64
-	sourceSessionCache  map[string]sourceSessionCacheCounters
+	activeTurnStartedAt            int64
+	executorSessionCacheHitTokens  int
+	executorSessionCacheMissTokens int
 }
 
 type usageSourceStats struct {
@@ -145,34 +146,6 @@ type usageSourceStats struct {
 	SessionCost      float64 `json:"sessionCost,omitempty"`
 	SessionCurrency  string  `json:"sessionCurrency,omitempty"`
 	SessionCostUsd   float64 `json:"sessionCostUsd,omitempty"`
-}
-
-type sourceSessionCacheCounters struct {
-	Hit  int
-	Miss int
-}
-
-func (s *sessionUsageStats) cacheTokenDelta(source string, u *provider.Usage, sessionHit, sessionMiss int) (hit, miss int) {
-	if u != nil {
-		hit = u.CacheHitTokens
-		miss = u.CacheMissTokens
-	}
-	if source != event.UsageSourceExecutor && source != event.UsageSourcePlanner {
-		return hit, miss
-	}
-	if sessionHit+sessionMiss <= 0 {
-		return hit, miss
-	}
-	if s.sourceSessionCache == nil {
-		s.sourceSessionCache = map[string]sourceSessionCacheCounters{}
-	}
-	prev := s.sourceSessionCache[source]
-	if sessionHit < prev.Hit || sessionMiss < prev.Miss {
-		s.sourceSessionCache[source] = sourceSessionCacheCounters{Hit: sessionHit, Miss: sessionMiss}
-		return hit, miss
-	}
-	s.sourceSessionCache[source] = sourceSessionCacheCounters{Hit: sessionHit, Miss: sessionMiss}
-	return sessionHit - prev.Hit, sessionMiss - prev.Miss
 }
 
 type tabTelemetrySnapshot struct {
@@ -474,9 +447,20 @@ func (t *WorkspaceTab) recordUsage(e event.Event) {
 	t.usageTelemetry.CompletionTokens += u.CompletionTokens
 	t.usageTelemetry.TotalTokens += u.TotalTokens
 	t.usageTelemetry.ReasoningTokens += u.ReasoningTokens
-	cacheHitTokens, cacheMissTokens := t.usageTelemetry.cacheTokenDelta(source, u, e.SessionHit, e.SessionMiss)
-	t.usageTelemetry.CacheHitTokens += cacheHitTokens
-	t.usageTelemetry.CacheMissTokens += cacheMissTokens
+	if source == event.UsageSourceExecutor && e.SessionHit+e.SessionMiss > 0 {
+		if e.SessionHit < t.usageTelemetry.executorSessionCacheHitTokens || e.SessionMiss < t.usageTelemetry.executorSessionCacheMissTokens {
+			t.usageTelemetry.CacheHitTokens += u.CacheHitTokens
+			t.usageTelemetry.CacheMissTokens += u.CacheMissTokens
+		} else {
+			t.usageTelemetry.CacheHitTokens += e.SessionHit - t.usageTelemetry.executorSessionCacheHitTokens
+			t.usageTelemetry.CacheMissTokens += e.SessionMiss - t.usageTelemetry.executorSessionCacheMissTokens
+		}
+		t.usageTelemetry.executorSessionCacheHitTokens = e.SessionHit
+		t.usageTelemetry.executorSessionCacheMissTokens = e.SessionMiss
+	} else {
+		t.usageTelemetry.CacheHitTokens += u.CacheHitTokens
+		t.usageTelemetry.CacheMissTokens += u.CacheMissTokens
+	}
 	t.usageTelemetry.RequestCount++
 	if t.usageTelemetry.Sources == nil {
 		t.usageTelemetry.Sources = map[string]usageSourceStats{}
@@ -486,8 +470,8 @@ func (t *WorkspaceTab) recordUsage(e event.Event) {
 	src.CompletionTokens += u.CompletionTokens
 	src.TotalTokens += u.TotalTokens
 	src.ReasoningTokens += u.ReasoningTokens
-	src.CacheHitTokens += cacheHitTokens
-	src.CacheMissTokens += cacheMissTokens
+	src.CacheHitTokens += u.CacheHitTokens
+	src.CacheMissTokens += u.CacheMissTokens
 	src.RequestCount++
 	if e.Pricing != nil {
 		cost := e.Pricing.Cost(u)
@@ -549,7 +533,8 @@ func (t *WorkspaceTab) telemetrySnapshot() tabTelemetrySnapshot {
 		}
 	}
 	usage.activeTurnStartedAt = 0
-	usage.sourceSessionCache = nil
+	usage.executorSessionCacheHitTokens = 0
+	usage.executorSessionCacheMissTokens = 0
 	return tabTelemetrySnapshot{Version: 2, ReadFiles: records, Usage: usage}
 }
 
@@ -1328,10 +1313,6 @@ func (a *App) openTopicTabWithActivation(scope, workspaceRoot, topicID, sessionP
 
 	tabID := a.newUniqueTabIDLocked()
 	topicTitle := topicTitleForTab(scope, workspaceRoot, topicID)
-	if t, source, ok := topicTitleFallbackForOpen(workspaceRoot, topicID, sessionPath); ok {
-		topicTitle = t
-		_ = setTopicTitleWithSource(workspaceRoot, topicID, t, source)
-	}
 	if sessionPath == "" {
 		var err error
 		sessionPath, err = createEmptySessionFile(desktopSessionDir(actualRoot), "")
@@ -2260,7 +2241,7 @@ func (a *App) buildTabControllerWithContext(tab *WorkspaceTab, loadedSession loa
 		// topicId and could pick the wrong session when one topic had multiple files.
 		if loaded, pinnedPath, ok := loadPinnedTabSessionWithPreload(dir, tab.SessionPath, loadedSession); ok {
 			if loaded != nil {
-				ctrl.Resume(sessionWithFreshSystemPrompt(loaded, systemPromptFrom(ctrl.History())), pinnedPath)
+				ctrl.Resume(loaded, pinnedPath)
 			} else {
 				ctrl.SetSessionPath(pinnedPath)
 			}
@@ -2270,7 +2251,7 @@ func (a *App) buildTabControllerWithContext(tab *WorkspaceTab, loadedSession loa
 			existingPath := findTopicSession(dir, tab.TopicID)
 			if existingPath != "" {
 				if loaded, err := loadResumableSession(existingPath); err == nil {
-					ctrl.Resume(sessionWithFreshSystemPrompt(loaded, systemPromptFrom(ctrl.History())), existingPath)
+					ctrl.Resume(loaded, existingPath)
 					path = existingPath
 				}
 			}
@@ -2602,42 +2583,6 @@ func autoTitleTopicFromSession(workspaceRoot, topicID, sessionPath string) (stri
 		return "", false
 	}
 	return nextTitle, true
-}
-
-func topicTitleFallbackForOpen(workspaceRoot, topicID, sessionPath string) (string, string, bool) {
-	topicID = strings.TrimSpace(topicID)
-	sessionPath = strings.TrimSpace(sessionPath)
-	if topicID == "" || sessionPath == "" {
-		return "", "", false
-	}
-	storedTitle := strings.TrimSpace(loadTopicTitle(workspaceRoot, topicID))
-	storedSource := strings.TrimSpace(loadTopicTitleSource(workspaceRoot, topicID))
-	if storedTitle != "" {
-		if storedSource == topicTitleSourceManual || storedTitle != defaultTopicTitle {
-			return "", "", false
-		}
-	}
-
-	if storedTitle == "" {
-		dir := filepath.Dir(sessionPath)
-		if meta, ok, err := agent.LoadBranchMeta(sessionPath); err == nil && ok {
-			if title := storedSessionTopicTitle(dir, sessionPath, meta); title != "" {
-				return title, topicTitleSourceManual, true
-			}
-		} else if title := topicTitleFromText(loadSessionTitles(dir)[filepath.Base(sessionPath)]); title != "" {
-			return title, topicTitleSourceManual, true
-		}
-	}
-
-	if storedSource == topicTitleSourceManual {
-		return "", "", false
-	}
-	if storedSource == "" || storedSource == topicTitleSourceAuto {
-		if title := topicTitleFromSession(sessionPath); title != "" {
-			return title, topicTitleSourceAuto, true
-		}
-	}
-	return "", "", false
 }
 
 func topicTitleFromSession(path string) string {
@@ -4107,7 +4052,10 @@ func restoreSessionTopicIndex(dir, sessionPath string) error {
 }
 
 func restoredSessionTopicTitle(dir, sessionPath string, meta agent.BranchMeta) string {
-	if title := storedSessionTopicTitle(dir, sessionPath, meta); title != "" {
+	if title := topicTitleFromText(meta.TopicTitle); title != "" {
+		return title
+	}
+	if title := topicTitleFromText(loadSessionTitles(dir)[filepath.Base(sessionPath)]); title != "" {
 		return title
 	}
 	if s, err := agent.LoadSession(sessionPath); err == nil {
@@ -4120,13 +4068,6 @@ func restoredSessionTopicTitle(dir, sessionPath string, meta agent.BranchMeta) s
 		}
 	}
 	return ""
-}
-
-func storedSessionTopicTitle(dir, sessionPath string, meta agent.BranchMeta) string {
-	if title := topicTitleFromText(meta.TopicTitle); title != "" {
-		return title
-	}
-	return topicTitleFromText(loadSessionTitles(dir)[filepath.Base(sessionPath)])
 }
 
 func legacySessionTopicID(path string) string {
@@ -5311,9 +5252,6 @@ func loadPinnedTabSessionWithPreload(dir, sessionPath string, preloaded loadedTa
 		return nil, "", false
 	}
 	if preloaded.matches(path) {
-		if preloaded.Session != nil && len(preloaded.Session.Snapshot()) == 0 {
-			return nil, path, true
-		}
 		return preloaded.Session, path, true
 	}
 	loaded, err := agent.LoadSession(path)
@@ -5322,9 +5260,6 @@ func loadPinnedTabSessionWithPreload(dir, sessionPath string, preloaded loadedTa
 			return nil, path, true
 		}
 		return nil, "", false
-	}
-	if len(loaded.Snapshot()) == 0 {
-		return nil, path, true
 	}
 	return loaded, path, true
 }

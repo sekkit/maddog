@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, ClipboardEvent, DragEvent, KeyboardEvent, PointerEvent as ReactPointerEvent } from "react";
-import { ArrowUp, Check, ChevronsUpDown, Eye, FileText, Folder, Gauge, List, MessageSquare, Search, Shield, ShieldAlert, ShieldCheck, SlidersHorizontal, Square, Target, Trash2, X } from "lucide-react";
+import { ArrowUp, Check, Eye, FileText, Folder, Gauge, List, MessageSquare, MoreHorizontal, Search, Shield, ShieldAlert, ShieldCheck, SlidersHorizontal, Square, Target, Trash2, X } from "lucide-react";
 import { asArray } from "../lib/array";
 import { filterAtMatches } from "../lib/atMatches";
 import { DedupIndex, sha256 } from "../lib/attachDedup";
@@ -1113,15 +1113,12 @@ export function Composer({
   const submit = async () => {
     if (disabled || submitDisabled || readOnly || submittingRef.current) return;
     const submitDraftKey = activeDraftKeyRef.current;
-    const currentText = textRef.current;
-    const trimmedText = currentText.trim();
+    const trimmedText = text.trim();
     if (pendingPaste > 0) return;
     if (!imageInputEnabled && hasImageAttachments(attachmentsRef.current)) {
       warnImageInputFallback();
     }
-    const currentAttachments = attachmentsRef.current;
-    const currentWorkspaceRefs = workspaceRefsRef.current;
-    if (!trimmedText && currentAttachments.length === 0 && currentWorkspaceRefs.length === 0) {
+    if (!trimmedText && attachments.length === 0 && workspaceRefs.length === 0) {
       if (goalModeOn && !activeGoal) {
         setComposerPrompt(t("composer.goalInputRequired"));
         requestAnimationFrame(() => taRef.current?.focus());
@@ -1132,13 +1129,13 @@ export function Composer({
     submittingRef.current = true;
     setSubmitting(true);
     try {
-      const orderedAttachments = sortComposerAttachments(currentAttachments);
+      const orderedAttachments = sortComposerAttachments(attachments);
       const refs = [
-        ...currentWorkspaceRefs.map((ref) => formatWorkspaceReference(ref.path, ref.isDir)),
+        ...workspaceRefs.map((ref) => formatWorkspaceReference(ref.path, ref.isDir)),
         ...orderedAttachments.map((a) => `@${a.path}`),
       ].join(" ");
       const displayRefs = [
-        ...currentWorkspaceRefs.map((ref) => formatWorkspaceReference(ref.displayPath || ref.path, ref.isDir)),
+        ...workspaceRefs.map((ref) => formatWorkspaceReference(ref.displayPath || ref.path, ref.isDir)),
         ...orderedAttachments.map(formatAttachmentDisplayReference),
       ].join(" ");
       const displayText = [trimmedText, displayRefs].filter(Boolean).join(trimmedText && displayRefs ? " " : "");
@@ -1146,8 +1143,7 @@ export function Composer({
       // to submitText only (displayText stays unchanged so the user still sees their
       // original prompt in the input preview). With no refs we keep the original
       // submitText verbatim — no header, no rewording, byte-identical to pre-PR-B.
-      const currentSessionRefs = sessionRefsRef.current;
-      const sessionContext = currentSessionRefs.length === 0 ? "" : await buildSessionContext(currentSessionRefs);
+      const sessionContext = sessionRefs.length === 0 ? "" : await buildSessionContext(sessionRefs);
       const baseSubmitText = [expandPastedBlocks(trimmedText), refs].filter(Boolean).join(trimmedText && refs ? " " : "");
       const submitText = sessionContext ? `${sessionContext}${baseSubmitText}` : baseSubmitText;
       await onSend(displayText, submitText);
@@ -1281,50 +1277,28 @@ export function Composer({
       void attachNativeClipboardImage(hasImageHint, activeDraftKeyRef.current);
       return;
     }
+    if (!shouldFoldPaste(pasted)) return;
 
-    // Always prevent the browser default paste so React's controlled-input
-    // reconciliation cannot race with the native DOM update and lose the
-    // pasted content (WebView2 / Windows). We insert the text manually below.
     e.preventDefault();
     const ta = e.currentTarget;
     const start = ta.selectionStart ?? text.length;
     const end = ta.selectionEnd ?? text.length;
+    const id = nextPasteId.current++;
+    const lines = lineCount(pasted);
+    const label = t("composer.pastedLabel", { id, lines });
+    const block: PastedBlock = { label, text: pasted };
+    const next = text.slice(0, start) + label + text.slice(end);
 
-    // Normalize CRLF from Windows clipboard so caret offsets match the
-    // textarea's normalized value. The raw text (with CRLF) is preserved
-    // in the PastedBlock for long pastes so block content is lossless.
-    const normalizedPasted = pasted.replace(/\r\n/g, "\n");
-
-    if (shouldFoldPaste(pasted)) {
-      // Long paste: fold into a collapsible block so the composer stays compact.
-      const id = nextPasteId.current++;
-      const lines = lineCount(pasted);
-      const label = t("composer.pastedLabel", { id, lines });
-      const block: PastedBlock = { label, text: pasted }; // keep raw text (CRLF preserved)
-      const next = text.slice(0, start) + label + text.slice(end);
-      pastedBlocksRef.current = [...pastedBlocksRef.current, block];
-      setPastedBlocks((prev) => [...prev, block]);
-      setText(next);
-      requestAnimationFrame(() => {
-        const node = taRef.current;
-        if (!node) return;
-        const pos = start + label.length;
-        node.focus();
-        node.selectionStart = node.selectionEnd = pos;
-      });
-    } else {
-      // Short paste: insert the raw text directly into state.
-      resetPromptHistoryNavigation();
-      const next = text.slice(0, start) + normalizedPasted + text.slice(end);
-      setText(next);
-      requestAnimationFrame(() => {
-        const node = taRef.current;
-        if (!node) return;
-        const pos = start + normalizedPasted.length;
-        node.focus();
-        node.selectionStart = node.selectionEnd = pos;
-      });
-    }
+    pastedBlocksRef.current = [...pastedBlocksRef.current, block];
+    setPastedBlocks((prev) => [...prev, block]);
+    setText(next);
+    requestAnimationFrame(() => {
+      const node = taRef.current;
+      if (!node) return;
+      const pos = start + label.length;
+      node.focus();
+      node.selectionStart = node.selectionEnd = pos;
+    });
   };
 
   const hasWorkspaceReferenceDrag = (dataTransfer: DataTransfer): boolean =>
@@ -1359,9 +1333,7 @@ export function Composer({
   };
 
   const onFileDropCapture = (e: DragEvent<HTMLDivElement>) => {
-    if (hasWorkspaceReferenceDrag(e.dataTransfer) || !hasFileDrag(e.dataTransfer)) return;
-    e.preventDefault();
-    if (!hasPathlessFileDrop(e.dataTransfer)) return;
+    if (hasWorkspaceReferenceDrag(e.dataTransfer) || !hasFileDrag(e.dataTransfer) || !hasPathlessFileDrop(e.dataTransfer)) return;
     const files = Array.from(e.dataTransfer.files);
     if (files.length === 0) return;
     stopNativeFileDrop(e);
@@ -1908,9 +1880,6 @@ export function Composer({
   };
   const effortLevels = asArray(effort?.levels);
   const currentEffort = effort?.current || "auto";
-  const compactEffortTitle = currentEffort === "auto"
-    ? t("status.effortAutoTitle", { def: effort?.default || "auto" })
-    : `${t("status.effortTitle")}: ${currentEffort}`;
   const hasEffort = Boolean(effort?.supported && effortLevels.length > 0);
   const chooseEffortLevel = (level: string) => {
     closeMoreMenu(() => {
@@ -2472,21 +2441,20 @@ export function Composer({
             )}
             {hasEffort && (
               <div className="composer-meta__control composer-meta__control--more">
-                <Tooltip label={compactEffortTitle} disabled={moreMenuOpen || moreMenuClosing}>
+                <Tooltip label={t("composer.moreControls")} disabled={moreMenuOpen || moreMenuClosing}>
                   <button
                     ref={moreMenuAnchorRef}
                     type="button"
-                    className={`composer-more-trigger composer-more-trigger--effort${currentEffort !== "auto" ? " composer-more-trigger--explicit" : ""}${moreMenuOpen || moreMenuClosing ? " composer-more-trigger--open" : ""}`}
+                    className={`composer-more-trigger${moreMenuOpen || moreMenuClosing ? " composer-more-trigger--open" : ""}`}
                     onClick={() => (moreMenuOpen || moreMenuClosing ? closeMoreMenu() : openMoreMenu())}
                     disabled={disabled || running}
                     aria-haspopup="menu"
                     aria-expanded={moreMenuOpen && !moreMenuClosing}
-                    aria-label={compactEffortTitle}
-                    title={moreMenuOpen || moreMenuClosing ? undefined : compactEffortTitle}
+                    aria-label={t("composer.moreControls")}
+                    title={moreMenuOpen || moreMenuClosing ? undefined : t("composer.moreControls")}
                   >
-                    <Gauge size={14} />
-                    <span>{currentEffort}</span>
-                    <ChevronsUpDown size={11} />
+                    <MoreHorizontal size={16} />
+                    <span>{t("topicBar.more")}</span>
                   </button>
                 </Tooltip>
               </div>

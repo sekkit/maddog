@@ -88,20 +88,6 @@ func TestHasContentWithTool(t *testing.T) {
 	}
 }
 
-func TestHasSystemMessage(t *testing.T) {
-	if NewSession("").HasSystemMessage() {
-		t.Error("empty session should not have a system message")
-	}
-	if !NewSession("system").HasSystemMessage() {
-		t.Error("session seeded with system prompt should have a system message")
-	}
-	s := NewSession("")
-	s.Add(provider.Message{Role: provider.RoleUser, Content: "hello"})
-	if s.HasSystemMessage() {
-		t.Error("user-only legacy session should not have a leading system message")
-	}
-}
-
 // --- Save / LoadSession round-trip ---
 
 func TestSaveLoadSessionRoundTrip(t *testing.T) {
