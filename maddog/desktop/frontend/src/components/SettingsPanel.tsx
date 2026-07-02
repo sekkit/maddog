@@ -712,6 +712,10 @@ function normalizeAuthType(authType: string | undefined): string {
   return AUTH_TYPES.includes(authType ?? "") ? authType ?? "api_key" : "api_key";
 }
 
+export function providerEditorEffectiveKind(kind: string, kinds: string[]): string {
+  return kind.trim() || kinds[0] || "openai";
+}
+
 function defaultBotSettings(): BotSettingsView {
   return {
     enabled: false,
@@ -840,6 +844,7 @@ function normalizeProviderView(p: ProviderView): ProviderView {
     ...p,
     builtIn: Boolean(p.builtIn),
     added: Boolean(p.added),
+    chatUrl: p.chatUrl ?? "",
     models: asArray(p.models),
     visionModels,
     visionModelsConfigured: Boolean(p.visionModelsConfigured ?? visionModels.length > 0),
@@ -900,6 +905,7 @@ function normalizeSettingsView(view: SettingsView | null | undefined): SettingsV
     bypass: Boolean(view.autoApproveTools ?? view.bypass),
     desktopLanguage: normalizeLangPref(view.desktopLanguage),
     desktopLayoutStyle: normalizeDesktopLayoutStyle(view.desktopLayoutStyle),
+    desktopWindowChrome: normalizeDesktopWindowChrome(view.desktopWindowChrome),
     desktopTheme: normalizeThemePreference(view.desktopTheme),
     desktopThemeStyle: normalizeThemeStyleForTheme(view.desktopThemeStyle, normalizeThemePreference(view.desktopTheme)),
     closeBehavior: normalizeCloseBehavior(view.closeBehavior),
@@ -923,16 +929,24 @@ function normalizeDisplayMode(mode: string | undefined): DisplayMode {
   return mode === "standard" || mode === "compact" ? mode : "standard";
 }
 
-type DesktopLayoutStyle = "classic" | "workbench" | "creation";
+type DesktopLayoutStyle = "workbench" | "creation";
+type DesktopWindowChrome = "native" | "custom";
 
 function normalizeDesktopLayoutStyle(style: string | undefined): DesktopLayoutStyle {
-  if (style === "classic") return "classic";
   if (style === "creation") return "creation";
   return "workbench";
 }
 
 function desktopLayoutStyleLabel(style: DesktopLayoutStyle, t: ReturnType<typeof useT>): string {
   return t(`settings.desktopLayoutStyle.${style}`);
+}
+
+function normalizeDesktopWindowChrome(chrome: string | undefined): DesktopWindowChrome {
+  return chrome === "custom" ? "custom" : "native";
+}
+
+function desktopWindowChromeLabel(chrome: DesktopWindowChrome, t: ReturnType<typeof useT>): string {
+  return t(`settings.desktopWindowChrome.${chrome}`);
 }
 
 type StatusBarStyle = "icon" | "text";
@@ -1047,6 +1061,7 @@ function GeneralSection({ s, busy, apply, agentRunning }: SectionProps & { agent
   const memoryCompilerEnabled = s.memoryCompilerEnabled !== false;
   const languagePref = normalizeLangPref(s.desktopLanguage);
   const desktopLayoutStyle = normalizeDesktopLayoutStyle(s.desktopLayoutStyle);
+  const desktopWindowChrome = normalizeDesktopWindowChrome(s.desktopWindowChrome);
   const [genMusicPreset, setGenMusicPreset] = useState<GenerativePreset>(getGenerativePreset());
   const [soundPref, setSoundPref] = useState<SoundWavPref>(getSuccessPreference());
   const [attentionPref, setAttentionPref] = useState<SoundWavPref>(getAttentionPreference());
@@ -1219,7 +1234,7 @@ function GeneralSection({ s, busy, apply, agentRunning }: SectionProps & { agent
       </SettingsField>
       <SettingsField label={t("settings.desktopLayoutStyle")}>
         <div className="set-seg">
-          {(["classic", "workbench", "creation"] as const).map((style) => (
+          {(["workbench", "creation"] as const).map((style) => (
             <button
               key={style}
               className={`set-seg__btn${desktopLayoutStyle === style ? " set-seg__btn--on" : ""}`}
@@ -1227,6 +1242,20 @@ function GeneralSection({ s, busy, apply, agentRunning }: SectionProps & { agent
               onClick={() => void apply(() => app.SetDesktopLayoutStyle(style))}
             >
               {desktopLayoutStyleLabel(style, t)}
+            </button>
+          ))}
+        </div>
+      </SettingsField>
+      <SettingsField label={t("settings.desktopWindowChrome")} hint={t("settings.desktopWindowChromeHint")}>
+        <div className="set-seg">
+          {(["native", "custom"] as const).map((chrome) => (
+            <button
+              key={chrome}
+              className={`set-seg__btn${desktopWindowChrome === chrome ? " set-seg__btn--on" : ""}`}
+              disabled={busy}
+              onClick={() => void apply(() => app.SetDesktopWindowChrome(chrome))}
+            >
+              {desktopWindowChromeLabel(chrome, t)}
             </button>
           ))}
         </div>
@@ -4540,6 +4569,7 @@ function ProviderEditor({
   const [name, setName] = useState(initial?.name ?? "");
   const [kind, setKind] = useState(initial?.kind ?? kinds[0] ?? "openai");
   const [baseUrl, setBaseUrl] = useState(initial?.baseUrl ?? "");
+  const [chatUrl, setChatUrl] = useState(initial?.chatUrl ?? "");
   const [models, setModels] = useState((initial?.models ?? []).join(", "));
   const [visionModels, setVisionModels] = useState((initial?.visionModels ?? []).join(", "));
   const [visionModelsConfigured, setVisionModelsConfigured] = useState(
@@ -4624,8 +4654,9 @@ function ProviderEditor({
         name: name.trim() || t("settings.newProviderDraftName"),
         builtIn: initial?.builtIn ?? false,
         added: initial?.added ?? true,
-        kind: kind.trim() || kinds[0] || "openai",
+        kind: providerEditorEffectiveKind(kind, kinds),
         baseUrl: baseUrl.trim(),
+        chatUrl: chatUrl.trim(),
         modelsUrl,
         models: [],
         visionModels: [],
@@ -4683,8 +4714,9 @@ function ProviderEditor({
       name: name.trim(),
       builtIn: initial?.builtIn ?? false,
       added: initial?.added ?? true,
-      kind: kind.trim() || kinds[0] || "openai",
+      kind: providerEditorEffectiveKind(kind, kinds),
       baseUrl: baseUrl.trim(),
+      chatUrl: chatUrl.trim(),
       models: ms,
       visionModels: vms,
       visionModelsConfigured: visionModelsConfigured || vms.length > 0,
@@ -4778,6 +4810,9 @@ function ProviderEditor({
           onChange={(e) => setApiKeyEnv(e.target.value)}
         />
         <div className="mem-hint">{t("settings.providerApiKeyEnvHint")}</div>
+        <label className="set-label">{t("settings.providerChatUrl")}</label>
+        <input className="mem-input" placeholder={t("settings.providerChatUrlPlaceholder")} value={chatUrl} onChange={(e) => setChatUrl(e.target.value)} />
+        <div className="mem-hint">{t("settings.providerChatUrlHint")}</div>
         <label className="set-label">{t("settings.authType")}</label>
         <select className="mem-select" value={authType} onChange={(e) => setAuthType(normalizeAuthType(e.target.value))}>
           {AUTH_TYPES.map((typ) => (

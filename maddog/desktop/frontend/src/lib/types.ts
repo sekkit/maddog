@@ -109,6 +109,7 @@ export interface WireUsage {
   reasoningTokens?: number;
   profile?: WireProfile;
   providerStatus?: WireProviderStatus;
+  cacheDiagnostics?: WireCacheDiagnostics;
   // Session-cumulative cache tokens — the status bar shows the aggregate
   // hit-rate (Σhit/Σ(hit+miss)), steadier than the single-turn cacheHitTokens.
   sessionCacheHitTokens: number;
@@ -881,6 +882,7 @@ export interface ProviderView {
   added: boolean;
   kind: string;
   baseUrl: string;
+  chatUrl?: string; // optional full chat completions URL; empty derives from baseUrl
   models: string[];
   visionModels: string[]; // subset of models that accepts image input
   visionModelsConfigured: boolean; // true when an empty list is an explicit choice
@@ -1150,7 +1152,8 @@ export interface SettingsView {
   agent: AgentView;
   bot: BotSettingsView;
   desktopLanguage: string; // "" | "en" | "zh"; empty = auto
-  desktopLayoutStyle: string; // "classic" | "workbench" | "creation"
+  desktopLayoutStyle: string; // "workbench" | "creation"; "classic" legacy configs open as workbench
+  desktopWindowChrome: string; // "native" | "custom"; custom uses self-drawn controls after restart
   desktopTheme: string; // "auto" | "dark" | "light"
   desktopThemeStyle: string;
   closeBehavior: string; // "background" | "quit"
@@ -1171,7 +1174,8 @@ export interface SettingsView {
 export interface DesktopStartupSettingsView {
   bot: BotSettingsView;
   desktopLanguage: string; // "" | "en" | "zh"; empty = auto
-  desktopLayoutStyle: string; // "classic" | "workbench"
+  desktopLayoutStyle: string; // "workbench" | "creation"; "classic" legacy configs open as workbench
+  desktopWindowChrome: string; // "native" | "custom"
   desktopTheme: string; // "auto" | "dark" | "light"
   desktopThemeStyle: string;
   displayMode: string;   // "standard" | "compact"

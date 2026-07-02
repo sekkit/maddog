@@ -34,7 +34,7 @@ func (a *App) HooksSettings(scope string) HooksSettingsView {
 		Scope:       s,
 		Path:        path,
 		ProjectRoot: root,
-		Trusted:     s == string(hook.ScopeGlobal) || hook.IsTrusted(root, ""),
+		Trusted:     s == string(hook.ScopeGlobal) || hook.IsTrusted(root, desktopHookTrustHome()),
 		Hooks:       []HookConfigView{},
 		Events:      hookEventNames(),
 	}
@@ -92,7 +92,15 @@ func (a *App) TrustProjectHooksForRoot(root string) error {
 	if strings.TrimSpace(root) == "" || root == "." {
 		return fmt.Errorf("no active project workspace")
 	}
-	return hook.Trust(root, "")
+	return hook.Trust(root, desktopHookTrustHome())
+}
+
+func desktopHookTrustHome() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return home
 }
 
 func (a *App) activeHookProjectRoot() string {

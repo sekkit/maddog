@@ -282,11 +282,35 @@ function sourceCost(stats: UsageSourceStats): number {
   return stats.sessionCost && stats.sessionCost > 0 ? stats.sessionCost : stats.sessionCostUsd ?? 0;
 }
 
-function sourceRows(info: ContextPanelInfo | null, sessionCurrency?: string): Array<{ source: string; label: string; cost: number; currency?: string; requests: number }> {
+function sourceTokenTotal(row: Pick<ContextSourceRow, "promptTokens" | "completionTokens" | "totalTokens">): number {
+  return row.totalTokens > 0 ? row.totalTokens : row.promptTokens + row.completionTokens;
+}
+
+export interface ContextSourceRow {
+  source: string;
+  label: string;
+  promptTokens: number;
+  completionTokens: number;
+  cacheHitTokens: number;
+  cacheMissTokens: number;
+  totalTokens: number;
+  cost: number;
+  currency?: string;
+  requests: number;
+}
+
+export function contextSourceRows(info: ContextPanelInfo | null, sessionCurrency?: string): ContextSourceRow[] {
   const entries = Object.entries(info?.sources ?? {});
   if (entries.length === 0) return [];
   return entries
-    .filter(([, stats]) => (stats.requestCount ?? 0) > 0 || sourceCost(stats) > 0)
+    .filter(([, stats]) =>
+      (stats.requestCount ?? 0) > 0 ||
+      (stats.promptTokens ?? 0) > 0 ||
+      (stats.completionTokens ?? 0) > 0 ||
+      (stats.cacheHitTokens ?? 0) > 0 ||
+      (stats.cacheMissTokens ?? 0) > 0 ||
+      sourceCost(stats) > 0
+    )
     .sort(([a], [b]) => {
       const ia = SOURCE_ORDER.indexOf(a);
       const ib = SOURCE_ORDER.indexOf(b);
@@ -296,6 +320,11 @@ function sourceRows(info: ContextPanelInfo | null, sessionCurrency?: string): Ar
     .map(([source, stats]) => ({
       source,
       label: source,
+      promptTokens: stats.promptTokens ?? 0,
+      completionTokens: stats.completionTokens ?? 0,
+      cacheHitTokens: stats.cacheHitTokens ?? 0,
+      cacheMissTokens: stats.cacheMissTokens ?? 0,
+      totalTokens: stats.totalTokens ?? 0,
       cost: sourceCost(stats),
       currency: stats.sessionCurrency || sessionCurrency || info?.sessionCurrency,
       requests: stats.requestCount ?? 0,
@@ -372,14 +401,14 @@ export function ContextPanel({
   // Session-cumulative values for the metrics cards (方案A: 纯前端改数据源)
   const sessionCacheHit = info?.sessionCacheHitTokens ?? usage?.sessionCacheHitTokens ?? context?.cacheHitTokens ?? 0;
   const sessionCacheMiss = info?.sessionCacheMissTokens ?? usage?.sessionCacheMissTokens ?? context?.cacheMissTokens ?? 0;
-  const sessionCompletion = info?.sessionCompletionTokens ?? 0;
+  const sessionCompletion = info?.sessionCompletionTokens ?? usage?.completionTokens ?? 0;
   const sessionCacheHitMetric = formatMetricTokens(sessionCacheHit, locale);
   const sessionCacheMissMetric = formatMetricTokens(sessionCacheMiss, locale);
   const sessionCompletionMetric = formatMetricTokens(sessionCompletion, locale);
   const totalTokensMetric = formatMetricTokens(totalTokens, locale);
   const cost = contextCostDisplay({ info, sessionCost, sessionCurrency, usage });
-  const costSources = sourceRows(info, sessionCurrency);
-  const showCostSources = costSources.some((row) => row.source !== "executor") || costSources.length > 1;
+  const sourceUsageRows = contextSourceRows(info, sessionCurrency);
+  const showSourceUsageRows = sourceUsageRows.length > 0;
   const compression = contextCompressionBreakdown(info ?? {});
   const readFiles = asArray(info?.readFiles);
   const changedFiles = asArray(info?.changedFiles);
@@ -464,7 +493,6 @@ export function ContextPanel({
               <MetricCard label={t("context.inputCacheMiss")} value={sessionCacheMissMetric.display} valueTitle={sessionCacheMissMetric.exact} wide />
               <MetricCard label={t("context.outputTokens")} value={sessionCompletionMetric.display} valueTitle={sessionCompletionMetric.exact} wide />
               <MetricCard label={t("context.sessionTokens")} value={totalTokensMetric.display} valueTitle={totalTokensMetric.exact} wide />
-              <MetricCard label={t("context.sessionTokens")} value={totalTokens > 0 ? totalTokens.toLocaleString() : "-"} wide />
               <MetricCard
                 label={t("context.compressionSaved")}
                 value={compression.events > 0 ? t("context.compressionSavedValue", { tokens: compression.savedTokensLabel, pct: compression.savedPct }) : "-"}
@@ -482,15 +510,20 @@ export function ContextPanel({
               <MetricCard label={t("context.cacheHit")} value={cachePctDisplay} tone="accent" />
               <MetricCard label={t("context.sessionCost")} value={formatMoneyLocalized(cost.amount, cost.currency, { locale, empty: "dash" })} />
             </div>
-            {showCostSources && (
+            {showSourceUsageRows && (
               <div className="context-panel__source-list" aria-label={t("context.costBreakdown")}>
-                {costSources.map((row) => (
-                  <div className="context-panel__source-row" key={row.source}>
-                    <span>{sourceLabel(row.label, t)}</span>
-                    <strong>{formatMoneyLocalized(row.cost, row.currency, { locale, empty: "dash" })}</strong>
-                    <em>{t("context.sourceRequests", { count: row.requests })}</em>
-                  </div>
-                ))}
+                {sourceUsageRows.map((row) => {
+                  const totalMetric = formatMetricTokens(sourceTokenTotal(row), locale);
+                  const cacheRate = formatCacheHitRate(row.cacheHitTokens, row.cacheMissTokens);
+                  const costLabel = formatMoneyLocalized(row.cost, row.currency, { locale, empty: "dash" });
+                  return (
+                    <div className="context-panel__source-row" key={row.source}>
+                      <span>{sourceLabel(row.label, t)}</span>
+                      <strong title={totalMetric.exact}>{totalMetric.display} · {cacheRate}</strong>
+                      <em>{costLabel} · {t("context.sourceRequests", { count: row.requests })}</em>
+                    </div>
+                  );
+                })}
               </div>
             )}
           </section>

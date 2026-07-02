@@ -24,6 +24,7 @@ import (
 	"maddog/internal/config"
 	"maddog/internal/control"
 	"maddog/internal/event"
+	"maddog/internal/jobs"
 	"maddog/internal/nilutil"
 	"maddog/internal/provider"
 )

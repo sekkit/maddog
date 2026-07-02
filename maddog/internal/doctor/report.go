@@ -30,6 +30,7 @@ type Report struct {
 	Config     ConfigReport     `json:"config"`
 	Providers  []ProviderReport `json:"providers"`
 	Plugins    []PluginReport   `json:"plugins,omitempty"`
+	Codegraph  CodegraphReport  `json:"codegraph"`
 	LSP        LSPReport        `json:"lsp"`
 	Sessions   SessionsReport   `json:"sessions"`
 	Sandbox    SandboxReport    `json:"sandbox"`

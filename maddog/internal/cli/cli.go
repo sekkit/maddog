@@ -103,6 +103,9 @@ func Run(args []string, version string) int {
 	case "codegraph":
 		configureCLIThemeFromConfigNoProbe()
 		return codegraphCommand(rest)
+	case "hypergraphrag":
+		configureCLIThemeFromConfigNoProbe()
+		return hyperGraphRAGCommand(rest)
 	case "skilleval":
 		configureCLIThemeFromConfigNoProbe()
 		return skillevalCommand(rest)

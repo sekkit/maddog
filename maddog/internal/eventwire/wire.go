@@ -16,6 +16,7 @@ type Event struct {
 	Level           string           `json:"level,omitempty"`
 	Tool            *Tool            `json:"tool,omitempty"`
 	Usage           *Usage           `json:"usage,omitempty"`
+	ProviderStatus  *ProviderStatus  `json:"providerStatus,omitempty"`
 	Advisor         *Advisor         `json:"advisor,omitempty"`
 	Approval        *Approval        `json:"approval,omitempty"`
 	Ask             *Ask             `json:"ask,omitempty"`
@@ -33,11 +34,14 @@ func ToWire(e event.Event) Event {
 		w.MemoryCitations = ToWireMemoryCitations(e.MemoryCitations)
 	}
 	switch e.Kind {
-	case event.Notice, event.MCPSurfaceReady, event.Upgrade, event.SkillGenerated, event.BudgetExceeded, event.SkillPromoted:
+	case event.Notice, event.MCPSurfaceReady, event.Upgrade, event.SkillGenerated, event.BudgetExceeded, event.SkillPromoted, event.ProviderStatusUpdate:
 		if e.Level == event.LevelWarn {
 			w.Level = "warn"
 		} else {
 			w.Level = "info"
+		}
+		if e.Kind == event.ProviderStatusUpdate {
+			w.ProviderStatus = ToWireProviderStatus(e.ProviderStatus)
 		}
 	case event.Advisor:
 		if e.Level == event.LevelWarn {
@@ -55,9 +59,7 @@ func ToWire(e event.Event) Event {
 			ParentID: e.Tool.ParentID,
 			Diff:     e.Tool.Diff, Added: e.Tool.Added, Removed: e.Tool.Removed,
 		}
-		if e.Tool.Profile != nil {
-			wt.Profile = &Profile{Model: e.Tool.Profile.Model, Effort: e.Tool.Profile.Effort}
-		}
+		wt.Profile = ToWireProfile(e.Tool.Profile)
 		w.Tool = wt
 	case event.Usage:
 		if u := e.Usage; u != nil {
@@ -68,6 +70,8 @@ func ToWire(e event.Event) Event {
 				Source:                e.UsageSource,
 				SessionCacheHitTokens: e.SessionHit, SessionCacheMissTokens: e.SessionMiss,
 			}
+			w.Usage.Profile = ToWireProfile(e.Profile)
+			w.Usage.ProviderStatus = ToWireProviderStatus(e.ProviderStatus)
 			if e.CacheDiagnostics != nil {
 				w.Usage.CacheDiagnostics = ToWireCacheDiagnostics(e.CacheDiagnostics)
 			}
@@ -195,10 +199,58 @@ type Ask struct {
 	Questions []AskQuestion `json:"questions"`
 }
 
-// Profile carries the subagent model/effort resolved for a tool call.
+// Profile carries the provider role/model/effort resolved for a tool call or usage event.
 type Profile struct {
-	Model  string `json:"model,omitempty"`
-	Effort string `json:"effort,omitempty"`
+	Role            string `json:"role,omitempty"`
+	Model           string `json:"model,omitempty"`
+	Effort          string `json:"effort,omitempty"`
+	BudgetUsed      int64  `json:"budgetUsed,omitempty"`
+	BudgetLimit     int64  `json:"budgetLimit,omitempty"`
+	BudgetRemaining int64  `json:"budgetRemaining,omitempty"`
+}
+
+// ToWireProfile converts provider profile metadata into frontend JSON.
+func ToWireProfile(p *event.Profile) *Profile {
+	if p == nil {
+		return nil
+	}
+	return &Profile{
+		Role:            p.Role,
+		Model:           p.Model,
+		Effort:          p.Effort,
+		BudgetUsed:      p.BudgetUsed,
+		BudgetLimit:     p.BudgetLimit,
+		BudgetRemaining: p.BudgetRemaining,
+	}
+}
+
+// ProviderStatus is a runtime provider health/auth/rate/balance snapshot.
+type ProviderStatus struct {
+	Role             string `json:"role,omitempty"`
+	Health           string `json:"health,omitempty"`
+	AuthStatus       string `json:"authStatus,omitempty"`
+	RateLimit        string `json:"rateLimit,omitempty"`
+	BalanceStatus    string `json:"balanceStatus,omitempty"`
+	LastError        string `json:"lastError,omitempty"`
+	BalanceAvailable bool   `json:"balanceAvailable,omitempty"`
+	BalanceDisplay   string `json:"balanceDisplay,omitempty"`
+}
+
+// ToWireProviderStatus converts provider status metadata into frontend JSON.
+func ToWireProviderStatus(s *event.ProviderStatus) *ProviderStatus {
+	if s == nil {
+		return nil
+	}
+	return &ProviderStatus{
+		Role:             s.Role,
+		Health:           s.Health,
+		AuthStatus:       s.AuthStatus,
+		RateLimit:        s.RateLimit,
+		BalanceStatus:    s.BalanceStatus,
+		LastError:        s.LastError,
+		BalanceAvailable: s.BalanceAvailable,
+		BalanceDisplay:   s.BalanceDisplay,
+	}
 }
 
 // Tool is the JSON form of an event.Tool.
@@ -228,6 +280,8 @@ type Usage struct {
 	CacheMissTokens  int               `json:"cacheMissTokens"`
 	ReasoningTokens  int               `json:"reasoningTokens,omitempty"`
 	Source           string            `json:"source,omitempty"`
+	Profile          *Profile          `json:"profile,omitempty"`
+	ProviderStatus   *ProviderStatus   `json:"providerStatus,omitempty"`
 	CacheDiagnostics *CacheDiagnostics `json:"cacheDiagnostics,omitempty"`
 	// Session-cumulative cache tokens keep status displays steadier than one-turn values.
 	SessionCacheHitTokens  int     `json:"sessionCacheHitTokens"`
@@ -382,4 +436,5 @@ var kindNames = map[event.Kind]string{
 	event.BudgetExceeded:           "budget_exceeded",
 	event.SkillPromoted:            "skill_promoted",
 	event.Advisor:                  "advisor",
+	event.ProviderStatusUpdate:     "provider_status",
 }

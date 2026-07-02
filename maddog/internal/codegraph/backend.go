@@ -11,8 +11,9 @@ import (
 const (
 	BuiltInBackendID = "codegraph"
 
-	BackendKindBuiltIn = "builtin"
-	BackendKindMCP     = "mcp"
+	BackendKindBuiltIn       = "builtin"
+	BackendKindMCP           = "mcp"
+	BackendKindHyperGraphRAG = "hypergraphrag"
 
 	BackendHealthReady    = "ready"
 	BackendHealthUnknown  = "unknown"
@@ -41,6 +42,9 @@ type Backend struct {
 	Kind         string
 	ServerName   string
 	Enabled      bool
+	Command      string
+	Args         []string
+	Env          map[string]string
 	Capabilities BackendCapabilities
 	ToolMapping  map[string]string
 	Health       BackendHealth
@@ -118,21 +122,30 @@ func (r *BackendRegistry) addExternal(entry config.CodeIntelligenceBackendConfig
 	if id == "" {
 		id = strings.TrimSpace(entry.Server)
 	}
+	if id == "" {
+		id = strings.TrimSpace(entry.Command)
+	}
 	backend := Backend{
 		ID:          id,
 		Name:        id,
 		Kind:        normalizeBackendKind(entry.Kind),
 		ServerName:  strings.TrimSpace(entry.Server),
 		Enabled:     entry.IsEnabled(),
+		Command:     strings.TrimSpace(entry.Command),
+		Args:        cloneStringSlice(entry.Args),
+		Env:         cloneStringMap(entry.Env),
 		ToolMapping: cloneStringMap(entry.Tools),
 	}
 	if backend.Kind == "" {
 		backend.Kind = BackendKindMCP
 	}
-	if backend.ServerName == "" {
+	if backend.Kind == BackendKindMCP && backend.ServerName == "" {
 		backend.ServerName = backend.ID
 	}
 	backend.Capabilities = capabilitiesFromTools(backend.ToolMapping)
+	if backend.Kind == BackendKindHyperGraphRAG && len(backend.ToolMapping) == 0 {
+		backend.Capabilities = BackendCapabilities{SemanticSearch: true, ContextPack: true, Health: true}
+	}
 	if _, exists := r.backends[backend.ID]; exists {
 		backend.Health = BackendHealth{Status: BackendHealthInvalid, Error: fmt.Sprintf("backend name %q is reserved or already registered", backend.ID)}
 		r.invalid = append(r.invalid, backend)
@@ -168,6 +181,8 @@ func normalizeBackendKind(kind string) string {
 		return BackendKindMCP
 	case BackendKindBuiltIn:
 		return BackendKindBuiltIn
+	case BackendKindHyperGraphRAG, "hypergraph-rag", "hypergraph_rag":
+		return BackendKindHyperGraphRAG
 	default:
 		return strings.ToLower(strings.TrimSpace(kind))
 	}
@@ -177,9 +192,17 @@ func validateExternalBackend(b Backend) error {
 	if b.ID == "" {
 		return fmt.Errorf("missing backend name")
 	}
-	if b.Kind != BackendKindMCP {
+	switch b.Kind {
+	case BackendKindMCP:
+		return validateMCPBackend(b)
+	case BackendKindHyperGraphRAG:
+		return validateHyperGraphRAGBackend(b)
+	default:
 		return fmt.Errorf("unsupported backend kind %q", b.Kind)
 	}
+}
+
+func validateMCPBackend(b Backend) error {
 	if b.ServerName == "" {
 		return fmt.Errorf("missing MCP server")
 	}
@@ -197,6 +220,16 @@ func validateExternalBackend(b Backend) error {
 	}
 	if !b.Capabilities.SymbolSearch && !b.Capabilities.SemanticSearch && !b.Capabilities.ContextPack && !b.Capabilities.GraphTrace {
 		return fmt.Errorf("tool mapping exposes no code intelligence capability")
+	}
+	return nil
+}
+
+func validateHyperGraphRAGBackend(b Backend) error {
+	if b.Command == "" {
+		return fmt.Errorf("missing HyperGraphRAG command")
+	}
+	if !b.Capabilities.SemanticSearch && !b.Capabilities.ContextPack {
+		return fmt.Errorf("HyperGraphRAG backend exposes no semantic/context capability")
 	}
 	return nil
 }
@@ -219,8 +252,19 @@ func capabilitiesFromTools(tools map[string]string) BackendCapabilities {
 }
 
 func cloneBackend(b Backend) Backend {
+	b.Args = cloneStringSlice(b.Args)
+	b.Env = cloneStringMap(b.Env)
 	b.ToolMapping = cloneStringMap(b.ToolMapping)
 	return b
+}
+
+func cloneStringSlice(in []string) []string {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]string, len(in))
+	copy(out, in)
+	return out
 }
 
 func cloneStringMap(in map[string]string) map[string]string {

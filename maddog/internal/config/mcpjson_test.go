@@ -267,6 +267,19 @@ func TestNormalizePluginCommandLine(t *testing.T) {
 	}
 }
 
+func parseLegacyMCPSpec(raw string) (PluginEntry, bool) {
+	name, command, ok := strings.Cut(raw, "=")
+	if !ok {
+		return PluginEntry{}, false
+	}
+	entry := PluginEntry{Name: strings.TrimSpace(name), Command: strings.TrimSpace(command)}
+	if entry.Name == "" || entry.Command == "" {
+		return PluginEntry{}, false
+	}
+	entry, _ = NormalizePluginCommandLine(entry)
+	return entry, true
+}
+
 func TestParseLegacyMCPSpecSplitsCustomCommandArgs(t *testing.T) {
 	got, ok := parseLegacyMCPSpec("fs=custom-mcp --stdio")
 	if !ok {

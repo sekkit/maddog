@@ -375,6 +375,7 @@ Usage:
   maddog setup [path]                                 interactive config wizard; writes maddog.toml (+ credentials)
   maddog config auto-plan [off|on]                    configure automatic plan mode
   maddog mcp <add|remove|list>                        manage MCP servers in maddog.toml
+  maddog hypergraphrag [status]                       inspect HyperGraphRAG code-intelligence backends
   maddog doctor [--json]                              print redacted local diagnostics
   maddog version
   maddog help

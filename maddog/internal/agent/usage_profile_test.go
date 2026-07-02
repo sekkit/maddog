@@ -226,3 +226,33 @@ func TestUsageEventCarriesFrontierBudgetSnapshot(t *testing.T) {
 		t.Fatalf("usage profile budget = used:%d limit:%d remaining:%d, want 7/10 remaining 3", profile.BudgetUsed, profile.BudgetLimit, profile.BudgetRemaining)
 	}
 }
+
+func TestUsageEventCarriesFrontierBudgetSnapshotBeforeUpgrade(t *testing.T) {
+	prov := testutil.NewMock("default", testutil.Turn{
+		Text:  "done",
+		Usage: &provider.Usage{PromptTokens: 20, CompletionTokens: 7, TotalTokens: 27},
+	})
+	sink := &recordSink{}
+	a := New(prov, echoRegistry(), NewSession(""), Options{
+		UpgradePolicy: ThresholdUpgradePolicy{Threshold: 2, BudgetLimit: 10, TargetModel: "anthropic/claude-3-5-sonnet"},
+	}, sink)
+
+	if err := a.Run(context.Background(), "stay on default model"); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	usages := sink.kinds(event.Usage)
+	if len(usages) != 1 {
+		t.Fatalf("usage events = %d, want 1", len(usages))
+	}
+	profile := usages[0].Profile
+	if profile == nil {
+		t.Fatal("usage profile = nil, want default provider profile")
+	}
+	if profile.Role != "default" {
+		t.Fatalf("usage profile role = %q, want default", profile.Role)
+	}
+	if profile.BudgetUsed != 0 || profile.BudgetLimit != 10 || profile.BudgetRemaining != 10 {
+		t.Fatalf("usage profile budget = used:%d limit:%d remaining:%d, want 0/10 remaining 10", profile.BudgetUsed, profile.BudgetLimit, profile.BudgetRemaining)
+	}
+}

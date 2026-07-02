@@ -1256,12 +1256,13 @@ func (a *Agent) currentUsageProfile() *event.Profile {
 		}
 	}
 	profile := &event.Profile{Role: role, Model: strings.TrimSpace(model), Effort: a.usageEffort}
-	if role == "frontier" {
-		used, limit := a.frontierBudgetSnapshot()
+	if used, limit := a.frontierBudgetSnapshot(); limit > 0 {
 		profile.BudgetUsed = used
 		profile.BudgetLimit = limit
-		if limit > 0 && used < limit {
+		if used < limit {
 			profile.BudgetRemaining = limit - used
+		} else {
+			profile.BudgetRemaining = 0
 		}
 	}
 	return profile

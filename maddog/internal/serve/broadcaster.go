@@ -5,6 +5,7 @@ import (
 	"sync"
 
 	"maddog/internal/event"
+	"maddog/internal/eventwire"
 )
 
 // Broadcaster is the event.Sink the controller emits to in server mode. It

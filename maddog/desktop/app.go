@@ -2209,7 +2209,12 @@ func (a *App) RenameSession(path, title string) error {
 	if err != nil {
 		return err
 	}
-	return setSessionTitle(dir, sessionPath, title)
+	if err := setSessionTitle(dir, sessionPath, title); err != nil {
+		return err
+	}
+	projectSessionCache.invalidate()
+	a.emitProjectTreeChanged()
+	return nil
 }
 
 // ResumeSession snapshots the current conversation, then loads the session at
@@ -2700,6 +2705,7 @@ type HistoryMessage struct {
 	Content            string                    `json:"content"`
 	SubmitText         string                    `json:"submitText,omitempty"`
 	CheckpointTurn     *int                      `json:"checkpointTurn,omitempty"`
+	CreatedAt          int64                     `json:"createdAt,omitempty"`
 	Reasoning          string                    `json:"reasoning,omitempty"`
 	MemoryCitations    []provider.MemoryCitation `json:"memoryCitations,omitempty"`
 	Level              string                    `json:"level,omitempty"`
@@ -2780,11 +2786,22 @@ func (a *App) HistoryPageForTab(tabID string, beforeTurn, limit int) HistoryPage
 	if dir == "" {
 		dir = desktopSessionDir()
 	}
+	checkpointTimes := map[int]int64{}
+	for _, meta := range ctrl.Checkpoints() {
+		if meta.Time.IsZero() {
+			continue
+		}
+		checkpointTimes[meta.Turn] = meta.Time.UnixMilli()
+	}
+	if len(checkpointTimes) == 0 {
+		checkpointTimes = nil
+	}
 	return historyPageFromProviderMessages(
 		msgs,
 		sessionDisplayResolver(dir, ctrl.SessionPath()),
-		nil,
+		sessionPlannerDisplayTurns(dir, ctrl.SessionPath()),
 		ctrl.CheckpointTurnsByMessageIndex(),
+		checkpointTimes,
 		beforeTurn,
 		limit,
 	)
@@ -2930,6 +2947,7 @@ func historyPageFromProviderMessages(
 	resolveUserContent func(string) string,
 	plannerTurns []plannerDisplayTurn,
 	checkpointTurns map[int]int,
+	checkpointTimes map[int]int64,
 	beforeTurn, limit int,
 ) HistoryPage {
 	limit = normalizeHistoryPageLimit(limit)
@@ -2960,7 +2978,42 @@ func historyPageFromProviderMessages(
 		historyTodoArgsWithCompleteSteps(msgs),
 		historyToolResultsByID(msgs),
 	)
+	applyHistoryCheckpointTimes(page.Messages, checkpointTimes)
 	return page
+}
+
+func applyHistoryCheckpointTimes(messages []HistoryMessage, checkpointTimes map[int]int64) {
+	if len(messages) == 0 || len(checkpointTimes) == 0 {
+		return
+	}
+	var currentAt int64
+	for i := range messages {
+		msg := &messages[i]
+		if msg.CheckpointTurn != nil {
+			currentAt = checkpointTimes[*msg.CheckpointTurn]
+		} else if msg.Role == "user" {
+			currentAt = 0
+		}
+		if msg.CreatedAt == 0 && currentAt > 0 {
+			msg.CreatedAt = currentAt
+		}
+	}
+}
+
+func historyCheckpointTurns(msgs []provider.Message, resolveUserContent func(string) string, checkpointTurns map[int]int) []int {
+	if len(checkpointTurns) == 0 {
+		return nil
+	}
+	out := []int{}
+	for index, msg := range msgs {
+		if !isVisibleHistoryUser(msg, resolveUserContent) {
+			continue
+		}
+		if turn, ok := checkpointTurns[index]; ok {
+			out = append(out, turn)
+		}
+	}
+	return out
 }
 
 func visibleHistoryUserTurns(msgs []provider.Message, resolveUserContent func(string) string) int {
@@ -3386,6 +3439,7 @@ func previewSessionPage(sessionDir, path string, beforeTurn, limit int) (History
 		sessionDisplayResolver(sessionDir, sessionPath),
 		sessionPlannerDisplayTurns(sessionDir, sessionPath),
 		nil,
+		nil,
 		beforeTurn,
 		limit,
 	), nil
@@ -3470,7 +3524,7 @@ func previewEventSessionMessages(path string) ([]HistoryMessage, bool, error) {
 		switch eventName {
 		case "user.message":
 			if rec.Text != "" {
-				out = append(out, HistoryMessage{Role: "user", Content: rec.Text})
+				out = append(out, previewHistoryMessage(rec, HistoryMessage{Role: "user", Content: rec.Text}))
 			}
 		case "model.final":
 			hm := HistoryMessage{Role: "assistant", Content: rec.Content, Reasoning: firstNonEmpty(rec.Reasoning, rec.ReasoningContent)}
@@ -3486,7 +3540,7 @@ func previewEventSessionMessages(path string) ([]HistoryMessage, bool, error) {
 					toolName[id] = name
 				}
 			}
-			out = append(out, hm)
+			out = append(out, previewHistoryMessage(rec, hm))
 		case "tool.result":
 			callID := firstNonEmpty(rec.CallID, rec.ToolCallID)
 			content := firstNonEmpty(rec.Output, rec.Content)
@@ -3494,37 +3548,44 @@ func previewEventSessionMessages(path string) ([]HistoryMessage, bool, error) {
 			if len(out) > 0 && callID != "" {
 				updateHistoryToolCallSummary(out, callID, content)
 			}
-			out = append(out, HistoryMessage{
+			out = append(out, previewHistoryMessage(rec, HistoryMessage{
 				Role:               "tool",
 				ToolCallID:         callID,
 				ToolName:           firstNonEmpty(rec.ToolName, rec.Name, toolName[callID]),
 				Content:            display,
 				ToolResultArchived: archived,
 				ToolResultError:    errPreview,
-			})
+			}))
 		case "phase":
-			out = append(out, HistoryMessage{Role: "phase", Content: firstNonEmpty(rec.Text, rec.Content)})
+			out = append(out, previewHistoryMessage(rec, HistoryMessage{Role: "phase", Content: firstNonEmpty(rec.Text, rec.Content)}))
 		case "notice":
 			level := rec.Level
 			if level != "warn" {
 				level = "info"
 			}
-			out = append(out, HistoryMessage{Role: "notice", Level: level, Content: firstNonEmpty(rec.Text, rec.Content)})
+			out = append(out, previewHistoryMessage(rec, HistoryMessage{Role: "notice", Level: level, Content: firstNonEmpty(rec.Text, rec.Content)}))
 		case "compaction_started":
 			c := rec.compactionPayload()
-			out = append(out, HistoryMessage{Role: "compaction", Pending: true, Trigger: c.Trigger})
+			out = append(out, previewHistoryMessage(rec, HistoryMessage{Role: "compaction", Pending: true, Trigger: c.Trigger}))
 		case "compaction_done":
 			c := rec.compactionPayload()
-			out = append(out, HistoryMessage{
+			out = append(out, previewHistoryMessage(rec, HistoryMessage{
 				Role:     "compaction",
 				Trigger:  c.Trigger,
 				Messages: c.Messages,
 				Summary:  c.Summary,
 				Archive:  c.Archive,
-			})
+			}))
 		}
 	}
 	return out, sawEvent, nil
+}
+
+func previewHistoryMessage(rec previewEventRecord, hm HistoryMessage) HistoryMessage {
+	if at, ok := promptHistoryEventMillis(rec); ok {
+		hm.CreatedAt = at
+	}
+	return hm
 }
 
 func (r previewEventRecord) compactionPayload() previewCompaction {
@@ -4101,8 +4162,10 @@ func (a *App) Capabilities() CapabilitiesView {
 	a.mu.RLock()
 	tab := a.activeTabLocked()
 	var ctrl control.SessionAPI
+	workspaceRoot := ""
 	if tab != nil {
 		ctrl = tab.Ctrl
+		workspaceRoot = tab.WorkspaceRoot
 	}
 	a.mu.RUnlock()
 	if ctrl == nil {
@@ -4126,8 +4189,35 @@ func (a *App) Capabilities() CapabilitiesView {
 		})
 	}
 	out.SkillRoots = a.cachedSkillRootsView()
-	out.SkillCandidates = skillCandidateViews(tab.WorkspaceRoot)
+	out.SkillCandidates = skillCandidateViews(workspaceRoot)
+	if cfg, err := config.LoadForRoot(workspaceRoot); err == nil {
+		connected := map[string]plugin.ServerStatus{}
+		failed := map[string]plugin.Failure{}
+		if h := ctrl.Host(); h != nil {
+			for _, s := range h.Servers() {
+				connected[s.Name] = s
+			}
+			for _, f := range h.Failures() {
+				failed[f.Name] = f
+			}
+		}
+		out.CodeIntelligenceBackends = codeIntelligenceBackendViews(
+			codegraph.NewBackendRegistry(cfg),
+			workspaceRoot,
+			connected,
+			failed,
+			loadCodeIntelligenceBenchmarkView(config.CacheDir()),
+			a.codeIntelligenceBenchmarkRunning(),
+		)
+	}
 	return out
+}
+
+// MCPServers is the legacy desktop binding for the MCP server drawer. Keep it
+// aligned with Capabilities().Servers so older frontend calls and tests observe
+// the same projection.
+func (a *App) MCPServers() []ServerView {
+	return a.mcpServersView()
 }
 
 func (a *App) mcpServersView() []ServerView {
@@ -4154,12 +4244,32 @@ func (a *App) mcpServersView() []ServerView {
 	connected := map[string]bool{}
 	retainedDisabled := map[string]ServerView{}
 	configured := map[string]config.PluginEntry{}
+	builtInConfigured := map[string]bool{}
 	var configuredEntries []config.PluginEntry
 	if cfg, err := config.LoadForRoot(workspaceRoot); err == nil {
 		configuredEntries = append(configuredEntries, cfg.Plugins...)
 		for _, p := range configuredEntries {
 			configured[p.Name] = p
 		}
+		if _, userConfigured := configured[codegraph.BuiltInBackendID]; !userConfigured {
+			entry := codegraphMCPServerEntry(cfg.Codegraph)
+			configured[entry.Name] = entry
+			builtInConfigured[entry.Name] = true
+			if len(configuredEntries) == 0 {
+				configuredEntries = append(configuredEntries, entry)
+			}
+		}
+	}
+	withConfig := func(v ServerView, p config.PluginEntry) ServerView {
+		v = withPluginConfig(v, p)
+		if builtInConfigured[p.Name] {
+			v.BuiltIn = true
+			if v.Status == "deferred" {
+				v.Status = "initializing"
+				v.RuntimeState = "connecting"
+			}
+		}
+		return v
 	}
 	if h := ctrl.Host(); h != nil {
 		for _, s := range h.Servers() {
@@ -4169,7 +4279,7 @@ func (a *App) mcpServersView() []ServerView {
 				disabledView.StartIntent = "off"
 				disabledView.Error = ""
 				if p, ok := configured[s.Name]; ok {
-					disabledView = withPluginConfig(disabledView, p)
+					disabledView = withConfig(disabledView, p)
 				}
 				out = append(out, disabledView)
 				retainedDisabled[s.Name] = disabledView
@@ -4185,7 +4295,7 @@ func (a *App) mcpServersView() []ServerView {
 				ToolList: pluginToolsToView(s.ToolList),
 			}
 			if p, ok := configured[s.Name]; ok {
-				view = withPluginConfig(view, p)
+				view = withConfig(view, p)
 			}
 			out = append(out, view)
 		}
@@ -4195,7 +4305,7 @@ func (a *App) mcpServersView() []ServerView {
 				Name: f.Name, Transport: f.Transport, Status: "failed", RuntimeState: "issue", Error: f.Error,
 			}
 			if p, ok := configured[f.Name]; ok {
-				view = withPluginConfig(view, p)
+				view = withConfig(view, p)
 			}
 			out = append(out, view)
 		}
@@ -4206,7 +4316,7 @@ func (a *App) mcpServersView() []ServerView {
 			seen[name] = true
 			view := ServerView{Name: name, Status: "initializing", RuntimeState: "connecting"}
 			if p, ok := configured[name]; ok {
-				view = withPluginConfig(view, p)
+				view = withConfig(view, p)
 			}
 			out = append(out, view)
 		}
@@ -4222,7 +4332,7 @@ func (a *App) mcpServersView() []ServerView {
 				s.Status = "disabled"
 				s.RuntimeState = "idle"
 				s.StartIntent = "off"
-				s = withPluginConfig(s, p)
+				s = withConfig(s, p)
 				s.Error = ""
 				out = append(out, s)
 				retainedDisabled[p.Name] = s
@@ -4236,7 +4346,7 @@ func (a *App) mcpServersView() []ServerView {
 				status = "deferred"
 				startIntent = mcpStartIntent(p)
 			}
-			out = append(out, withPluginConfig(ServerView{Name: p.Name, Status: status, StartIntent: startIntent, RuntimeState: "idle"}, p))
+			out = append(out, withConfig(ServerView{Name: p.Name, Status: status, StartIntent: startIntent, RuntimeState: "idle"}, p))
 			seen[p.Name] = true
 		}
 	}
@@ -4491,6 +4601,21 @@ func withPluginConfig(v ServerView, p config.PluginEntry) ServerView {
 	return v
 }
 
+func codegraphMCPServerEntry(c config.CodegraphConfig) config.PluginEntry {
+	command := strings.TrimSpace(c.Path)
+	if command == "" {
+		command = codegraph.BuiltInBackendID
+	}
+	autoStart := c.Enabled
+	return config.PluginEntry{
+		Name:      codegraph.BuiltInBackendID,
+		Command:   command,
+		Args:      []string{"serve", "--mcp"},
+		AutoStart: &autoStart,
+		Tier:      c.ResolvedTier(),
+	}
+}
+
 func mcpRuntimeState(status string) string {
 	switch status {
 	case "connected":
@@ -4507,6 +4632,9 @@ func mcpRuntimeState(status string) string {
 func mcpStartIntent(p config.PluginEntry) string {
 	if !p.ShouldAutoStart() {
 		return "off"
+	}
+	if p.ResolvedTier() == "background" {
+		return "automatic"
 	}
 	return p.ResolvedTier()
 }
@@ -5241,6 +5369,13 @@ func (a *App) SetCodeIntelligenceBackendEnabled(id string, enabled bool) error {
 	if id == "" {
 		return fmt.Errorf("code intelligence backend id is required")
 	}
+	if id == codegraph.BuiltInBackendID {
+		return a.applyConfigChange(func(c *config.Config) error {
+			c.Codegraph.Enabled = enabled
+			c.Codegraph.Tier = ""
+			return nil
+		})
+	}
 	return a.SetMCPServerEnabled(id, enabled)
 }
 
@@ -5353,6 +5488,12 @@ func (a *App) connectConfiguredMCPServerForTab(tab *WorkspaceTab, name string) (
 			return tab.Ctrl.ConnectMCPServer(p)
 		}
 	}
+	if name == codegraph.BuiltInBackendID {
+		if !cfg.Codegraph.Enabled {
+			return 0, fmt.Errorf("configured MCP server named %q is disabled", name)
+		}
+		return tab.Ctrl.ConnectMCPServer(codegraphMCPServerEntry(cfg.Codegraph))
+	}
 	return 0, fmt.Errorf("no configured MCP server named %q", name)
 }
 
@@ -5363,6 +5504,13 @@ func (a *App) SetMCPServerTier(name, tier string) error {
 	tab := a.activeTab()
 	if tab != nil && controllerHasActiveRuntimeWork(tab.Ctrl) {
 		return rebuildControllerActiveWorkError("MCP server")
+	}
+	if name == codegraph.BuiltInBackendID {
+		if _, isUserPlugin, err := a.desktopMCPPluginForEdit(name); err != nil {
+			return err
+		} else if !isUserPlugin {
+			return a.enableBuiltInCodegraphFromLegacyTier(tab)
+		}
 	}
 	updated, found, err := a.desktopMCPServerForEdit(name)
 	if err != nil {
@@ -5391,7 +5539,47 @@ func (a *App) SetMCPServerTier(name, tier string) error {
 	return nil
 }
 
+func (a *App) enableBuiltInCodegraphFromLegacyTier(tab *WorkspaceTab) error {
+	if err := a.applyConfigChange(func(c *config.Config) error {
+		c.Codegraph.Enabled = true
+		c.Codegraph.Tier = ""
+		return nil
+	}); err != nil {
+		return err
+	}
+	if tab == nil || tab.Ctrl == nil || mcpConnected(tab.Ctrl, codegraph.BuiltInBackendID) {
+		return nil
+	}
+	cfg, err := config.LoadForRoot(tab.WorkspaceRoot)
+	if err != nil {
+		return err
+	}
+	entry := codegraphMCPServerEntry(cfg.Codegraph)
+	if _, err := tab.Ctrl.ConnectMCPServer(entry); err != nil {
+		recordMCPFailure(tab.Ctrl, entry, err)
+		return nil
+	}
+	a.mu.Lock()
+	delete(tab.disabledMCP, codegraph.BuiltInBackendID)
+	a.mu.Unlock()
+	return nil
+}
+
 func (a *App) desktopMCPServerForEdit(name string) (config.PluginEntry, bool, error) {
+	if p, ok, err := a.desktopMCPPluginForEdit(name); err != nil || ok {
+		return p, ok, err
+	}
+	if name == codegraph.BuiltInBackendID {
+		if cfg, err := config.LoadForRoot(a.activeWorkspaceRoot()); err == nil {
+			return codegraphMCPServerEntry(cfg.Codegraph), true, nil
+		} else {
+			return config.PluginEntry{}, false, err
+		}
+	}
+	return config.PluginEntry{}, false, nil
+}
+
+func (a *App) desktopMCPPluginForEdit(name string) (config.PluginEntry, bool, error) {
 	cfg, _, err := a.loadDesktopUserConfigForEdit()
 	if err != nil {
 		return config.PluginEntry{}, false, err
@@ -5717,7 +5905,7 @@ func (a *App) ModelsForTab(tabID string) []ModelInfo {
 	out := []ModelInfo{}
 	for i := range cfg.Providers {
 		p := &cfg.Providers[i]
-		if !modelProviderAccessAllowed(access, p.Name) || !p.Configured() {
+		if !modelProviderAccessAllowed(access, p.Name) || !providerSelectableForDesktop(*p) {
 			continue
 		}
 		for _, m := range p.ChatModelList() {
@@ -5751,8 +5939,12 @@ func (a *App) resolvedModelForTab(tab *WorkspaceTab) (string, bool, error) {
 	if err != nil {
 		return "", false, err
 	}
-	if entry, ok := cfg.ResolveModel(tab.model); ok && modelProviderAccessAllowed(providerAccessSet(cfg.Desktop.ProviderAccess), entry.Name) {
-		return entry.Name + "/" + entry.Model, false, nil
+	tabModel := strings.TrimSpace(tab.model)
+	if tabModel != "" {
+		if entry, ok := cfg.ResolveModel(tabModel); ok && modelProviderAccessAllowed(providerAccessSet(cfg.Desktop.ProviderAccess), entry.Name) {
+			return entry.Name + "/" + entry.Model, false, nil
+		}
+		return "", false, fmt.Errorf("unknown model %q", tabModel)
 	}
 	entry, ok := cfg.ResolveModel(cfg.DefaultModel)
 	if !ok {

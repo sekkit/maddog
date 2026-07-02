@@ -113,6 +113,42 @@ func (a *App) runBuiltInMCPUpdateCheck(cfg *config.Config) ([]BuiltInMCPUpdateSt
 	return []BuiltInMCPUpdateStatus{status}, nil
 }
 
+func (a *App) UpdateBuiltInMCPServer(name string) (BuiltInMCPUpdateResult, error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return BuiltInMCPUpdateResult{}, fmt.Errorf("built-in MCP server name is required")
+	}
+	if name != codegraph.BuiltInBackendID {
+		return BuiltInMCPUpdateResult{}, fmt.Errorf("unsupported built-in MCP server %q", name)
+	}
+	status := BuiltInMCPUpdateStatus{
+		Name:    name,
+		Mode:    "manual",
+		Current: firstNonEmpty(codegraph.ActiveVersion(), codegraph.Version),
+		Phase:   "activated",
+	}
+	client, err := httpClient()
+	if err != nil {
+		status.Phase = "error"
+		status.Err = err.Error()
+		a.recordBuiltInMCPUpdateStatus(status)
+		return BuiltInMCPUpdateResult{}, err
+	}
+	ctx, cancel := context.WithTimeout(a.reqCtx(), httpTimeout)
+	defer cancel()
+	res, err := updateBuiltInCodegraph(ctx, client, nil)
+	if err != nil {
+		status.Phase = "error"
+		status.Err = err.Error()
+		a.recordBuiltInMCPUpdateStatus(status)
+		return BuiltInMCPUpdateResult{}, err
+	}
+	status.Latest = res.Version
+	status.Path = res.Path
+	a.recordBuiltInMCPUpdateStatus(status)
+	return BuiltInMCPUpdateResult{Name: name, Version: res.Version, Path: res.Path}, nil
+}
+
 func (a *App) emitBuiltInMCPUpdateStatus(status BuiltInMCPUpdateStatus) {
 	if a.ctx == nil {
 		return

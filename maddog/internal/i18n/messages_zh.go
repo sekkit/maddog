@@ -377,6 +377,7 @@ var Chinese = Messages{
   maddog setup [path]                                 交互式配置向导；生成 maddog.toml（及 credentials）
   maddog config auto-plan [off|on]                    配置自动计划模式
   maddog mcp <add|remove|list>                        管理 maddog.toml 里的 MCP 服务器
+  maddog hypergraphrag [status]                       查看 HyperGraphRAG 代码智能后端
   maddog doctor [--json]                              输出脱敏的本地诊断信息
   maddog version
   maddog help

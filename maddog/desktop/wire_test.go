@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 
@@ -84,7 +85,8 @@ func TestToWireUsage(t *testing.T) {
 		},
 		SessionHit:  800,
 		SessionMiss: 200,
-	}, "tab-1")
+	}
+	w := toWireTab(e, "tab-1")
 	if w.Kind != "usage" || w.TabID != "tab-1" {
 		t.Fatalf("tab wire = %+v", w)
 	}
@@ -133,6 +135,14 @@ func TestWireEventTabPreservesMaddogRuntimeEvents(t *testing.T) {
 	}, "tab-1")
 	if w.Kind != "advisor" || w.Level != "warn" || w.Advisor == nil {
 		t.Fatalf("advisor tab wire = %+v", w)
+	}
+}
+
+func TestToWireUsageCost(t *testing.T) {
+	e := event.Event{
+		Kind:    event.Usage,
+		Usage:   &provider.Usage{PromptTokens: 1_000_000},
+		Pricing: &provider.Pricing{Input: 1},
 	}
 	w := toWire(e)
 	if w.Usage == nil || w.Usage.Cost != 1.0 || w.Usage.CostUSD != 1.0 {

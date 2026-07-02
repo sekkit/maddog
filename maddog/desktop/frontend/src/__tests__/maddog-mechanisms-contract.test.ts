@@ -55,7 +55,7 @@ check(
 check(
   "provider editor supports OpenAI, Anthropic, API-key, bearer, and workload identity configuration",
   includesAll(settingsPanel, [
-    'kinds[0] ?? "openai"',
+    "export function providerEditorEffectiveKind",
     'kind.trim() || kinds[0] || "openai"',
     'const AUTH_TYPES: readonly string[] = ["api_key", "bearer", "workload_identity"]',
     'authType === "workload_identity"',

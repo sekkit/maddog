@@ -12,6 +12,7 @@ import (
 
 	"maddog/internal/codegraph"
 	"maddog/internal/config"
+	"maddog/internal/hypergraphrag"
 	"maddog/internal/plugin"
 	"maddog/internal/tool"
 )
@@ -38,13 +39,32 @@ func runCodeIntelBench(args []string, stdout, stderr io.Writer) int {
 	ctx, cancel := context.WithTimeout(context.Background(), *timeout)
 	defer cancel()
 	cases := defaultBenchmarkCases()
+	backends := []codegraph.BenchmarkBackend{
+		mockBenchmarkBackend{},
+		newCodeGraphMCPBenchmarkBackend(*codegraphPath, cases),
+	}
+	if cfg, err := config.LoadForRoot(*repo); err == nil {
+		for _, backend := range cfg.CodeIntelligence.Backends {
+			if strings.EqualFold(strings.TrimSpace(backend.Kind), codegraph.BackendKindHyperGraphRAG) ||
+				strings.EqualFold(strings.TrimSpace(backend.Kind), "hypergraph-rag") ||
+				strings.EqualFold(strings.TrimSpace(backend.Kind), "hypergraph_rag") {
+				if !backend.IsEnabled() {
+					continue
+				}
+				backends = append(backends, hypergraphrag.NewBenchmarkBackend(hypergraphrag.SidecarConfig{
+					ID:      backend.Name,
+					Name:    "HyperGraphRAG",
+					Command: backend.Command,
+					Args:    backend.Args,
+					Env:     backend.Env,
+				}))
+			}
+		}
+	}
 	report := codegraph.RunBenchmark(ctx, codegraph.BenchmarkOptions{
-		Root: *repo,
-		Backends: []codegraph.BenchmarkBackend{
-			mockBenchmarkBackend{},
-			newCodeGraphMCPBenchmarkBackend(*codegraphPath, cases),
-		},
-		Cases: cases,
+		Root:     *repo,
+		Backends: backends,
+		Cases:    cases,
 	})
 	saved, err := codegraph.SaveBenchmarkReport(report, *outDir)
 	if err != nil {
@@ -64,6 +84,12 @@ func defaultBenchmarkCases() []codegraph.BenchmarkCase {
 		Query:       "RunBenchmark",
 		Capability:  codegraph.BenchmarkCapabilitySymbolSearch,
 		ExpectedIDs: []string{"runner.go"},
+		TopK:        5,
+	}, {
+		Name:        "semantic context",
+		Query:       "advisor frontier routing",
+		Capability:  codegraph.BenchmarkCapabilitySemanticSearch,
+		ExpectedIDs: []string{"docs/cc/maddog-fusion--3949/tech.md"},
 		TopK:        5,
 	}}
 }

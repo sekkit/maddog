@@ -417,7 +417,6 @@ func (t *WorkspaceTab) recordReadFile(rec readFileRecord) {
 
 func (t *WorkspaceTab) recordTurnStarted(now int64) {
 	t.telemMu.Lock()
-	resetTurnCompressionTelemetry(&t.usageTelemetry)
 	if t.usageTelemetry.activeTurnStartedAt == 0 {
 		t.usageTelemetry.activeTurnStartedAt = now
 	}
@@ -499,19 +498,6 @@ func (t *WorkspaceTab) recordToolCompression(c *event.Compression) {
 	t.usageTelemetry.CompressionCompressedTokens += c.CompressedTokens
 	t.usageTelemetry.CompressionSavedTokens += c.SavedTokens
 	t.telemMu.Unlock()
-}
-
-func resetTurnCompressionTelemetry(usage *sessionUsageStats) {
-	if usage == nil {
-		return
-	}
-	usage.CompressionEvents = 0
-	usage.CompressionRawChars = 0
-	usage.CompressionCompressedChars = 0
-	usage.CompressionSavedChars = 0
-	usage.CompressionRawTokens = 0
-	usage.CompressionCompressedTokens = 0
-	usage.CompressionSavedTokens = 0
 }
 
 func (t *WorkspaceTab) telemetrySnapshot() tabTelemetrySnapshot {
@@ -4647,8 +4633,9 @@ func (a *App) ListProjectTree() []ProjectNode {
 	listProjectTreeMu.Lock()
 	defer listProjectTreeMu.Unlock()
 
-	sessionDir := desktopSessionDir()
-	migrateLegacySessionsIntoGlobalTopics(sessionDir)
+	for _, dir := range a.knownSessionDirs() {
+		migrateLegacySessionsIntoGlobalTopics(dir)
+	}
 	f := loadProjectsFile()
 	out := []ProjectNode{}
 	type runtimeSessionStatus struct {
@@ -4926,29 +4913,33 @@ func unixMilliOrZero(t time.Time) int64 {
 
 // ContextPanelInfo is the right-side panel's data for one tab.
 type ContextPanelInfo struct {
-	UsedTokens                  int               `json:"usedTokens"`
-	WindowTokens                int               `json:"windowTokens"`
-	PromptTokens                int               `json:"promptTokens"`
-	CompletionTokens            int               `json:"completionTokens"`
-	TotalTokens                 int               `json:"totalTokens"`
-	ReasoningTokens             int               `json:"reasoningTokens"`
-	CacheHitTokens              int               `json:"cacheHitTokens"`
-	CacheMissTokens             int               `json:"cacheMissTokens"`
-	RequestCount                int               `json:"requestCount"`
-	ElapsedMs                   int64             `json:"elapsedMs"`
-	SessionCost                 float64           `json:"sessionCost"`
-	SessionCurrency             string            `json:"sessionCurrency,omitempty"`
-	SessionCostUsd              float64           `json:"sessionCostUsd,omitempty"`
-	CompressionEvents           int               `json:"compressionEvents,omitempty"`
-	CompressionRawChars         int               `json:"compressionRawChars,omitempty"`
-	CompressionCompressedChars  int               `json:"compressionCompressedChars,omitempty"`
-	CompressionSavedChars       int               `json:"compressionSavedChars,omitempty"`
-	CompressionRawTokens        int               `json:"compressionRawTokens,omitempty"`
-	CompressionCompressedTokens int               `json:"compressionCompressedTokens,omitempty"`
-	CompressionSavedTokens      int               `json:"compressionSavedTokens,omitempty"`
-	Mock                        bool              `json:"mock,omitempty"`
-	ReadFiles                   []readFileRecord  `json:"readFiles"`
-	ChangedFiles                []ChangedFileInfo `json:"changedFiles"`
+	UsedTokens                  int                         `json:"usedTokens"`
+	WindowTokens                int                         `json:"windowTokens"`
+	PromptTokens                int                         `json:"promptTokens"`
+	CompletionTokens            int                         `json:"completionTokens"`
+	TotalTokens                 int                         `json:"totalTokens"`
+	ReasoningTokens             int                         `json:"reasoningTokens"`
+	CacheHitTokens              int                         `json:"cacheHitTokens"`
+	CacheMissTokens             int                         `json:"cacheMissTokens"`
+	SessionCacheHitTokens       int                         `json:"sessionCacheHitTokens"`
+	SessionCacheMissTokens      int                         `json:"sessionCacheMissTokens"`
+	SessionCompletionTokens     int                         `json:"sessionCompletionTokens"`
+	RequestCount                int                         `json:"requestCount"`
+	ElapsedMs                   int64                       `json:"elapsedMs"`
+	SessionCost                 float64                     `json:"sessionCost"`
+	SessionCurrency             string                      `json:"sessionCurrency,omitempty"`
+	SessionCostUsd              float64                     `json:"sessionCostUsd,omitempty"`
+	CompressionEvents           int                         `json:"compressionEvents,omitempty"`
+	CompressionRawChars         int                         `json:"compressionRawChars,omitempty"`
+	CompressionCompressedChars  int                         `json:"compressionCompressedChars,omitempty"`
+	CompressionSavedChars       int                         `json:"compressionSavedChars,omitempty"`
+	CompressionRawTokens        int                         `json:"compressionRawTokens,omitempty"`
+	CompressionCompressedTokens int                         `json:"compressionCompressedTokens,omitempty"`
+	CompressionSavedTokens      int                         `json:"compressionSavedTokens,omitempty"`
+	Sources                     map[string]usageSourceStats `json:"sources,omitempty"`
+	Mock                        bool                        `json:"mock,omitempty"`
+	ReadFiles                   []readFileRecord            `json:"readFiles"`
+	ChangedFiles                []ChangedFileInfo           `json:"changedFiles"`
 }
 
 type ChangedFileInfo struct {
@@ -4998,6 +4989,9 @@ func (a *App) ContextPanel(tabID string) ContextPanelInfo {
 	}
 	usage := telemetry.Usage
 	info.TotalTokens = usage.TotalTokens
+	info.SessionCompletionTokens = usage.CompletionTokens
+	info.SessionCacheHitTokens = usage.CacheHitTokens
+	info.SessionCacheMissTokens = usage.CacheMissTokens
 	info.RequestCount = usage.RequestCount
 	info.ElapsedMs = usage.ElapsedMs
 	info.SessionCost = usage.SessionCost
@@ -5010,6 +5004,12 @@ func (a *App) ContextPanel(tabID string) ContextPanelInfo {
 	info.CompressionRawTokens = usage.CompressionRawTokens
 	info.CompressionCompressedTokens = usage.CompressionCompressedTokens
 	info.CompressionSavedTokens = usage.CompressionSavedTokens
+	if len(usage.Sources) > 0 {
+		info.Sources = make(map[string]usageSourceStats, len(usage.Sources))
+		for source, stats := range usage.Sources {
+			info.Sources[source] = stats
+		}
+	}
 
 	// Gather workspace changes for this tab's root.
 	if ctrl != nil && tab.WorkspaceRoot != "" {

@@ -316,6 +316,9 @@ func trashSessionArtifactsBeforeMove(dir, sessionPath, key string, beforeMove fu
 			return err
 		}
 	}
+	if err := trashRawToolResultArtifacts(dir, sessionPath, itemDir); err != nil {
+		return err
+	}
 	if err := trashSubagentArtifacts(dir, sessionPath, itemDir); err != nil {
 		return err
 	}
@@ -411,8 +414,19 @@ func restoreTrashedSessionFile(dir, path string) error {
 	if err := movePathIfExists(trashPath+".meta", target+".meta"); err != nil {
 		return err
 	}
+	stem := strings.TrimSuffix(key, ".jsonl")
+	if err := movePathIfExists(filepath.Join(itemDir, stem+".goal-state.json"), store.SessionGoalState(target)); err != nil {
+		return err
+	}
+	if err := movePathIfExists(filepath.Join(itemDir, key+".telemetry.json"), sessionTelemetryPath(target)); err != nil {
+		return err
+	}
 	ckptName := strings.TrimSuffix(key, ".jsonl") + ".ckpt"
 	if err := movePathIfExists(filepath.Join(itemDir, ckptName), filepath.Join(dir, ckptName)); err != nil {
+		return err
+	}
+	jobsName := stem + ".jobs"
+	if err := movePathIfExists(filepath.Join(itemDir, jobsName), store.SessionJobsDir(target)); err != nil {
 		return err
 	}
 	if err := restoreSubagentArtifacts(dir, itemDir); err != nil {

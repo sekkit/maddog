@@ -136,6 +136,7 @@ func TestRenderTOMLRoundTrips(t *testing.T) {
 	orig.UI.CursorShape = "bar"
 	orig.Desktop.Language = "en"
 	orig.Desktop.LayoutStyle = "workbench"
+	orig.Desktop.WindowChrome = "custom"
 	orig.Desktop.Theme = "dark"
 	orig.Desktop.ThemeStyle = "graphite"
 	orig.Desktop.CloseBehavior = "background"
@@ -274,6 +275,9 @@ func TestRenderTOMLRoundTrips(t *testing.T) {
 	}
 	if got.Desktop.LayoutStyle != "workbench" {
 		t.Errorf("desktop.layout_style = %q, want workbench", got.Desktop.LayoutStyle)
+	}
+	if got.DesktopWindowChrome() != "custom" {
+		t.Errorf("desktop.window_chrome = %q, want custom", got.DesktopWindowChrome())
 	}
 	if got.Desktop.Theme != "dark" {
 		t.Errorf("desktop.theme = %q, want dark", got.Desktop.Theme)
@@ -663,6 +667,44 @@ func TestRenderCodeIntelligenceToolKeysRoundTripWhenQuoted(t *testing.T) {
 	}
 }
 
+func TestRenderHyperGraphRAGCodeIntelligenceBackendRoundTrip(t *testing.T) {
+	c := Default()
+	c.CodeIntelligence.Backends = []CodeIntelligenceBackendConfig{{
+		Name:    "project-hypergraph",
+		Kind:    "hypergraphrag",
+		Command: "maddog-hypergraphrag",
+		Args:    []string{"--workdir", ".maddog/hypergraph"},
+		Enabled: boolPtr(false),
+		Env: map[string]string{
+			"OPENAI_API_KEY": "${OPENAI_API_KEY}",
+		},
+	}}
+
+	rendered := RenderTOML(c)
+	for _, want := range []string{
+		`kind = "hypergraphrag"`,
+		`command = "maddog-hypergraphrag"`,
+		`args = ["--workdir", ".maddog/hypergraph"]`,
+		`[code_intelligence.backends.env]`,
+		`OPENAI_API_KEY = "${OPENAI_API_KEY}"`,
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("rendered config missing %q:\n%s", want, rendered)
+		}
+	}
+	var got Config
+	if _, err := toml.Decode(rendered, &got); err != nil {
+		t.Fatalf("decode rendered TOML: %v\n---\n%s", err, rendered)
+	}
+	backend := got.CodeIntelligence.Backends[0]
+	if backend.Kind != "hypergraphrag" || backend.Command != "maddog-hypergraphrag" || len(backend.Args) != 2 || backend.Env["OPENAI_API_KEY"] != "${OPENAI_API_KEY}" {
+		t.Fatalf("HyperGraphRAG backend did not round-trip: %+v", backend)
+	}
+	if backend.Enabled == nil || *backend.Enabled {
+		t.Fatalf("enabled should round-trip false, got %+v", backend.Enabled)
+	}
+}
+
 func BenchmarkRenderTOMLWithLSPServers(b *testing.B) {
 	cfg := Default()
 	cfg.LSP.Servers = make(map[string]LSPServer, 64)
@@ -710,20 +752,21 @@ func TestScopedRenderSeparatesUserAndProjectConfig(t *testing.T) {
 	c.Desktop.Language = "zh"
 	c.Desktop.Theme = "dark"
 	c.Desktop.ThemeStyle = "graphite"
+	c.Desktop.WindowChrome = "custom"
 	c.Desktop.CloseBehavior = "background"
 	c.Desktop.StatusBarStyle = "text"
 	c.Desktop.DefaultToolApprovalMode = "auto"
 	c.Desktop.CheckUpdates = boolPtr(false)
 
 	user := RenderTOMLForScope(c, RenderScopeUser)
-	for _, want := range []string{"config_version = 3", "[desktop]", `theme = "dark"`, `close_behavior = "background"`, `status_bar_style = "text"`, `default_tool_approval_mode = "auto"`, `check_updates = false`, "[notifications]", "[tools.shell]"} {
+	for _, want := range []string{"config_version = 3", "[desktop]", `theme = "dark"`, `window_chrome = "custom"`, `close_behavior = "background"`, `status_bar_style = "text"`, `default_tool_approval_mode = "auto"`, `check_updates = false`, "[notifications]", "[tools.shell]"} {
 		if !strings.Contains(user, want) {
 			t.Fatalf("user render missing %q:\n%s", want, user)
 		}
 	}
 
 	project := RenderTOMLForScope(c, RenderScopeProject)
-	for _, forbidden := range []string{"[desktop]", "[notifications]", "close_behavior =", "default_tool_approval_mode =", "check_updates =", "max_steps", "planner_max_steps"} {
+	for _, forbidden := range []string{"[desktop]", "[notifications]", "window_chrome =", "close_behavior =", "default_tool_approval_mode =", "check_updates =", "max_steps", "planner_max_steps"} {
 		if strings.Contains(project, forbidden) {
 			t.Fatalf("project render should not contain %q:\n%s", forbidden, project)
 		}

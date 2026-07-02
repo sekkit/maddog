@@ -55,7 +55,7 @@ import { WorkspacePanel } from "./components/WorkspacePanel";
 import { Tooltip } from "./components/Tooltip";
 import { StartupSplash } from "./components/StartupSplash";
 import { OnboardingOverlay } from "./components/OnboardingOverlay";
-import { AppChrome } from "./components/AppChrome";
+import { AppChrome, WindowControls } from "./components/AppChrome";
 import { ShortcutsCheatsheet } from "./components/ShortcutsCheatsheet";
 import { ProjectTree } from "./components/ProjectTree";
 import { HeartbeatPanel } from "./custom/features/heartbeat/HeartbeatPanel";
@@ -175,12 +175,16 @@ function isThemeMode(value: string): value is Theme {
   return value === "auto" || value === "light" || value === "dark";
 }
 
-type DesktopLayoutStyle = "classic" | "workbench" | "creation";
+type DesktopLayoutStyle = "workbench" | "creation";
+type DesktopWindowChrome = "native" | "custom";
 
 function normalizeDesktopLayoutStyle(style: string | undefined): DesktopLayoutStyle {
-  if (style === "workbench") return "workbench";
   if (style === "creation") return "creation";
-  return "classic";
+  return "workbench";
+}
+
+function normalizeDesktopWindowChrome(chrome: string | undefined): DesktopWindowChrome {
+  return chrome === "custom" ? "custom" : "native";
 }
 const SHOW_CONTEXT_DOCK = true;
 type HistoryScopeFilter = { scope: "global" | "project"; workspaceRoot: string };
@@ -868,6 +872,7 @@ export default function App() {
   const settingsFocus = useOverlayStore((s) => s.settingsFocus);
   const setSettingsFocus = useOverlayStore((s) => s.setSettingsFocus);
   const [desktopLayoutStyle, setDesktopLayoutStyle] = useState<DesktopLayoutStyle>("workbench");
+  const [desktopWindowChrome, setDesktopWindowChrome] = useState<DesktopWindowChrome>("native");
   const singleSurfaceLayout = desktopLayoutStyle === "workbench" || desktopLayoutStyle === "creation";
   const [startupUpdateChecksEnabled, setStartupUpdateChecksEnabled] = useState<boolean | null>(null);
   const [histView, setHistView] = useState<HistoryViewState | null>(null);
@@ -1065,11 +1070,12 @@ export default function App() {
   }, []);
 
   const applyDesktopPreferences = useCallback(
-    (settings: Pick<SettingsView, "desktopTheme" | "desktopThemeStyle" | "desktopLayoutStyle" | "desktopLanguage" | "checkUpdates" | "statusBarStyle" | "statusBarItems">) => {
+    (settings: Pick<SettingsView, "desktopTheme" | "desktopThemeStyle" | "desktopLayoutStyle" | "desktopWindowChrome" | "desktopLanguage" | "checkUpdates" | "statusBarStyle" | "statusBarItems">) => {
       const nextTheme = normalizeThemePreference(settings.desktopTheme);
       const nextStyle = normalizeThemeStyleForTheme(settings.desktopThemeStyle, nextTheme);
       applyTheme(nextTheme, nextStyle, { persist: false });
       setDesktopLayoutStyle(normalizeDesktopLayoutStyle(settings.desktopLayoutStyle));
+      setDesktopWindowChrome(normalizeDesktopWindowChrome(settings.desktopWindowChrome));
       setLocalePref(normalizeLangPref(settings.desktopLanguage));
       setStartupUpdateChecksEnabled(settings.checkUpdates !== false);
       setStatusBarStyle(settings.statusBarStyle === "text" ? "text" : "icon");
@@ -2695,6 +2701,7 @@ export default function App() {
   const workspacePanelResizeMinWidth = workspacePanelAriaMinWidth(workspacePanelMinWidth, workspacePanelRenderWidth);
   const workspacePanelMaxWidth = rightDockDetailActive ? RIGHT_DOCK_MAX_WIDTH : RIGHT_DOCK_TREE_MAX_WIDTH;
   const sidebarCreation = desktopLayoutStyle === "creation";
+  const customWindowChrome = desktopWindowChrome === "custom";
   const topicbarTitle = sidebarImDetailConnection ? t("botDetail.title", { name: sidebarImDetailConnection.title }) : topicDisplayTitle(activeTab);
   const topicbarWorkspaceLabel = sidebarImDetailConnection ? t("botDetail.subtitle") : activeTab ? tabWorkspaceTitle(activeTab) : "";
   const topicbarWorkspacePath = activeTab?.scope === "project" ? activeTab.workspaceRoot || state.meta?.cwd : "";
@@ -2730,6 +2737,7 @@ export default function App() {
         "app",
         `app--${desktopPlatform}`,
         browserPreviewChrome ? "app--browser-preview" : "",
+        customWindowChrome ? "app--custom-chrome" : "",
         sidebarWorkbench ? "app--workbench" : "",
         sidebarCreation ? "app--creation" : "",
       ].filter(Boolean).join(" ")}
@@ -2755,6 +2763,7 @@ export default function App() {
           <AppChrome
             platform={desktopPlatform}
             browserPreviewChrome={browserPreviewChrome}
+            customWindowChrome={customWindowChrome}
             workbenchChrome={sidebarWorkbench}
             tabs={visibleTabs}
             activeTabId={visibleTabId}
@@ -2778,6 +2787,8 @@ export default function App() {
             onOpenPalette={() => void openPalette()}
           />
         )}
+        {appChromeHidden && customWindowChrome && <span className="app-window-drag-rail" aria-hidden="true" />}
+        {appChromeHidden && customWindowChrome && <WindowControls platform={desktopPlatform} className="app-window-controls--overlay" />}
         <a className="skip-to-composer" href="#composer-input">
           {t("shortcuts.skipToComposer")}
         </a>
@@ -3494,6 +3505,7 @@ export default function App() {
                 />
               ) : rightDockMode === "dashboard" ? (
                 <DashboardPanel
+                  tabId={activeTabId}
                   context={state.context}
                   usage={state.usage}
                   providerStatus={state.providerStatus}
@@ -3503,6 +3515,7 @@ export default function App() {
                   sessionTurns={sessionTurns}
                   turnTokens={state.turnTotalTokens}
                   turnCost={state.turnCost}
+                  balance={state.balance}
                   refreshKey={dockRefreshKey}
                   onOpenSettings={() => {
                     closeTransientOverlays();

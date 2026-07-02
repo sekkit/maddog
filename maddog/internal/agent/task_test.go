@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"maddog/internal/event"
+	"maddog/internal/jobs"
 	"maddog/internal/provider"
 	"maddog/internal/tool"
 )

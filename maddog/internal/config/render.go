@@ -96,7 +96,8 @@ func RenderTOMLForScope(c *Config, scope RenderScope) string {
 		} else {
 			b.WriteString("# language = \"zh\"   # desktop UI language; empty/auto = browser/OS auto-detect\n")
 		}
-		fmt.Fprintf(&b, "layout_style = %q   # desktop layout: classic|workbench|creation\n", c.DesktopLayoutStyle())
+		fmt.Fprintf(&b, "layout_style = %q   # desktop layout: workbench|creation (classic legacy configs open as workbench)\n", c.DesktopLayoutStyle())
+		fmt.Fprintf(&b, "window_chrome = %q   # desktop window chrome: native|custom (custom self-draws controls; restart required)\n", c.DesktopWindowChrome())
 		fmt.Fprintf(&b, "theme = %q   # desktop only: auto|dark|light\n", c.DesktopTheme())
 		if style := c.DesktopThemeStyle(); style != "" {
 			fmt.Fprintf(&b, "theme_style = %q   # desktop accent palette\n", style)
@@ -287,6 +288,9 @@ func RenderTOMLForScope(c *Config, scope RenderScope) string {
 			fmt.Fprintf(&b, "name        = %q\n", p.Name)
 			fmt.Fprintf(&b, "kind        = %q\n", p.Kind)
 			fmt.Fprintf(&b, "base_url    = %q\n", p.BaseURL)
+			if p.ChatURL != "" {
+				fmt.Fprintf(&b, "chat_url    = %q   # optional full chat completions URL; disables automatic /chat/completions suffix\n", p.ChatURL)
+			}
 			if len(p.Models) > 0 {
 				fmt.Fprintf(&b, "models      = %s\n", renderStringArray(p.Models))
 				if p.Default != "" {
@@ -666,8 +670,20 @@ func renderCodeIntelligenceConfig(b *strings.Builder, c CodeIntelligenceConfig) 
 		if backend.Server != "" {
 			fmt.Fprintf(b, "server = %q\n", backend.Server)
 		}
+		if backend.Command != "" {
+			fmt.Fprintf(b, "command = %q\n", backend.Command)
+		}
+		if len(backend.Args) > 0 {
+			fmt.Fprintf(b, "args = %s\n", renderStringArray(backend.Args))
+		}
 		if backend.Enabled != nil {
 			fmt.Fprintf(b, "enabled = %v\n", *backend.Enabled)
+		}
+		if len(backend.Env) > 0 {
+			b.WriteString("[code_intelligence.backends.env]\n")
+			for _, key := range sortedMapKeys(backend.Env) {
+				fmt.Fprintf(b, "%s = %q\n", renderTOMLKey(key), backend.Env[key])
+			}
 		}
 		if len(backend.Tools) > 0 {
 			b.WriteString("[code_intelligence.backends.tools]\n")

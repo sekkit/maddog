@@ -5,9 +5,9 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
-	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/BurntSushi/toml"
 )
@@ -177,8 +177,8 @@ func TestDesktopLayoutStyleNormalizes(t *testing.T) {
 		want    string
 		wantErr bool
 	}{
-		{"", "classic", false},
-		{"classic", "classic", false},
+		{"", "workbench", false},
+		{"classic", "workbench", false},
 		{" workbench ", "workbench", false},
 		{"workspace", "workbench", false},
 		{"creation", "creation", false},
@@ -201,6 +201,32 @@ func TestDesktopLayoutStyleNormalizes(t *testing.T) {
 	}
 	if got := c.DesktopThemeStyle(); got != "" {
 		t.Fatalf("legacy desktop theme_style=workbench theme style = %q, want empty", got)
+	}
+}
+
+func TestDesktopWindowChromeNormalizes(t *testing.T) {
+	if got := Default().DesktopWindowChrome(); got != "native" {
+		t.Fatalf("default desktop window chrome = %q, want native", got)
+	}
+	for _, tt := range []struct {
+		in      string
+		want    string
+		wantErr bool
+	}{
+		{"", "native", false},
+		{"native", "native", false},
+		{"custom", "custom", false},
+		{"frameless", "custom", false},
+		{"self-drawn", "custom", false},
+		{"later", "native", true},
+	} {
+		c := Default()
+		if err := c.SetDesktopWindowChrome(tt.in); (err != nil) != tt.wantErr {
+			t.Fatalf("SetDesktopWindowChrome(%q) err = %v, wantErr %v", tt.in, err, tt.wantErr)
+		}
+		if got := c.DesktopWindowChrome(); got != tt.want {
+			t.Fatalf("DesktopWindowChrome(%q) = %q, want %q", tt.in, got, tt.want)
+		}
 	}
 }
 
