@@ -72,9 +72,6 @@ func unverifiedOutcomeReason(bundles []BundleV2, baseline, replayed []OutcomeInf
 		if baseline[i].Confidence != OutcomeConfidenceVerified {
 			return fmt.Sprintf("baseline outcome for bundle %s is not verified", bundleLabel(bundles[i], i))
 		}
-		if replayed[i].Confidence != OutcomeConfidenceVerified {
-			return fmt.Sprintf("replayed outcome for bundle %s is not verified", bundleLabel(bundles[i], i))
-		}
 	}
 	return ""
 }

@@ -108,8 +108,8 @@ func TestEvaluateSkillCandidateFromDesktopRecordsDryRunPreview(t *testing.T) {
 	if got.PromotionGrade || got.EvaluationMode != skilleval.EvaluationModeDryRunPreview {
 		t.Fatalf("evaluated candidate provenance = %+v, want preview-only", got)
 	}
-	if got.GuardrailPass == nil || *got.GuardrailPass || !strings.Contains(got.GuardrailReason, "not verified") {
-		t.Fatalf("evaluated candidate guardrail = %+v, want dry-run verification rejection", got)
+	if got.GuardrailPass == nil || *got.GuardrailPass || !strings.Contains(got.GuardrailReason, "dry-run preview") {
+		t.Fatalf("evaluated candidate guardrail = %+v, want dry-run preview rejection", got)
 	}
 
 	if _, err := app.PromoteSkillCandidate(candidate.Hash); err == nil || !strings.Contains(err.Error(), "promotion-grade") {

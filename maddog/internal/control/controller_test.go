@@ -63,6 +63,25 @@ func (r answeringRunner) Run(_ context.Context, input string) error {
 	return nil
 }
 
+type runSkillRunner struct {
+	session   *agent.Session
+	skillName string
+	answer    string
+}
+
+func (r runSkillRunner) Run(_ context.Context, input string) error {
+	r.session.Add(provider.Message{Role: provider.RoleUser, Content: input})
+	callID := "run-skill-1"
+	r.session.Add(provider.Message{Role: provider.RoleAssistant, Content: "using skill", ToolCalls: []provider.ToolCall{{
+		ID:        callID,
+		Name:      "run_skill",
+		Arguments: fmt.Sprintf(`{"name":%q,"input":"%s"}`, r.skillName, "parse logs"),
+	}}})
+	r.session.Add(provider.Message{Role: provider.RoleTool, ToolCallID: callID, Name: "run_skill", Content: "skill completed"})
+	r.session.Add(provider.Message{Role: provider.RoleAssistant, Content: r.answer})
+	return nil
+}
+
 type handoffRunner struct {
 	session *agent.Session
 }
@@ -378,6 +397,116 @@ func TestRunCapturesOfflineReplayBundle(t *testing.T) {
 	}
 }
 
+func TestRunCapturesDynamicSkillCandidateAfterRunSkill(t *testing.T) {
+	dir := t.TempDir()
+	workspace := t.TempDir()
+	path := filepath.Join(dir, "session.jsonl")
+	sess := agent.NewSession("sys")
+	exec := agent.New(nil, nil, sess, agent.Options{}, event.Discard)
+	store := skill.New(skill.Options{HomeDir: t.TempDir(), ProjectRoot: workspace, DisableBuiltins: true})
+	dynamic := skill.Skill{
+		Name:        "dynamic-parser",
+		Description: "Parses dynamic logs",
+		Body:        "Use the dynamic parser checklist.",
+		RunAs:       skill.RunInline,
+		AllowedTools: []string{
+			"read_file",
+		},
+	}
+	if err := store.Inject(dynamic); err != nil {
+		t.Fatalf("Inject dynamic skill: %v", err)
+	}
+	c := New(Options{
+		Runner:        runSkillRunner{session: sess, skillName: dynamic.Name, answer: "done"},
+		Executor:      exec,
+		SessionDir:    dir,
+		SessionPath:   path,
+		Label:         "test",
+		WorkspaceRoot: workspace,
+		SkillStore:    store,
+		Skills:        store.List(),
+	})
+
+	if err := c.Run(context.Background(), "parse the log"); err != nil {
+		t.Fatal(err)
+	}
+
+	bundle := waitForSkillEvalBundle(t, workspace)
+	if bundle.SkillName != dynamic.Name {
+		t.Fatalf("SkillName = %q, want %q", bundle.SkillName, dynamic.Name)
+	}
+	if bundle.Dynamic == nil || bundle.Dynamic.Name != dynamic.Name || bundle.Dynamic.Body != dynamic.Body {
+		t.Fatalf("Dynamic = %+v, want dynamic skill snapshot", bundle.Dynamic)
+	}
+	candidates := waitForSkillCandidates(t, workspace, 1)
+	candidate := candidates[0]
+	if candidate.Status != skilleval.CandidatePending {
+		t.Fatalf("candidate status = %q, want pending", candidate.Status)
+	}
+	if candidate.SourceBundleID != bundle.ID || candidate.SourceBundlePath == "" || candidate.SourceTask != "parse the log" {
+		t.Fatalf("candidate source = %+v, bundle = %+v", candidate, bundle)
+	}
+	if candidate.Skill.Name != dynamic.Name {
+		t.Fatalf("candidate skill = %q, want %q", candidate.Skill.Name, dynamic.Name)
+	}
+}
+
+func TestRunDoesNotCreateCandidateForUnusedDynamicSkill(t *testing.T) {
+	dir := t.TempDir()
+	workspace := t.TempDir()
+	sess := agent.NewSession("sys")
+	exec := agent.New(nil, nil, sess, agent.Options{}, event.Discard)
+	store := skill.New(skill.Options{HomeDir: t.TempDir(), ProjectRoot: workspace, DisableBuiltins: true})
+	if err := store.Inject(skill.Skill{Name: "dynamic-parser", Description: "Parses logs", Body: "Use dynamic parser.", RunAs: skill.RunInline}); err != nil {
+		t.Fatalf("Inject dynamic skill: %v", err)
+	}
+	c := New(Options{
+		Runner:        answeringRunner{session: sess, answer: "done"},
+		Executor:      exec,
+		SessionDir:    dir,
+		SessionPath:   filepath.Join(dir, "session.jsonl"),
+		Label:         "test",
+		WorkspaceRoot: workspace,
+		SkillStore:    store,
+		Skills:        store.List(),
+	})
+
+	if err := c.Run(context.Background(), "parse the log"); err != nil {
+		t.Fatal(err)
+	}
+
+	_ = waitForSkillEvalBundle(t, workspace)
+	if got := listSkillCandidates(t, workspace); len(got) != 0 {
+		t.Fatalf("candidates = %+v, want none for unused dynamic skill", got)
+	}
+}
+
+func TestRunDoesNotCreateCandidateForStaticRunSkill(t *testing.T) {
+	dir := t.TempDir()
+	workspace := t.TempDir()
+	sess := agent.NewSession("sys")
+	exec := agent.New(nil, nil, sess, agent.Options{}, event.Discard)
+	staticSkill := skill.Skill{Name: "static-parser", Description: "Parses logs", Body: "Use static parser.", RunAs: skill.RunInline}
+	c := New(Options{
+		Runner:        runSkillRunner{session: sess, skillName: staticSkill.Name, answer: "done"},
+		Executor:      exec,
+		SessionDir:    dir,
+		SessionPath:   filepath.Join(dir, "session.jsonl"),
+		Label:         "test",
+		WorkspaceRoot: workspace,
+		Skills:        []skill.Skill{staticSkill},
+	})
+
+	if err := c.Run(context.Background(), "parse the log"); err != nil {
+		t.Fatal(err)
+	}
+
+	_ = waitForSkillEvalBundle(t, workspace)
+	if got := listSkillCandidates(t, workspace); len(got) != 0 {
+		t.Fatalf("candidates = %+v, want none for static run_skill", got)
+	}
+}
+
 func waitForSkillEvalBundle(t *testing.T, workspace string) *skilleval.BundleV2 {
 	t.Helper()
 	dir := filepath.Join(workspace, config.ProjectConventionDir, "skilleval")
@@ -401,6 +530,30 @@ func waitForSkillEvalBundle(t *testing.T, workspace string) *skilleval.BundleV2 
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
+}
+
+func waitForSkillCandidates(t *testing.T, workspace string, want int) []skilleval.Candidate {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		candidates := listSkillCandidates(t, workspace)
+		if len(candidates) == want {
+			return candidates
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for %d skill candidates, got %d", want, len(candidates))
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func listSkillCandidates(t *testing.T, workspace string) []skilleval.Candidate {
+	t.Helper()
+	candidates, err := skilleval.NewCandidateStore(filepath.Join(workspace, config.ProjectConventionDir, "skilleval")).List()
+	if err != nil {
+		t.Fatalf("List candidates: %v", err)
+	}
+	return candidates
 }
 
 func TestRunStopHookIgnoresCanceledCallerContext(t *testing.T) {

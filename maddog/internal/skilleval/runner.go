@@ -54,8 +54,8 @@ func (r ReplayRunner) Run(ctx context.Context, bundle BundleV2, candidate Candid
 	return OutcomeInfo{
 		Success:          answer != "",
 		GoalMet:          answer != "",
-		Confidence:       OutcomeConfidenceVerified,
-		ConfidenceReason: "provider replay completed",
+		Confidence:       OutcomeConfidenceUnverified,
+		ConfidenceReason: "provider replay completion is scored separately",
 		FinalAnswer:      answer,
 		TotalTurns:       1,
 	}, nil

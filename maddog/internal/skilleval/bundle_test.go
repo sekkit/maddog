@@ -109,9 +109,9 @@ func TestCaptureBundleDoesNotOverwriteSameSessionHistory(t *testing.T) {
 func TestCaptureBundleDefaultsMissingOutcomeConfidenceToUnverified(t *testing.T) {
 	bundle, _, err := CaptureBundle(CaptureOptions{
 		SessionID: "sess-unverified",
-		Messages: []provider.Message{{Role: provider.RoleAssistant, Content: "done"}},
-		Dir:      t.TempDir(),
-		Now:      time.Date(2026, 7, 3, 9, 0, 0, 0, time.UTC),
+		Messages:  []provider.Message{{Role: provider.RoleAssistant, Content: "done"}},
+		Dir:       t.TempDir(),
+		Now:       time.Date(2026, 7, 3, 9, 0, 0, 0, time.UTC),
 	})
 	if err != nil {
 		t.Fatalf("CaptureBundle: %v", err)
@@ -124,5 +124,54 @@ func TestCaptureBundleDefaultsMissingOutcomeConfidenceToUnverified(t *testing.T)
 	}
 	if bundle.Outcome.ConfidenceReason == "" {
 		t.Fatalf("ConfidenceReason should explain unverified outcome: %+v", bundle.Outcome)
+	}
+}
+
+func TestCaptureBundlePromotesExplicitVerificationEvidence(t *testing.T) {
+	bundle, _, err := CaptureBundle(CaptureOptions{
+		SessionID: "sess-verified",
+		Messages: []provider.Message{
+			{Role: provider.RoleUser, Content: "fix parser"},
+			{Role: provider.RoleAssistant, Content: "parser fixed"},
+		},
+		Evidence: []evidence.Receipt{
+			{ToolName: "bash", Success: true, Command: "go test ./internal/parser"},
+		},
+		Outcome: OutcomeInfo{
+			Confidence:       OutcomeConfidenceUnverified,
+			ConfidenceReason: "turn completed with a final answer but no verified goal signal",
+		},
+		Dir: t.TempDir(),
+		Now: time.Date(2026, 7, 4, 9, 0, 0, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatalf("CaptureBundle: %v", err)
+	}
+	if !bundle.Outcome.Success || !bundle.Outcome.GoalMet {
+		t.Fatalf("verified evidence should mark captured outcome successful: %+v", bundle.Outcome)
+	}
+	if bundle.Outcome.Confidence != OutcomeConfidenceVerified {
+		t.Fatalf("Confidence = %q, want verified from test receipt", bundle.Outcome.Confidence)
+	}
+	if bundle.Outcome.ConfidenceReason == "" || bundle.Outcome.ConfidenceReason == "turn completed with a final answer but no verified goal signal" {
+		t.Fatalf("ConfidenceReason did not cite verification evidence: %+v", bundle.Outcome)
+	}
+}
+
+func TestCaptureBundleDoesNotVerifyGenericSuccessfulTool(t *testing.T) {
+	bundle, _, err := CaptureBundle(CaptureOptions{
+		SessionID: "sess-read-only",
+		Messages:  []provider.Message{{Role: provider.RoleAssistant, Content: "done"}},
+		Evidence: []evidence.Receipt{
+			{ToolName: "read_file", Success: true, Paths: []string{"parser.go"}, Read: true},
+		},
+		Dir: t.TempDir(),
+		Now: time.Date(2026, 7, 4, 9, 1, 0, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatalf("CaptureBundle: %v", err)
+	}
+	if bundle.Outcome.Confidence == OutcomeConfidenceVerified || bundle.Outcome.Success || bundle.Outcome.GoalMet {
+		t.Fatalf("generic successful tool should not verify outcome: %+v", bundle.Outcome)
 	}
 }

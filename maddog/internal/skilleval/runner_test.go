@@ -31,6 +31,9 @@ func TestReplayRunnerBuildsReadOnlyPromptAndReturnsOutcome(t *testing.T) {
 	if !out.Success || !out.GoalMet || out.FinalAnswer != "replayed answer" || out.TotalTurns != 1 {
 		t.Fatalf("outcome = %+v", out)
 	}
+	if out.Confidence == OutcomeConfidenceVerified {
+		t.Fatalf("provider replay completion should not self-verify outcome: %+v", out)
+	}
 	if prov.calls != 1 {
 		t.Fatalf("provider calls = %d, want 1", prov.calls)
 	}

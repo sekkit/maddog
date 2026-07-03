@@ -175,7 +175,7 @@ func (o *turnOrchestrator) runGoalLoopWithRawDisplay(ctx context.Context, input,
 	if err := o.continueGoal(ctx); err != nil {
 		return err
 	}
-	o.c.captureReplayBundleAsync(raw, startMessages)
+	o.c.captureReplayBundle(raw, startMessages)
 	return nil
 }
 
@@ -190,7 +190,7 @@ func (o *turnOrchestrator) runEditedGoalLoopWithRawDisplay(ctx context.Context, 
 	if err := o.continueGoal(ctx); err != nil {
 		return err
 	}
-	o.c.captureReplayBundleAsync(raw, startMessages)
+	o.c.captureReplayBundle(raw, startMessages)
 	return nil
 }
 

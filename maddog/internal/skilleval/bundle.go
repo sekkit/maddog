@@ -150,6 +150,15 @@ func CaptureBundle(opts CaptureOptions) (*BundleV2, string, error) {
 			}
 		}
 	}
+	if reason := verifiedOutcomeEvidenceReason(b.Evidence, b.Review); reason != "" && strings.TrimSpace(b.Outcome.FinalAnswer) != "" {
+		b.Outcome.Success = true
+		b.Outcome.GoalMet = true
+		b.Outcome.Confidence = OutcomeConfidenceVerified
+		b.Outcome.ConfidenceReason = reason
+		if b.Review.Approved && b.Outcome.HumanReviews == 0 {
+			b.Outcome.HumanReviews = 1
+		}
+	}
 	if b.Outcome.Confidence == "" {
 		b.Outcome.Confidence = OutcomeConfidenceUnverified
 		if b.Outcome.ConfidenceReason == "" {
@@ -173,6 +182,64 @@ func CaptureBundle(opts CaptureOptions) (*BundleV2, string, error) {
 		return nil, "", err
 	}
 	return b, path, nil
+}
+
+func verifiedOutcomeEvidenceReason(receipts []evidence.Receipt, review HumanReview) string {
+	if review.Approved && !review.Denied {
+		if strings.TrimSpace(review.Reason) != "" {
+			return "verified by human review: " + strings.TrimSpace(review.Reason)
+		}
+		return "verified by human review"
+	}
+	for _, receipt := range receipts {
+		if !receipt.Success {
+			continue
+		}
+		if receipt.StepProof {
+			step := strings.TrimSpace(receipt.Step)
+			if step != "" {
+				return "verified by completed step: " + step
+			}
+			return "verified by completed step"
+		}
+		if isVerificationCommand(receipt.ToolName, receipt.Command) {
+			cmd := strings.TrimSpace(receipt.Command)
+			if cmd == "" {
+				cmd = strings.TrimSpace(receipt.ToolName)
+			}
+			return "verified by command: " + cmd
+		}
+	}
+	return ""
+}
+
+func isVerificationCommand(toolName, command string) bool {
+	text := strings.ToLower(strings.TrimSpace(command))
+	if text == "" {
+		text = strings.ToLower(strings.TrimSpace(toolName))
+	}
+	if text == "" {
+		return false
+	}
+	prefixes := []string{
+		"go test", "go build", "go vet",
+		"npm test", "npm run test", "npm run build", "npm run typecheck",
+		"pnpm test", "pnpm run test", "pnpm run build", "pnpm run typecheck",
+		"yarn test", "yarn build", "yarn typecheck",
+		"pytest", "python -m pytest", "python3 -m pytest",
+		"cargo test", "cargo build", "cargo clippy",
+		"mvn test", "gradle test", "./gradlew test", "make test",
+		"tsc ", "tsc --noemit", "tsc --noemit",
+	}
+	for _, prefix := range prefixes {
+		if strings.HasPrefix(text, prefix) {
+			return true
+		}
+	}
+	return strings.Contains(text, " run test") ||
+		strings.Contains(text, " run test:") ||
+		strings.Contains(text, " run typecheck") ||
+		strings.Contains(text, " check:css")
 }
 
 func LoadBundle(path string) (*BundleV2, error) {

@@ -1355,11 +1355,11 @@ func (c *Controller) Run(ctx context.Context, input string) error {
 	if err := c.runner.Run(ctx, input); err != nil {
 		return err
 	}
-	c.captureReplayBundleAsync(rawInput, startMessages)
+	c.captureReplayBundle(rawInput, startMessages)
 	return nil
 }
 
-func (c *Controller) captureReplayBundleAsync(task string, startMessages int) {
+func (c *Controller) captureReplayBundle(task string, startMessages int) {
 	if c == nil || c.executor == nil || strings.TrimSpace(c.workspaceRoot) == "" {
 		return
 	}
@@ -1380,6 +1380,7 @@ func (c *Controller) captureReplayBundleAsync(task string, startMessages int) {
 	}
 	receipts := c.executor.EvidenceReceipts()
 	skills := c.Skills()
+	dynamicSkill, dynamicSkillUsed := dynamicRunSkillUsed(messages[startMessages:], skills)
 	sessionID := agent.BranchID(c.SessionPath())
 	if sessionID == "" {
 		sessionID = c.Label()
@@ -1396,6 +1397,7 @@ func (c *Controller) captureReplayBundleAsync(task string, startMessages int) {
 		SessionID: sessionID,
 		Task:      task,
 		Skills:    skills,
+		SkillName: dynamicSkill.Name,
 		Messages:  messages,
 		Evidence:  receipts,
 		Outcome: skilleval.OutcomeInfo{
@@ -1406,13 +1408,67 @@ func (c *Controller) captureReplayBundleAsync(task string, startMessages int) {
 		},
 		Dir: dir,
 	}
-	go func() {
-		if _, path, err := skilleval.CaptureBundle(opts); err != nil {
-			slog.Warn("offline replay capture failed", "err", err)
-		} else {
-			slog.Debug("offline replay bundle captured", "path", path)
+	if dynamicSkillUsed {
+		dyn := dynamicSkill
+		opts.Dynamic = &dyn
+	}
+	bundle, path, err := skilleval.CaptureBundle(opts)
+	if err != nil {
+		slog.Warn("offline replay capture failed", "err", err)
+		return
+	}
+	slog.Debug("offline replay bundle captured", "path", path)
+	if dynamicSkillUsed {
+		if _, err := skilleval.NewCandidateStore(dir).Create(dynamicSkill, *bundle, task); err != nil {
+			slog.Warn("offline replay candidate creation failed", "skill", dynamicSkill.Name, "err", err)
 		}
-	}()
+	}
+}
+
+func dynamicRunSkillUsed(messages []provider.Message, skills []skill.Skill) (skill.Skill, bool) {
+	if len(messages) == 0 || len(skills) == 0 {
+		return skill.Skill{}, false
+	}
+	dynamicByName := map[string]skill.Skill{}
+	for _, sk := range skills {
+		if sk.Scope == skill.ScopeCustom && strings.TrimSpace(sk.Path) == "(dynamic)" {
+			dynamicByName[sk.Name] = sk
+		}
+	}
+	if len(dynamicByName) == 0 {
+		return skill.Skill{}, false
+	}
+	completed := map[string]bool{}
+	for _, msg := range messages {
+		if msg.Role == provider.RoleTool && msg.Name == "run_skill" && strings.TrimSpace(msg.ToolCallID) != "" {
+			completed[msg.ToolCallID] = true
+		}
+	}
+	if len(completed) == 0 {
+		return skill.Skill{}, false
+	}
+	for _, msg := range messages {
+		for _, call := range msg.ToolCalls {
+			if call.Name != "run_skill" || !completed[call.ID] {
+				continue
+			}
+			name := runSkillCallName(call.Arguments)
+			if sk, ok := dynamicByName[name]; ok {
+				return sk, true
+			}
+		}
+	}
+	return skill.Skill{}, false
+}
+
+func runSkillCallName(args string) string {
+	var payload struct {
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal([]byte(args), &payload); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(payload.Name)
 }
 
 // Cancel aborts the in-flight turn. A goroutine blocked awaiting approval

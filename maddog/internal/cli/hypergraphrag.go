@@ -8,6 +8,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"time"
 
 	"maddog/internal/codegraph"
 	"maddog/internal/config"
@@ -42,11 +43,18 @@ func hyperGraphRAGCommand(args []string) int {
 }
 
 func hyperGraphRAGHealth(args []string) int {
-	backend, ok := resolveHyperGraphRAGBackendFromArgs(args)
+	fs := flag.NewFlagSet("hypergraphrag health", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	backendID := fs.String("backend", "", "HyperGraphRAG backend id")
+	timeout := fs.Duration("timeout", hypergraphrag.DefaultSidecarTimeout, "sidecar command timeout")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	backend, ok := resolveHyperGraphRAGBackend(*backendID)
 	if !ok {
 		return 1
 	}
-	res, err := hypergraphrag.Health(context.Background(), sidecarConfigFromBackend(backend))
+	res, err := hypergraphrag.Health(context.Background(), sidecarConfigFromBackendWithTimeout(backend, *timeout))
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
@@ -59,6 +67,7 @@ func hyperGraphRAGIndex(args []string) int {
 	fs.SetOutput(os.Stderr)
 	backendID := fs.String("backend", "", "HyperGraphRAG backend id")
 	root := fs.String("root", ".", "repository root to index")
+	timeout := fs.Duration("timeout", hypergraphrag.DefaultSidecarTimeout, "sidecar command timeout")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -66,7 +75,7 @@ func hyperGraphRAGIndex(args []string) int {
 	if !ok {
 		return 1
 	}
-	if err := hypergraphrag.Index(context.Background(), sidecarConfigFromBackend(backend), *root); err != nil {
+	if err := hypergraphrag.Index(context.Background(), sidecarConfigFromBackendWithTimeout(backend, *timeout), *root); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
@@ -81,6 +90,7 @@ func hyperGraphRAGQuery(args []string) int {
 	text := fs.String("query", "", "query text")
 	topK := fs.Int("top-k", 0, "maximum results")
 	budgetTokens := fs.Int("budget-tokens", 0, "context budget")
+	timeout := fs.Duration("timeout", hypergraphrag.DefaultSidecarTimeout, "sidecar command timeout")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -92,7 +102,7 @@ func hyperGraphRAGQuery(args []string) int {
 	if !ok {
 		return 1
 	}
-	results, err := hypergraphrag.Query(context.Background(), sidecarConfigFromBackend(backend), codegraph.BenchmarkQuery{
+	results, err := hypergraphrag.Query(context.Background(), sidecarConfigFromBackendWithTimeout(backend, *timeout), codegraph.BenchmarkQuery{
 		Text:         *text,
 		Capability:   *capability,
 		TopK:         *topK,
@@ -103,16 +113,6 @@ func hyperGraphRAGQuery(args []string) int {
 		return 1
 	}
 	return printJSON(hypergraphrag.QueryResponse{Results: results})
-}
-
-func resolveHyperGraphRAGBackendFromArgs(args []string) (codegraph.Backend, bool) {
-	fs := flag.NewFlagSet("hypergraphrag health", flag.ContinueOnError)
-	fs.SetOutput(os.Stderr)
-	backendID := fs.String("backend", "", "HyperGraphRAG backend id")
-	if err := fs.Parse(args); err != nil {
-		return codegraph.Backend{}, false
-	}
-	return resolveHyperGraphRAGBackend(*backendID)
 }
 
 func resolveHyperGraphRAGBackend(backendID string) (codegraph.Backend, bool) {
@@ -152,12 +152,17 @@ func resolveHyperGraphRAGBackend(backendID string) (codegraph.Backend, bool) {
 }
 
 func sidecarConfigFromBackend(backend codegraph.Backend) hypergraphrag.SidecarConfig {
+	return sidecarConfigFromBackendWithTimeout(backend, 0)
+}
+
+func sidecarConfigFromBackendWithTimeout(backend codegraph.Backend, timeout time.Duration) hypergraphrag.SidecarConfig {
 	return hypergraphrag.SidecarConfig{
 		ID:      backend.ID,
 		Name:    backend.Name,
 		Command: backend.Command,
 		Args:    backend.Args,
 		Env:     backend.Env,
+		Timeout: timeout,
 	}
 }
 
@@ -270,9 +275,9 @@ func hyperGraphRAGUsage() {
 
 Usage:
   maddog hypergraphrag status                         show configured sidecar backends without launching them
-  maddog hypergraphrag health --backend <id>           run the configured sidecar health check
-  maddog hypergraphrag index --backend <id> --root .   run sidecar indexing
-  maddog hypergraphrag query --backend <id> --query q  run a semantic/context query
+  maddog hypergraphrag health --backend <id> [--timeout 2m]           run the configured sidecar health check
+  maddog hypergraphrag index --backend <id> --root . [--timeout 2m]   run sidecar indexing
+  maddog hypergraphrag query --backend <id> --query q [--timeout 2m]  run a semantic/context query
 
 Configure HyperGraphRAG as an optional code-intelligence backend:
 

@@ -66,6 +66,24 @@ func TestGuardrailRejectsUnverifiedBundleOutcome(t *testing.T) {
 	}
 }
 
+func TestGuardrailAllowsUnverifiedReplayWhenModelScorePasses(t *testing.T) {
+	bundles := []BundleV2{{ID: "source", Outcome: verifiedOutcome(true)}}
+	baseline := []OutcomeInfo{verifiedOutcome(true)}
+	replayed := []OutcomeInfo{{
+		Success:          true,
+		GoalMet:          true,
+		Confidence:       OutcomeConfidenceUnverified,
+		ConfidenceReason: "provider replay completion is scored separately",
+	}}
+	scores := []ScoreResult{{Score: 0.92, Reason: "model scorer accepted replay"}}
+	candidate := Candidate{Hash: "abc", Skill: validScoredSkill("parser-helper", "read_file"), Status: CandidatePending, Validation: ValidationInfo{Valid: true}}
+
+	result := CheckPromotionGuardrail(bundles, baseline, replayed, scores, candidate, GuardrailConfig{MinBundles: 1, MinScore: 0.7})
+	if !result.Pass {
+		t.Fatalf("guardrail should use model score for replay quality, got %+v", result)
+	}
+}
+
 func verifiedOutcome(success bool) OutcomeInfo {
 	return OutcomeInfo{Success: success, GoalMet: success, Confidence: OutcomeConfidenceVerified}
 }

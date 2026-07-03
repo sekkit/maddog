@@ -43,7 +43,7 @@ func TestSkillEvalCommandScoresBundleCandidateDryRun(t *testing.T) {
 			t.Fatal("skillevalCommand rc = 0, want dry-run guardrail failure")
 		}
 	})
-	if !strings.Contains(out, "\"bundle_id\": \"bundle-a\"") || !strings.Contains(out, "\"guardrail_pass\": false") || !strings.Contains(out, "not verified") {
+	if !strings.Contains(out, "\"bundle_id\": \"bundle-a\"") || !strings.Contains(out, "\"guardrail_pass\": false") || !strings.Contains(out, "dry-run preview") {
 		t.Fatalf("unexpected skilleval output: %s", out)
 	}
 	if !strings.Contains(out, "Use the parser checklist") {
@@ -102,7 +102,7 @@ func TestSkillEvalCommandPersistsCandidateEvaluation(t *testing.T) {
 	if updated.EvalScore == nil {
 		t.Fatalf("EvalScore = nil, want persisted preview score")
 	}
-	if updated.GuardrailPass || !strings.Contains(updated.GuardrailReason, "not verified") {
+	if updated.GuardrailPass || !strings.Contains(updated.GuardrailReason, "dry-run preview") {
 		t.Fatalf("guardrail = %v/%q, want persisted dry-run preview failure", updated.GuardrailPass, updated.GuardrailReason)
 	}
 }
@@ -202,7 +202,7 @@ func TestSkillEvalCommandEvaluatesRepeatedHeldOutBundles(t *testing.T) {
 			t.Fatal("skillevalCommand rc = 0, want dry-run guardrail failure")
 		}
 	})
-	if !strings.Contains(out, "\"bundles\": 5") || !strings.Contains(out, "\"bundle_ids\"") || !strings.Contains(out, "\"guardrail_pass\": false") || !strings.Contains(out, "not verified") {
+	if !strings.Contains(out, "\"bundles\": 5") || !strings.Contains(out, "\"bundle_ids\"") || !strings.Contains(out, "\"guardrail_pass\": false") || !strings.Contains(out, "dry-run preview") {
 		t.Fatalf("unexpected multi-bundle output: %s", out)
 	}
 	if !strings.Contains(out, "\"scores\"") || !strings.Contains(out, "\"replays\"") {

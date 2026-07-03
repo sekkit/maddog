@@ -4,8 +4,10 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"maddog/internal/codegraph"
 )
@@ -133,6 +135,51 @@ GO_WANT_HYPERGRAPHRAG_CLI_HELPER_PROCESS = "1"
 	}
 }
 
+func TestHyperGraphRAGSubcommandsHonorTimeout(t *testing.T) {
+	isolateCLIConfigHome(t)
+	if err := os.WriteFile(filepath.Join(mustGetwd(t), "maddog.toml"), []byte(`
+[[code_intelligence.backends]]
+name = "slow-hypergraph"
+kind = "hypergraphrag"
+command = "`+strings.ReplaceAll(os.Args[0], `\`, `\\`)+`"
+args = ["-test.run=TestHyperGraphRAGCLIHelperProcess", "--"]
+enabled = true
+
+[code_intelligence.backends.env]
+GO_WANT_HYPERGRAPHRAG_CLI_HELPER_PROCESS = "1"
+GO_WANT_HYPERGRAPHRAG_CLI_SLEEP_MS = "250"
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		name string
+		args []string
+	}{
+		{"health", []string{"health", "--backend", "slow-hypergraph", "--timeout", "20ms"}},
+		{"index", []string{"index", "--backend", "slow-hypergraph", "--root", mustGetwd(t), "--timeout", "20ms"}},
+		{"query", []string{"query", "--backend", "slow-hypergraph", "--query", "advisor", "--timeout", "20ms"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			start := time.Now()
+			errOut := captureStderr(t, func() {
+				if rc := hyperGraphRAGCommand(tc.args); rc == 0 {
+					t.Fatalf("%s rc = 0, want timeout failure", tc.name)
+				}
+			})
+			if elapsed := time.Since(start); elapsed > time.Second {
+				t.Fatalf("%s took %s, want bounded timeout", tc.name, elapsed)
+			}
+			if strings.Contains(strings.ToLower(errOut), "flag provided but not defined") {
+				t.Fatalf("%s stderr = %q, want implemented timeout flag", tc.name, errOut)
+			}
+			if !strings.Contains(strings.ToLower(errOut), "timeout") && !strings.Contains(strings.ToLower(errOut), "deadline") {
+				t.Fatalf("%s stderr = %q, want timeout/deadline", tc.name, errOut)
+			}
+		})
+	}
+}
+
 func TestHyperGraphRAGCLIHelperProcess(t *testing.T) {
 	if os.Getenv("GO_WANT_HYPERGRAPHRAG_CLI_HELPER_PROCESS") != "1" {
 		return
@@ -145,6 +192,13 @@ func TestHyperGraphRAGCLIHelperProcess(t *testing.T) {
 		}
 	}
 	enc := json.NewEncoder(os.Stdout)
+	if sleepMS := os.Getenv("GO_WANT_HYPERGRAPHRAG_CLI_SLEEP_MS"); sleepMS != "" {
+		ms, err := strconv.Atoi(sleepMS)
+		if err != nil {
+			os.Exit(4)
+		}
+		time.Sleep(time.Duration(ms) * time.Millisecond)
+	}
 	switch args[0] {
 	case "health":
 		_ = enc.Encode(map[string]string{"status": codegraph.BenchmarkHealthReady})

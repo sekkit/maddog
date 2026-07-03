@@ -5073,6 +5073,7 @@ func evaluateSkillCandidateDryRunPreview(ctx context.Context, root string, candi
 		candidate,
 		skilleval.GuardrailConfig{MinBundles: 1, MinScore: req.MinScore},
 	)
+	guard = skilleval.GuardrailResult{Reason: "dry-run preview is not promotion-grade evidence"}
 	return skilleval.EvaluationResult{
 		Bundles:        []skilleval.BundleV2{*bundle},
 		BundleIDs:      []string{bundle.ID},

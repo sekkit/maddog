@@ -9,13 +9,15 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"time"
 
 	"maddog/internal/codegraph"
 )
 
 const (
-	DefaultBackendID   = "hypergraphrag"
-	DefaultBackendName = "HyperGraphRAG"
+	DefaultBackendID      = "hypergraphrag"
+	DefaultBackendName    = "HyperGraphRAG"
+	DefaultSidecarTimeout = 2 * time.Minute
 )
 
 type SidecarConfig struct {
@@ -24,6 +26,7 @@ type SidecarConfig struct {
 	Command string
 	Args    []string
 	Env     map[string]string
+	Timeout time.Duration
 }
 
 type HealthResponse struct {
@@ -78,6 +81,8 @@ func (b *BenchmarkBackend) BuildIndex(ctx context.Context, root string) error {
 	if err := b.validate(); err != nil {
 		return err
 	}
+	ctx, cancel := b.withTimeout(ctx)
+	defer cancel()
 	_, err := b.run(ctx, "index", "--root", root, "--json")
 	return err
 }
@@ -93,6 +98,8 @@ func (b *BenchmarkBackend) Query(ctx context.Context, query codegraph.BenchmarkQ
 	if err := b.validate(); err != nil {
 		return nil, err
 	}
+	ctx, cancel := b.withTimeout(ctx)
+	defer cancel()
 	args := []string{"query", "--capability", query.Capability, "--query", query.Text, "--json"}
 	if query.TopK > 0 {
 		args = append(args, "--top-k", strconv.Itoa(query.TopK))
@@ -115,6 +122,8 @@ func (b *BenchmarkBackend) health(ctx context.Context) (HealthResponse, error) {
 	if err := b.validate(); err != nil {
 		return HealthResponse{}, err
 	}
+	ctx, cancel := b.withTimeout(ctx)
+	defer cancel()
 	raw, err := b.run(ctx, "health", "--json")
 	if err != nil {
 		return HealthResponse{}, err
@@ -133,6 +142,17 @@ func (b *BenchmarkBackend) validate() error {
 	return nil
 }
 
+func (b *BenchmarkBackend) withTimeout(ctx context.Context) (context.Context, context.CancelFunc) {
+	if _, ok := ctx.Deadline(); ok {
+		return ctx, func() {}
+	}
+	timeout := b.cfg.Timeout
+	if timeout <= 0 {
+		timeout = DefaultSidecarTimeout
+	}
+	return context.WithTimeout(ctx, timeout)
+}
+
 func (b *BenchmarkBackend) run(ctx context.Context, actionArgs ...string) ([]byte, error) {
 	args := append([]string{}, b.cfg.Args...)
 	args = append(args, actionArgs...)
@@ -148,6 +168,9 @@ func (b *BenchmarkBackend) run(ctx context.Context, actionArgs ...string) ([]byt
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()
 	if err != nil {
+		if ctx.Err() != nil {
+			return nil, fmt.Errorf("HyperGraphRAG sidecar %s timeout: %w", strings.Join(actionArgs, " "), ctx.Err())
+		}
 		msg := strings.TrimSpace(stderr.String())
 		if msg == "" {
 			msg = err.Error()

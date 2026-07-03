@@ -98,7 +98,7 @@ func TestEvaluateCandidateDryRunIsPreviewOnly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EvaluateCandidate dry run: %v", err)
 	}
-	if result.PromotionGrade || result.Guardrail.Pass || !strings.Contains(result.Guardrail.Reason, "not verified") {
+	if result.PromotionGrade || result.Guardrail.Pass || !strings.Contains(result.Guardrail.Reason, "dry-run preview") {
 		t.Fatalf("dry-run result = %+v, want preview-only guardrail failure", result)
 	}
 }

@@ -103,6 +103,9 @@ func EvaluateCandidate(ctx context.Context, req EvaluationRequest) (EvaluationRe
 		scores = append(scores, score)
 	}
 	guard := CheckPromotionGuardrail(bundles, baseline, replays, scores, req.Candidate, GuardrailConfig{MinBundles: req.MinBundles, MinScore: req.MinScore})
+	if req.DryRun && !strings.HasPrefix(guard.Reason, "need at least ") {
+		guard = GuardrailResult{Reason: "dry-run preview is not promotion-grade evidence"}
+	}
 	return EvaluationResult{
 		Bundles:        bundles,
 		BundleIDs:      bundleIDs,

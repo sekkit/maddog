@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"maddog/internal/codegraph"
 )
@@ -66,6 +68,24 @@ func TestBenchmarkBackendExpandsConfiguredEnv(t *testing.T) {
 	}
 }
 
+func TestBenchmarkInfoHealthCheckUsesConfiguredTimeout(t *testing.T) {
+	cfg := helperSidecarConfig(t)
+	cfg.Timeout = 20 * time.Millisecond
+	cfg.Env["GO_WANT_HYPERGRAPHRAG_SLEEP_MS"] = "250"
+	backend := NewBenchmarkBackend(cfg)
+
+	start := time.Now()
+	info := backend.BenchmarkInfo()
+	elapsed := time.Since(start)
+
+	if elapsed > time.Second {
+		t.Fatalf("BenchmarkInfo took %s, want bounded timeout", elapsed)
+	}
+	if info.Health != codegraph.BackendHealthDegraded {
+		t.Fatalf("health = %q, want degraded on timeout", info.Health)
+	}
+}
+
 func helperSidecarConfig(t *testing.T) SidecarConfig {
 	t.Helper()
 	return SidecarConfig{
@@ -92,6 +112,13 @@ func TestHyperGraphRAGSidecarHelper(t *testing.T) {
 		os.Exit(2)
 	}
 	enc := json.NewEncoder(os.Stdout)
+	if sleepMS := os.Getenv("GO_WANT_HYPERGRAPHRAG_SLEEP_MS"); sleepMS != "" {
+		ms, err := strconv.Atoi(sleepMS)
+		if err != nil {
+			os.Exit(4)
+		}
+		time.Sleep(time.Duration(ms) * time.Millisecond)
+	}
 	switch args[0] {
 	case "health":
 		if want := os.Getenv("GO_WANT_HYPERGRAPHRAG_ENV"); want != "" && want != "expanded-secret" {
