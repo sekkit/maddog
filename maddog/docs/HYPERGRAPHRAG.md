@@ -1,6 +1,6 @@
 # HyperGraphRAG Backend
 
-Maddog can register HyperGraphRAG as an optional code-intelligence backend for semantic search and context-pack retrieval. It is not a replacement for CodeGraph, grep, file reads, or LSP. The integration is sidecar based so Python, embedding, model, and storage dependencies stay outside the Maddog Go process and outside the default startup path.
+Maddog can register HyperGraphRAG as an optional code-intelligence backend for semantic search and context-pack retrieval. It is not a replacement for CodeGraph, grep, file reads, or LSP. The integration is an external sidecar contract: Maddog does not ship a bundled `maddog-hypergraphrag` executable, so users must provide a command that implements the contract below. Python, embedding, model, and storage dependencies stay outside the Maddog Go process and outside the default startup path.
 
 ## Configuration
 
@@ -23,6 +23,14 @@ maddog hypergraphrag status
 ```
 
 The status command prints environment variable names only. It does not print configured values.
+
+Run live contract checks against the configured sidecar:
+
+```sh
+maddog hypergraphrag health --backend project-hypergraph
+maddog hypergraphrag index --backend project-hypergraph --root .
+maddog hypergraphrag query --backend project-hypergraph --capability semantic_search --query "advisor frontier routing" --top-k 5
+```
 
 ## Sidecar Contract
 
@@ -64,3 +72,5 @@ Benchmark it with:
 ```sh
 go run ./cmd/codeintelbench --repo .
 ```
+
+If no sidecar command is configured, HyperGraphRAG remains `external-contract` rather than a verified built-in backend.

@@ -37,7 +37,7 @@ func (r ReplayRunner) Run(ctx context.Context, bundle BundleV2, candidate Candid
 		MaxTokens:   maxTokens,
 	})
 	if err != nil {
-		return OutcomeInfo{Success: false, GoalMet: false}, err
+		return OutcomeInfo{Success: false, GoalMet: false, Confidence: OutcomeConfidenceVerified, ConfidenceReason: "provider replay returned an error"}, err
 	}
 	var text strings.Builder
 	for chunk := range ch {
@@ -46,16 +46,18 @@ func (r ReplayRunner) Run(ctx context.Context, bundle BundleV2, candidate Candid
 			text.WriteString(chunk.Text)
 		case provider.ChunkError:
 			if chunk.Err != nil {
-				return OutcomeInfo{Success: false, GoalMet: false}, chunk.Err
+				return OutcomeInfo{Success: false, GoalMet: false, Confidence: OutcomeConfidenceVerified, ConfidenceReason: "provider replay returned an error chunk"}, chunk.Err
 			}
 		}
 	}
 	answer := strings.TrimSpace(text.String())
 	return OutcomeInfo{
-		Success:     answer != "",
-		GoalMet:     answer != "",
-		FinalAnswer: answer,
-		TotalTurns:  1,
+		Success:          answer != "",
+		GoalMet:          answer != "",
+		Confidence:       OutcomeConfidenceVerified,
+		ConfidenceReason: "provider replay completed",
+		FinalAnswer:      answer,
+		TotalTurns:       1,
 	}, nil
 }
 
@@ -70,14 +72,16 @@ func replaySystemPrompt(candidate Candidate) string {
 func DryRunReplay(bundle BundleV2, candidate Candidate) OutcomeInfo {
 	body := strings.TrimSpace(candidate.Skill.Body)
 	if body == "" {
-		return OutcomeInfo{Success: false, GoalMet: false}
+		return OutcomeInfo{Success: false, GoalMet: false, Confidence: OutcomeConfidenceUnverified, ConfidenceReason: "dry-run replay has no candidate body"}
 	}
 	return OutcomeInfo{
-		Success:     true,
-		GoalMet:     bundle.Outcome.GoalMet || bundle.Outcome.Success,
-		FinalAnswer: body,
-		TotalTurns:  1,
-		ToolErrors:  bundle.Outcome.ToolErrors,
+		Success:          true,
+		GoalMet:          bundle.Outcome.GoalMet || bundle.Outcome.Success,
+		Confidence:       OutcomeConfidenceUnverified,
+		ConfidenceReason: "dry-run replay does not execute a provider",
+		FinalAnswer:      body,
+		TotalTurns:       1,
+		ToolErrors:       bundle.Outcome.ToolErrors,
 	}
 }
 

@@ -28,7 +28,7 @@ func TestSkillEvalCommandScoresBundleCandidateDryRun(t *testing.T) {
 	candidatePath := filepath.Join(dir, "candidate.json")
 	writeJSONFixture(t, bundlePath, skilleval.BundleV2{
 		ID:      "bundle-a",
-		Outcome: skilleval.OutcomeInfo{Success: true, GoalMet: true, FinalAnswer: "done", ToolErrors: 1},
+		Outcome: verifiedSkillEvalOutcomeWithErrors("done", 1),
 	})
 	writeJSONFixture(t, candidatePath, skilleval.Candidate{
 		Hash:       "abc",
@@ -39,11 +39,11 @@ func TestSkillEvalCommandScoresBundleCandidateDryRun(t *testing.T) {
 
 	out := captureStdout(t, func() {
 		rc := skillevalCommand([]string{"--bundle", bundlePath, "--candidate", candidatePath, "--dry-run", "--json", "--min-bundles", "1"})
-		if rc != 0 {
-			t.Fatalf("skillevalCommand rc = %d, want 0", rc)
+		if rc == 0 {
+			t.Fatal("skillevalCommand rc = 0, want dry-run guardrail failure")
 		}
 	})
-	if !strings.Contains(out, "\"bundle_id\": \"bundle-a\"") || !strings.Contains(out, "\"guardrail_pass\": true") {
+	if !strings.Contains(out, "\"bundle_id\": \"bundle-a\"") || !strings.Contains(out, "\"guardrail_pass\": false") || !strings.Contains(out, "not verified") {
 		t.Fatalf("unexpected skilleval output: %s", out)
 	}
 	if !strings.Contains(out, "Use the parser checklist") {
@@ -60,7 +60,7 @@ func TestSkillEvalCommandPersistsCandidateEvaluation(t *testing.T) {
 			{Role: provider.RoleUser, Content: "parse logs"},
 			{Role: provider.RoleAssistant, Content: "done"},
 		},
-		Outcome: skilleval.OutcomeInfo{Success: true, GoalMet: true, FinalAnswer: "done"},
+		Outcome: verifiedSkillEvalOutcome("done"),
 		Dir:     storeDir,
 	})
 	if err != nil {
@@ -78,7 +78,7 @@ func TestSkillEvalCommandPersistsCandidateEvaluation(t *testing.T) {
 			{Role: provider.RoleUser, Content: "parse held-out logs"},
 			{Role: provider.RoleAssistant, Content: "done"},
 		},
-		Outcome: skilleval.OutcomeInfo{Success: true, GoalMet: true, FinalAnswer: "done"},
+		Outcome: verifiedSkillEvalOutcome("done"),
 		Dir:     storeDir,
 	})
 	if err != nil {
@@ -88,8 +88,8 @@ func TestSkillEvalCommandPersistsCandidateEvaluation(t *testing.T) {
 
 	out := captureStdout(t, func() {
 		rc := skillevalCommand([]string{"--bundle", bundlePath, "--candidate", candidatePath, "--dry-run", "--json", "--min-bundles", "1", "--store-dir", storeDir})
-		if rc != 0 {
-			t.Fatalf("skillevalCommand rc = %d, want 0", rc)
+		if rc == 0 {
+			t.Fatal("skillevalCommand rc = 0, want dry-run guardrail failure")
 		}
 	})
 	if !strings.Contains(out, "\"persisted\": true") {
@@ -99,11 +99,11 @@ func TestSkillEvalCommandPersistsCandidateEvaluation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get candidate: %v", err)
 	}
-	if updated.EvalScore == nil || updated.EvalScore.Score < 0.7 {
-		t.Fatalf("EvalScore = %+v, want persisted score", updated.EvalScore)
+	if updated.EvalScore == nil {
+		t.Fatalf("EvalScore = nil, want persisted preview score")
 	}
-	if !updated.GuardrailPass || !strings.Contains(updated.GuardrailReason, "passed guardrail") {
-		t.Fatalf("guardrail = %v/%q, want persisted pass", updated.GuardrailPass, updated.GuardrailReason)
+	if updated.GuardrailPass || !strings.Contains(updated.GuardrailReason, "not verified") {
+		t.Fatalf("guardrail = %v/%q, want persisted dry-run preview failure", updated.GuardrailPass, updated.GuardrailReason)
 	}
 }
 
@@ -113,7 +113,7 @@ func TestSkillEvalCommandRejectsSourceOrDuplicateBundles(t *testing.T) {
 		SessionID: "session-source",
 		Task:      "parse logs",
 		Messages:  []provider.Message{{Role: provider.RoleUser, Content: "parse logs"}},
-		Outcome:   skilleval.OutcomeInfo{Success: true, GoalMet: true, FinalAnswer: "done"},
+		Outcome:   verifiedSkillEvalOutcome("done"),
 		Dir:       storeDir,
 	})
 	if err != nil {
@@ -138,7 +138,7 @@ func TestSkillEvalCommandRejectsSourceOrDuplicateBundles(t *testing.T) {
 	heldOutPath := filepath.Join(storeDir, "held-out.json")
 	writeJSONFixture(t, heldOutPath, skilleval.BundleV2{
 		ID:      "held-out",
-		Outcome: skilleval.OutcomeInfo{Success: true, GoalMet: true, FinalAnswer: "done"},
+		Outcome: verifiedSkillEvalOutcome("done"),
 	})
 	errOut = captureStderr(t, func() {
 		rc := skillevalCommand([]string{"--bundle", heldOutPath, "--bundle", heldOutPath, "--candidate", candidatePath, "--dry-run", "--json", "--min-bundles", "1"})
@@ -157,7 +157,7 @@ func TestSkillEvalCommandRequiresHeldOutBundlesByDefault(t *testing.T) {
 	candidatePath := filepath.Join(dir, "candidate.json")
 	writeJSONFixture(t, bundlePath, skilleval.BundleV2{
 		ID:      "bundle-a",
-		Outcome: skilleval.OutcomeInfo{Success: true, GoalMet: true, FinalAnswer: "done"},
+		Outcome: verifiedSkillEvalOutcome("done"),
 	})
 	writeJSONFixture(t, candidatePath, skilleval.Candidate{
 		Hash:       "abc",
@@ -191,18 +191,18 @@ func TestSkillEvalCommandEvaluatesRepeatedHeldOutBundles(t *testing.T) {
 		bundlePath := filepath.Join(dir, "bundle-"+string(rune('a'+i))+".json")
 		writeJSONFixture(t, bundlePath, skilleval.BundleV2{
 			ID:      "bundle-" + string(rune('a'+i)),
-			Outcome: skilleval.OutcomeInfo{Success: true, GoalMet: true, FinalAnswer: "done"},
+			Outcome: verifiedSkillEvalOutcome("done"),
 		})
 		args = append(args, "--bundle", bundlePath)
 	}
 
 	out := captureStdout(t, func() {
 		rc := skillevalCommand(args)
-		if rc != 0 {
-			t.Fatalf("skillevalCommand rc = %d, want 0", rc)
+		if rc == 0 {
+			t.Fatal("skillevalCommand rc = 0, want dry-run guardrail failure")
 		}
 	})
-	if !strings.Contains(out, "\"bundles\": 5") || !strings.Contains(out, "\"bundle_ids\"") || !strings.Contains(out, "\"guardrail_pass\": true") {
+	if !strings.Contains(out, "\"bundles\": 5") || !strings.Contains(out, "\"bundle_ids\"") || !strings.Contains(out, "\"guardrail_pass\": false") || !strings.Contains(out, "not verified") {
 		t.Fatalf("unexpected multi-bundle output: %s", out)
 	}
 	if !strings.Contains(out, "\"scores\"") || !strings.Contains(out, "\"replays\"") {
@@ -237,7 +237,7 @@ api_key_env = "MADDOG_TEST_KEY"
 	candidatePath := filepath.Join(dir, "candidate.json")
 	writeJSONFixture(t, bundlePath, skilleval.BundleV2{
 		ID:      "bundle-a",
-		Outcome: skilleval.OutcomeInfo{Success: true, GoalMet: true, FinalAnswer: "done", ToolErrors: 1},
+		Outcome: verifiedSkillEvalOutcomeWithErrors("done", 1),
 	})
 	writeJSONFixture(t, candidatePath, skilleval.Candidate{
 		Hash:       "abc",
@@ -257,6 +257,16 @@ api_key_env = "MADDOG_TEST_KEY"
 	}
 	if !strings.Contains(out, "\"score\": 0.92") || !strings.Contains(out, "provider scorer") {
 		t.Fatalf("provider scorer output missing: %s", out)
+	}
+	for _, want := range []string{
+		"\"mode\": \"provider_replay\"",
+		"\"provider\": \"local\"",
+		"\"model_ref\": \"local\"",
+		"\"promotion_grade\": true",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("provider provenance %s missing: %s", want, out)
+		}
 	}
 }
 
@@ -297,6 +307,21 @@ func validScoredSkillForCLI(name string) skill.Skill {
 		Description: "Helps fix parser bugs",
 		Body:        "Use the parser checklist before editing.",
 		RunAs:       skill.RunInline,
+	}
+}
+
+func verifiedSkillEvalOutcome(finalAnswer string) skilleval.OutcomeInfo {
+	return verifiedSkillEvalOutcomeWithErrors(finalAnswer, 0)
+}
+
+func verifiedSkillEvalOutcomeWithErrors(finalAnswer string, toolErrors int) skilleval.OutcomeInfo {
+	return skilleval.OutcomeInfo{
+		Success:          true,
+		GoalMet:          true,
+		Confidence:       skilleval.OutcomeConfidenceVerified,
+		ConfidenceReason: "test fixture verified outcome",
+		FinalAnswer:      finalAnswer,
+		ToolErrors:       toolErrors,
 	}
 }
 

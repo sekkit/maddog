@@ -27,6 +27,7 @@ func runCodeIntelBench(args []string, stdout, stderr io.Writer) int {
 	repo := fs.String("repo", ".", "repository root to benchmark")
 	outDir := fs.String("out-dir", config.CacheDir(), "directory where codeintel-bench reports are written")
 	codegraphPath := fs.String("codegraph-path", "", "optional CodeGraph launcher path override")
+	includeMock := fs.Bool("include-mock", false, "include the deterministic MockGraph backend for development fixtures")
 	timeout := fs.Duration("timeout", 2*time.Minute, "benchmark timeout")
 	if err := fs.Parse(args); err != nil {
 		return 2
@@ -39,9 +40,9 @@ func runCodeIntelBench(args []string, stdout, stderr io.Writer) int {
 	ctx, cancel := context.WithTimeout(context.Background(), *timeout)
 	defer cancel()
 	cases := defaultBenchmarkCases()
-	backends := []codegraph.BenchmarkBackend{
-		mockBenchmarkBackend{},
-		newCodeGraphMCPBenchmarkBackend(*codegraphPath, cases),
+	backends := []codegraph.BenchmarkBackend{codegraph.NewMCPBenchmarkBackend(*codegraphPath, cases)}
+	if *includeMock {
+		backends = append([]codegraph.BenchmarkBackend{mockBenchmarkBackend{}}, backends...)
 	}
 	if cfg, err := config.LoadForRoot(*repo); err == nil {
 		for _, backend := range cfg.CodeIntelligence.Backends {

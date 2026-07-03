@@ -367,8 +367,11 @@ func TestRunCapturesOfflineReplayBundle(t *testing.T) {
 	if bundle.Task != "parse the log" {
 		t.Fatalf("Task = %q, want raw prompt", bundle.Task)
 	}
-	if bundle.Outcome.FinalAnswer != "done" || !bundle.Outcome.Success || !bundle.Outcome.GoalMet {
-		t.Fatalf("Outcome = %+v, want successful final answer", bundle.Outcome)
+	if bundle.Outcome.FinalAnswer != "done" {
+		t.Fatalf("FinalAnswer = %q, want done", bundle.Outcome.FinalAnswer)
+	}
+	if bundle.Outcome.Success || bundle.Outcome.GoalMet || bundle.Outcome.Confidence != skilleval.OutcomeConfidenceUnverified {
+		t.Fatalf("Outcome = %+v, want unverified final answer without success", bundle.Outcome)
 	}
 	if len(bundle.Skills) != 1 || bundle.Skills[0].Name != "parser-helper" {
 		t.Fatalf("Skills = %+v, want parser-helper snapshot", bundle.Skills)

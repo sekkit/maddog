@@ -721,8 +721,20 @@ export interface SkillCandidateView {
   scoreReason?: string;
   guardrailPass?: boolean;
   guardrailReason?: string;
+  evaluationMode?: string;
+  evaluationProvider?: string;
+  evaluationModelRef?: string;
+  evaluationBundleCount?: number;
+  promotionGrade?: boolean;
   updatedAt?: string;
   audit?: SkillCandidateAuditView[];
+}
+export interface SkillCandidateEvaluationRequest {
+  bundlePaths?: string[];
+  modelRef?: string;
+  dryRun?: boolean;
+  minBundles?: number;
+  minScore?: number;
 }
 export interface SkillCandidateAuditView {
   time?: string;

@@ -33,21 +33,26 @@ type CandidateStore struct {
 }
 
 type Candidate struct {
-	Hash             string          `json:"hash"`
-	Skill            skill.Skill     `json:"skill"`
-	Status           CandidateStatus `json:"status"`
-	SourceBundleID   string          `json:"source_bundle_id,omitempty"`
-	SourceBundlePath string          `json:"source_bundle_path,omitempty"`
-	SourceTask       string          `json:"source_task,omitempty"`
-	Validation       ValidationInfo  `json:"validation"`
-	ValidationReason string          `json:"validation_reason,omitempty"`
-	EvalScore        *ScoreResult    `json:"eval_score,omitempty"`
-	EvaluatedHash    string          `json:"evaluated_hash,omitempty"`
-	GuardrailPass    bool            `json:"guardrail_pass,omitempty"`
-	GuardrailReason  string          `json:"guardrail_reason,omitempty"`
-	PromotedPath     string          `json:"promoted_path,omitempty"`
-	CreatedAt        time.Time       `json:"created_at"`
-	UpdatedAt        time.Time       `json:"updated_at"`
+	Hash                string          `json:"hash"`
+	Skill               skill.Skill     `json:"skill"`
+	Status              CandidateStatus `json:"status"`
+	SourceBundleID      string          `json:"source_bundle_id,omitempty"`
+	SourceBundlePath    string          `json:"source_bundle_path,omitempty"`
+	SourceTask          string          `json:"source_task,omitempty"`
+	Validation          ValidationInfo  `json:"validation"`
+	ValidationReason    string          `json:"validation_reason,omitempty"`
+	EvalScore           *ScoreResult    `json:"eval_score,omitempty"`
+	EvaluatedHash       string          `json:"evaluated_hash,omitempty"`
+	GuardrailPass       bool            `json:"guardrail_pass,omitempty"`
+	GuardrailReason     string          `json:"guardrail_reason,omitempty"`
+	EvaluationMode      string          `json:"evaluation_mode,omitempty"`
+	EvaluationProvider  string          `json:"evaluation_provider,omitempty"`
+	EvaluationModelRef  string          `json:"evaluation_model_ref,omitempty"`
+	EvaluationBundleIDs []string        `json:"evaluation_bundle_ids,omitempty"`
+	PromotionGrade      bool            `json:"promotion_grade,omitempty"`
+	PromotedPath        string          `json:"promoted_path,omitempty"`
+	CreatedAt           time.Time       `json:"created_at"`
+	UpdatedAt           time.Time       `json:"updated_at"`
 }
 
 type AuditRecord struct {
@@ -235,7 +240,24 @@ func (s *CandidateStore) Reject(hash, reason string) (Candidate, error) {
 	return c, nil
 }
 
+type EvaluationProvenance struct {
+	Mode           string
+	Provider       string
+	ModelRef       string
+	BundleIDs      []string
+	PromotionGrade bool
+}
+
+const (
+	EvaluationModeDryRunPreview  = "dry_run_preview"
+	EvaluationModeProviderReplay = "provider_replay"
+)
+
 func (s *CandidateStore) RecordEvaluation(hash string, score ScoreResult, guardrail GuardrailResult) (Candidate, error) {
+	return s.RecordEvaluationWithProvenance(hash, score, guardrail, EvaluationProvenance{})
+}
+
+func (s *CandidateStore) RecordEvaluationWithProvenance(hash string, score ScoreResult, guardrail GuardrailResult, provenance EvaluationProvenance) (Candidate, error) {
 	if s == nil {
 		return Candidate{}, fmt.Errorf("candidate store is nil")
 	}
@@ -250,6 +272,11 @@ func (s *CandidateStore) RecordEvaluation(hash string, score ScoreResult, guardr
 	c.EvaluatedHash = c.Hash
 	c.GuardrailPass = guardrail.Pass
 	c.GuardrailReason = strings.TrimSpace(guardrail.Reason)
+	c.EvaluationMode = strings.TrimSpace(provenance.Mode)
+	c.EvaluationProvider = strings.TrimSpace(provenance.Provider)
+	c.EvaluationModelRef = strings.TrimSpace(provenance.ModelRef)
+	c.EvaluationBundleIDs = cleanStringList(provenance.BundleIDs)
+	c.PromotionGrade = provenance.PromotionGrade
 	c.UpdatedAt = s.now()
 	if err := writeJSON(s.path(c.Hash), c); err != nil {
 		return Candidate{}, err
@@ -287,6 +314,9 @@ func (s *CandidateStore) Promote(hash string, activeStore *skill.Store, scope sk
 	}
 	if c.EvaluatedHash != c.Hash {
 		return Candidate{}, "", fmt.Errorf("candidate %s evaluation hash mismatch: %s", c.Hash, c.EvaluatedHash)
+	}
+	if !c.PromotionGrade {
+		return Candidate{}, "", fmt.Errorf("candidate %s has no promotion-grade evaluation", c.Hash)
 	}
 	if !c.GuardrailPass {
 		return Candidate{}, "", fmt.Errorf("candidate %s failed guardrail: %s", c.Hash, c.GuardrailReason)

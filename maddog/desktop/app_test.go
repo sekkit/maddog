@@ -4750,8 +4750,23 @@ func TestRunCodeIntelligenceBenchmarkUpdatesCapabilities(t *testing.T) {
 	if len(backend.Benchmark.Backends) == 0 || backend.Benchmark.Backends[0].ID == "" {
 		t.Fatalf("benchmark backend summary missing: %+v", backend.Benchmark)
 	}
-	if !strings.Contains(strings.ToLower(backend.Benchmark.Backends[0].Name), "local smoke") {
-		t.Fatalf("benchmark backend name = %q, want local smoke label", backend.Benchmark.Backends[0].Name)
+	if strings.Contains(strings.ToLower(backend.Benchmark.Backends[0].Name), "local smoke") {
+		t.Fatalf("benchmark backend name = %q, must not present local smoke as selected-backend evidence", backend.Benchmark.Backends[0].Name)
+	}
+}
+
+func TestRunCodeIntelligenceBenchmarkRejectsUnknownBackend(t *testing.T) {
+	isolateDesktopUserDirs(t)
+	dir := robustTempDir(t)
+	t.Chdir(dir)
+
+	app := NewApp()
+	app.setTestCtrl(control.New(control.Options{Host: plugin.NewHost()}), "")
+	app.tabs["test"].WorkspaceRoot = dir
+	defer app.activeCtrl().Close()
+
+	if err := app.RunCodeIntelligenceBenchmark("serena"); err == nil {
+		t.Fatal("RunCodeIntelligenceBenchmark(serena) succeeded, want unknown backend error")
 	}
 }
 

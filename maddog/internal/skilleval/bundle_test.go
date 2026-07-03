@@ -105,3 +105,24 @@ func TestCaptureBundleDoesNotOverwriteSameSessionHistory(t *testing.T) {
 		t.Fatalf("second bundle mismatch: %+v", loadedSecond)
 	}
 }
+
+func TestCaptureBundleDefaultsMissingOutcomeConfidenceToUnverified(t *testing.T) {
+	bundle, _, err := CaptureBundle(CaptureOptions{
+		SessionID: "sess-unverified",
+		Messages: []provider.Message{{Role: provider.RoleAssistant, Content: "done"}},
+		Dir:      t.TempDir(),
+		Now:      time.Date(2026, 7, 3, 9, 0, 0, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatalf("CaptureBundle: %v", err)
+	}
+	if bundle.Outcome.Success || bundle.Outcome.GoalMet {
+		t.Fatalf("capture without verified outcome should not mark success: %+v", bundle.Outcome)
+	}
+	if bundle.Outcome.Confidence != OutcomeConfidenceUnverified {
+		t.Fatalf("Confidence = %q, want unverified", bundle.Outcome.Confidence)
+	}
+	if bundle.Outcome.ConfidenceReason == "" {
+		t.Fatalf("ConfidenceReason should explain unverified outcome: %+v", bundle.Outcome)
+	}
+}

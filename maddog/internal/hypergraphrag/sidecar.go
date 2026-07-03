@@ -43,6 +43,18 @@ func NewBenchmarkBackend(cfg SidecarConfig) *BenchmarkBackend {
 	return &BenchmarkBackend{cfg: cfg}
 }
 
+func Health(ctx context.Context, cfg SidecarConfig) (HealthResponse, error) {
+	return NewBenchmarkBackend(cfg).health(ctx)
+}
+
+func Index(ctx context.Context, cfg SidecarConfig, root string) error {
+	return NewBenchmarkBackend(cfg).BuildIndex(ctx, root)
+}
+
+func Query(ctx context.Context, cfg SidecarConfig, query codegraph.BenchmarkQuery) ([]codegraph.BenchmarkResult, error) {
+	return NewBenchmarkBackend(cfg).Query(ctx, query)
+}
+
 func (b *BenchmarkBackend) BenchmarkInfo() codegraph.BenchmarkBackendInfo {
 	health := codegraph.BackendHealthDegraded
 	if err := b.validate(); err != nil {

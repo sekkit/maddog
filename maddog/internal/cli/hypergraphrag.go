@@ -1,6 +1,9 @@
 package cli
 
 import (
+	"context"
+	"encoding/json"
+	"flag"
 	"fmt"
 	"os"
 	"sort"
@@ -8,6 +11,7 @@ import (
 
 	"maddog/internal/codegraph"
 	"maddog/internal/config"
+	"maddog/internal/hypergraphrag"
 )
 
 // hyperGraphRAGCommand backs `maddog hypergraphrag` for inspecting configured
@@ -21,6 +25,12 @@ func hyperGraphRAGCommand(args []string) int {
 	switch sub {
 	case "status", "":
 		return hyperGraphRAGStatus()
+	case "health":
+		return hyperGraphRAGHealth(args[1:])
+	case "index":
+		return hyperGraphRAGIndex(args[1:])
+	case "query":
+		return hyperGraphRAGQuery(args[1:])
 	case "help", "-h", "--help":
 		hyperGraphRAGUsage()
 		return 0
@@ -29,6 +39,136 @@ func hyperGraphRAGCommand(args []string) int {
 		hyperGraphRAGUsage()
 		return 2
 	}
+}
+
+func hyperGraphRAGHealth(args []string) int {
+	backend, ok := resolveHyperGraphRAGBackendFromArgs(args)
+	if !ok {
+		return 1
+	}
+	res, err := hypergraphrag.Health(context.Background(), sidecarConfigFromBackend(backend))
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	return printJSON(res)
+}
+
+func hyperGraphRAGIndex(args []string) int {
+	fs := flag.NewFlagSet("hypergraphrag index", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	backendID := fs.String("backend", "", "HyperGraphRAG backend id")
+	root := fs.String("root", ".", "repository root to index")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	backend, ok := resolveHyperGraphRAGBackend(*backendID)
+	if !ok {
+		return 1
+	}
+	if err := hypergraphrag.Index(context.Background(), sidecarConfigFromBackend(backend), *root); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	return printJSON(map[string]bool{"indexed": true})
+}
+
+func hyperGraphRAGQuery(args []string) int {
+	fs := flag.NewFlagSet("hypergraphrag query", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	backendID := fs.String("backend", "", "HyperGraphRAG backend id")
+	capability := fs.String("capability", codegraph.BenchmarkCapabilitySemanticSearch, "query capability")
+	text := fs.String("query", "", "query text")
+	topK := fs.Int("top-k", 0, "maximum results")
+	budgetTokens := fs.Int("budget-tokens", 0, "context budget")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if strings.TrimSpace(*text) == "" {
+		fmt.Fprintln(os.Stderr, "query text is required")
+		return 2
+	}
+	backend, ok := resolveHyperGraphRAGBackend(*backendID)
+	if !ok {
+		return 1
+	}
+	results, err := hypergraphrag.Query(context.Background(), sidecarConfigFromBackend(backend), codegraph.BenchmarkQuery{
+		Text:         *text,
+		Capability:   *capability,
+		TopK:         *topK,
+		BudgetTokens: *budgetTokens,
+	})
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	return printJSON(hypergraphrag.QueryResponse{Results: results})
+}
+
+func resolveHyperGraphRAGBackendFromArgs(args []string) (codegraph.Backend, bool) {
+	fs := flag.NewFlagSet("hypergraphrag health", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	backendID := fs.String("backend", "", "HyperGraphRAG backend id")
+	if err := fs.Parse(args); err != nil {
+		return codegraph.Backend{}, false
+	}
+	return resolveHyperGraphRAGBackend(*backendID)
+}
+
+func resolveHyperGraphRAGBackend(backendID string) (codegraph.Backend, bool) {
+	cfg, err := config.Load()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return codegraph.Backend{}, false
+	}
+	backends := hyperGraphRAGBackends(codegraph.NewBackendRegistry(cfg))
+	if len(backends) == 0 {
+		fmt.Fprintln(os.Stderr, "no HyperGraphRAG backends configured")
+		return codegraph.Backend{}, false
+	}
+	backendID = strings.TrimSpace(backendID)
+	if backendID == "" {
+		if len(backends) > 1 {
+			fmt.Fprintln(os.Stderr, "multiple HyperGraphRAG backends configured; pass --backend")
+			return codegraph.Backend{}, false
+		}
+		return backends[0], true
+	}
+	for _, backend := range backends {
+		if backend.ID == backendID {
+			if !backend.Enabled {
+				fmt.Fprintf(os.Stderr, "HyperGraphRAG backend %q is disabled\n", backendID)
+				return codegraph.Backend{}, false
+			}
+			if backend.Health.Status == codegraph.BackendHealthInvalid {
+				fmt.Fprintf(os.Stderr, "HyperGraphRAG backend %q is invalid: %s\n", backendID, backend.Health.Error)
+				return codegraph.Backend{}, false
+			}
+			return backend, true
+		}
+	}
+	fmt.Fprintf(os.Stderr, "unknown HyperGraphRAG backend %q\n", backendID)
+	return codegraph.Backend{}, false
+}
+
+func sidecarConfigFromBackend(backend codegraph.Backend) hypergraphrag.SidecarConfig {
+	return hypergraphrag.SidecarConfig{
+		ID:      backend.ID,
+		Name:    backend.Name,
+		Command: backend.Command,
+		Args:    backend.Args,
+		Env:     backend.Env,
+	}
+}
+
+func printJSON(v any) int {
+	enc := json.NewEncoder(os.Stdout)
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(v); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	return 0
 }
 
 func hyperGraphRAGStatus() int {
@@ -129,7 +269,10 @@ func hyperGraphRAGUsage() {
 	fmt.Print(`maddog hypergraphrag — inspect HyperGraphRAG code-intelligence sidecars
 
 Usage:
-  maddog hypergraphrag status   show configured sidecar backends without launching them
+  maddog hypergraphrag status                         show configured sidecar backends without launching them
+  maddog hypergraphrag health --backend <id>           run the configured sidecar health check
+  maddog hypergraphrag index --backend <id> --root .   run sidecar indexing
+  maddog hypergraphrag query --backend <id> --query q  run a semantic/context query
 
 Configure HyperGraphRAG as an optional code-intelligence backend:
 

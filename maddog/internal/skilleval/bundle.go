@@ -70,15 +70,25 @@ type HumanReview struct {
 }
 
 type OutcomeInfo struct {
-	Success      bool   `json:"success"`
-	GoalMet      bool   `json:"goal_met"`
-	FinalAnswer  string `json:"final_answer,omitempty"`
-	TotalTurns   int    `json:"total_turns,omitempty"`
-	ToolErrors   int    `json:"tool_errors,omitempty"`
-	Tokens       int    `json:"tokens,omitempty"`
-	AdvisorUses  int    `json:"advisor_uses,omitempty"`
-	HumanReviews int    `json:"human_reviews,omitempty"`
+	Success          bool              `json:"success"`
+	GoalMet          bool              `json:"goal_met"`
+	Confidence       OutcomeConfidence `json:"confidence,omitempty"`
+	ConfidenceReason string            `json:"confidence_reason,omitempty"`
+	FinalAnswer      string            `json:"final_answer,omitempty"`
+	TotalTurns       int               `json:"total_turns,omitempty"`
+	ToolErrors       int               `json:"tool_errors,omitempty"`
+	Tokens           int               `json:"tokens,omitempty"`
+	AdvisorUses      int               `json:"advisor_uses,omitempty"`
+	HumanReviews     int               `json:"human_reviews,omitempty"`
 }
+
+type OutcomeConfidence string
+
+const (
+	OutcomeConfidenceUnknown    OutcomeConfidence = "unknown"
+	OutcomeConfidenceUnverified OutcomeConfidence = "unverified"
+	OutcomeConfidenceVerified   OutcomeConfidence = "verified"
+)
 
 type CaptureOptions struct {
 	SessionID string
@@ -138,6 +148,12 @@ func CaptureBundle(opts CaptureOptions) (*BundleV2, string, error) {
 			if !r.Success {
 				b.Outcome.ToolErrors++
 			}
+		}
+	}
+	if b.Outcome.Confidence == "" {
+		b.Outcome.Confidence = OutcomeConfidenceUnverified
+		if b.Outcome.ConfidenceReason == "" {
+			b.Outcome.ConfidenceReason = "outcome was captured without a verified completion signal"
 		}
 	}
 	b.ID = bundleID(*b)

@@ -55,6 +55,7 @@ import type {
   ServerView,
   SessionMeta,
   SettingsView,
+  SkillCandidateEvaluationRequest,
   SkillCandidateView,
   SkillRootView,
   SkillSuggestion,
@@ -219,7 +220,7 @@ export interface AppBindings {
   RefreshSkills(): Promise<void>;
   ReloadCommands(): Promise<void>;
   SetSkillEnabled(name: string, enabled: boolean): Promise<void>;
-  EvaluateSkillCandidate(hash: string): Promise<SkillCandidateView>;
+  EvaluateSkillCandidate(hash: string, request?: SkillCandidateEvaluationRequest): Promise<SkillCandidateView>;
   PromoteSkillCandidate(hash: string): Promise<string>;
   RollbackSkillCandidate(hash: string, reason: string): Promise<void>;
   RejectSkillCandidate(hash: string, reason: string): Promise<void>;
@@ -869,6 +870,7 @@ function makeMockApp(): AppBindings {
       scoreReason: "Replay checks passed",
       guardrailPass: true,
       guardrailReason: "No blocked patterns",
+      evaluationModelRef: "",
       updatedAt: new Date().toISOString(),
       audit: [{ action: "evaluate", status: "pending", reason: "Replay checks passed", time: new Date().toISOString() }],
     },
@@ -2409,13 +2411,18 @@ function makeMockApp(): AppBindings {
       const skill = capSkills.find((s) => s.name === name);
       if (skill) skill.enabled = enabled;
     },
-    async EvaluateSkillCandidate(hash: string) {
+    async EvaluateSkillCandidate(hash: string, request: SkillCandidateEvaluationRequest = {}) {
       const candidate = capSkillCandidates.find((s) => s.hash === hash);
       if (!candidate) throw new Error(`unknown skill candidate: ${hash}`);
       candidate.score = 0.91;
-      candidate.scoreReason = "Offline replay dry-run passed";
-      candidate.guardrailPass = true;
-      candidate.guardrailReason = "passed guardrail: success 1.00 >= 1.00";
+      candidate.scoreReason = request.dryRun ? "Offline replay dry-run preview" : "Promotion-grade replay requires held-out bundles";
+      candidate.guardrailPass = false;
+      candidate.guardrailReason = request.dryRun ? "dry-run preview is not promotion-grade evidence" : "held-out provider replay is unavailable in browser mock";
+      candidate.evaluationMode = request.dryRun ? "dry_run_preview" : "provider_replay";
+      candidate.evaluationProvider = request.modelRef ?? "";
+      candidate.evaluationModelRef = request.modelRef ?? "";
+      candidate.evaluationBundleCount = request.bundlePaths?.length ?? 0;
+      candidate.promotionGrade = false;
       candidate.updatedAt = new Date().toISOString();
       candidate.audit = [...(candidate.audit ?? []), { action: "evaluate", status: candidate.status, reason: candidate.guardrailReason, time: candidate.updatedAt }];
       return { ...candidate };
@@ -2423,6 +2430,7 @@ function makeMockApp(): AppBindings {
     async PromoteSkillCandidate(hash: string) {
       const candidate = capSkillCandidates.find((s) => s.hash === hash);
       if (!candidate) throw new Error(`unknown skill candidate: ${hash}`);
+      if (!candidate.promotionGrade || !candidate.guardrailPass) throw new Error(`candidate ${hash} has no promotion-grade passing evaluation`);
       candidate.status = "promoted";
       candidate.promotedPath = `~/projects/maddog/.maddog/skills/${candidate.name}/SKILL.md`;
       candidate.updatedAt = new Date().toISOString();

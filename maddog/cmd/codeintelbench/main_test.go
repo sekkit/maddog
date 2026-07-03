@@ -13,7 +13,7 @@ import (
 	"maddog/internal/codegraph"
 )
 
-func TestRunCodeIntelBenchWritesComparableLocalReport(t *testing.T) {
+func TestRunCodeIntelBenchDefaultReportExcludesMockBackend(t *testing.T) {
 	repo := t.TempDir()
 	if err := os.WriteFile(filepath.Join(repo, "runner.go"), []byte("package fixture\nfunc RunBenchmark() {}\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -43,8 +43,11 @@ func TestRunCodeIntelBenchWritesComparableLocalReport(t *testing.T) {
 		got[backend.ID] = true
 		health[backend.ID] = backend.Health
 	}
-	if !got["mock"] || !got[codegraph.BuiltInBackendID] {
-		t.Fatalf("backends = %+v, want mock and built-in codegraph", report.Backends)
+	if got["mock"] {
+		t.Fatalf("default benchmark report must not include mock backend: %+v", report.Backends)
+	}
+	if !got[codegraph.BuiltInBackendID] {
+		t.Fatalf("backends = %+v, want built-in codegraph", report.Backends)
 	}
 	if health[codegraph.BuiltInBackendID] != codegraph.BackendHealthDegraded {
 		t.Fatalf("built-in codegraph health = %q, want degraded when launcher is missing", health[codegraph.BuiltInBackendID])

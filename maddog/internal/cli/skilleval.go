@@ -17,18 +17,22 @@ import (
 )
 
 type skillevalSummary struct {
-	BundleID      string                  `json:"bundle_id"`
-	BundleIDs     []string                `json:"bundle_ids,omitempty"`
-	Bundles       int                     `json:"bundles"`
-	CandidateHash string                  `json:"candidate_hash"`
-	Replay        skilleval.OutcomeInfo   `json:"replay"`
-	Replays       []skilleval.OutcomeInfo `json:"replays,omitempty"`
-	Score         skilleval.ScoreResult   `json:"score"`
-	Scores        []skilleval.ScoreResult `json:"scores,omitempty"`
-	GuardrailPass bool                    `json:"guardrail_pass"`
-	Guardrail     string                  `json:"guardrail"`
-	DryRun        bool                    `json:"dry_run"`
-	Persisted     bool                    `json:"persisted,omitempty"`
+	BundleID       string                  `json:"bundle_id"`
+	BundleIDs      []string                `json:"bundle_ids,omitempty"`
+	Bundles        int                     `json:"bundles"`
+	CandidateHash  string                  `json:"candidate_hash"`
+	Replay         skilleval.OutcomeInfo   `json:"replay"`
+	Replays        []skilleval.OutcomeInfo `json:"replays,omitempty"`
+	Score          skilleval.ScoreResult   `json:"score"`
+	Scores         []skilleval.ScoreResult `json:"scores,omitempty"`
+	GuardrailPass  bool                    `json:"guardrail_pass"`
+	Guardrail      string                  `json:"guardrail"`
+	DryRun         bool                    `json:"dry_run"`
+	Mode           string                  `json:"mode"`
+	Provider       string                  `json:"provider,omitempty"`
+	ModelRef       string                  `json:"model_ref,omitempty"`
+	PromotionGrade bool                    `json:"promotion_grade"`
+	Persisted      bool                    `json:"persisted,omitempty"`
 }
 
 func skillevalCommand(args []string) int {
@@ -57,75 +61,53 @@ func skillevalCommand(args []string) int {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	bundles := make([]skilleval.BundleV2, 0, len(bundlePaths))
-	bundleIDs := make([]string, 0, len(bundlePaths))
-	for _, path := range bundlePaths {
-		bundle, err := skilleval.LoadBundle(path)
+	var prov provider.Provider
+	resolvedModelRef := strings.TrimSpace(*modelRef)
+	if !*dryRun {
+		prov, resolvedModelRef, err = resolveConfiguredSkillEvalProvider(*modelRef)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			return 1
 		}
-		bundles = append(bundles, *bundle)
-		bundleIDs = append(bundleIDs, bundle.ID)
 	}
-	if err := validateHeldOutBundles(bundlePaths, bundles, candidate); err != nil {
+	result, err := skilleval.EvaluateCandidate(context.Background(), skilleval.EvaluationRequest{
+		Candidate:   candidate,
+		BundlePaths: []string(bundlePaths),
+		Provider:    prov,
+		ModelRef:    resolvedModelRef,
+		DryRun:      *dryRun,
+		MinBundles:  *minBundles,
+		MinScore:    *minScore,
+	})
+	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	var prov provider.Provider
-	if !*dryRun {
-		prov, err = resolveConfiguredSkillEvalProvider(*modelRef)
-		if err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			return 1
-		}
-	}
-	baseline := make([]skilleval.OutcomeInfo, 0, len(bundles))
-	replays := make([]skilleval.OutcomeInfo, 0, len(bundles))
-	scores := make([]skilleval.ScoreResult, 0, len(bundles))
-	for _, bundle := range bundles {
-		var replayed skilleval.OutcomeInfo
-		if *dryRun {
-			replayed = skilleval.DryRunReplay(bundle, candidate)
-		} else {
-			replayed, err = (skilleval.ReplayRunner{Provider: prov}).Run(context.Background(), bundle, candidate)
-			if err != nil {
-				fmt.Fprintln(os.Stderr, err)
-				return 1
-			}
-		}
-		score, err := skilleval.ScoreReplay(context.Background(), scorerProvider(*dryRun, prov), bundle.Outcome, replayed)
-		if err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			return 1
-		}
-		baseline = append(baseline, bundle.Outcome)
-		replays = append(replays, replayed)
-		scores = append(scores, score)
-	}
-	guard := skilleval.CheckPromotionGuardrail(bundles, baseline, replays, scores, candidate, skilleval.GuardrailConfig{MinBundles: *minBundles, MinScore: *minScore})
-	summaryScore := aggregateSkillEvalScores(scores)
 	persisted := false
 	if strings.TrimSpace(*storeDir) != "" {
-		if _, err := skilleval.NewCandidateStore(*storeDir).RecordEvaluation(candidate.Hash, summaryScore, guard); err != nil {
+		if _, err := skilleval.NewCandidateStore(*storeDir).RecordEvaluationWithProvenance(candidate.Hash, result.Score, result.Guardrail, result.Provenance()); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			return 1
 		}
 		persisted = true
 	}
 	summary := skillevalSummary{
-		BundleID:      bundleIDs[0],
-		BundleIDs:     bundleIDs,
-		Bundles:       len(bundles),
-		CandidateHash: candidate.Hash,
-		Replay:        replays[0],
-		Replays:       replays,
-		Score:         summaryScore,
-		Scores:        scores,
-		GuardrailPass: guard.Pass,
-		Guardrail:     guard.Reason,
-		DryRun:        *dryRun,
-		Persisted:     persisted,
+		BundleID:       result.BundleIDs[0],
+		BundleIDs:      result.BundleIDs,
+		Bundles:        len(result.Bundles),
+		CandidateHash:  candidate.Hash,
+		Replay:         result.Replays[0],
+		Replays:        result.Replays,
+		Score:          result.Score,
+		Scores:         result.Scores,
+		GuardrailPass:  result.Guardrail.Pass,
+		Guardrail:      result.Guardrail.Reason,
+		DryRun:         *dryRun,
+		Mode:           result.Mode,
+		Provider:       result.Provider,
+		ModelRef:       result.ModelRef,
+		PromotionGrade: result.PromotionGrade,
+		Persisted:      persisted,
 	}
 	if *jsonOut {
 		enc := json.NewEncoder(os.Stdout)
@@ -134,10 +116,10 @@ func skillevalCommand(args []string) int {
 			fmt.Fprintln(os.Stderr, err)
 			return 1
 		}
-		return boolExit(guard.Pass)
+		return boolExit(result.Guardrail.Pass)
 	}
 	fmt.Printf("bundles: %d\ncandidate: %s\nreplay: %s\nscore: %.2f\nrail: %s\n", summary.Bundles, summary.CandidateHash, summary.Replay.FinalAnswer, summary.Score.Score, summary.Guardrail)
-	return boolExit(guard.Pass)
+	return boolExit(result.Guardrail.Pass)
 }
 
 type multiValueFlag []string
@@ -159,95 +141,6 @@ func (f *multiValueFlag) Set(value string) error {
 	return nil
 }
 
-func scorerProvider(dryRun bool, prov provider.Provider) provider.Provider {
-	if dryRun {
-		return nil
-	}
-	return prov
-}
-
-func aggregateSkillEvalScores(scores []skilleval.ScoreResult) skilleval.ScoreResult {
-	if len(scores) == 0 {
-		return skilleval.ScoreResult{}
-	}
-	if len(scores) == 1 {
-		return scores[0]
-	}
-	total := 0.0
-	min := scores[0].Score
-	max := scores[0].Score
-	for _, score := range scores {
-		total += score.Score
-		if score.Score < min {
-			min = score.Score
-		}
-		if score.Score > max {
-			max = score.Score
-		}
-	}
-	avg := total / float64(len(scores))
-	return skilleval.ScoreResult{
-		Score:  avg,
-		Reason: fmt.Sprintf("average score across %d bundles (min %.2f, max %.2f)", len(scores), min, max),
-	}
-}
-
-func validateHeldOutBundles(paths []string, bundles []skilleval.BundleV2, candidate skilleval.Candidate) error {
-	seenIDs := map[string]bool{}
-	seenPaths := map[string]bool{}
-	sourceID := strings.TrimSpace(candidate.SourceBundleID)
-	sourcePath := canonicalSkillEvalPath(candidate.SourceBundlePath)
-	for i, bundle := range bundles {
-		id := strings.TrimSpace(bundle.ID)
-		if id == "" {
-			return fmt.Errorf("held-out bundle %d has no id", i+1)
-		}
-		if seenIDs[id] {
-			return fmt.Errorf("duplicate held-out bundle id %q", id)
-		}
-		seenIDs[id] = true
-		if sourceID != "" && id == sourceID {
-			return fmt.Errorf("bundle %q is the candidate source bundle, not held-out", id)
-		}
-		var inputPath string
-		if i < len(paths) {
-			inputPath = paths[i]
-		}
-		path := canonicalSkillEvalPath(firstNonEmptyString(inputPath, bundle.Path))
-		if path == "" {
-			continue
-		}
-		if seenPaths[path] {
-			return fmt.Errorf("duplicate held-out bundle path %q", path)
-		}
-		seenPaths[path] = true
-		if sourcePath != "" && path == sourcePath {
-			return fmt.Errorf("bundle %q is the candidate source bundle, not held-out", id)
-		}
-	}
-	return nil
-}
-
-func canonicalSkillEvalPath(path string) string {
-	path = strings.TrimSpace(path)
-	if path == "" {
-		return ""
-	}
-	if abs, err := filepath.Abs(path); err == nil {
-		path = abs
-	}
-	return strings.ToLower(filepath.Clean(path))
-}
-
-func firstNonEmptyString(vals ...string) string {
-	for _, val := range vals {
-		if strings.TrimSpace(val) != "" {
-			return strings.TrimSpace(val)
-		}
-	}
-	return ""
-}
-
 func loadSkillEvalCandidate(path string) (skilleval.Candidate, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -260,10 +153,10 @@ func loadSkillEvalCandidate(path string) (skilleval.Candidate, error) {
 	return c, nil
 }
 
-func resolveConfiguredSkillEvalProvider(modelRef string) (provider.Provider, error) {
+func resolveConfiguredSkillEvalProvider(modelRef string) (provider.Provider, string, error) {
 	cfg, err := config.Load()
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	ref := strings.TrimSpace(modelRef)
 	if ref == "" {
@@ -271,9 +164,10 @@ func resolveConfiguredSkillEvalProvider(modelRef string) (provider.Provider, err
 	}
 	entry, ok := cfg.ResolveModel(ref)
 	if !ok {
-		return nil, fmt.Errorf("model %q is not configured", ref)
+		return nil, "", fmt.Errorf("model %q is not configured", ref)
 	}
-	return boot.NewProviderWithProxy(entry, cfg.NetworkProxySpec())
+	prov, err := boot.NewProviderWithProxy(entry, cfg.NetworkProxySpec())
+	return prov, ref, err
 }
 
 func skillevalListCommand(args []string) int {

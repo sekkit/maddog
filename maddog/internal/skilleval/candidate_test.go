@@ -97,15 +97,65 @@ func TestPendingCandidateRequiresPassingEvaluationBeforePromote(t *testing.T) {
 	}
 }
 
+func TestPromoteRequiresPromotionGradeEvaluation(t *testing.T) {
+	store := NewCandidateStore(t.TempDir())
+	candidate, err := store.Create(validSkill("parser-helper"), BundleV2{ID: "bundle-a"}, "fix parser")
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if _, err := store.RecordEvaluation(candidate.Hash, ScoreResult{Score: 0.9, Reason: "preview"}, GuardrailResult{Pass: true, Reason: "passed"}); err != nil {
+		t.Fatalf("RecordEvaluation preview: %v", err)
+	}
+	activeStore := skill.New(skill.Options{HomeDir: t.TempDir(), ProjectRoot: t.TempDir(), DisableBuiltins: true})
+	if _, _, err := store.Promote(candidate.Hash, activeStore, skill.ScopeProject); err == nil || !strings.Contains(err.Error(), "promotion-grade") {
+		t.Fatalf("Promote preview err = %v, want promotion-grade guard", err)
+	}
+
+	promoted, err := store.RecordEvaluationWithProvenance(candidate.Hash, ScoreResult{Score: 0.9, Reason: "provider replay"}, GuardrailResult{Pass: true, Reason: "passed"}, EvaluationProvenance{
+		Mode:           EvaluationModeProviderReplay,
+		Provider:       "test-provider",
+		BundleIDs:      []string{"held-out-a", "held-out-b", ""},
+		PromotionGrade: true,
+	})
+	if err != nil {
+		t.Fatalf("RecordEvaluationWithProvenance: %v", err)
+	}
+	if !promoted.PromotionGrade || promoted.EvaluationMode != EvaluationModeProviderReplay || promoted.EvaluationProvider != "test-provider" || len(promoted.EvaluationBundleIDs) != 2 {
+		t.Fatalf("promotion provenance = %+v", promoted)
+	}
+	if _, _, err := store.Promote(candidate.Hash, activeStore, skill.ScopeProject); err != nil {
+		t.Fatalf("Promote promotion-grade evaluation: %v", err)
+	}
+}
+
+func TestCandidateStorePersistsEvaluationModelRef(t *testing.T) {
+	store := NewCandidateStore(t.TempDir())
+	candidate, err := store.Create(validSkill("parser-helper"), BundleV2{ID: "bundle-a"}, "fix parser")
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	updated, err := store.RecordEvaluationWithProvenance(candidate.Hash, ScoreResult{Score: 0.91}, GuardrailResult{Pass: true}, EvaluationProvenance{
+		Mode:           EvaluationModeProviderReplay,
+		Provider:       "local",
+		ModelRef:       "local/deepseek",
+		BundleIDs:      []string{"held-out-a"},
+		PromotionGrade: true,
+	})
+	if err != nil {
+		t.Fatalf("RecordEvaluationWithProvenance: %v", err)
+	}
+	if updated.EvaluationModelRef != "local/deepseek" {
+		t.Fatalf("EvaluationModelRef = %q, want persisted model ref", updated.EvaluationModelRef)
+	}
+}
+
 func TestPromoteRejectsTamperedCandidateAfterEvaluation(t *testing.T) {
 	store := NewCandidateStore(t.TempDir())
 	candidate, err := store.Create(validSkill("parser-helper"), BundleV2{ID: "bundle-a"}, "fix parser")
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	if _, err := store.RecordEvaluation(candidate.Hash, ScoreResult{Score: 0.9, Reason: "ok"}, GuardrailResult{Pass: true, Reason: "passed"}); err != nil {
-		t.Fatalf("RecordEvaluation: %v", err)
-	}
+	recordPromotionGradeEvaluation(t, store, candidate.Hash)
 	raw, err := os.ReadFile(filepath.Join(store.Dir, "candidates", candidate.Hash+".json"))
 	if err != nil {
 		t.Fatal(err)
@@ -130,10 +180,7 @@ func TestPromoteCandidateWritesActiveSkillAndTransitions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	candidate, err = candidateStore.RecordEvaluation(candidate.Hash, ScoreResult{Score: 0.9, Reason: "ok"}, GuardrailResult{Pass: true, Reason: "passed"})
-	if err != nil {
-		t.Fatalf("RecordEvaluation: %v", err)
-	}
+	candidate = recordPromotionGradeEvaluation(t, candidateStore, candidate.Hash)
 	projectRoot := t.TempDir()
 	activeStore := skill.New(skill.Options{HomeDir: t.TempDir(), ProjectRoot: projectRoot, DisableBuiltins: true})
 
@@ -198,9 +245,7 @@ func TestFailedPromotionRestoresPending(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	if _, err := candidateStore.RecordEvaluation(candidate.Hash, ScoreResult{Score: 0.9, Reason: "ok"}, GuardrailResult{Pass: true, Reason: "passed"}); err != nil {
-		t.Fatalf("RecordEvaluation: %v", err)
-	}
+	recordPromotionGradeEvaluation(t, candidateStore, candidate.Hash)
 	projectRoot := t.TempDir()
 	activeStore := skill.New(skill.Options{HomeDir: t.TempDir(), ProjectRoot: projectRoot, DisableBuiltins: true})
 	if _, err := activeStore.CreateWithContent("parser-helper", skill.ScopeProject, "---\nname: parser-helper\ndescription: different\n---\n\ndifferent\n"); err != nil {
@@ -224,9 +269,7 @@ func TestRollbackPromotedCandidateRemovesOnlyMatchingSkill(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	if _, err := candidateStore.RecordEvaluation(candidate.Hash, ScoreResult{Score: 0.9, Reason: "ok"}, GuardrailResult{Pass: true, Reason: "passed"}); err != nil {
-		t.Fatalf("RecordEvaluation: %v", err)
-	}
+	recordPromotionGradeEvaluation(t, candidateStore, candidate.Hash)
 	activeStore := skill.New(skill.Options{HomeDir: t.TempDir(), ProjectRoot: t.TempDir(), DisableBuiltins: true})
 	updated, path, err := candidateStore.Promote(candidate.Hash, activeStore, skill.ScopeProject)
 	if err != nil {
@@ -253,9 +296,7 @@ func TestCandidateStoreAuditForHashReadsLifecycleRecords(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	if _, err := candidateStore.RecordEvaluation(candidate.Hash, ScoreResult{Score: 0.9, Reason: "ok"}, GuardrailResult{Pass: true, Reason: "passed"}); err != nil {
-		t.Fatalf("RecordEvaluation: %v", err)
-	}
+	recordPromotionGradeEvaluation(t, candidateStore, candidate.Hash)
 	activeStore := skill.New(skill.Options{HomeDir: t.TempDir(), ProjectRoot: t.TempDir(), DisableBuiltins: true})
 	if _, _, err := candidateStore.Promote(candidate.Hash, activeStore, skill.ScopeProject); err != nil {
 		t.Fatalf("Promote: %v", err)
@@ -281,9 +322,7 @@ func TestRollbackRefusesModifiedPromotedSkill(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	if _, err := candidateStore.RecordEvaluation(candidate.Hash, ScoreResult{Score: 0.9, Reason: "ok"}, GuardrailResult{Pass: true, Reason: "passed"}); err != nil {
-		t.Fatalf("RecordEvaluation: %v", err)
-	}
+	recordPromotionGradeEvaluation(t, candidateStore, candidate.Hash)
 	activeStore := skill.New(skill.Options{HomeDir: t.TempDir(), ProjectRoot: t.TempDir(), DisableBuiltins: true})
 	_, path, err := candidateStore.Promote(candidate.Hash, activeStore, skill.ScopeProject)
 	if err != nil {
@@ -304,4 +343,18 @@ func validSkill(name string) skill.Skill {
 		Body:        "Use the parser checklist before editing.",
 		RunAs:       skill.RunInline,
 	}
+}
+
+func recordPromotionGradeEvaluation(t *testing.T, store *CandidateStore, hash string) Candidate {
+	t.Helper()
+	candidate, err := store.RecordEvaluationWithProvenance(hash, ScoreResult{Score: 0.9, Reason: "ok"}, GuardrailResult{Pass: true, Reason: "passed"}, EvaluationProvenance{
+		Mode:           EvaluationModeProviderReplay,
+		Provider:       "test-provider",
+		BundleIDs:      []string{"held-out-a", "held-out-b", "held-out-c", "held-out-d", "held-out-e"},
+		PromotionGrade: true,
+	})
+	if err != nil {
+		t.Fatalf("RecordEvaluationWithProvenance: %v", err)
+	}
+	return candidate
 }

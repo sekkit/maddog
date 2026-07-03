@@ -1399,10 +1399,10 @@ func (c *Controller) captureReplayBundleAsync(task string, startMessages int) {
 		Messages:  messages,
 		Evidence:  receipts,
 		Outcome: skilleval.OutcomeInfo{
-			Success:     true,
-			GoalMet:     true,
-			FinalAnswer: finalAnswer,
-			Tokens:      tokens,
+			Confidence:       skilleval.OutcomeConfidenceUnverified,
+			ConfidenceReason: "turn completed with a final answer but no verified goal signal",
+			FinalAnswer:      finalAnswer,
+			Tokens:           tokens,
 		},
 		Dir: dir,
 	}

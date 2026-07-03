@@ -10096,6 +10096,26 @@ body > .mermaid-diagram--fullscreen {
   gap: 6px;
   margin: 0 0 8px;
 }
+.cap-skill-candidates__request {
+  display: grid;
+  grid-template-columns: minmax(120px, auto) minmax(160px, 1fr);
+  gap: 8px;
+  margin: 0 0 8px;
+}
+.cap-skill-candidates__toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 30px;
+  color: var(--fg-dim);
+  font-size: 11px;
+  line-height: 1.35;
+}
+.cap-skill-candidates__bundles {
+  grid-column: 1 / -1;
+  min-height: 54px;
+  resize: vertical;
+}
 .btn--active {
   border-color: color-mix(in srgb, var(--accent) 42%, var(--border));
   background: color-mix(in srgb, var(--accent) 10%, var(--bg-elev));

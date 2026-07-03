@@ -38,6 +38,7 @@ import (
 	"maddog/internal/evidence"
 	"maddog/internal/fileref"
 	fileenc "maddog/internal/fileutil/encoding"
+	"maddog/internal/hypergraphrag"
 	"maddog/internal/i18n"
 	"maddog/internal/mcpdiag"
 	"maddog/internal/memory"
@@ -4119,22 +4120,35 @@ type SkillView struct {
 }
 
 type SkillCandidateView struct {
-	Hash             string                    `json:"hash"`
-	Name             string                    `json:"name"`
-	Description      string                    `json:"description"`
-	Status           string                    `json:"status"`
-	SourceTask       string                    `json:"sourceTask,omitempty"`
-	SourceBundleID   string                    `json:"sourceBundleId,omitempty"`
-	SourceBundlePath string                    `json:"sourceBundlePath,omitempty"`
-	ValidationReason string                    `json:"validationReason,omitempty"`
-	PromotedPath     string                    `json:"promotedPath,omitempty"`
-	TargetRoot       string                    `json:"targetRoot,omitempty"`
-	Score            *float64                  `json:"score,omitempty"`
-	ScoreReason      string                    `json:"scoreReason,omitempty"`
-	GuardrailPass    *bool                     `json:"guardrailPass,omitempty"`
-	GuardrailReason  string                    `json:"guardrailReason,omitempty"`
-	UpdatedAt        string                    `json:"updatedAt,omitempty"`
-	Audit            []SkillCandidateAuditView `json:"audit,omitempty"`
+	Hash                  string                    `json:"hash"`
+	Name                  string                    `json:"name"`
+	Description           string                    `json:"description"`
+	Status                string                    `json:"status"`
+	SourceTask            string                    `json:"sourceTask,omitempty"`
+	SourceBundleID        string                    `json:"sourceBundleId,omitempty"`
+	SourceBundlePath      string                    `json:"sourceBundlePath,omitempty"`
+	ValidationReason      string                    `json:"validationReason,omitempty"`
+	PromotedPath          string                    `json:"promotedPath,omitempty"`
+	TargetRoot            string                    `json:"targetRoot,omitempty"`
+	Score                 *float64                  `json:"score,omitempty"`
+	ScoreReason           string                    `json:"scoreReason,omitempty"`
+	GuardrailPass         *bool                     `json:"guardrailPass,omitempty"`
+	GuardrailReason       string                    `json:"guardrailReason,omitempty"`
+	EvaluationMode        string                    `json:"evaluationMode,omitempty"`
+	EvaluationProvider    string                    `json:"evaluationProvider,omitempty"`
+	EvaluationModelRef    string                    `json:"evaluationModelRef,omitempty"`
+	EvaluationBundleCount int                       `json:"evaluationBundleCount,omitempty"`
+	PromotionGrade        bool                      `json:"promotionGrade,omitempty"`
+	UpdatedAt             string                    `json:"updatedAt,omitempty"`
+	Audit                 []SkillCandidateAuditView `json:"audit,omitempty"`
+}
+
+type SkillCandidateEvaluationRequest struct {
+	BundlePaths []string `json:"bundlePaths,omitempty"`
+	ModelRef    string   `json:"modelRef,omitempty"`
+	DryRun      bool     `json:"dryRun,omitempty"`
+	MinBundles  int      `json:"minBundles,omitempty"`
+	MinScore    float64  `json:"minScore,omitempty"`
 }
 
 type SkillCandidateAuditView struct {
@@ -4415,16 +4429,21 @@ func skillCandidateViews(workspaceRoot string) []SkillCandidateView {
 
 func skillCandidateView(workspaceRoot string, c skilleval.Candidate) SkillCandidateView {
 	view := SkillCandidateView{
-		Hash:             c.Hash,
-		Name:             c.Skill.Name,
-		Description:      c.Skill.Description,
-		Status:           string(c.Status),
-		SourceTask:       c.SourceTask,
-		SourceBundleID:   c.SourceBundleID,
-		SourceBundlePath: c.SourceBundlePath,
-		ValidationReason: c.ValidationReason,
-		PromotedPath:     c.PromotedPath,
-		GuardrailReason:  c.GuardrailReason,
+		Hash:                  c.Hash,
+		Name:                  c.Skill.Name,
+		Description:           c.Skill.Description,
+		Status:                string(c.Status),
+		SourceTask:            c.SourceTask,
+		SourceBundleID:        c.SourceBundleID,
+		SourceBundlePath:      c.SourceBundlePath,
+		ValidationReason:      c.ValidationReason,
+		PromotedPath:          c.PromotedPath,
+		GuardrailReason:       c.GuardrailReason,
+		EvaluationMode:        c.EvaluationMode,
+		EvaluationProvider:    c.EvaluationProvider,
+		EvaluationModelRef:    c.EvaluationModelRef,
+		EvaluationBundleCount: len(c.EvaluationBundleIDs),
+		PromotionGrade:        c.PromotionGrade,
 	}
 	if audit, err := skilleval.NewCandidateStore(skillCandidateStoreDir(workspaceRoot)).AuditForHash(c.Hash); err == nil {
 		view.Audit = skillCandidateAuditViews(audit)
@@ -4972,7 +4991,7 @@ func (a *App) SetSkillEnabled(name string, enabled bool) error {
 	return err
 }
 
-func (a *App) EvaluateSkillCandidate(hash string) (SkillCandidateView, error) {
+func (a *App) EvaluateSkillCandidate(hash string, req SkillCandidateEvaluationRequest) (SkillCandidateView, error) {
 	root := a.activeWorkspaceRoot()
 	if strings.TrimSpace(root) == "" {
 		return SkillCandidateView{}, fmt.Errorf("no active workspace")
@@ -4982,22 +5001,69 @@ func (a *App) EvaluateSkillCandidate(hash string) (SkillCandidateView, error) {
 	if err != nil {
 		return SkillCandidateView{}, err
 	}
-	bundlePath, err := resolveSkillCandidateBundlePath(root, candidate)
-	if err != nil {
-		return SkillCandidateView{}, err
-	}
-	bundle, err := skilleval.LoadBundle(bundlePath)
-	if err != nil {
-		return SkillCandidateView{}, fmt.Errorf("load source bundle %q: %w", bundlePath, err)
-	}
-	replayed := skilleval.DryRunReplay(*bundle, candidate)
 	ctx := a.ctx
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	score, err := skilleval.ScoreReplay(ctx, nil, bundle.Outcome, replayed)
+	var result skilleval.EvaluationResult
+	if req.DryRun {
+		result, err = evaluateSkillCandidateDryRunPreview(ctx, root, candidate, req)
+	} else {
+		result, err = evaluateSkillCandidateProviderReplay(ctx, root, candidate, req)
+	}
 	if err != nil {
 		return SkillCandidateView{}, err
+	}
+	updated, err := store.RecordEvaluationWithProvenance(candidate.Hash, result.Score, result.Guardrail, result.Provenance())
+	if err != nil {
+		return SkillCandidateView{}, err
+	}
+	if tabID := a.activeTabIDSnapshot(); tabID != "" {
+		label := "provider replay"
+		if req.DryRun {
+			label = "dry-run preview"
+		}
+		a.noticeForTab(tabID, fmt.Sprintf("%s scored skill candidate %.2f", label, result.Score.Score))
+	}
+	return skillCandidateView(root, updated), nil
+}
+
+func evaluateSkillCandidateProviderReplay(ctx context.Context, root string, candidate skilleval.Candidate, req SkillCandidateEvaluationRequest) (skilleval.EvaluationResult, error) {
+	bundlePaths := cleanSkillCandidateBundlePaths(req.BundlePaths)
+	if len(bundlePaths) == 0 {
+		var err error
+		bundlePaths, err = discoverHeldOutSkillEvalBundles(root, candidate)
+		if err != nil {
+			return skilleval.EvaluationResult{}, err
+		}
+	}
+	prov, modelRef, err := resolveDesktopSkillEvalProvider(root, req.ModelRef)
+	if err != nil {
+		return skilleval.EvaluationResult{}, err
+	}
+	return skilleval.EvaluateCandidate(ctx, skilleval.EvaluationRequest{
+		Candidate:   candidate,
+		BundlePaths: bundlePaths,
+		Provider:    prov,
+		ModelRef:    modelRef,
+		MinBundles:  req.MinBundles,
+		MinScore:    req.MinScore,
+	})
+}
+
+func evaluateSkillCandidateDryRunPreview(ctx context.Context, root string, candidate skilleval.Candidate, req SkillCandidateEvaluationRequest) (skilleval.EvaluationResult, error) {
+	bundlePath, err := resolveSkillCandidateBundlePath(root, candidate)
+	if err != nil {
+		return skilleval.EvaluationResult{}, err
+	}
+	bundle, err := skilleval.LoadBundle(bundlePath)
+	if err != nil {
+		return skilleval.EvaluationResult{}, fmt.Errorf("load source bundle %q: %w", bundlePath, err)
+	}
+	replayed := skilleval.DryRunReplay(*bundle, candidate)
+	score, err := skilleval.ScoreReplay(ctx, nil, bundle.Outcome, replayed)
+	if err != nil {
+		return skilleval.EvaluationResult{}, err
 	}
 	guard := skilleval.CheckPromotionGuardrail(
 		[]skilleval.BundleV2{*bundle},
@@ -5005,16 +5071,77 @@ func (a *App) EvaluateSkillCandidate(hash string) (SkillCandidateView, error) {
 		[]skilleval.OutcomeInfo{replayed},
 		[]skilleval.ScoreResult{score},
 		candidate,
-		skilleval.GuardrailConfig{MinScore: 0.7},
+		skilleval.GuardrailConfig{MinBundles: 1, MinScore: req.MinScore},
 	)
-	updated, err := store.RecordEvaluation(candidate.Hash, score, guard)
+	return skilleval.EvaluationResult{
+		Bundles:        []skilleval.BundleV2{*bundle},
+		BundleIDs:      []string{bundle.ID},
+		Baseline:       []skilleval.OutcomeInfo{bundle.Outcome},
+		Replays:        []skilleval.OutcomeInfo{replayed},
+		Scores:         []skilleval.ScoreResult{score},
+		Score:          score,
+		Guardrail:      guard,
+		DryRun:         true,
+		Mode:           skilleval.EvaluationModeDryRunPreview,
+		ModelRef:       strings.TrimSpace(req.ModelRef),
+		PromotionGrade: false,
+	}, nil
+}
+
+func resolveDesktopSkillEvalProvider(root, modelRef string) (provider.Provider, string, error) {
+	cfg, err := config.LoadForRoot(root)
 	if err != nil {
-		return SkillCandidateView{}, err
+		return nil, "", err
 	}
-	if tabID := a.activeTabIDSnapshot(); tabID != "" {
-		a.noticeForTab(tabID, fmt.Sprintf("offline replay scored skill candidate %.2f", score.Score))
+	ref := strings.TrimSpace(modelRef)
+	if ref == "" {
+		ref = strings.TrimSpace(cfg.DefaultModel)
 	}
-	return skillCandidateView(root, updated), nil
+	entry, ok := cfg.ResolveModel(ref)
+	if !ok {
+		return nil, "", fmt.Errorf("model %q is not configured", ref)
+	}
+	prov, err := boot.NewProviderWithProxy(entry, cfg.NetworkProxySpec())
+	return prov, ref, err
+}
+
+func discoverHeldOutSkillEvalBundles(root string, candidate skilleval.Candidate) ([]string, error) {
+	files, err := filepath.Glob(filepath.Join(skillCandidateStoreDir(root), "*.json"))
+	if err != nil {
+		return nil, err
+	}
+	sort.Strings(files)
+	sourceID := strings.TrimSpace(candidate.SourceBundleID)
+	sourcePath := skilleval.CanonicalSkillEvalPath(candidate.SourceBundlePath)
+	out := make([]string, 0, len(files))
+	for _, path := range files {
+		if sourcePath != "" && skilleval.CanonicalSkillEvalPath(path) == sourcePath {
+			continue
+		}
+		bundle, err := skilleval.LoadBundle(path)
+		if err != nil {
+			continue
+		}
+		if sourceID != "" && strings.TrimSpace(bundle.ID) == sourceID {
+			continue
+		}
+		out = append(out, path)
+	}
+	return out, nil
+}
+
+func cleanSkillCandidateBundlePaths(paths []string) []string {
+	if len(paths) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(paths))
+	for _, path := range paths {
+		path = strings.TrimSpace(path)
+		if path != "" {
+			out = append(out, path)
+		}
+	}
+	return out
 }
 
 func resolveSkillCandidateBundlePath(workspaceRoot string, candidate skilleval.Candidate) (string, error) {
@@ -5542,6 +5669,20 @@ func (a *App) RunCodeIntelligenceBenchmark(id string) error {
 			root = cwd
 		}
 	}
+	cfg, err := config.LoadForRoot(root)
+	if err != nil {
+		return err
+	}
+	backend, ok := codegraph.NewBackendRegistry(cfg).Backend(id)
+	if !ok {
+		return fmt.Errorf("unknown code intelligence backend %q", id)
+	}
+	if !backend.Enabled {
+		return fmt.Errorf("code intelligence backend %q is disabled", id)
+	}
+	if backend.Health.Status == codegraph.BackendHealthInvalid {
+		return fmt.Errorf("code intelligence backend %q is invalid: %s", id, backend.Health.Error)
+	}
 	cacheDir := config.CacheDir()
 	if strings.TrimSpace(cacheDir) == "" {
 		return fmt.Errorf("maddog cache dir is unavailable")
@@ -5564,9 +5705,37 @@ func (a *App) RunCodeIntelligenceBenchmark(id string) error {
 			ExpectedIDs: []string{"runner.go"},
 			TopK:        5,
 		}}
+		if backend.Capabilities.SemanticSearch {
+			cases = append(cases, codegraph.BenchmarkCase{
+				Name:        "semantic context",
+				Query:       "advisor frontier routing",
+				Capability:  codegraph.BenchmarkCapabilitySemanticSearch,
+				ExpectedIDs: []string{"docs/cc/maddog-fusion--3949/tech.md"},
+				TopK:        5,
+			})
+		}
+		benchmarkBackend, err := codeIntelligenceBenchmarkBackendFor(backend, cases)
+		if err != nil {
+			_, _ = codegraph.SaveBenchmarkReport(codegraph.BenchmarkReport{
+				StartedAt: time.Now().UTC(),
+				Root:      root,
+				Backends: []codegraph.BenchmarkBackendReport{{
+					ID:       backend.ID,
+					Name:     backend.Name,
+					Health:   codegraph.BackendHealthDegraded,
+					Failures: 1,
+					Queries: []codegraph.BenchmarkQueryReport{{
+						Name:   "benchmark adapter",
+						Status: codegraph.BenchmarkQueryError,
+						Error:  err.Error(),
+					}},
+				}},
+			}, cacheDir)
+			return
+		}
 		report := codegraph.RunBenchmark(ctx, codegraph.BenchmarkOptions{
 			Root:     root,
-			Backends: []codegraph.BenchmarkBackend{newCodeIntelligenceBenchmarkBackend(id)},
+			Backends: []codegraph.BenchmarkBackend{benchmarkBackend},
 			Cases:    cases,
 		})
 		_, _ = codegraph.SaveBenchmarkReport(report, cacheDir)
@@ -5574,36 +5743,23 @@ func (a *App) RunCodeIntelligenceBenchmark(id string) error {
 	return nil
 }
 
-type codeIntelligenceBenchmarkBackend struct {
-	*codegraph.LocalFilesBenchmarkBackend
-	id   string
-	name string
-}
-
-func newCodeIntelligenceBenchmarkBackend(id string) codegraph.BenchmarkBackend {
-	id = strings.TrimSpace(id)
-	if id == "" {
-		id = codegraph.BuiltInBackendID
+func codeIntelligenceBenchmarkBackendFor(backend codegraph.Backend, cases []codegraph.BenchmarkCase) (codegraph.BenchmarkBackend, error) {
+	switch backend.Kind {
+	case codegraph.BackendKindBuiltIn:
+		return codegraph.NewMCPBenchmarkBackend("", cases), nil
+	case codegraph.BackendKindHyperGraphRAG:
+		return hypergraphrag.NewBenchmarkBackend(hypergraphrag.SidecarConfig{
+			ID:      backend.ID,
+			Name:    backend.Name,
+			Command: backend.Command,
+			Args:    backend.Args,
+			Env:     backend.Env,
+		}), nil
+	case codegraph.BackendKindMCP:
+		return nil, fmt.Errorf("MCP code intelligence backend %q does not expose a desktop benchmark adapter yet", backend.ID)
+	default:
+		return nil, fmt.Errorf("code intelligence backend %q has unsupported benchmark kind %q", backend.ID, backend.Kind)
 	}
-	return &codeIntelligenceBenchmarkBackend{
-		LocalFilesBenchmarkBackend: codegraph.NewLocalFilesBenchmarkBackend(),
-		id:                         id,
-		name:                       codeIntelligenceBenchmarkBackendName(id),
-	}
-}
-
-func (b *codeIntelligenceBenchmarkBackend) BenchmarkInfo() codegraph.BenchmarkBackendInfo {
-	info := b.LocalFilesBenchmarkBackend.BenchmarkInfo()
-	info.ID = b.id
-	info.Name = b.name
-	return info
-}
-
-func codeIntelligenceBenchmarkBackendName(id string) string {
-	if id == codegraph.BuiltInBackendID {
-		return "CodeGraph local smoke"
-	}
-	return id + " local smoke"
 }
 
 func (a *App) connectConfiguredMCPServerForTab(tab *WorkspaceTab, name string) (int, error) {

@@ -7,11 +7,11 @@ import (
 
 func TestGuardrailPassesAndRejectsPromotionRisks(t *testing.T) {
 	bundles := []BundleV2{
-		{ID: "a", Dynamic: &SkillSnapshot{Name: "parser-helper", AllowedTools: []string{"read_file"}}},
-		{ID: "b", Dynamic: &SkillSnapshot{Name: "parser-helper", AllowedTools: []string{"read_file"}}},
+		{ID: "a", Outcome: verifiedOutcome(true), Dynamic: &SkillSnapshot{Name: "parser-helper", AllowedTools: []string{"read_file"}}},
+		{ID: "b", Outcome: verifiedOutcome(true), Dynamic: &SkillSnapshot{Name: "parser-helper", AllowedTools: []string{"read_file"}}},
 	}
-	baseline := []OutcomeInfo{{Success: true, GoalMet: true}, {Success: false}}
-	replayed := []OutcomeInfo{{Success: true, GoalMet: true}, {Success: true, GoalMet: true}}
+	baseline := []OutcomeInfo{verifiedOutcome(true), verifiedOutcome(false)}
+	replayed := []OutcomeInfo{verifiedOutcome(true), verifiedOutcome(true)}
 	scores := []ScoreResult{{Score: 0.8}, {Score: 0.9}}
 	candidate := Candidate{Hash: "abc", Skill: validScoredSkill("parser-helper", "read_file"), Status: CandidatePending, Validation: ValidationInfo{Valid: true}}
 
@@ -39,7 +39,7 @@ func TestGuardrailPassesAndRejectsPromotionRisks(t *testing.T) {
 
 	readOnlyNewCandidate := candidate
 	readOnlyNewCandidate.Skill.AllowedTools = []string{"read_file", "grep"}
-	readOnly := CheckPromotionGuardrail([]BundleV2{{ID: "a"}, {ID: "b"}}, baseline, replayed, scores, readOnlyNewCandidate, GuardrailConfig{MinBundles: 2, MinScore: 0.7})
+	readOnly := CheckPromotionGuardrail([]BundleV2{{ID: "a", Outcome: verifiedOutcome(true)}, {ID: "b", Outcome: verifiedOutcome(true)}}, baseline, replayed, scores, readOnlyNewCandidate, GuardrailConfig{MinBundles: 2, MinScore: 0.7})
 	if !readOnly.Pass {
 		t.Fatalf("read-only tool expansion should pass: %+v", readOnly)
 	}
@@ -51,4 +51,21 @@ func TestGuardrailPassesAndRejectsPromotionRisks(t *testing.T) {
 	if invalid.Pass || !strings.Contains(invalid.Reason, "rejected") {
 		t.Fatalf("guardrail should reject invalid candidate: %+v", invalid)
 	}
+}
+
+func TestGuardrailRejectsUnverifiedBundleOutcome(t *testing.T) {
+	bundles := []BundleV2{{ID: "source", Outcome: OutcomeInfo{Success: true, GoalMet: true}}}
+	baseline := []OutcomeInfo{verifiedOutcome(true)}
+	replayed := []OutcomeInfo{verifiedOutcome(true)}
+	scores := []ScoreResult{{Score: 0.9}}
+	candidate := Candidate{Hash: "abc", Skill: validScoredSkill("parser-helper", "read_file"), Status: CandidatePending, Validation: ValidationInfo{Valid: true}}
+
+	result := CheckPromotionGuardrail(bundles, baseline, replayed, scores, candidate, GuardrailConfig{MinBundles: 1, MinScore: 0.7})
+	if result.Pass || !strings.Contains(result.Reason, "not verified") {
+		t.Fatalf("guardrail should reject unverified bundle outcome: %+v", result)
+	}
+}
+
+func verifiedOutcome(success bool) OutcomeInfo {
+	return OutcomeInfo{Success: success, GoalMet: success, Confidence: OutcomeConfidenceVerified}
 }

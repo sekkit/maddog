@@ -14,22 +14,35 @@ type ScoreResult struct {
 	Reason string  `json:"reason,omitempty"`
 }
 
+type ScoreReplayRequest struct {
+	Original          OutcomeInfo
+	Replayed          OutcomeInfo
+	Bundle            BundleV2
+	Candidate         Candidate
+	RequireModelScore bool
+}
+
 func ScoreReplay(ctx context.Context, frontier provider.Provider, original, replayed OutcomeInfo) (ScoreResult, error) {
+	return ScoreReplayWithContext(ctx, frontier, ScoreReplayRequest{Original: original, Replayed: replayed})
+}
+
+func ScoreReplayWithContext(ctx context.Context, frontier provider.Provider, req ScoreReplayRequest) (ScoreResult, error) {
 	if frontier == nil {
-		return ruleScore(original, replayed), nil
+		if req.RequireModelScore {
+			return ScoreResult{Score: 0, Reason: "promotion-grade scoring requires a model scorer"}, nil
+		}
+		return ruleScore(req.Original, req.Replayed), nil
 	}
 	ch, err := frontier.Stream(ctx, provider.Request{
 		Messages: []provider.Message{
 			{Role: provider.RoleSystem, Content: "Score the replayed skill-eval outcome against the original from 0.0 to 1.0. Return a number first, then a short reason."},
-			{Role: provider.RoleUser, Content: fmt.Sprintf("Original success=%v goal=%v tool_errors=%d answer=%q\nReplayed success=%v goal=%v tool_errors=%d answer=%q", original.Success, original.GoalMet, original.ToolErrors, original.FinalAnswer, replayed.Success, replayed.GoalMet, replayed.ToolErrors, replayed.FinalAnswer)},
+			{Role: provider.RoleUser, Content: scoreReplayPrompt(req)},
 		},
 		Temperature: 0,
 		MaxTokens:   200,
 	})
 	if err != nil {
-		rs := ruleScore(original, replayed)
-		rs.Reason = "rule fallback after scorer error: " + err.Error()
-		return rs, nil
+		return scoreReplayFallback(req, "scorer error: "+err.Error()), nil
 	}
 	var text strings.Builder
 	for chunk := range ch {
@@ -38,18 +51,14 @@ func ScoreReplay(ctx context.Context, frontier provider.Provider, original, repl
 			text.WriteString(chunk.Text)
 		case provider.ChunkError:
 			if chunk.Err != nil {
-				rs := ruleScore(original, replayed)
-				rs.Reason = "rule fallback after scorer stream error: " + chunk.Err.Error()
-				return rs, nil
+				return scoreReplayFallback(req, "scorer stream error: "+chunk.Err.Error()), nil
 			}
 		}
 	}
 	raw := strings.TrimSpace(text.String())
 	score, ok := leadingScore(raw)
 	if !ok {
-		rs := ruleScore(original, replayed)
-		rs.Reason = "rule fallback after unparseable scorer output"
-		return rs, nil
+		return scoreReplayFallback(req, "unparseable scorer output"), nil
 	}
 	if score < 0 {
 		score = 0
@@ -60,21 +69,75 @@ func ScoreReplay(ctx context.Context, frontier provider.Provider, original, repl
 	return ScoreResult{Score: score, Reason: raw}, nil
 }
 
+func scoreReplayFallback(req ScoreReplayRequest, reason string) ScoreResult {
+	if req.RequireModelScore {
+		return ScoreResult{Score: 0, Reason: "promotion-grade scorer " + reason}
+	}
+	rs := ruleScore(req.Original, req.Replayed)
+	rs.Reason = "rule fallback after " + reason
+	return rs
+}
+
+func scoreReplayPrompt(req ScoreReplayRequest) string {
+	var b strings.Builder
+	if strings.TrimSpace(req.Bundle.ID) != "" {
+		b.WriteString("Bundle: ")
+		b.WriteString(strings.TrimSpace(req.Bundle.ID))
+		b.WriteString("\n")
+	}
+	task := strings.TrimSpace(firstNonEmptyString(req.Bundle.Task, req.Candidate.SourceTask))
+	if task != "" {
+		b.WriteString("Task: ")
+		b.WriteString(task)
+		b.WriteString("\n")
+	}
+	if strings.TrimSpace(req.Candidate.Skill.Name) != "" {
+		b.WriteString("Candidate skill: ")
+		b.WriteString(strings.TrimSpace(req.Candidate.Skill.Name))
+		b.WriteString("\n")
+	}
+	if body := strings.TrimSpace(req.Candidate.Skill.Body); body != "" {
+		b.WriteString("Candidate skill body:\n")
+		b.WriteString(trimForScorePrompt(body, 4000))
+		b.WriteString("\n")
+	}
+	b.WriteString("\nOriginal outcome:\n")
+	b.WriteString(outcomeForScorePrompt(req.Original))
+	b.WriteString("\nReplayed outcome:\n")
+	b.WriteString(outcomeForScorePrompt(req.Replayed))
+	b.WriteString("\nScore whether the replayed answer satisfies the task at least as well as the original, using the task and candidate skill context above.")
+	return b.String()
+}
+
+func outcomeForScorePrompt(out OutcomeInfo) string {
+	return fmt.Sprintf("success=%v goal=%v confidence=%s tool_errors=%d tokens=%d answer=%q\n", out.Success, out.GoalMet, out.Confidence, out.ToolErrors, out.Tokens, trimForScorePrompt(out.FinalAnswer, 2000))
+}
+
+func trimForScorePrompt(s string, max int) string {
+	s = strings.TrimSpace(s)
+	if max <= 0 || len(s) <= max {
+		return s
+	}
+	return s[:max] + "\n[truncated]"
+}
+
 func ruleScore(original, replayed OutcomeInfo) ScoreResult {
-	score := 0.5
+	score := 0.1
 	switch {
+	case replayed.Success && replayed.GoalMet && original.Success && original.GoalMet:
+		score = 0.45
 	case replayed.Success && replayed.GoalMet:
-		score = 0.8
+		score = 0.35
 	case replayed.Success:
-		score = 0.7
+		score = 0.25
 	case !replayed.Success:
-		score = 0.2
+		score = 0.1
 	}
 	if original.Success && !replayed.Success {
 		score = 0.1
 	}
 	if replayed.ToolErrors < original.ToolErrors {
-		score += 0.05
+		score += 0.1
 	}
 	if original.Tokens > 0 && replayed.Tokens > 0 && replayed.Tokens < original.Tokens {
 		score += 0.05
@@ -86,7 +149,7 @@ func ruleScore(original, replayed OutcomeInfo) ScoreResult {
 		score += 0.05
 	}
 	if strings.TrimSpace(replayed.FinalAnswer) != "" && strings.TrimSpace(replayed.FinalAnswer) == strings.TrimSpace(original.FinalAnswer) {
-		score += 0.1
+		score += 0.35
 	}
 	if score > 1 {
 		score = 1

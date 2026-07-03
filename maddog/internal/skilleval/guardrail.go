@@ -42,6 +42,9 @@ func CheckPromotionGuardrail(bundles []BundleV2, baseline, replayed []OutcomeInf
 	if len(baseline) < len(bundles) || len(replayed) < len(bundles) || len(scores) < len(bundles) {
 		return GuardrailResult{Reason: "missing replay or score results"}
 	}
+	if reason := unverifiedOutcomeReason(bundles, baseline, replayed); reason != "" {
+		return GuardrailResult{Reason: reason}
+	}
 	if expanded := expandedAllowedTools(bundles, candidate); len(expanded) > 0 {
 		return GuardrailResult{Reason: "allowed tools expanded: " + strings.Join(expanded, ", ")}
 	}
@@ -59,6 +62,28 @@ func CheckPromotionGuardrail(bundles []BundleV2, baseline, replayed []OutcomeInf
 		}
 	}
 	return GuardrailResult{Pass: true, Reason: fmt.Sprintf("passed guardrail: success %.2f >= %.2f", newRate, oldRate)}
+}
+
+func unverifiedOutcomeReason(bundles []BundleV2, baseline, replayed []OutcomeInfo) string {
+	for i := 0; i < len(bundles); i++ {
+		if bundles[i].Outcome.Confidence != OutcomeConfidenceVerified {
+			return fmt.Sprintf("bundle %s outcome is not verified", bundleLabel(bundles[i], i))
+		}
+		if baseline[i].Confidence != OutcomeConfidenceVerified {
+			return fmt.Sprintf("baseline outcome for bundle %s is not verified", bundleLabel(bundles[i], i))
+		}
+		if replayed[i].Confidence != OutcomeConfidenceVerified {
+			return fmt.Sprintf("replayed outcome for bundle %s is not verified", bundleLabel(bundles[i], i))
+		}
+	}
+	return ""
+}
+
+func bundleLabel(bundle BundleV2, index int) string {
+	if strings.TrimSpace(bundle.ID) != "" {
+		return bundle.ID
+	}
+	return fmt.Sprintf("#%d", index+1)
 }
 
 func abnormalCostIncrease(baseline, replayed []OutcomeInfo) string {

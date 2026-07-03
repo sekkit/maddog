@@ -22,7 +22,8 @@ param(
   [switch]$SkipFrontend,
   [switch]$SkipFrontendBuild,
   [switch]$AuditOnly,
-  [switch]$RequireComplete
+  [switch]$RequireComplete,
+  [switch]$RequireRealCapabilities
 )
 
 $ErrorActionPreference = "Continue"
@@ -36,6 +37,36 @@ $MaddogBin = Join-Path $RepoRoot "bin\maddog.exe"
 
 New-Item -ItemType Directory -Force -Path $ReportDir, $LogDir | Out-Null
 Set-Location $RepoRoot
+
+function Test-NonEmptyCollection {
+  param($Value)
+  if ($null -eq $Value) {
+    return $false
+  }
+  return @($Value).Count -gt 0
+}
+
+function Assert-RealCapabilityAudit {
+  param($Audit)
+  if ($null -eq $Audit) {
+    Write-Error "Regression summary does not contain completion_audit."
+    return $false
+  }
+  $ok = $true
+  if (Test-NonEmptyCollection $Audit.skipped_real_gates) {
+    Write-Error "Regression summary still has skipped real gates; run the required live/provider/external checks before using -RequireRealCapabilities."
+    $ok = $false
+  }
+  if ([bool]$Audit.blocked_missing_credentials) {
+    Write-Error "Regression summary is blocked by missing credentials."
+    $ok = $false
+  }
+  if (-not [bool]$Audit.external_backend_verified) {
+    Write-Error "Regression summary does not contain real external backend benchmark evidence."
+    $ok = $false
+  }
+  return $ok
+}
 
 if ($AuditOnly) {
   if (!(Test-Path $SummaryJson)) {
@@ -64,6 +95,9 @@ if ($AuditOnly) {
     Write-Host "Pending: none"
   }
   if ($RequireComplete -and -not $audit.complete) {
+    exit 1
+  }
+  if ($RequireRealCapabilities -and -not (Assert-RealCapabilityAudit -Audit $audit)) {
     exit 1
   }
   exit 0
@@ -615,20 +649,33 @@ if ($IncludeOfficialAuthSmoke) {
   Add-SkipStep -Name "official-auth-smoke" -Reason "Skipped by default. Use -IncludeOfficialAuthSmoke with ANTHROPIC_IDENTITY_TOKEN plus OPENAI_OFFICIAL_TOKEN or OpenAI WIF envs for live official auth validation." -Coverage @("official-auth-live")
 }
 
+$ExternalBenchmarkRealRequested = [bool]($IncludeExternal -and $RequireRealCapabilities -and -not $DryRunExternal)
+
 if ($IncludeExternal) {
   $ps = Resolve-Native "powershell"
+  $externalCoverage = @("external-coding-benchmark", "agent-command-adapter")
+  if (-not $ExternalBenchmarkRealRequested) {
+    $externalCoverage += "local-provider-fixture"
+  }
+  $externalCommand = if ($ExternalBenchmarkRealRequested) {
+    "powershell -ExecutionPolicy Bypass -File scripts/run-coding-agent-benchmark.ps1 -BenchmarkDir $BenchmarkDir"
+  } elseif ($DryRunExternal) {
+    "powershell -ExecutionPolicy Bypass -File scripts/run-coding-agent-benchmark.ps1 -BenchmarkDir $BenchmarkDir -DryRun -SmokeOnly"
+  } else {
+    "powershell -ExecutionPolicy Bypass -File scripts/run-coding-agent-benchmark.ps1 -BenchmarkDir $BenchmarkDir -LocalSmoke"
+  }
   if ($ps -eq "") {
     Invoke-Step `
       -Name "coding-agent-benchmark" `
       -Command "powershell -ExecutionPolicy Bypass -File scripts/run-coding-agent-benchmark.ps1" `
-      -Coverage @("external-coding-benchmark") `
+      -Coverage $externalCoverage `
       -Required $true `
       -Action { throw "powershell is not available on PATH" }
   } else {
     Invoke-Step `
       -Name "coding-agent-benchmark" `
-      -Command "powershell -ExecutionPolicy Bypass -File scripts/run-coding-agent-benchmark.ps1 -BenchmarkDir $BenchmarkDir -LocalSmoke" `
-      -Coverage @("external-coding-benchmark", "agent-command-adapter", "local-provider-fixture") `
+      -Command $externalCommand `
+      -Coverage $externalCoverage `
       -Required $true `
       -Action {
         $args = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", (Join-Path $RepoRoot "scripts\run-coding-agent-benchmark.ps1"), "-BenchmarkDir", $BenchmarkDir, "-GoExe", $GoExe)
@@ -637,7 +684,7 @@ if ($IncludeExternal) {
         }
         if ($DryRunExternal) {
           $args += @("-DryRun", "-SmokeOnly")
-        } else {
+        } elseif (-not $RequireRealCapabilities) {
           $args += "-LocalSmoke"
         }
         if ($UseProxy) {
@@ -675,6 +722,7 @@ $ProviderAPIKeyE2EVerified = [bool](Test-StepPassed "maddog-e2e")
 $OfficialAuthLiveVerified = [bool](Test-StepPassed "official-auth-smoke")
 $FrontierSmokeVerified = [bool](Test-StepPassed "frontier-smoke")
 $AnthropicAdvisorVerified = [bool]($FrontierSmokeVerified -and $AnthropicLiveReady)
+$ExternalBenchmarkRealVerified = [bool]($ExternalBenchmarkRealRequested -and (Test-StepPassed "coding-agent-benchmark"))
 $CoverageMatrix[0].status = if ($ProviderAPIKeyE2EVerified -and $OfficialAuthLiveVerified) { "verified" } else { "partial-live-pending" }
 $CoverageMatrix[0].remaining = @(
   if (-not $ProviderAPIKeyE2EVerified) {
@@ -704,6 +752,8 @@ $CoverageMatrix[4].status = if ($FrontierSmokeVerified) { "verified" } else { "p
 $CoverageMatrix[4].remaining = if ($FrontierSmokeVerified) { @() } else {
   if ($LiveReadiness.frontier_smoke_ready) { @("Run live frontier scoring path with -IncludeFrontierSmoke.") } else { @("Set ICODEEASY_API_KEY or OPENAI_API_KEY, then run live frontier scoring path.") }
 }
+$CoverageMatrix[6].status = if ($ExternalBenchmarkRealVerified) { "verified" } elseif ($RequireRealCapabilities) { "partial-live-pending" } else { "verified-offline" }
+$CoverageMatrix[6].remaining = if ($ExternalBenchmarkRealVerified -or -not $RequireRealCapabilities) { @() } else { @("Run real external coding-agent benchmark with -IncludeExternal -RequireRealCapabilities and provider credentials; local smoke does not count as external backend verification.") }
 
 $CoverageSummaries = @(
   foreach ($c in $CoverageMatrix) {
@@ -728,11 +778,29 @@ $FailedRequiredSteps = @(
     }
   }
 )
+$SkippedRealGates = @(
+  foreach ($c in $CoverageSummaries) {
+    if ($c.status -eq "partial-live-pending") {
+      [ordered]@{
+        capability = [string]$c.capability
+        status = "blocked_missing_credentials"
+        remaining = [string[]]@($c.remaining)
+      }
+    }
+  }
+)
 $CompletionAudit = [ordered]@{
   complete = [bool](
     -not ($CoverageSummaries | Where-Object { $_.status -eq "partial-live-pending" } | Select-Object -First 1) -and
-    -not ($FailedRequiredSteps | Select-Object -First 1)
+    -not ($FailedRequiredSteps | Select-Object -First 1) -and
+    (-not $RequireRealCapabilities -or -not ($SkippedRealGates | Select-Object -First 1))
   )
+  offline_verified = [bool](-not ($FailedRequiredSteps | Select-Object -First 1))
+  real_provider_verified = [bool]$ProviderAPIKeyE2EVerified
+  external_backend_verified = [bool]$ExternalBenchmarkRealVerified
+  dev_fixture_only = [bool](-not $IncludeE2E)
+  blocked_missing_credentials = [bool]($SkippedRealGates | Select-Object -First 1)
+  skipped_real_gates = $SkippedRealGates
   failed_required_steps = $FailedRequiredSteps
   pending = @(
     foreach ($c in $CoverageSummaries) {
@@ -840,6 +908,13 @@ if ($CompletionAudit.pending.Count -gt 0) {
 } else {
   $md.Add("- Pending: none") | Out-Null
 }
+if ($CompletionAudit.skipped_real_gates.Count -gt 0) {
+  foreach ($g in $CompletionAudit.skipped_real_gates) {
+    $md.Add("- Skipped real gate: $($g.capability) ($($g.status)) - $($g.remaining -join '; ')") | Out-Null
+  }
+} else {
+  $md.Add("- Skipped real gates: none") | Out-Null
+}
 $md.Add("") | Out-Null
 $md.Add("JSON summary: $SummaryJson") | Out-Null
 $md | Set-Content -Encoding UTF8 $SummaryMd
@@ -852,5 +927,9 @@ if ($HadFailure) {
 }
 if ($RequireComplete -and -not $CompletionAudit.complete) {
   Write-Error "Completion audit is not complete. See $SummaryMd and $SummaryJson."
+  exit 1
+}
+if ($RequireRealCapabilities -and $CompletionAudit.skipped_real_gates.Count -gt 0) {
+  Write-Error "Strict real capability gate failed: skipped real gates remain. See $SummaryMd and $SummaryJson."
   exit 1
 }
