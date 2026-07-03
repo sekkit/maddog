@@ -895,6 +895,7 @@ function normalizeSettingsView(view: SettingsView | null | undefined): SettingsV
       proxy: network.proxy ?? { type: "socks5", server: "", port: 0, username: "", password: "" },
     },
     agent,
+    advisorModel: view.advisorModel ?? "",
     frontierModel: view.frontierModel ?? "",
     upgradeEnabled: Boolean(view.upgradeEnabled),
     upgradeThreshold: sanitizeInteger(view.upgradeThreshold ?? 0, 0),
@@ -3133,6 +3134,7 @@ function ModelsSection({ s, busy, apply, backgroundApply }: ModelsSectionProps) 
   const defaultRef = toRef(s.defaultModel, s);
   const plannerRef = toRef(s.plannerModel, s);
   const subagentRef = toRef(s.subagentModel, s);
+  const advisorRef = toRef(s.advisorModel, s);
   const frontierRef = toRef(s.frontierModel, s);
   const plannerSelectRef = plannerRef === defaultRef ? "" : plannerRef;
   const [defaultProvider] = defaultRef.split("/");
@@ -3251,6 +3253,18 @@ function ModelsSection({ s, busy, apply, backgroundApply }: ModelsSectionProps) 
               emptyOptionLabel={t("settings.subagentModelDefault")}
               emptyOptionHint={t("common.auto")}
               onPick={(ref) => void apply(() => app.SetSubagentModel(ref))}
+            />
+          </SettingsField>
+
+          <SettingsField label={t("settings.advisorModel")} hint={t("settings.advisorModelHint")}>
+            <ModelPicker
+              s={s}
+              refs={refs}
+              value={advisorRef}
+              disabled={busy}
+              emptyOptionLabel={t("settings.advisorModelDefault")}
+              emptyOptionHint={subagentLabel}
+              onPick={(ref) => void apply(() => app.SetAdvisorModel(ref))}
             />
           </SettingsField>
 
@@ -3968,6 +3982,7 @@ type ProviderAccessGroup = {
   description: string;
   builtIn: boolean;
   providers: ProviderView[];
+  roles: string[];
   apiKeyEnv: string;
   credentialEnv: string;
   authType: string;
@@ -4188,6 +4203,15 @@ function ProviderAccessCard({
             </span>
           </div>
           <div className="provider-access-card__desc">{group.description}</div>
+          {group.roles.length > 0 && (
+            <div className="provider-role-chips" aria-label={t("settings.providerRoles")}>
+              {group.roles.map((role) => (
+                <span className="provider-role-chip" key={role}>
+                  {providerRoleLabel(role, t)}
+                </span>
+              ))}
+            </div>
+          )}
         </div>
         <div className="provider-access-card__actions">
           {editableProvider && (
@@ -4280,6 +4304,11 @@ function ProviderAccessCard({
             return (
               <div className="provider-profile-row" key={p.name}>
                 <span>{p.name}</span>
+                <span className="provider-profile-row__roles">
+                  {normalizedProviderRoles(p.roles).length > 0
+                    ? normalizedProviderRoles(p.roles).map((role) => providerRoleLabel(role, t)).join(", ")
+                    : t("common.none")}
+                </span>
                 <span>{p.models.join(", ") || t("common.none")}</span>
                 <button
                   className="btn btn--small"
@@ -4425,6 +4454,7 @@ function providerAccessGroups(providers: ProviderView[], t: ReturnType<typeof us
       if (!existing.keySource && p.keySource) existing.keySource = p.keySource;
       if (!existing.keySourcePath && p.keySourcePath) existing.keySourcePath = p.keySourcePath;
       existing.models = uniqueStrings([...existing.models, ...p.models]);
+      existing.roles = uniqueStrings([...existing.roles, ...normalizedProviderRoles(p.roles)]);
       existing.credentialEnv = existing.credentialEnv || providerCredentialEnv(p);
       continue;
     }
@@ -4434,6 +4464,7 @@ function providerAccessGroups(providers: ProviderView[], t: ReturnType<typeof us
       description: providerGroupDescription(p, t),
       builtIn,
       providers: [p],
+      roles: normalizedProviderRoles(p.roles),
       apiKeyEnv: p.apiKeyEnv,
       credentialEnv: providerCredentialEnv(p),
       authType: p.authType,
@@ -4492,6 +4523,27 @@ function providerGroupDescription(p: ProviderView, t: ReturnType<typeof useT>): 
   const id = providerGroupID(p);
   if (id === "builtin:deepseek") return t("settings.providerDesc.deepseek");
   return p.baseUrl;
+}
+
+function normalizedProviderRoles(roles?: string[]): string[] {
+  return uniqueStrings((roles ?? []).map((role) => role.trim()).filter(Boolean));
+}
+
+function providerRoleLabel(role: string, t: ReturnType<typeof useT>): string {
+  switch (role) {
+    case "default":
+      return t("settings.providerRole.default");
+    case "planner":
+      return t("settings.providerRole.planner");
+    case "frontier":
+      return t("settings.providerRole.frontier");
+    case "small":
+      return t("settings.providerRole.small");
+    case "advisor":
+      return t("settings.providerRole.advisor");
+    default:
+      return role;
+  }
 }
 
 function uniqueStrings(values: string[]): string[] {

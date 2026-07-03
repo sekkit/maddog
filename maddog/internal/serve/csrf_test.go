@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"maddog/internal/config"
 	"maddog/internal/control"
 )
 

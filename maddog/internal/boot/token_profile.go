@@ -113,11 +113,18 @@ func (t *toolSourceConnector) Execute(ctx context.Context, args json.RawMessage)
 	if err := json.Unmarshal(args, &p); err != nil {
 		return "", fmt.Errorf("invalid args: %w", err)
 	}
-	source := normalizeToolSource(p.Source)
+	rawSource := strings.ToLower(strings.TrimSpace(p.Source))
+	source := normalizeToolSource(rawSource)
+	name := strings.TrimSpace(p.Name)
+	if source == "codegraph" {
+		source = "mcp"
+		if name == "" {
+			name = "codegraph"
+		}
+	}
 	if source == "" {
 		return "", fmt.Errorf("unknown tool source %q; available: %s", p.Source, strings.Join(t.availableSources(), ", "))
 	}
-	name := strings.TrimSpace(p.Name)
 
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -196,6 +203,8 @@ func normalizeToolSource(source string) string {
 		return "read_only_skill"
 	case "mcp", "plugin", "plugins", "server", "servers":
 		return "mcp"
+	case "codegraph", "code_graph", "symbol_graph", "symbol-graph":
+		return "codegraph"
 	case "lsp", "language_server", "language-servers":
 		return "lsp"
 	case "web", "web_fetch", "webfetch", "fetch":

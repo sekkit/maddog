@@ -192,6 +192,7 @@ func resolveProviderCredentialWithResolver(entry *ProviderEntry, resolver *Crede
 		return
 	}
 	key := strings.TrimSpace(entry.APIKeyEnv)
+	entry.credentialsResolved = true
 	if key == "" {
 		entry.resolvedAPIKey = ""
 		entry.resolvedSource = CredentialSource{}

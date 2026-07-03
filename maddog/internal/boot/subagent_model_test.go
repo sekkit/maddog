@@ -4,8 +4,10 @@ import (
 	"path/filepath"
 	"testing"
 
+	"maddog/internal/agent"
 	"maddog/internal/config"
 	"maddog/internal/skill"
+	"maddog/internal/tool"
 )
 
 func TestSubagentModelRefUsesConfiguredDefault(t *testing.T) {
@@ -39,6 +41,22 @@ func TestSubagentModelRefHonorsPrecedence(t *testing.T) {
 	})
 	if got != "mimo-flash" {
 		t.Fatalf("skill frontmatter should override default config, got %q", got)
+	}
+}
+
+func TestSubagentModelRefPrefersAdvisorModelForAdvisor(t *testing.T) {
+	cfg := config.Default()
+	cfg.Agent.SubagentModel = "small/default"
+	cfg.Agent.AdvisorModel = "advisor/claude-opus"
+	cfg.Agent.SubagentModels = map[string]string{"advisor": "legacy/claude-haiku"}
+
+	got := subagentModelRef(cfg, skill.Skill{
+		Name:  "advisor",
+		RunAs: skill.RunSubagent,
+		Model: "frontmatter/ignored",
+	})
+	if got != "advisor/claude-opus" {
+		t.Fatalf("advisor model = %q, want advisor/claude-opus", got)
 	}
 }
 
@@ -88,6 +106,15 @@ func TestSubagentEffortRefAcceptsToolNameAliases(t *testing.T) {
 	got := subagentEffortRef(cfg, skill.Skill{Name: "security-review", RunAs: skill.RunSubagent})
 	if got != "max" {
 		t.Fatalf("security_review alias should configure security-review effort, got %q", got)
+	}
+}
+
+func TestSubagentUsageRoleDistinguishesAdvisor(t *testing.T) {
+	if got := subagentUsageRole(skill.Skill{Name: "advisor", RunAs: skill.RunSubagent}); got != "advisor" {
+		t.Fatalf("advisor usage role = %q, want advisor", got)
+	}
+	if got := subagentUsageRole(skill.Skill{Name: "review", RunAs: skill.RunSubagent}); got != "small" {
+		t.Fatalf("review usage role = %q, want small", got)
 	}
 }
 

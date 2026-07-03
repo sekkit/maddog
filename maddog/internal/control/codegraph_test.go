@@ -14,7 +14,7 @@ import (
 )
 
 func TestConnectConfiguredCodegraphSetsShortDaemonIdleTimeout(t *testing.T) {
-	isolateControlConfigHome(t)
+	isolateCodegraphControlConfigHome(t)
 	dir := t.TempDir()
 	t.Chdir(dir)
 	launcher := writeControlCodegraphHelper(t, dir)
@@ -45,7 +45,7 @@ path = "`+escapeTOMLPath(launcher)+`"
 	time.Sleep(100 * time.Millisecond)
 }
 
-func isolateControlConfigHome(t *testing.T) {
+func isolateCodegraphControlConfigHome(t *testing.T) {
 	t.Helper()
 	home := t.TempDir()
 	xdg := filepath.Join(home, ".config")

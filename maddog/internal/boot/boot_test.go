@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"runtime"
@@ -20,7 +21,6 @@ import (
 
 	"maddog/internal/agent"
 	"maddog/internal/agent/testutil"
-	"maddog/internal/builtinmcp"
 	"maddog/internal/codegraph"
 	"maddog/internal/config"
 	"maddog/internal/event"
@@ -382,6 +382,32 @@ func firstTokenProfileRequest(t *testing.T, tokenMode string) provider.Request {
 		t.Fatalf("requests(%q) = %d, want 1", tokenMode, len(reqs))
 	}
 	return reqs[0]
+}
+
+func captureTokenProfileSurface(t *testing.T, tokenMode string) (provider.Request, []tool.ContractEntry) {
+	t.Helper()
+	registerBootTokenProfileTestProvider()
+	prov := testutil.NewMock("token-profile", testutil.Turn{Text: "done"})
+	setBootTokenProfileTestProvider(t, prov)
+
+	opts := Options{Sink: event.Discard}
+	if tokenMode != "" {
+		opts.TokenMode = tokenMode
+	}
+	ctrl, err := Build(context.Background(), opts)
+	if err != nil {
+		t.Fatalf("Build(%q): %v", tokenMode, err)
+	}
+	defer ctrl.Close()
+	entries := ctrl.ToolContractEntries()
+	if err := ctrl.Run(context.Background(), "capture request prefix"); err != nil {
+		t.Fatalf("Run(%q): %v", tokenMode, err)
+	}
+	reqs := prov.Requests()
+	if len(reqs) != 1 {
+		t.Fatalf("requests(%q) = %d, want 1", tokenMode, len(reqs))
+	}
+	return reqs[0], entries
 }
 
 func TestBuildUsageProfileUsesResolvedDefaultModelAndEffort(t *testing.T) {
@@ -2797,8 +2823,14 @@ func TestBuildMigratesLegacyXDGAndProjectSessions(t *testing.T) {
 func isolateConfigHome(t *testing.T) string {
 	t.Helper()
 	dir := robustTempDir(t)
+	appData := filepath.Join(dir, "AppData", "Roaming")
 	t.Setenv("HOME", dir)
-	t.Setenv("XDG_CONFIG_HOME", dir)
+	t.Setenv("USERPROFILE", dir)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, ".config"))
+	t.Setenv("MADDOG_HOME", filepath.Join(dir, ".maddog"))
+	t.Setenv("APPDATA", appData)
+	t.Setenv("AppData", appData)
+	t.Setenv("LOCALAPPDATA", filepath.Join(dir, "AppData", "Local"))
 	t.Setenv("MADDOG_CREDENTIALS_STORE", "file")
 	return dir
 }

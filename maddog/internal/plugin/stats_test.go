@@ -194,9 +194,9 @@ func TestStatsPathLayout(t *testing.T) {
 	if p == "" {
 		t.Fatal("statsPath returned empty")
 	}
-	wantSuffix := filepath.Join("maddog", "cache", "mcp")
-	if got := filepath.Dir(p); !strings.HasSuffix(got, wantSuffix) {
-		t.Fatalf("parent = %q, want suffix %q", got, wantSuffix)
+	wantParent := filepath.Join(root, "mcp")
+	if got := filepath.Dir(p); got != wantParent {
+		t.Fatalf("parent = %q, want %q", got, wantParent)
 	}
 	base := filepath.Base(p)
 	if filepath.Ext(base) != ".json" {

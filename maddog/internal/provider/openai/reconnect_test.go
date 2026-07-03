@@ -84,6 +84,7 @@ func TestStreamReconnectsOnEarlyConnReset(t *testing.T) {
 func TestStreamCancelDoesNotReconnect(t *testing.T) {
 	var reqs atomic.Int32
 	ready := make(chan struct{})
+	release := make(chan struct{})
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		first := reqs.Add(1) == 1
 		w.Header().Set("Content-Type", "text/event-stream")
@@ -92,9 +93,13 @@ func TestStreamCancelDoesNotReconnect(t *testing.T) {
 		if first {
 			close(ready)
 		}
-		<-r.Context().Done()
+		select {
+		case <-r.Context().Done():
+		case <-release:
+		}
 	}))
 	defer srv.Close()
+	defer close(release)
 
 	p, err := New(provider.Config{Name: "deepseek", BaseURL: srv.URL, Model: "deepseek-v4", APIKey: "k"})
 	if err != nil {

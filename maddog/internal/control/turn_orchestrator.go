@@ -66,6 +66,9 @@ func (o *turnOrchestrator) runOrchestratedTurn(ctx context.Context, turn orchest
 		ctx = agent.WithMemoryCompilerSourceInput(ctx, turn.raw)
 	}
 	input := c.Compose(turn.input)
+	if !turn.synthetic {
+		input = c.orchestrateSkills(ctx, input)
+	}
 	startMessages := c.messageCount()
 	defer c.snapshotActivityIfChanged(startMessages)
 	defer c.recordDisplayForNewUser(startMessages, turn.display)
@@ -162,23 +165,33 @@ func (o *turnOrchestrator) runOrchestratedTurn(ctx context.Context, turn orchest
 }
 
 func (o *turnOrchestrator) runGoalLoopWithRawDisplay(ctx context.Context, input, raw, display string) error {
+	startMessages := o.c.messageCount()
 	if err := o.runTurnWithRawDisplay(ctx, input, raw, display); err != nil {
 		if ctx.Err() != nil {
 			o.c.stopGoal(GoalStatusStopped)
 		}
 		return err
 	}
-	return o.continueGoal(ctx)
+	if err := o.continueGoal(ctx); err != nil {
+		return err
+	}
+	o.c.captureReplayBundleAsync(raw, startMessages)
+	return nil
 }
 
 func (o *turnOrchestrator) runEditedGoalLoopWithRawDisplay(ctx context.Context, input, raw, display, original string) error {
+	startMessages := o.c.messageCount()
 	if err := o.runEditedTurnWithRawDisplay(ctx, input, raw, display, original); err != nil {
 		if ctx.Err() != nil {
 			o.c.stopGoal(GoalStatusStopped)
 		}
 		return err
 	}
-	return o.continueGoal(ctx)
+	if err := o.continueGoal(ctx); err != nil {
+		return err
+	}
+	o.c.captureReplayBundleAsync(raw, startMessages)
+	return nil
 }
 
 func (o *turnOrchestrator) continueGoal(ctx context.Context) error {

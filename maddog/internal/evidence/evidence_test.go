@@ -91,6 +91,32 @@ func TestLedgerResetClearsTurnReceipts(t *testing.T) {
 	}
 }
 
+func TestLedgerSnapshotDeepCopiesReceipts(t *testing.T) {
+	ledger := NewLedger()
+	ledger.Record(Receipt{
+		ToolName: "todo_write",
+		Success:  true,
+		Args:     []byte(`{"todos":[]}`),
+		Paths:    []string{"a.go"},
+		Todos:    []TodoItem{{Content: "Ship it", Status: "pending"}},
+		TodoStep: &TodoStepMatch{Found: true, Index: 1, Content: "Ship it"},
+	})
+
+	snap := ledger.Snapshot()
+	if len(snap) != 1 {
+		t.Fatalf("Snapshot length = %d, want 1", len(snap))
+	}
+	snap[0].Args[0] = '['
+	snap[0].Paths[0] = "mutated.go"
+	snap[0].Todos[0].Content = "mutated"
+	snap[0].TodoStep.Content = "mutated"
+
+	again := ledger.Snapshot()
+	if string(again[0].Args) != `{"todos":[]}` || again[0].Paths[0] != "a.go" || again[0].Todos[0].Content != "Ship it" || again[0].TodoStep.Content != "Ship it" {
+		t.Fatalf("Snapshot shared mutable receipt data: %+v", again[0])
+	}
+}
+
 func TestContextCarriesLedger(t *testing.T) {
 	ledger := NewLedger()
 	ctx := WithLedger(context.Background(), ledger)

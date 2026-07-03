@@ -475,6 +475,7 @@ func TestSettingsProviderProfilesAnnotateRolesAuthAndGateway(t *testing.T) {
 	t.Setenv("ANTHROPIC_TOKEN", "frontier-token")
 	t.Setenv("ICODEEASY_API_KEY", "")
 	t.Setenv("SMALL_API_KEY", "")
+	t.Setenv("ADVISOR_API_KEY", "advisor-token")
 
 	app := NewApp()
 	if err := app.applyConfigChange(func(c *config.Config) error {
@@ -483,7 +484,8 @@ func TestSettingsProviderProfilesAnnotateRolesAuthAndGateway(t *testing.T) {
 		c.Agent.UpgradeEnabled = true
 		c.Agent.FrontierBudget = 1234
 		c.Agent.SubagentModel = "small/qwen2.5-coder"
-		c.Desktop.ProviderAccess = []string{"icodeeasy", "anthropic", "small"}
+		c.Agent.AdvisorModel = "advisor/claude-haiku"
+		c.Desktop.ProviderAccess = []string{"icodeeasy", "anthropic", "small", "advisor"}
 		c.Providers = []config.ProviderEntry{
 			{
 				Name: "icodeeasy", Kind: "openai", BaseURL: "https://api.icodeeasy.com/v1",
@@ -498,6 +500,10 @@ func TestSettingsProviderProfilesAnnotateRolesAuthAndGateway(t *testing.T) {
 				Name: "small", Kind: "openai", BaseURL: "https://small.local/v1",
 				Models: []string{"qwen2.5-coder"}, Default: "qwen2.5-coder", APIKeyEnv: "SMALL_API_KEY",
 			},
+			{
+				Name: "advisor", Kind: "openai", BaseURL: "https://advisor.local/v1",
+				Models: []string{"claude-haiku"}, Default: "claude-haiku", APIKeyEnv: "ADVISOR_API_KEY",
+			},
 		}
 		return nil
 	}); err != nil {
@@ -505,6 +511,9 @@ func TestSettingsProviderProfilesAnnotateRolesAuthAndGateway(t *testing.T) {
 	}
 
 	view := app.Settings()
+	if view.AdvisorModel != "advisor/claude-haiku" {
+		t.Fatalf("settings advisor model = %q, want advisor/claude-haiku", view.AdvisorModel)
+	}
 	providers := providerViewsByName(view.Providers)
 
 	defaultProvider := providers["icodeeasy"]
@@ -535,6 +544,44 @@ func TestSettingsProviderProfilesAnnotateRolesAuthAndGateway(t *testing.T) {
 	}
 	if smallProvider.SmallModelEligible {
 		t.Fatalf("small model provider with missing credential should not be eligible: %+v", smallProvider)
+	}
+
+	advisorProvider := providers["advisor"]
+	if !containsString(advisorProvider.Roles, "advisor") {
+		t.Fatalf("advisor roles = %v, want advisor", advisorProvider.Roles)
+	}
+	if advisorProvider.CredentialStatus != "configured" {
+		t.Fatalf("advisor credential = %q, want configured", advisorProvider.CredentialStatus)
+	}
+}
+
+func TestSetAdvisorModelPersistsDedicatedAdvisorModel(t *testing.T) {
+	isolateDesktopUserDirs(t)
+	t.Setenv("ADVISOR_API_KEY", "advisor-token")
+
+	app := NewApp()
+	if err := app.applyConfigChange(func(c *config.Config) error {
+		c.DefaultModel = "advisor/claude-haiku"
+		c.Desktop.ProviderAccess = []string{"advisor"}
+		c.Providers = []config.ProviderEntry{{
+			Name: "advisor", Kind: "openai", BaseURL: "https://advisor.local/v1",
+			Models: []string{"claude-haiku", "claude-opus"}, Default: "claude-haiku", APIKeyEnv: "ADVISOR_API_KEY",
+		}}
+		return nil
+	}); err != nil {
+		t.Fatalf("applyConfigChange: %v", err)
+	}
+
+	if err := app.SetAdvisorModel("advisor/claude-opus"); err != nil {
+		t.Fatalf("SetAdvisorModel: %v", err)
+	}
+	view := app.Settings()
+	if view.AdvisorModel != "advisor/claude-opus" {
+		t.Fatalf("settings advisor model = %q, want advisor/claude-opus", view.AdvisorModel)
+	}
+	cfg := config.LoadForEdit(config.UserConfigPath())
+	if cfg.Agent.AdvisorModel != "advisor/claude-opus" {
+		t.Fatalf("config advisor model = %q, want advisor/claude-opus", cfg.Agent.AdvisorModel)
 	}
 }
 

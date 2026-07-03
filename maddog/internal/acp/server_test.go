@@ -13,9 +13,11 @@ import (
 	"time"
 
 	"maddog/internal/agent"
+	"maddog/internal/command"
 	"maddog/internal/control"
 	"maddog/internal/event"
 	"maddog/internal/hook"
+	"maddog/internal/jobs"
 	"maddog/internal/provider"
 )
 

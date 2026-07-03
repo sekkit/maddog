@@ -532,7 +532,9 @@ func (c *client) readStream(ctx context.Context, resp *http.Response, out chan<-
 			case "tool_use":
 				tc := &provider.ToolCall{ID: ev.ContentBlock.ID, Name: ev.ContentBlock.Name}
 				tools[ev.Index] = tc
-				out <- provider.Chunk{Type: provider.ChunkToolCallStart, ToolCall: &provider.ToolCall{ID: tc.ID, Name: tc.Name}}
+				if !send(provider.Chunk{Type: provider.ChunkToolCallStart, ToolCall: &provider.ToolCall{ID: tc.ID, Name: tc.Name}}) {
+					return
+				}
 			case "server_tool_use":
 				preserveNative = true
 				serverBlocks[ev.Index] = ev.ContentBlock
@@ -552,7 +554,9 @@ func (c *client) readStream(ctx context.Context, resp *http.Response, out chan<-
 					if b := textBlocks[ev.Index]; b != nil {
 						b.WriteString(ev.Delta.Text)
 					}
-					out <- provider.Chunk{Type: provider.ChunkText, Text: ev.Delta.Text}
+					if !send(provider.Chunk{Type: provider.ChunkText, Text: ev.Delta.Text}) {
+						return
+					}
 				}
 			case "thinking_delta":
 				if ev.Delta.Thinking != "" {
@@ -582,7 +586,9 @@ func (c *client) readStream(ctx context.Context, resp *http.Response, out chan<-
 				if block := marshalToolUseNativeBlock(tc); len(block) > 0 {
 					nativeBlocks = append(nativeBlocks, block)
 				}
-				out <- provider.Chunk{Type: provider.ChunkToolCall, ToolCall: tc}
+				if !send(provider.Chunk{Type: provider.ChunkToolCall, ToolCall: tc}) {
+					return
+				}
 				delete(tools, ev.Index)
 			}
 			if block := serverBlocks[ev.Index]; block != nil {
@@ -610,7 +616,9 @@ func (c *client) readStream(ctx context.Context, resp *http.Response, out chan<-
 			if ev.Error != nil {
 				errType = ev.Error.Type
 			}
-			out <- provider.Chunk{Type: provider.ChunkError, Err: provider.NewStructuredAPIError(c.name, errType, "", msg)}
+			if !send(provider.Chunk{Type: provider.ChunkError, Err: provider.NewStructuredAPIError(c.name, errType, "", msg)}) {
+				return
+			}
 			return
 		}
 	}
@@ -629,7 +637,9 @@ func (c *client) readStream(ctx context.Context, resp *http.Response, out chan<-
 
 	if preserveNative {
 		for _, block := range nativeBlocks {
-			out <- provider.Chunk{Type: provider.ChunkNativeBlock, NativeBlock: block}
+			if !send(provider.Chunk{Type: provider.ChunkNativeBlock, NativeBlock: block}) {
+				return
+			}
 		}
 	}
 	if haveUsage {

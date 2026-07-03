@@ -17,7 +17,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/http/httptrace"
 	"sort"
 	"strings"
 	"sync"
@@ -233,10 +235,16 @@ func (c *client) Stream(ctx context.Context, req provider.Request) (<-chan provi
 		if err != nil {
 			return nil, err
 		}
-		httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.chatURL, bytes.NewReader(body))
+		holder := &streamConnHolder{}
+		trace := &httptrace.ClientTrace{GotConn: func(info httptrace.GotConnInfo) {
+			holder.set(info.Conn)
+		}}
+		reqCtx := context.WithValue(httptrace.WithClientTrace(ctx, trace), streamConnContextKey{}, holder)
+		httpReq, err := http.NewRequestWithContext(reqCtx, http.MethodPost, c.chatURL, bytes.NewReader(body))
 		if err != nil {
 			return nil, err
 		}
+		httpReq.Close = true
 		httpReq.Header.Set("Content-Type", "application/json")
 		auth.Header(httpReq, "Authorization")
 		httpReq.Header.Set("Accept", "text/event-stream")
@@ -369,6 +377,34 @@ func exchangeOpenAIWorkloadIdentity(ctx context.Context, httpClient *http.Client
 // whole request (cheap under prompt caching, but not free).
 const maxStreamReconnects = 3
 
+type streamConnContextKey struct{}
+
+type streamConnHolder struct {
+	mu   sync.Mutex
+	conn net.Conn
+}
+
+func (h *streamConnHolder) set(conn net.Conn) {
+	if h == nil {
+		return
+	}
+	h.mu.Lock()
+	h.conn = conn
+	h.mu.Unlock()
+}
+
+func (h *streamConnHolder) close() {
+	if h == nil {
+		return
+	}
+	h.mu.Lock()
+	conn := h.conn
+	h.mu.Unlock()
+	if conn != nil {
+		_ = conn.Close()
+	}
+}
+
 // streamWithReconnect drives readStream and, when the connection is cut before
 // any model output has been forwarded, replays the request rather than failing
 // the turn. Once a token (reasoning/text/tool-call) has been emitted, a replay
@@ -491,7 +527,13 @@ func (c *client) buildRequest(req provider.Request) chatRequest {
 // any model output was forwarded (so the caller can decide a replay is safe) and
 // the first fatal error — a nil error means the stream reached [DONE].
 func (c *client) readStream(ctx context.Context, resp *http.Response, out chan<- provider.Chunk) (emitted bool, _ error) {
-	defer resp.Body.Close()
+	defer func() {
+		if ctx.Err() != nil {
+			closeCanceledStreamResponse(c.http, resp)
+			return
+		}
+		resp.Body.Close()
+	}()
 
 	// Close the response body when the context is canceled (user interrupt) or the
 	// stream stalls past c.idleTimeout, so scanner.Scan() unblocks instead of
@@ -513,7 +555,7 @@ func (c *client) readStream(ctx context.Context, resp *http.Response, out chan<-
 		for {
 			select {
 			case <-ctx.Done():
-				resp.Body.Close()
+				closeCanceledStreamResponse(c.http, resp)
 				return
 			case <-idle.C:
 				stalled.Store(true)
@@ -675,6 +717,23 @@ func (c *client) readStream(ctx context.Context, resp *http.Response, out chan<-
 		return emitted, ctx.Err()
 	}
 	return emitted, nil
+}
+
+func closeCanceledStreamResponse(httpClient *http.Client, resp *http.Response) {
+	if resp == nil {
+		return
+	}
+	if httpClient != nil && resp.Request != nil {
+		if tr, ok := httpClient.Transport.(interface{ CancelRequest(*http.Request) }); ok {
+			tr.CancelRequest(resp.Request)
+		}
+	}
+	if resp.Request != nil {
+		if holder, ok := resp.Request.Context().Value(streamConnContextKey{}).(*streamConnHolder); ok {
+			holder.close()
+		}
+	}
+	_ = resp.Body.Close()
 }
 
 // normaliseUsage folds the two cache-hit shapes the OpenAI-compatible ecosystem

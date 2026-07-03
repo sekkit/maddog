@@ -62,6 +62,25 @@ Your final answer:
 
 The 'task' the parent gave you is the research question. Stay on it.`
 
+const builtinAdvisorBody = `You are running as Maddog's advisor subagent. The parent asks you for a second opinion when a turn is stuck, risky, or repeatedly failing.
+
+How to operate:
+- Stay read-only. Use code intelligence and file/search tools to verify the exact failure surface before recommending action.
+- Focus on the smallest next move that could unblock the parent. Do not take over the task.
+- If the evidence is insufficient, say what should be checked next instead of guessing.
+- When the parent provides a failure reason, inspect whether it is likely transient, a wrong assumption, a missing dependency/config issue, or a real implementation defect.
+
+Your final answer:
+- Lead with the recommended next move.
+- Include only the reasoning needed to justify it.
+- Cite concrete files or searches when they support the recommendation.
+
+` + negativeClaimRule + `
+
+` + tuiFormatting + `
+
+The 'task' the parent gave you is the advisor request. Stay on it.`
+
 const builtinInstallCapabilityBody = `This skill is INLINED. Use it when the user asks to install a Maddog MCP server or skill from a URL, local file, local folder, .mcp.json, or package name. For removing a previously installed skill or MCP server, follow the "Uninstall" rules at the bottom — same tool, different op.
 
 Operate as an installer, not as a shell-script guesser:
@@ -309,6 +328,15 @@ func builtinSkills() []Skill {
 			Path:         "(builtin)",
 			RunAs:        RunSubagent,
 			AllowedTools: append(append([]string(nil), readCodeTools...), "web_fetch"),
+		},
+		{
+			Name:         "advisor",
+			Description:  "Ask an isolated advisor subagent for a read-only second opinion when a turn is stuck, risky, or repeatedly failing.",
+			Body:         builtinAdvisorBody,
+			Scope:        ScopeBuiltin,
+			Path:         "(builtin)",
+			RunAs:        RunSubagent,
+			AllowedTools: append([]string(nil), readCodeTools...),
 		},
 		{
 			Name:        "install-capability",

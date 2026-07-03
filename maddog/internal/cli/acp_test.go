@@ -19,6 +19,13 @@ import (
 
 const acpTestProviderKind = "acp-test-provider"
 
+func seedACPTestCredential(t *testing.T) {
+	t.Helper()
+	if _, err := config.StoreCredentialLines([]string{"MADDOG_TEST_KEY=test-key"}); err != nil {
+		t.Fatalf("StoreCredentialLines: %v", err)
+	}
+}
+
 func init() {
 	provider.Register(acpTestProviderKind, func(cfg provider.Config) (provider.Provider, error) {
 		return &acpTestProvider{cfg: cfg}, nil
@@ -71,7 +78,7 @@ func TestACPInitializesWithoutAPIKey(t *testing.T) {
 
 func TestACPFactoryLoadsSessionCwdProjectConfig(t *testing.T) {
 	home := isolateCLIConfigHome(t)
-	t.Setenv("MADDOG_TEST_KEY", "test-key")
+	seedACPTestCredential(t)
 	project := t.TempDir()
 	if err := os.WriteFile(filepath.Join(project, "maddog.toml"), []byte(`
 default_model = "local"
@@ -112,7 +119,7 @@ api_key_env = "MADDOG_TEST_KEY"
 
 func TestACPFactoryClearsEffortOverrideForUnsupportedModel(t *testing.T) {
 	isolateCLIConfigHome(t)
-	t.Setenv("MADDOG_TEST_KEY", "test-key")
+	seedACPTestCredential(t)
 	project := t.TempDir()
 	if err := os.WriteFile(filepath.Join(project, "maddog.toml"), []byte(`
 default_model = "reasoner/reasoning-model"

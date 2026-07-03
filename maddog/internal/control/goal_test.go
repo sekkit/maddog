@@ -8,6 +8,7 @@ import (
 
 	"maddog/internal/agent"
 	"maddog/internal/event"
+	"maddog/internal/evidence"
 	"maddog/internal/provider"
 	"maddog/internal/tool"
 )

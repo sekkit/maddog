@@ -31,6 +31,7 @@ import (
 	"maddog/internal/agent"
 	"maddog/internal/billing"
 	"maddog/internal/checkpoint"
+	"maddog/internal/codegraph"
 	"maddog/internal/command"
 	"maddog/internal/config"
 	"maddog/internal/diff"
@@ -48,6 +49,7 @@ import (
 	"maddog/internal/provider"
 	"maddog/internal/sandbox"
 	"maddog/internal/skill"
+	"maddog/internal/skilleval"
 	"maddog/internal/store"
 	"maddog/internal/tool"
 )
@@ -330,41 +332,42 @@ func New(opts Options) *Controller {
 		pluginCtx = context.Background()
 	}
 	c := &Controller{
-		runner:                 opts.Runner,
-		executor:               opts.Executor,
-		sink:                   sink,
-		policy:                 opts.Policy,
-		label:                  opts.Label,
-		systemPrompt:           opts.SystemPrompt,
-		sessionDir:             opts.SessionDir,
-		sessionPath:            opts.SessionPath,
-		modelRef:               opts.ModelRef,
-		guardianSess:           opts.Guardian,
-		host:                   opts.Host,
-		skills:                 newSkillSet(opts.Skills, opts.AllSkills, opts.SkillStore, opts.AllSkillStore),
-		allSkills:              opts.AllSkills,
-		skillStore:             opts.SkillStore,
-		allSkillStore:          opts.AllSkillStore,
-		skillOrch:              opts.SkillOrchestrator,
-		hooks:                  opts.Hooks,
-		mem:                    opts.Memory,
-		memory:                 newMemoryManager(opts.Memory),
-		cleanup:                opts.Cleanup,
-		autoPlan:               normalizeAutoPlan(opts.AutoPlan),
-		reasoningLanguage:      config.NormalizeReasoningLanguage(opts.ReasoningLanguage),
-		disableColdResumePrune: opts.DisableColdResumePrune,
-		shell:                  opts.Shell,
-		classifier:             classifier,
-		onRemember:             opts.OnRemember,
-		balanceURL:             opts.BalanceURL,
-		balanceKey:             opts.BalanceKey,
-		balanceClient:          opts.BalanceClient,
-		jobs:                   opts.Jobs,
-		mcp:                    newMcpManager(opts.Host, opts.Registry, pluginCtx),
-		approval:               newApprovalManager(opts.Policy, ToolApprovalAsk, opts.ApprovalTimeout),
-		workspaceRoot:          opts.WorkspaceRoot,
-		externalFolderRefs:     map[string]string{},
-		externalFolderToolRefs: opts.ExternalFolderToolRefs,
+		runner:                     opts.Runner,
+		executor:                   opts.Executor,
+		sink:                       sink,
+		policy:                     opts.Policy,
+		label:                      opts.Label,
+		systemPrompt:               opts.SystemPrompt,
+		sessionDir:                 opts.SessionDir,
+		sessionPath:                opts.SessionPath,
+		modelRef:                   opts.ModelRef,
+		guardianSess:               opts.Guardian,
+		host:                       opts.Host,
+		skills:                     newSkillSet(opts.Skills, opts.AllSkills, opts.SkillStore, opts.AllSkillStore),
+		allSkills:                  opts.AllSkills,
+		skillStore:                 opts.SkillStore,
+		allSkillStore:              opts.AllSkillStore,
+		skillOrch:                  opts.SkillOrchestrator,
+		hooks:                      opts.Hooks,
+		mem:                        opts.Memory,
+		memory:                     newMemoryManager(opts.Memory),
+		cleanup:                    opts.Cleanup,
+		autoPlan:                   normalizeAutoPlan(opts.AutoPlan),
+		reasoningLanguage:          config.NormalizeReasoningLanguage(opts.ReasoningLanguage),
+		disableColdResumePrune:     opts.DisableColdResumePrune,
+		shell:                      opts.Shell,
+		classifier:                 classifier,
+		onRemember:                 opts.OnRemember,
+		onRememberMCPReadOnlyTrust: opts.OnRememberMCPReadOnlyTrust,
+		balanceURL:                 opts.BalanceURL,
+		balanceKey:                 opts.BalanceKey,
+		balanceClient:              opts.BalanceClient,
+		jobs:                       opts.Jobs,
+		mcp:                        newMcpManager(opts.Host, opts.Registry, pluginCtx),
+		approval:                   newApprovalManager(opts.Policy, ToolApprovalAsk, opts.ApprovalTimeout),
+		workspaceRoot:              opts.WorkspaceRoot,
+		externalFolderRefs:         map[string]string{},
+		externalFolderToolRefs:     opts.ExternalFolderToolRefs,
 	}
 	cmds := append([]command.Command(nil), opts.Commands...)
 	c.commands.Store(&cmds)
@@ -664,7 +667,7 @@ func (c *Controller) runTurnWithRawDisplay(ctx context.Context, input, raw, disp
 	// later turn (even "continue") falls back to the normal per-tool approval.
 	c.approval.setPlanAutoApprove(true)
 	defer c.approval.setPlanAutoApprove(false)
-	if err := c.runner.Run(ctx, c.ComposeSynthetic(planApprovedMessage)); err != nil {
+	if err := c.runner.Run(agent.WithMemoryCompilerSkip(ctx), c.ComposeSynthetic(planApprovedMessage)); err != nil {
 		return err
 	}
 	if todoArgs != "" && !c.hasTodoUpdateSince(execStart) {
@@ -1327,6 +1330,7 @@ func (c *Controller) orchestrateSkills(ctx context.Context, input string) string
 // headless `maddog run` path, where the Sink renders to stdout and the caller
 // just needs the exit status — no TurnDone event, no cancel bookkeeping.
 func (c *Controller) Run(ctx context.Context, input string) error {
+	rawInput := input
 	c.maybeSessionStart(ctx)
 	parentSession := c.parentSessionID()
 	ctx = agent.WithParentSession(ctx, parentSession)
@@ -1348,7 +1352,67 @@ func (c *Controller) Run(ctx context.Context, input string) error {
 	}
 	c.markInFlightTurn(startMessages, true)
 	defer c.clearInFlightTurn()
-	return c.runner.Run(ctx, input)
+	if err := c.runner.Run(ctx, input); err != nil {
+		return err
+	}
+	c.captureReplayBundleAsync(rawInput, startMessages)
+	return nil
+}
+
+func (c *Controller) captureReplayBundleAsync(task string, startMessages int) {
+	if c == nil || c.executor == nil || strings.TrimSpace(c.workspaceRoot) == "" {
+		return
+	}
+	task = strings.TrimSpace(task)
+	if task == "" {
+		return
+	}
+	messages := c.History()
+	if startMessages < 0 {
+		startMessages = 0
+	}
+	if startMessages >= len(messages) {
+		return
+	}
+	finalAnswer := lastAssistantText(messages[startMessages:])
+	if strings.TrimSpace(finalAnswer) == "" {
+		return
+	}
+	receipts := c.executor.EvidenceReceipts()
+	skills := c.Skills()
+	sessionID := agent.BranchID(c.SessionPath())
+	if sessionID == "" {
+		sessionID = c.Label()
+	}
+	tokens := 0
+	if usage := c.LastUsage(); usage != nil {
+		tokens = usage.TotalTokens
+		if tokens == 0 {
+			tokens = usage.PromptTokens + usage.CompletionTokens
+		}
+	}
+	dir := filepath.Join(c.workspaceRoot, config.ProjectConventionDir, "skilleval")
+	opts := skilleval.CaptureOptions{
+		SessionID: sessionID,
+		Task:      task,
+		Skills:    skills,
+		Messages:  messages,
+		Evidence:  receipts,
+		Outcome: skilleval.OutcomeInfo{
+			Success:     true,
+			GoalMet:     true,
+			FinalAnswer: finalAnswer,
+			Tokens:      tokens,
+		},
+		Dir: dir,
+	}
+	go func() {
+		if _, path, err := skilleval.CaptureBundle(opts); err != nil {
+			slog.Warn("offline replay capture failed", "err", err)
+		} else {
+			slog.Debug("offline replay bundle captured", "path", path)
+		}
+	}()
 }
 
 // Cancel aborts the in-flight turn. A goroutine blocked awaiting approval
@@ -2947,12 +3011,44 @@ func (c *Controller) ConnectConfiguredMCPServer(name string) (int, error) {
 	if err != nil {
 		return 0, err
 	}
+	if strings.EqualFold(strings.TrimSpace(name), "codegraph") {
+		return c.ConnectCodegraphMCPServerForRoot(cfg, c.workspaceRoot)
+	}
 	for _, p := range cfg.Plugins {
 		if p.Name == name {
 			return c.connectMCPServer(p)
 		}
 	}
 	return 0, fmt.Errorf("no configured MCP server named %q", name)
+}
+
+// ConnectCodegraphMCPServerForRoot connects the built-in CodeGraph MCP server for
+// a specific project root. Unlike external MCPs, CodeGraph is configured by the
+// [codegraph] table instead of [[plugins]], so callers use this helper when they
+// need to reconnect or test the built-in server directly.
+func (c *Controller) ConnectCodegraphMCPServerForRoot(cfg *config.Config, root string) (int, error) {
+	if cfg == nil {
+		return 0, fmt.Errorf("codegraph config is nil")
+	}
+	if !cfg.Codegraph.Enabled {
+		return 0, fmt.Errorf("codegraph is disabled")
+	}
+	bin, ok := codegraph.Resolve(cfg.Codegraph.Path)
+	if !ok {
+		return 0, fmt.Errorf("codegraph not installed; run `maddog codegraph install`")
+	}
+	root = strings.TrimSpace(root)
+	if root == "" {
+		if cwd, err := os.Getwd(); err == nil {
+			root = cwd
+		}
+	}
+	if root != "" {
+		if real, err := filepath.EvalSymlinks(root); err == nil {
+			root = real
+		}
+	}
+	return c.mcp.connectSpec(codegraph.MCPSpec(bin, root))
 }
 
 // RemoveMCPServer disconnects a live MCP server — its tools vanish from the next

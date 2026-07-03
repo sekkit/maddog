@@ -606,6 +606,17 @@ function SkillCandidateRow({
         {candidate.scoreReason && <span className="cap-codeintel-cap">{candidate.scoreReason}</span>}
         {candidate.guardrailReason && <span className="cap-codeintel-cap">{candidate.guardrailReason}</span>}
       </div>
+      {candidate.audit && candidate.audit.length > 0 && (
+        <div className="cap-skill-candidate-audit" aria-label={t("caps.skillCandidateAudit")}>
+          {candidate.audit.slice(-3).map((record, index) => (
+            <span className="cap-codeintel-cap" key={`${record.action}-${record.time ?? index}`}>
+              {skillCandidateAuditActionLabel(record.action, t)}
+              {record.reason ? `: ${record.reason}` : record.path ? `: ${record.path}` : ""}
+              {record.time ? ` (${formatSkillCandidateDate(record.time)})` : ""}
+            </span>
+          ))}
+        </div>
+      )}
       {candidate.validationReason && <div className="cap-codeintel-row__error">{candidate.validationReason}</div>}
       {candidate.description && <div className="cap-skill-card__desc cap-skill-card__desc--candidate">{candidate.description}</div>}
     </div>
@@ -659,6 +670,21 @@ function skillCandidateFilterLabel(filter: SkillCandidateFilter, t: ReturnType<t
       return t("caps.skillCandidateStatus.rolledBack");
     default:
       return t("caps.skillCandidateFilterAll");
+  }
+}
+
+function skillCandidateAuditActionLabel(action: string, t: ReturnType<typeof useT>): string {
+  switch (action) {
+    case "promote":
+      return t("caps.skillCandidateAudit.promote");
+    case "rollback":
+      return t("caps.skillCandidateAudit.rollback");
+    case "reject":
+      return t("caps.skillCandidateAudit.reject");
+    case "evaluate":
+      return t("caps.skillCandidateAudit.evaluate");
+    default:
+      return action || t("caps.skillCandidateAudit");
   }
 }
 

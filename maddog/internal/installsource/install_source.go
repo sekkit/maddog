@@ -61,7 +61,7 @@ type Options struct {
 type installSourceTool struct {
 	root         string
 	home         string
-	maddogHome string
+	maddogHome   string
 	httpClient   *http.Client
 	connectMCP   MCPConnector
 	onDisconnect OnDisconnectFunc
@@ -106,7 +106,7 @@ func NewTool(opts Options) tool.Tool {
 	return &installSourceTool{
 		root:         root,
 		home:         home,
-		maddogHome: maddogHome,
+		maddogHome:   maddogHome,
 		httpClient:   client,
 		connectMCP:   opts.ConnectMCP,
 		onDisconnect: opts.OnDisconnect,
@@ -437,7 +437,7 @@ func (t *installSourceTool) resolveSkillPath(name, scope string) (string, bool) 
 			return "", false
 		}
 		roots = []string{
-			filepath.Join(t.home, config.ProjectConventionDir, skill.SkillsDirname),
+			filepath.Join(t.maddogHome, skill.SkillsDirname),
 		}
 	} else {
 		roots = []string{
@@ -524,6 +524,11 @@ func (t *installSourceTool) installScope(req request, kind, source string) strin
 	if kind == "mcp" {
 		if t.isProjectMCPJSONSource(source) {
 			return "project"
+		}
+		if strings.TrimSpace(t.root) != "" {
+			if info, err := os.Stat(source); err == nil && isExecutable(source, info) {
+				return "project"
+			}
 		}
 		return "global"
 	}

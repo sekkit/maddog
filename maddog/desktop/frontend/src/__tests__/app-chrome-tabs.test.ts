@@ -145,6 +145,17 @@ ok(
 );
 
 ok(
+  finalDeclaration(".sidebar--collapsed .sidebar__brand", "display") === "flex" &&
+    finalDeclaration(".sidebar--collapsed .sidebar__brand-name", "display") === "none" &&
+    finalDeclaration(".layout--sidebar-collapsed", "--sidebar-width") === "var(--sidebar-collapsed-width)" &&
+    finalDeclaration(".layout--sidebar-collapsed", "grid-template-columns") === "var(--sidebar-collapsed-width) minmax(0, 1fr)" &&
+    finalDeclaration(".app--darwin .sidebar--collapsed > *", "visibility") === "visible" &&
+    finalDeclaration(":root[data-theme-style] .sidebar--collapsed", "display") === "flex" &&
+    !/sidebar__brand[^>]*aria-hidden=\{sidebarCollapsed\}/.test(appSource),
+  "collapsed sidebar keeps the Maddog logo visible while hiding only the wordmark",
+);
+
+ok(
   finalDeclaration(".sidebar--workbench .sidebar__brand-logo--workbench", "width") === "28px" &&
     finalDeclaration(".sidebar--workbench .sidebar__brand-logo--workbench", "height") === "28px",
   "workbench sidebar keeps the app logo large enough to read",
@@ -172,6 +183,13 @@ ok(
 ok(
   /setActive\(items\.length > 0 \? 0 : -1\)/.test(commandPaletteSource),
   "command palette highlights the first item when opened with an empty query",
+);
+
+ok(
+  /cmd-offline-replay/.test(appSource) &&
+    /palette\.cmd\.offlineReplay/.test(appSource) &&
+    /setSettingsTarget\("skills"\)/.test(appSource),
+  "command palette includes an Offline replay self-improvement shortcut to Skills settings",
 );
 
 ok(

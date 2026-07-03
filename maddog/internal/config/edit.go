@@ -455,7 +455,7 @@ func (c *Config) modelRefTargetsProvider(ref, name string) bool {
 // RemoveProvider deletes the named provider. References to the removed provider
 // are migrated to the first remaining configured provider when possible. The
 // default model is required, so removal is refused when no fallback exists;
-// optional planner/subagent/frontier refs are cleared or disabled instead of
+// optional planner/subagent/advisor/frontier refs are cleared or disabled instead of
 // being left dangling.
 func (c *Config) RemoveProvider(name string) error {
 	name = strings.TrimSpace(name)
@@ -473,6 +473,7 @@ func (c *Config) RemoveProvider(name string) error {
 	defaultRefsProvider := c.modelRefTargetsProvider(c.DefaultModel, name)
 	plannerRefsProvider := c.modelRefTargetsProvider(c.Agent.PlannerModel, name)
 	subagentRefsProvider := c.modelRefTargetsProvider(c.Agent.SubagentModel, name)
+	advisorRefsProvider := c.modelRefTargetsProvider(c.Agent.AdvisorModel, name)
 	frontierRefsProvider := c.modelRefTargetsProvider(c.Agent.FrontierModel, name)
 	subagentModelRefsProvider := map[string]bool{}
 	for skill, ref := range c.Agent.SubagentModels {
@@ -482,7 +483,7 @@ func (c *Config) RemoveProvider(name string) error {
 	}
 
 	fallback := ""
-	if defaultRefsProvider || plannerRefsProvider || subagentRefsProvider || frontierRefsProvider || len(subagentModelRefsProvider) > 0 {
+	if defaultRefsProvider || plannerRefsProvider || subagentRefsProvider || advisorRefsProvider || frontierRefsProvider || len(subagentModelRefsProvider) > 0 {
 		fallback = c.providerRemovalFallback(name)
 	}
 	if defaultRefsProvider && fallback == "" {
@@ -499,6 +500,9 @@ func (c *Config) RemoveProvider(name string) error {
 	}
 	if subagentRefsProvider {
 		c.Agent.SubagentModel = fallback
+	}
+	if advisorRefsProvider {
+		c.Agent.AdvisorModel = fallback
 	}
 	if frontierRefsProvider {
 		c.Agent.FrontierModel = fallback
@@ -1111,6 +1115,22 @@ func SaveMinimalProjectReasoningLanguage(path, lang string) (string, error) {
 reasoning_language = %q
 `, cfg.ReasoningLanguage())
 	return cfg.ReasoningLanguage(), writeConfigFile(path, body)
+}
+
+// SaveMinimalProjectAutoPlan writes a new project config that only overrides
+// [agent].auto_plan.
+func SaveMinimalProjectAutoPlan(path, mode string) (string, error) {
+	cfg := Default()
+	if err := cfg.SetAutoPlan(mode); err != nil {
+		return "", err
+	}
+	body := fmt.Sprintf(`# Maddog project configuration.
+# Project-local overrides are merged over the user config.
+
+[agent]
+auto_plan = %q
+`, cfg.Agent.AutoPlan)
+	return cfg.Agent.AutoPlan, writeConfigFile(path, body)
 }
 
 func writeConfigFile(path, body string) error {

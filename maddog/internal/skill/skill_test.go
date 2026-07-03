@@ -512,6 +512,7 @@ func TestBuiltinInitIsInlineSkill(t *testing.T) {
 func TestBuiltinSubagentSkillsDeclareAllowedTools(t *testing.T) {
 	st := New(Options{HomeDir: t.TempDir()})
 	cases := map[string][]string{
+		"advisor":         {"read_file", "ls", "glob", "grep", "code_index"},
 		"explore":         {"read_file", "ls", "glob", "grep", "code_index"},
 		"research":        {"read_file", "ls", "glob", "grep", "code_index", "web_fetch"},
 		"review":          {"read_file", "ls", "glob", "grep", "code_index", "bash"},
@@ -553,6 +554,9 @@ func TestBuiltinsPresentAndOverridable(t *testing.T) {
 	st := New(Options{HomeDir: t.TempDir()})
 	if _, ok := find(st.List(), "explore"); !ok {
 		t.Error("built-in explore should be present")
+	}
+	if _, ok := find(st.List(), "advisor"); !ok {
+		t.Error("built-in advisor should be present")
 	}
 	// A user file named after a built-in overrides it.
 	home := t.TempDir()

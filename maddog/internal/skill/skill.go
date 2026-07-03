@@ -645,7 +645,7 @@ func (s *Store) CreateWithContent(name string, scope Scope, content string) (str
 		}
 		root = filepath.Join(s.projectRoot, config.ProjectConventionDir, SkillsDirname)
 	default:
-		root = filepath.Join(s.homeDir, config.ProjectConventionDir, SkillsDirname)
+		root = s.globalSkillsRoot()
 	}
 	flat := filepath.Join(root, name+".md")
 	folder := filepath.Join(root, name, SkillFile)

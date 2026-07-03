@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"runtime/debug"
 	"strings"
 
 	"maddog/internal/event"
@@ -443,6 +444,13 @@ func (t *TaskTool) Execute(ctx context.Context, args json.RawMessage) (string, e
 		}
 		job := jm.StartForSession(jobs.SessionFromContext(ctx), "task", label, func(jobCtx context.Context, _ io.Writer) (result string, err error) {
 			defer run.Release()
+			defer func() {
+				if r := recover(); r != nil {
+					panicErr := fmt.Errorf("internal error: panic: %v\n%s", r, debug.Stack())
+					result = FormatSubagentRunResult("", run, true)
+					err = errors.Join(panicErr, t.transcripts.SaveFailed(run))
+				}
+			}()
 			answer, err := t.runSubSession(jobCtx, p.Prompt, subReg, nested, maxSteps, prov, pricing, ctxWin, run.Session, modelRef, effortRef)
 			if err != nil {
 				return FormatSubagentRunResult("", run, true), errors.Join(err, t.transcripts.SaveFailed(run))

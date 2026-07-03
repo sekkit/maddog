@@ -722,6 +722,14 @@ export interface SkillCandidateView {
   guardrailPass?: boolean;
   guardrailReason?: string;
   updatedAt?: string;
+  audit?: SkillCandidateAuditView[];
+}
+export interface SkillCandidateAuditView {
+  time?: string;
+  action: string;
+  status?: string;
+  path?: string;
+  reason?: string;
 }
 export interface SkillRootSkillView {
   name: string;
@@ -912,7 +920,7 @@ export interface ProviderView {
   reasoningProtocol: string; // auto|deepseek|openai|none; empty = auto/model registry
   supportedEfforts: string[]; // custom /effort levels; empty = use built-in Kind/BaseURL default
   defaultEffort: string; // /effort level when user picks "auto" or unset; "" = supportedEfforts[0]
-  roles?: string[]; // derived profile roles: default|planner|frontier|small
+  roles?: string[]; // derived profile roles: default|planner|frontier|small|advisor
   gateway?: string; // openai-official|openai-compatible|anthropic-official|...
   authMode?: string; // normalized auth mode from the provider entry
   credentialStatus?: "configured" | "missing" | "none" | string;
@@ -1137,6 +1145,7 @@ export interface SettingsView {
   defaultModel: string;
   plannerModel: string;
   subagentModel: string;
+  advisorModel: string;
   subagentEffort: string;
   frontierModel: string;
   upgradeEnabled: boolean;

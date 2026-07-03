@@ -9,6 +9,7 @@ import (
 	"maddog/internal/agent"
 	"maddog/internal/event"
 	"maddog/internal/provider"
+	"maddog/internal/tool"
 )
 
 func TestBranchAndSwitch(t *testing.T) {

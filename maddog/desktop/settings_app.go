@@ -172,6 +172,7 @@ type SettingsView struct {
 	DefaultModel            string          `json:"defaultModel"`
 	PlannerModel            string          `json:"plannerModel"`
 	SubagentModel           string          `json:"subagentModel"`
+	AdvisorModel            string          `json:"advisorModel"`
 	SubagentEffort          string          `json:"subagentEffort"`
 	FrontierModel           string          `json:"frontierModel"`
 	UpgradeEnabled          bool            `json:"upgradeEnabled"`
@@ -481,6 +482,21 @@ func providerProfileRolesAndWarnings(c *config.Config) (map[string][]string, []s
 	addRef("planner_model", c.Agent.PlannerModel, "planner")
 	addRef("frontier_model", c.Agent.FrontierModel, "frontier")
 	addRef("subagent_model", c.Agent.SubagentModel, "small")
+	advisorRef := strings.TrimSpace(c.Agent.AdvisorModel)
+	advisorField := "advisor_model"
+	if advisorRef == "" {
+		advisorRef = strings.TrimSpace(c.Agent.SubagentModels["advisor"])
+		advisorField = "subagent_models.advisor"
+	}
+	if advisorRef == "" {
+		advisorRef = strings.TrimSpace(c.Agent.SubagentModels["advisor-tool"])
+		advisorField = "subagent_models.advisor-tool"
+	}
+	if advisorRef != "" {
+		addRef(advisorField, advisorRef, "advisor")
+	} else if c.Agent.AdvisorMaxUsesPerTurn > 0 {
+		addRef("subagent_model", c.Agent.SubagentModel, "advisor")
+	}
 
 	var skills []string
 	for skill := range c.Agent.SubagentModels {
@@ -488,6 +504,9 @@ func providerProfileRolesAndWarnings(c *config.Config) (map[string][]string, []s
 	}
 	sort.Strings(skills)
 	for _, skill := range skills {
+		if strings.EqualFold(strings.TrimSpace(skill), "advisor") || strings.EqualFold(strings.TrimSpace(skill), "advisor-tool") {
+			continue
+		}
 		addRef("subagent_models."+skill, c.Agent.SubagentModels[skill], "small")
 	}
 	return roles, warnings
@@ -648,6 +667,7 @@ func (a *App) Settings() SettingsView {
 		DefaultModel:            cfg.DefaultModel,
 		PlannerModel:            cfg.Agent.PlannerModel,
 		SubagentModel:           cfg.Agent.SubagentModel,
+		AdvisorModel:            cfg.Agent.AdvisorModel,
 		SubagentEffort:          cfg.Agent.SubagentEffort,
 		FrontierModel:           cfg.Agent.FrontierModel,
 		UpgradeEnabled:          cfg.Agent.UpgradeEnabled,
@@ -1212,6 +1232,22 @@ func (a *App) SetSubagentModel(ref string) error {
 	})
 }
 
+// SetAdvisorModel sets (or clears) the dedicated model used by advisor consultations.
+func (a *App) SetAdvisorModel(ref string) error {
+	return a.applyConfigChange(func(c *config.Config) error {
+		ref = strings.TrimSpace(ref)
+		if ref != "" {
+			resolved, err := selectableDesktopModelRef(c, ref)
+			if err != nil {
+				return err
+			}
+			ref = resolved
+		}
+		c.Agent.AdvisorModel = ref
+		return nil
+	})
+}
+
 func selectableDesktopModelRef(c *config.Config, ref string) (string, error) {
 	entry, ok := c.ResolveModel(ref)
 	if !ok {
@@ -1629,6 +1665,9 @@ func retargetProviderReferences(c *config.Config, name, fallbackRef string) {
 	}
 	if desktopModelRefsProvider(c, c.Agent.SubagentModel, name) {
 		c.Agent.SubagentModel = fallbackRef
+	}
+	if desktopModelRefsProvider(c, c.Agent.AdvisorModel, name) {
+		c.Agent.AdvisorModel = fallbackRef
 	}
 	if desktopModelRefsProvider(c, c.Agent.FrontierModel, name) {
 		c.Agent.FrontierModel = fallbackRef

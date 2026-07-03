@@ -247,6 +247,34 @@ func TestRollbackPromotedCandidateRemovesOnlyMatchingSkill(t *testing.T) {
 	}
 }
 
+func TestCandidateStoreAuditForHashReadsLifecycleRecords(t *testing.T) {
+	candidateStore := NewCandidateStore(t.TempDir())
+	candidate, err := candidateStore.Create(validSkill("parser-helper"), BundleV2{ID: "bundle-a"}, "fix parser")
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if _, err := candidateStore.RecordEvaluation(candidate.Hash, ScoreResult{Score: 0.9, Reason: "ok"}, GuardrailResult{Pass: true, Reason: "passed"}); err != nil {
+		t.Fatalf("RecordEvaluation: %v", err)
+	}
+	activeStore := skill.New(skill.Options{HomeDir: t.TempDir(), ProjectRoot: t.TempDir(), DisableBuiltins: true})
+	if _, _, err := candidateStore.Promote(candidate.Hash, activeStore, skill.ScopeProject); err != nil {
+		t.Fatalf("Promote: %v", err)
+	}
+	if _, err := candidateStore.Rollback(candidate.Hash, activeStore, "not useful after review"); err != nil {
+		t.Fatalf("Rollback: %v", err)
+	}
+	records, err := candidateStore.AuditForHash(candidate.Hash)
+	if err != nil {
+		t.Fatalf("AuditForHash: %v", err)
+	}
+	if len(records) != 2 || records[0].Action != "promote" || records[1].Action != "rollback" {
+		t.Fatalf("audit records = %+v, want promote then rollback", records)
+	}
+	if records[1].Reason != "not useful after review" {
+		t.Fatalf("rollback reason = %q", records[1].Reason)
+	}
+}
+
 func TestRollbackRefusesModifiedPromotedSkill(t *testing.T) {
 	candidateStore := NewCandidateStore(t.TempDir())
 	candidate, err := candidateStore.Create(validSkill("parser-helper"), BundleV2{ID: "bundle-a"}, "fix parser")

@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -14,6 +15,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"maddog/internal/agent"
 	"maddog/internal/config"
 	"maddog/internal/event"
 	"maddog/internal/i18n"
@@ -353,7 +355,7 @@ func TestConfigAutoPlanCommandWritesUserConfig(t *testing.T) {
 	}
 }
 
-func TestConfigAutoPlanLocalIsRejected(t *testing.T) {
+func TestConfigAutoPlanLocalWritesProjectOverride(t *testing.T) {
 	isolateCLIConfigHome(t)
 
 	userCfg := config.Default()
@@ -362,13 +364,13 @@ func TestConfigAutoPlanLocalIsRejected(t *testing.T) {
 		t.Fatalf("write user config: %v", err)
 	}
 
-	errOut := captureStderr(t, func() {
-		if rc := Run([]string{"config", "auto-plan", "--local", "on"}, "test-version"); rc != 2 {
-			t.Fatalf("config auto-plan --local rc = %d, want 2", rc)
+	out := captureStdout(t, func() {
+		if rc := Run([]string{"config", "auto-plan", "--local", "on"}, "test-version"); rc != 0 {
+			t.Fatalf("config auto-plan --local rc = %d, want 0", rc)
 		}
 	})
-	if !strings.Contains(errOut, "--local is not supported") {
-		t.Fatalf("config auto-plan --local stderr = %q", errOut)
+	if !strings.Contains(out, `auto_plan = "on"`) || !strings.Contains(out, "maddog.toml") {
+		t.Fatalf("config auto-plan --local output = %q", out)
 	}
 
 	body, err := os.ReadFile("maddog.toml")

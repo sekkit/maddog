@@ -1,6 +1,7 @@
 package skilleval
 
 import (
+	"bufio"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -108,6 +109,43 @@ func (s *CandidateStore) List() ([]Candidate, error) {
 		}
 		return out[i].UpdatedAt.After(out[j].UpdatedAt)
 	})
+	return out, nil
+}
+
+func (s *CandidateStore) AuditForHash(hash string) ([]AuditRecord, error) {
+	if s == nil {
+		return nil, fmt.Errorf("candidate store is nil")
+	}
+	hash = strings.TrimSpace(hash)
+	if hash == "" {
+		return []AuditRecord{}, nil
+	}
+	f, err := os.Open(filepath.Join(s.Dir, "audit.jsonl"))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return []AuditRecord{}, nil
+		}
+		return nil, err
+	}
+	defer f.Close()
+	var out []AuditRecord
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" {
+			continue
+		}
+		var record AuditRecord
+		if err := json.Unmarshal([]byte(line), &record); err != nil {
+			continue
+		}
+		if record.Hash == hash {
+			out = append(out, record)
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, err
+	}
 	return out, nil
 }
 

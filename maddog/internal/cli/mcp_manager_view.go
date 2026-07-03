@@ -70,7 +70,7 @@ func (p *mcpManager) renderList(width int) string {
 		s := p.snapshot.servers[i]
 		group := "User MCPs"
 		if s.BuiltIn {
-			group = "Managed MCPs"
+			group = "Built-in MCPs"
 		}
 		if group != lastGroup {
 			if lastGroup != "" {

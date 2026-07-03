@@ -14,6 +14,8 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -41,6 +43,7 @@ import (
 	"maddog/internal/netclient"
 	"maddog/internal/outputstyle"
 	"maddog/internal/permission"
+	"maddog/internal/planmode"
 	"maddog/internal/plugin"
 	"maddog/internal/provider"
 	"maddog/internal/provider/costwrap"
@@ -183,7 +186,7 @@ func Build(ctx context.Context, opts Options) (*control.Controller, error) {
 	// A resolvable model whose API key env is unset would otherwise build fine
 	// (RequireKey is false so the UI stays reachable) and then fail silently on the
 	// first request, showing as an empty/dead model. Surface the cause up front.
-	if !opts.RequireKey && entry.AuthEnvName() != "" && !entry.Configured() {
+	if !opts.RequireKey && entry.AuthEnvName() != "" && !entry.Configured() && !suppressMissingKeyNotice(entry) {
 		sink.Emit(event.Event{Kind: event.Notice, Text: fmt.Sprintf("model %q is selected but its auth env %s is not set — requests will fail until you set it", modelName, entry.AuthEnvName())})
 	}
 	jm := jobs.NewManager(sink)
@@ -343,20 +346,23 @@ func Build(ctx context.Context, opts Options) (*control.Controller, error) {
 	)
 	onDemandMCPSpecs := map[string]plugin.Spec{}
 	onDemandMCPNames := []string{}
+	addOnDemandMCPSpec := func(spec plugin.Spec) {
+		name := strings.TrimSpace(spec.Name)
+		if name == "" {
+			return
+		}
+		if _, exists := onDemandMCPSpecs[name]; !exists {
+			onDemandMCPNames = append(onDemandMCPNames, name)
+		}
+		onDemandMCPSpecs[name] = spec
+	}
 	if tokenEconomy {
 		for _, spec := range append(PluginSpecsForRootWithOptions(autoStartEntries, root, pluginSpecOptions), extraSpecs...) {
-			name := strings.TrimSpace(spec.Name)
-			if name == "" {
-				continue
-			}
-			if _, exists := onDemandMCPSpecs[name]; !exists {
-				onDemandMCPNames = append(onDemandMCPNames, name)
-			}
-			onDemandMCPSpecs[name] = spec
+			addOnDemandMCPSpec(spec)
 		}
 		eagerEntries, bgEntries = nil, nil
 	}
-	trustedMCPServers := planModeTrustedMCPServers(onDemandMCPSpecs)
+	var trustedMCPServers map[string]bool
 
 	// Auto-demote: any eager plugin that has been chronically slow (recent
 	// samples repeatedly hit the blocking startup budget) drops to background
@@ -390,7 +396,7 @@ func Build(ctx context.Context, opts Options) (*control.Controller, error) {
 	//
 	// CodeGraph is fixed to background startup. Legacy tier values are ignored so
 	// enabling it never blocks chat startup.
-	if cfg.Codegraph.Enabled && !tokenEconomy {
+	if cfg.Codegraph.Enabled {
 		bin, ok := codegraph.Resolve(cfg.Codegraph.Path)
 		switch {
 		case ok && !codegraph.IndexableRoot(root):
@@ -402,6 +408,10 @@ func Build(ctx context.Context, opts Options) (*control.Controller, error) {
 			if err := codegraph.EnsureInit(ctx, bin, root); err != nil {
 				sink.Emit(event.Event{Kind: event.Notice, Level: event.LevelWarn,
 					Text: "codegraph: init failed (" + err.Error() + ") — symbol-graph tools disabled this session"})
+				break
+			}
+			if tokenEconomy {
+				addOnDemandMCPSpec(spec)
 				break
 			}
 			bgNotice := func() {
@@ -590,6 +600,10 @@ func Build(ctx context.Context, opts Options) (*control.Controller, error) {
 	// inherit this same gate.
 	policy := permission.New(cfg.Permissions.Mode, cfg.Permissions.Allow, cfg.Permissions.Ask, cfg.Permissions.Deny)
 	headlessGate := permission.NewGate(policy, nil)
+	if ignored := (planmode.Policy{AllowedTools: cfg.Agent.PlanModeAllowedTools}).IgnoredAllowedTools(); len(ignored) > 0 {
+		sink.Emit(event.Event{Kind: event.Notice, Level: event.LevelWarn,
+			Text: "ignored plan_mode_allowed_tools entries: " + strings.Join(ignored, ", ")})
+	}
 
 	// Hooks: load the global settings.json plus the project's (only when trusted —
 	// project hooks run arbitrary shell commands, so cloning a repo must not
@@ -657,6 +671,7 @@ func Build(ctx context.Context, opts Options) (*control.Controller, error) {
 			WithTranscripts(subagentStore, root, modelName, entry.Effort).
 			WithTranscriptIdentityResolver(subagentIdentity)
 		reg.Add(taskTool)
+		reg.Add(agent.NewParallelTasksTool(taskTool, reg))
 		return "enabled task."
 	}
 	addReadOnlyTaskTool := func() string {
@@ -824,7 +839,7 @@ func Build(ctx context.Context, opts Options) (*control.Controller, error) {
 			CompactForceRatio: cfg.Agent.CompactForceRatio,
 			ArchiveDir:        archiveDir,
 			ReasoningLanguage: agent.ReasoningLanguageFromContext(sctx),
-			UsageRole:         "small",
+			UsageRole:         subagentUsageRole(sk),
 			UsageModel:        identityModel,
 			UsageEffort:       identityEffort,
 		}, agent.NestedSink(sctx, event.Discard))
@@ -839,10 +854,10 @@ func Build(ctx context.Context, opts Options) (*control.Controller, error) {
 	skillProfile := func(sk skill.Skill) *event.Profile {
 		model, effort := subagentModelRef(cfg, sk), subagentEffortRef(cfg, sk)
 		model, effort = subagentIdentity(model, effort)
-		return &event.Profile{Role: "small", Model: model, Effort: effort}
+		return &event.Profile{Role: subagentUsageRole(sk), Model: model, Effort: effort}
 	}
 	var advisorRunner agent.AdvisorRunner
-	if cfg.Agent.AdvisorMaxUsesPerTurn > 0 && frontierProv != nil {
+	if cfg.Agent.AdvisorMaxUsesPerTurn > 0 {
 		advisorRunner = func(sctx context.Context, req agent.AdvisorRequest) (string, error) {
 			sk, ok := skillStore.Read("advisor")
 			if !ok {
@@ -963,6 +978,7 @@ func Build(ctx context.Context, opts Options) (*control.Controller, error) {
 		addSkillTools()
 	}
 	if tokenEconomy {
+		trustedMCPServers = planModeTrustedMCPServers(onDemandMCPSpecs)
 		reg.Add(&toolSourceConnector{
 			skills: func(context.Context) (string, error) {
 				return addSkillTools(), nil
@@ -1304,6 +1320,11 @@ func firstNonEmpty(vals ...string) string {
 
 func subagentModelRef(cfg *config.Config, sk skill.Skill) string {
 	if cfg != nil {
+		if strings.EqualFold(strings.TrimSpace(sk.Name), "advisor") {
+			if m := strings.TrimSpace(cfg.Agent.AdvisorModel); m != "" {
+				return m
+			}
+		}
 		for _, key := range subagentModelKeys(sk.Name) {
 			if m := strings.TrimSpace(cfg.Agent.SubagentModels[key]); m != "" {
 				return m
@@ -1317,6 +1338,13 @@ func subagentModelRef(cfg *config.Config, sk skill.Skill) string {
 		return ""
 	}
 	return strings.TrimSpace(cfg.Agent.SubagentModel)
+}
+
+func subagentUsageRole(sk skill.Skill) string {
+	if strings.EqualFold(strings.TrimSpace(sk.Name), "advisor") {
+		return "advisor"
+	}
+	return "small"
 }
 
 func subagentEffortRef(cfg *config.Config, sk skill.Skill) string {
@@ -1817,4 +1845,24 @@ func providerNames(cfg *config.Config) string {
 		names[i] = p.Name
 	}
 	return strings.Join(names, "/")
+}
+
+func suppressMissingKeyNotice(entry *config.ProviderEntry) bool {
+	if entry == nil || entry.NormalizedAuthType() != provider.AuthTypeAPIKey {
+		return false
+	}
+	return isLoopbackBaseURL(entry.BaseURL)
+}
+
+func isLoopbackBaseURL(raw string) bool {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil {
+		return false
+	}
+	host := strings.TrimSpace(u.Hostname())
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }

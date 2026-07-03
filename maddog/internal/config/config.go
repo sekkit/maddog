@@ -59,6 +59,7 @@ type Config struct {
 	Permissions       PermissionsConfig       `toml:"permissions"`
 	Sandbox           SandboxConfig           `toml:"sandbox"`
 	Network           NetworkConfig           `toml:"network"`
+	Serve             ServeConfig             `toml:"serve"`
 	Plugins           []PluginEntry           `toml:"plugins"`
 	Skills            SkillsConfig            `toml:"skills"`
 	Codegraph         CodegraphConfig         `toml:"codegraph"`
@@ -355,6 +356,8 @@ var defaultDesktopStatusBarItems = []string{
 
 var knownDesktopStatusBarItems = map[string]bool{
 	"model":           true,
+	"workspace":       true,
+	"git_branch":      true,
 	"cache":           true,
 	"cache_avg":       true,
 	"session_tokens":  true,
@@ -1042,7 +1045,8 @@ func (c *Config) BashMode() string {
 // to another provider's name it enables two-model collaboration, where the
 // planner handles low-frequency planning in its own session (kept separate so
 // each model's prompt prefix stays cache-stable). SubagentModel is the optional
-// default for runAs=subagent skills; SubagentModels overrides it per skill name.
+// default for runAs=subagent skills; AdvisorModel is a dedicated advisor path;
+// SubagentModels overrides the generic subagent default per skill name.
 type AgentConfig struct {
 	SystemPrompt              string            `toml:"system_prompt"`
 	SystemPromptFile          string            `toml:"system_prompt_file"`
@@ -1051,6 +1055,7 @@ type AgentConfig struct {
 	Temperature               float64           `toml:"temperature"`
 	PlannerModel              string            `toml:"planner_model"`
 	SubagentModel             string            `toml:"subagent_model"`
+	AdvisorModel              string            `toml:"advisor_model"`
 	SubagentModels            map[string]string `toml:"subagent_models"`
 	SubagentEffort            string            `toml:"subagent_effort"`
 	SubagentEfforts           map[string]string `toml:"subagent_efforts"`
@@ -1215,8 +1220,9 @@ type ProviderEntry struct {
 	// (or set one outside this list) to fall back to SupportedEfforts[0].
 	SupportedEfforts []string `toml:"supported_efforts"`
 
-	resolvedAPIKey string
-	resolvedSource CredentialSource
+	resolvedAPIKey      string
+	resolvedSource      CredentialSource
+	credentialsResolved bool
 	// DefaultEffort is the /effort level used when the user picks "auto" or
 	// has not set Effort. Ignored when SupportedEfforts is empty.
 	DefaultEffort string `toml:"default_effort"`
@@ -1978,6 +1984,7 @@ func NormalizeLegacyDesktopProviderAccess(c *Config) {
 	addRef(c.DefaultModel)
 	addRef(c.Agent.PlannerModel)
 	addRef(c.Agent.SubagentModel)
+	addRef(c.Agent.AdvisorModel)
 	addRef(c.Agent.AutoPlanClassifier)
 	for _, ref := range c.Agent.SubagentModels {
 		addRef(ref)
@@ -2194,6 +2201,7 @@ func retargetDesktopOfficialRefs(c *Config, access map[string]bool) {
 	c.DefaultModel = retargetDesktopOfficialRef(c.DefaultModel, access)
 	c.Agent.PlannerModel = retargetDesktopOfficialRef(c.Agent.PlannerModel, access)
 	c.Agent.SubagentModel = retargetDesktopOfficialRef(c.Agent.SubagentModel, access)
+	c.Agent.AdvisorModel = retargetDesktopOfficialRef(c.Agent.AdvisorModel, access)
 	c.Agent.AutoPlanClassifier = retargetDesktopOfficialRef(c.Agent.AutoPlanClassifier, access)
 	for skill, ref := range c.Agent.SubagentModels {
 		c.Agent.SubagentModels[skill] = retargetDesktopOfficialRef(ref, access)
@@ -2577,6 +2585,12 @@ func (e *ProviderEntry) AuthEnvName() string {
 // api_key_env; bearer auth reads auth_token_env with api_key_env as a legacy
 // fallback; workload identity reads a pre-minted access token when present.
 func (e *ProviderEntry) AuthToken() string {
+	if e == nil {
+		return ""
+	}
+	if e.NormalizedAuthType() == provider.AuthTypeAPIKey || e.NormalizedAuthType() == "" {
+		return e.APIKey()
+	}
 	env := e.AuthEnvName()
 	if e.NormalizedAuthType() == provider.AuthTypeWorkloadIdentity {
 		env = strings.TrimSpace(e.AuthTokenEnv)
@@ -2632,14 +2646,35 @@ func (e *ProviderEntry) APIKey() string {
 	if e.resolvedAPIKey != "" {
 		return e.resolvedAPIKey
 	}
-	if e.APIKeyEnv == "" {
+	if strings.TrimSpace(e.APIKeyEnv) == "" {
 		return ""
+	}
+	if e.credentialsResolved {
+		return ""
+	}
+	if value := strings.TrimSpace(os.Getenv(e.APIKeyEnv)); value != "" {
+		return value
 	}
 	value, _, ok := storedCredentialValue(e.APIKeyEnv)
 	if !ok {
 		return ""
 	}
 	return value
+}
+
+// ResolveAPIKeyFromProcessEnvForProbe pins a setup/model-list probe to the
+// current process environment. Runtime provider assembly uses the normal
+// credential resolver; this helper is only for first-run probing after the
+// wizard has just collected a key into os.Environ.
+func (e *ProviderEntry) ResolveAPIKeyFromProcessEnvForProbe() {
+	if e == nil || strings.TrimSpace(e.APIKeyEnv) == "" {
+		return
+	}
+	if value := strings.TrimSpace(os.Getenv(e.APIKeyEnv)); value != "" {
+		e.resolvedAPIKey = value
+		e.resolvedSource = CredentialSource{Kind: CredentialSourceEnvironment, Label: "environment variable"}
+		e.credentialsResolved = true
+	}
 }
 
 // Configured reports whether the provider's configured auth material is

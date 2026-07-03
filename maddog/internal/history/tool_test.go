@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"maddog/internal/agent"
 	"maddog/internal/provider"
 )
 

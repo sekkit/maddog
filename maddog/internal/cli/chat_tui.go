@@ -28,6 +28,7 @@ import (
 	"maddog/internal/hook"
 	"maddog/internal/i18n"
 	"maddog/internal/memory"
+	"maddog/internal/migration"
 	"maddog/internal/outputstyle"
 	"maddog/internal/permission"
 	"maddog/internal/plugin"

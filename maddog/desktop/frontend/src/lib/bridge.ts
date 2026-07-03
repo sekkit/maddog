@@ -278,6 +278,7 @@ export interface AppBindings {
   SetDefaultModel(ref: string): Promise<void>;
   SetPlannerModel(ref: string): Promise<void>;
   SetSubagentModel(ref: string): Promise<void>;
+  SetAdvisorModel(ref: string): Promise<void>;
   SetSubagentEffort(level: string): Promise<void>;
   SetFrontierRoute(ref: string, enabled: boolean, threshold: number, budget: number): Promise<void>;
   SetAutoPlan(mode: string): Promise<void>;
@@ -582,7 +583,7 @@ function bridgeBreadcrumb(method: string): string {
   if (method === "ReportCrash") return "";
   if (/^(Submit|SubmitDisplay|RunShell|Steer|Cancel|Approve|AnswerQuestion|ReplayPendingPrompts)/.test(method))
     return `turn ${method}`;
-  if (/^(SetModel|SetEffort|SetTokenMode|SetDefaultModel|SetPlannerModel|SetSubagentModel|SetSubagentEffort)/.test(method))
+  if (/^(SetModel|SetEffort|SetTokenMode|SetDefaultModel|SetPlannerModel|SetSubagentModel|SetAdvisorModel|SetSubagentEffort)/.test(method))
     return `model ${method}`;
   if (/^(SetDesktop|SetCloseBehavior|SetDisplayMode|SetStatusBar|SetExpandThinking|SetAutoPlan|SetDefaultToolApprovalMode|SetMemoryCompilerEnabled|SetReasoningLanguage)/.test(method))
     return `settings ${method}`;
@@ -869,6 +870,7 @@ function makeMockApp(): AppBindings {
       guardrailPass: true,
       guardrailReason: "No blocked patterns",
       updatedAt: new Date().toISOString(),
+      audit: [{ action: "evaluate", status: "pending", reason: "Replay checks passed", time: new Date().toISOString() }],
     },
     {
       hash: "skill-candidate-docs-helper",
@@ -883,6 +885,7 @@ function makeMockApp(): AppBindings {
       guardrailPass: false,
       guardrailReason: "Regression on held-out bundle",
       updatedAt: new Date().toISOString(),
+      audit: [{ action: "evaluate", status: "pending", reason: "Regression on held-out bundle", time: new Date().toISOString() }],
     },
   ];
   let capSkillRoots: SkillRootView[] = [
@@ -1018,6 +1021,7 @@ function makeMockApp(): AppBindings {
     defaultModel: "deepseek",
     plannerModel: "",
     subagentModel: "",
+    advisorModel: "",
     subagentEffort: "",
     frontierModel: "",
     upgradeEnabled: true,
@@ -2413,6 +2417,7 @@ function makeMockApp(): AppBindings {
       candidate.guardrailPass = true;
       candidate.guardrailReason = "passed guardrail: success 1.00 >= 1.00";
       candidate.updatedAt = new Date().toISOString();
+      candidate.audit = [...(candidate.audit ?? []), { action: "evaluate", status: candidate.status, reason: candidate.guardrailReason, time: candidate.updatedAt }];
       return { ...candidate };
     },
     async PromoteSkillCandidate(hash: string) {
@@ -2421,6 +2426,7 @@ function makeMockApp(): AppBindings {
       candidate.status = "promoted";
       candidate.promotedPath = `~/projects/maddog/.maddog/skills/${candidate.name}/SKILL.md`;
       candidate.updatedAt = new Date().toISOString();
+      candidate.audit = [...(candidate.audit ?? []), { action: "promote", status: candidate.status, path: candidate.promotedPath, time: candidate.updatedAt }];
       if (!capSkills.some((s) => s.name === candidate.name)) {
         capSkills.push({ name: candidate.name, description: candidate.description, scope: "project", runAs: "inline", enabled: true });
       }
@@ -2432,6 +2438,7 @@ function makeMockApp(): AppBindings {
       candidate.status = "rolled_back";
       candidate.validationReason = reason || "rolled back from desktop";
       candidate.updatedAt = new Date().toISOString();
+      candidate.audit = [...(candidate.audit ?? []), { action: "rollback", status: candidate.status, reason: candidate.validationReason, time: candidate.updatedAt }];
       const idx = capSkills.findIndex((s) => s.name === candidate.name && s.scope === "project");
       if (idx >= 0) capSkills.splice(idx, 1);
     },
@@ -2441,6 +2448,7 @@ function makeMockApp(): AppBindings {
       candidate.status = "rejected";
       candidate.validationReason = reason || "rejected from desktop";
       candidate.updatedAt = new Date().toISOString();
+      candidate.audit = [...(candidate.audit ?? []), { action: "reject", status: candidate.status, reason: candidate.validationReason, time: candidate.updatedAt }];
     },
     async SetMCPServerEnabled(name: string, enabled: boolean) {
       capServers = capServers.map((s) =>
@@ -2787,6 +2795,9 @@ function makeMockApp(): AppBindings {
     },
     async SetSubagentModel(ref: string) {
       settings.subagentModel = ref;
+    },
+    async SetAdvisorModel(ref: string) {
+      settings.advisorModel = ref;
     },
     async SetSubagentEffort(level: string) {
       settings.subagentEffort = level;

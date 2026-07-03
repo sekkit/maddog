@@ -2540,6 +2540,7 @@ export default function App() {
       { id: "cmd-appearance", group: t("palette.group.commands"), title: t("palette.cmd.appearance"), icon: <Palette size={15} />, compact: true, keywords: ["theme", "appearance", "外观", "主题"], run: () => setSettingsTarget("appearance") },
       { id: "cmd-memory", group: t("palette.group.commands"), title: t("palette.cmd.memory"), icon: <Brain size={15} />, compact: true, keywords: ["memory", "记忆"], run: () => setSettingsTarget("memory") },
       { id: "cmd-models", group: t("palette.group.commands"), title: t("palette.cmd.models"), icon: <Cpu size={15} />, compact: true, keywords: ["model", "模型"], run: () => setSettingsTarget("models") },
+      { id: "cmd-offline-replay", group: t("palette.group.commands"), title: t("palette.cmd.offlineReplay"), icon: <Activity size={15} />, compact: true, keywords: ["offline", "replay", "skill", "skills", "self-improvement", "离线", "回放", "技能"], run: () => setSettingsTarget("skills") },
     ];
     const startOfDay = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
     const dayLabel = (ms: number) => {
@@ -2796,8 +2797,8 @@ export default function App() {
         <aside className={sidebarClassName} aria-label={t("sidebar.navigation")}>
           {sidebarWorkbench ? (
             <>
-              <div className="sidebar__head" aria-hidden={sidebarCollapsed}>
-                <div className="sidebar__brand sidebar__brand--workbench">
+              <div className="sidebar__head">
+                <div className="sidebar__brand sidebar__brand--workbench" title="Maddog">
                   <img src={maddogIcon} alt="Maddog" className="sidebar__brand-logo sidebar__brand-logo--workbench" draggable={false} />
                   <span className="sidebar__brand-name">Maddog</span>
                 </div>
@@ -2818,7 +2819,7 @@ export default function App() {
             </>
           ) : (
             <>
-              <div className="sidebar__brand" aria-hidden={sidebarCollapsed}>
+              <div className="sidebar__brand" title="Maddog">
                 <img src={maddogIcon} alt="Maddog" className="sidebar__brand-logo" draggable={false} />
                 <span className="sidebar__brand-name">Maddog</span>
               </div>

@@ -34,9 +34,11 @@ check(
   includesAll(settingsPanel, [
     "app.SetDefaultModel(ref)",
     "app.SetSubagentModel(ref)",
+    "app.SetAdvisorModel(ref)",
     "app.SetSubagentEffort(e.target.value)",
     "app.SetFrontierRoute(model, enabled, threshold, budget)",
     "settings.subagentModel",
+    "settings.advisorModel",
     "settings.frontierRoute",
     "settings.frontierBudget",
   ]),
@@ -71,10 +73,14 @@ check(
 );
 
 check(
-  "provider access view displays auth mode, credential env, models, and manual refresh controls",
+  "provider access view displays auth mode, credential env, roles, models, and manual refresh controls",
   includesAll(settingsPanel, [
     "authTypeLabel(group.authType, t)",
     "credentialEnv: providerCredentialEnv(p)",
+    "roles: normalizedProviderRoles(p.roles)",
+    "existing.roles = uniqueStrings([...existing.roles, ...normalizedProviderRoles(p.roles)])",
+    "providerRoleLabel(role, t)",
+    "settings.providerRole.advisor",
     "group.credentialEnv || t(\"common.none\")",
     "providerCredentialEnv(editableProvider ?? group.providers[0])",
     "settings.fetchModels",
@@ -114,8 +120,10 @@ check(
     "authType: string; // api_key|bearer|workload_identity; empty = api_key",
     "authTokenEnv: string;",
     "identityEnv: string;",
+    "roles?: string[]; // derived profile roles: default|planner|frontier|small|advisor",
     "export interface SettingsView",
     "subagentModel: string;",
+    "advisorModel: string;",
     "frontierModel: string;",
     "officialProviders: ProviderView[];",
   ]),

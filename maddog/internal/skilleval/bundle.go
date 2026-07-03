@@ -207,6 +207,10 @@ func cloneReceipts(receipts []evidence.Receipt) []evidence.Receipt {
 		out[i].Args = append([]byte(nil), out[i].Args...)
 		out[i].Paths = append([]string(nil), out[i].Paths...)
 		out[i].Todos = append([]evidence.TodoItem(nil), out[i].Todos...)
+		if out[i].TodoStep != nil {
+			step := *out[i].TodoStep
+			out[i].TodoStep = &step
+		}
 	}
 	return out
 }

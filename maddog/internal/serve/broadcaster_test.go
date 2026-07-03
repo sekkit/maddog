@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"maddog/internal/event"
+	"maddog/internal/eventwire"
 )
 
 func TestBroadcasterFanOut(t *testing.T) {

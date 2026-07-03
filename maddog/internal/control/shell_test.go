@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"maddog/internal/event"
+	"maddog/internal/i18n"
 	"maddog/internal/sandbox"
 )
 

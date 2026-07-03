@@ -14,12 +14,16 @@ import (
 
 	"maddog/internal/agent"
 	"maddog/internal/checkpoint"
+	"maddog/internal/command"
+	"maddog/internal/config"
 	"maddog/internal/event"
 	"maddog/internal/hook"
 	"maddog/internal/jobs"
 	"maddog/internal/permission"
 	"maddog/internal/plugin"
 	"maddog/internal/provider"
+	"maddog/internal/skill"
+	"maddog/internal/skilleval"
 	"maddog/internal/tool"
 )
 
@@ -45,6 +49,17 @@ type appendingRunner struct {
 
 func (r appendingRunner) Run(_ context.Context, input string) error {
 	r.session.Add(provider.Message{Role: provider.RoleUser, Content: input})
+	return nil
+}
+
+type answeringRunner struct {
+	session *agent.Session
+	answer  string
+}
+
+func (r answeringRunner) Run(_ context.Context, input string) error {
+	r.session.Add(provider.Message{Role: provider.RoleUser, Content: input})
+	r.session.Add(provider.Message{Role: provider.RoleAssistant, Content: r.answer})
 	return nil
 }
 
@@ -322,6 +337,66 @@ func TestRunInjectsParentSessionForJobs(t *testing.T) {
 	}
 	if runner.jobSession != want {
 		t.Fatalf("jobs session = %q, want %q", runner.jobSession, want)
+	}
+}
+
+func TestRunCapturesOfflineReplayBundle(t *testing.T) {
+	dir := t.TempDir()
+	workspace := t.TempDir()
+	path := filepath.Join(dir, "session.jsonl")
+	sess := agent.NewSession("sys")
+	exec := agent.New(nil, nil, sess, agent.Options{}, event.Discard)
+	c := New(Options{
+		Runner:        answeringRunner{session: sess, answer: "done"},
+		Executor:      exec,
+		SessionDir:    dir,
+		SessionPath:   path,
+		Label:         "test",
+		WorkspaceRoot: workspace,
+		Skills:        []skill.Skill{{Name: "parser-helper", Description: "parses logs"}},
+	})
+
+	if err := c.Run(context.Background(), "parse the log"); err != nil {
+		t.Fatal(err)
+	}
+
+	bundle := waitForSkillEvalBundle(t, workspace)
+	if bundle.SessionID != agent.BranchID(path) {
+		t.Fatalf("SessionID = %q, want %q", bundle.SessionID, agent.BranchID(path))
+	}
+	if bundle.Task != "parse the log" {
+		t.Fatalf("Task = %q, want raw prompt", bundle.Task)
+	}
+	if bundle.Outcome.FinalAnswer != "done" || !bundle.Outcome.Success || !bundle.Outcome.GoalMet {
+		t.Fatalf("Outcome = %+v, want successful final answer", bundle.Outcome)
+	}
+	if len(bundle.Skills) != 1 || bundle.Skills[0].Name != "parser-helper" {
+		t.Fatalf("Skills = %+v, want parser-helper snapshot", bundle.Skills)
+	}
+}
+
+func waitForSkillEvalBundle(t *testing.T, workspace string) *skilleval.BundleV2 {
+	t.Helper()
+	dir := filepath.Join(workspace, config.ProjectConventionDir, "skilleval")
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		entries, err := os.ReadDir(dir)
+		if err == nil {
+			for _, entry := range entries {
+				if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
+					continue
+				}
+				bundle, err := skilleval.LoadBundle(filepath.Join(dir, entry.Name()))
+				if err != nil {
+					t.Fatalf("LoadBundle: %v", err)
+				}
+				return bundle
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for offline replay bundle in %s", dir)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 

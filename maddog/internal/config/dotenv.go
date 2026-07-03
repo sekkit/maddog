@@ -8,30 +8,60 @@ import (
 )
 
 // loadDotEnv loads KEY=value files into the process environment without
-// overriding variables that are already set (first file to set a key wins).
-// Order: a project ./.env (read-only back-compat, so a manual project override
-// takes precedence), then the Maddog-owned global credentials file in the user
-// config dir (where setup writes keys, so they resolve from any directory without
-// ever touching a project's own .env). Existing environment variables always win.
+// importing project .env files. Project .env values are returned as a scoped
+// expansion map for MCP/plugin fields; provider credentials come only from the
+// Maddog-owned credentials file.
 func loadDotEnv() {
-	loadDotEnvForRoot(".")
+	projectEnv := loadDotEnvForRoot(".")
+	loadProjectEnvKeysThatShadowHome(".env", projectEnv)
 }
 
-// loadDotEnvForRoot loads a root's .env file (if present) before the Maddog
-// credentials file. When root is "." it behaves like loadDotEnv().
+// loadDotEnvForRoot reads a root's .env file into a scoped expansion map, then
+// pins Maddog's global credentials file into the process environment.
 func loadDotEnvForRoot(root string) map[string]string {
 	dotEnvPath := ".env"
 	if root != "" && root != "." {
 		dotEnvPath = filepath.Join(root, ".env")
 	}
-	loadDotEnvFileAs(dotEnvPath, CredentialSource{Kind: CredentialSourceProjectEnv, Path: dotEnvPath})
+	projectEnv := readDotEnvFileMap(dotEnvPath, allowProjectExpansionEnv)
 	if current := UserCredentialsPath(); current != "" {
 		loadDotEnvFileAs(current, CredentialSource{Kind: CredentialSourceCredentials, Path: current})
 	}
 	for _, path := range legacyCredentialsPaths() {
 		loadDotEnvFileAs(path, CredentialSource{Kind: CredentialSourceLegacy, Path: path})
 	}
-	return nil
+	return projectEnv
+}
+
+func allowProjectExpansionEnv(key string) bool {
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return false
+	}
+	return !strings.HasPrefix(key, "MADDOG_")
+}
+
+func loadProjectEnvKeysThatShadowHome(projectPath string, projectEnv map[string]string) {
+	if len(projectEnv) == 0 {
+		return
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return
+	}
+	homeEnv := readDotEnvFileMap(filepath.Join(home, ".env"), nil)
+	for key, value := range projectEnv {
+		if _, shadowsHome := homeEnv[key]; !shadowsHome {
+			continue
+		}
+		if _, exists := os.LookupEnv(key); exists {
+			recordExistingCredentialSource(key)
+			continue
+		}
+		if err := os.Setenv(key, value); err == nil {
+			recordCredentialSource(key, value, CredentialSource{Kind: CredentialSourceProjectEnv, Path: projectPath})
+		}
+	}
 }
 
 func legacyCredentialsPaths() []string {

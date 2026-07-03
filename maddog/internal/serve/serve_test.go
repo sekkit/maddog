@@ -15,6 +15,8 @@ import (
 	"maddog/internal/agent"
 	"maddog/internal/config"
 	"maddog/internal/control"
+	"maddog/internal/eventwire"
+	"maddog/internal/jobs"
 	"maddog/internal/provider"
 )
 

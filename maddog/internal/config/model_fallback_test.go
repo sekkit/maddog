@@ -127,6 +127,7 @@ func TestRemoveProviderMigratesDanglingRefs(t *testing.T) {
 	c.DefaultModel = "model-a2"
 	c.Agent.PlannerModel = "prov-a"
 	c.Agent.SubagentModel = "prov-a/model-a1"
+	c.Agent.AdvisorModel = "prov-a/model-a2"
 	c.Agent.SubagentModels = map[string]string{
 		"review":  "prov-a/model-a2",
 		"bare":    "model-a1",
@@ -147,6 +148,9 @@ func TestRemoveProviderMigratesDanglingRefs(t *testing.T) {
 	}
 	if c.Agent.SubagentModel != "prov-b" {
 		t.Fatalf("subagent_model = %q, want prov-b", c.Agent.SubagentModel)
+	}
+	if c.Agent.AdvisorModel != "prov-b" {
+		t.Fatalf("advisor_model = %q, want prov-b", c.Agent.AdvisorModel)
 	}
 	if c.Agent.SubagentModels["review"] != "prov-b" {
 		t.Fatalf("subagent_models.review = %q, want prov-b", c.Agent.SubagentModels["review"])
@@ -181,6 +185,7 @@ func TestRemoveProviderClearsOptionalRefsWithoutFallback(t *testing.T) {
 	c.DefaultModel = "prov-b"
 	c.Agent.PlannerModel = "prov-a/model-a1"
 	c.Agent.SubagentModel = "prov-a"
+	c.Agent.AdvisorModel = "prov-a/model-a2"
 	c.Agent.SubagentModels = map[string]string{"review": "prov-a/model-a2"}
 	c.Providers[1].APIKeyEnv = "MADDOG_TEST_EMPTY"
 
@@ -192,6 +197,9 @@ func TestRemoveProviderClearsOptionalRefsWithoutFallback(t *testing.T) {
 	}
 	if c.Agent.SubagentModel != "" {
 		t.Fatalf("subagent_model = %q, want cleared", c.Agent.SubagentModel)
+	}
+	if c.Agent.AdvisorModel != "" {
+		t.Fatalf("advisor_model = %q, want cleared", c.Agent.AdvisorModel)
 	}
 	if _, ok := c.Agent.SubagentModels["review"]; ok {
 		t.Fatal("subagent_models.review should be removed")

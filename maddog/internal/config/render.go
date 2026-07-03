@@ -171,116 +171,7 @@ func RenderTOMLForScope(c *Config, scope RenderScope) string {
 		renderEnvironmentConfig(&b, c.Environment)
 	}
 
-	b.WriteString("[agent]\n")
-	if shouldRenderSystemPrompt(c, defaults, scope) {
-		b.WriteString("system_prompt = \"\"\"\n")
-		b.WriteString(c.Agent.SystemPrompt)
-		b.WriteString("\"\"\"\n")
-	} else {
-		b.WriteString("# system_prompt = \"\"\"...\"\"\"   # omit to use the built-in prompt for this version\n")
-	}
-	if c.Agent.SystemPromptFile != "" {
-		fmt.Fprintf(&b, "system_prompt_file = %q\n", c.Agent.SystemPromptFile)
-	} else {
-		b.WriteString("# system_prompt_file = \"prompts/system.md\"   # overrides system_prompt when set\n")
-	}
-	if scope != RenderScopeProject {
-		if c.Agent.MaxSteps != defaults.Agent.MaxSteps {
-			fmt.Fprintf(&b, "max_steps         = %d   # executor tool-call rounds; 0 = no limit\n", c.Agent.MaxSteps)
-		} else {
-			b.WriteString("# max_steps         = 0   # executor tool-call rounds; 0 = no limit\n")
-		}
-		if c.Agent.PlannerMaxSteps != defaults.Agent.PlannerMaxSteps {
-			fmt.Fprintf(&b, "planner_max_steps = %d   # planner read-only tool-call rounds; 0 = no limit\n", c.Agent.PlannerMaxSteps)
-		} else {
-			b.WriteString("# planner_max_steps = 0    # planner read-only tool-call rounds; 0 = no limit\n")
-		}
-	}
-	fmt.Fprintf(&b, "temperature       = %s\n", formatFloat(c.Agent.Temperature))
-	if scope != RenderScopeProject {
-		autoPlan := c.Agent.AutoPlan
-		switch strings.ToLower(strings.TrimSpace(autoPlan)) {
-		case "on", "ask":
-			autoPlan = "on"
-		default:
-			autoPlan = "off"
-		}
-		fmt.Fprintf(&b, "auto_plan   = %q   # user-level only: off|on; off keeps plan mode manual\n", autoPlan)
-		fmt.Fprintf(&b, "memory_compiler = { enabled = %v }   # user-level only: Memory v5 execution compiler\n", c.MemoryCompilerEnabled())
-	}
-	if lang := c.ReasoningLanguage(); lang != "auto" {
-		fmt.Fprintf(&b, "reasoning_language = %q   # visible reasoning language: auto|zh|en\n", lang)
-	} else {
-		b.WriteString("# reasoning_language = \"zh\"   # visible reasoning language: auto|zh|en\n")
-	}
-	if c.Agent.AutoPlanClassifier != "" {
-		fmt.Fprintf(&b, "auto_plan_classifier = %q   # optional provider/model for borderline auto-plan decisions\n", c.Agent.AutoPlanClassifier)
-	} else {
-		b.WriteString("# auto_plan_classifier = \"deepseek-flash\"   # optional; only used for borderline tasks\n")
-	}
-	fmt.Fprintf(&b, "soft_compact_ratio  = %s   # notice only; keeps cache-first prefix intact\n", formatFloat(c.Agent.SoftCompactRatio))
-	fmt.Fprintf(&b, "tool_result_snip_ratio = %s   # snip stale tool results at this fraction before summary compaction\n", formatFloat(c.Agent.ToolResultSnipRatio))
-	fmt.Fprintf(&b, "compact_ratio       = %s   # try compacting when prompt reaches this fraction\n", formatFloat(c.Agent.CompactRatio))
-	fmt.Fprintf(&b, "compact_force_ratio = %s   # force compacting at this high-water mark\n", formatFloat(c.Agent.CompactForceRatio))
-	if c.Agent.Keep != nil {
-		fmt.Fprintf(&b, "keep                = %s   # compaction keep policy: errors, user_marked\n", renderStringArray(c.Agent.Keep))
-	} else {
-		b.WriteString("# keep                = [\"errors\"]   # compaction keep policy: errors, user_marked\n")
-	}
-	if c.Agent.RecentKeep > 0 {
-		fmt.Fprintf(&b, "recent_keep         = %d   # minimum recent messages kept verbatim\n", c.Agent.RecentKeep)
-	} else {
-		b.WriteString("# recent_keep         = 2   # minimum recent messages kept verbatim\n")
-	}
-	fmt.Fprintf(&b, "cold_resume_prune   = %v   # elide stale tool results when reopening a session past the provider cache window\n", c.ColdResumePruneEnabled())
-	if len(c.Agent.PlanModeAllowedTools) > 0 {
-		fmt.Fprintf(&b, "plan_mode_allowed_tools = %s   # extra read-only declarations for custom tools; cannot unlock known blocked tools or unsafe bash\n", renderStringArray(c.Agent.PlanModeAllowedTools))
-	} else {
-		b.WriteString("# plan_mode_allowed_tools = [\"custom_reader\"]   # extra read-only declarations; cannot unlock known blocked tools or unsafe bash\n")
-	}
-	if c.Agent.PlannerModel != "" {
-		fmt.Fprintf(&b, "planner_model = %q   # low-frequency planner (two-model collaboration)\n", c.Agent.PlannerModel)
-	} else {
-		b.WriteString("# planner_model = \"deepseek-pro\"   # optional: enable two-model collaboration\n")
-	}
-	if c.Agent.SubagentModel != "" {
-		fmt.Fprintf(&b, "subagent_model = %q   # default model for runAs=subagent skills\n", c.Agent.SubagentModel)
-	} else {
-		b.WriteString("# subagent_model = \"deepseek-pro\"   # optional default for runAs=subagent skills\n")
-	}
-	if len(c.Agent.SubagentModels) > 0 {
-		fmt.Fprintf(&b, "subagent_models = %s   # per-skill overrides\n", renderStringMap(c.Agent.SubagentModels))
-	} else {
-		b.WriteString("# subagent_models = { review = \"deepseek-pro\", security_review = \"deepseek-pro\" }   # per-skill overrides\n")
-	}
-	if c.Agent.SubagentEffort != "" {
-		fmt.Fprintf(&b, "subagent_effort = %q   # default effort for subagent entry points\n", c.Agent.SubagentEffort)
-	} else {
-		b.WriteString("# subagent_effort = \"high\"   # optional default effort for subagents\n")
-	}
-	if len(c.Agent.SubagentEfforts) > 0 {
-		fmt.Fprintf(&b, "subagent_efforts = %s   # per-tool/skill effort overrides\n", renderStringMap(c.Agent.SubagentEfforts))
-	} else {
-		b.WriteString("# subagent_efforts = { review = \"max\", task = \"high\" }   # per-tool/skill effort overrides\n")
-	}
-	if c.Agent.FrontierModel != "" {
-		fmt.Fprintf(&b, "frontier_model = %q   # automatic upgrade target after repeated tool failures\n", c.Agent.FrontierModel)
-	} else {
-		b.WriteString("# frontier_model = \"deepseek-pro\"   # optional automatic upgrade target\n")
-	}
-	fmt.Fprintf(&b, "upgrade_enabled = %t   # enable automatic frontier routing when frontier_model is set\n", c.Agent.UpgradeEnabled)
-	fmt.Fprintf(&b, "upgrade_threshold = %d   # consecutive tool failures before upgrading; 0 disables\n", c.Agent.UpgradeThreshold)
-	fmt.Fprintf(&b, "frontier_budget = %d   # session output-token budget for frontier calls; 0 = unlimited\n", c.Agent.FrontierBudget)
-	if c.Agent.OutputStyle != "" {
-		fmt.Fprintf(&b, "output_style = %q   # persona/tone folded into the prompt\n", c.Agent.OutputStyle)
-	} else {
-		b.WriteString("# output_style = \"explanatory\"   # explanatory | learning | concise | custom; empty = default\n")
-	}
-	fmt.Fprintf(&b, "\n[agent.context_compression]\n")
-	fmt.Fprintf(&b, "policy = %q   # off|auto|aggressive\n", c.Agent.ContextCompression.EffectivePolicy())
-	fmt.Fprintf(&b, "threshold_bytes = %d   # auto compresses tool output above this size; 0 = built-in default\n", c.Agent.ContextCompression.EffectiveThresholdBytes())
-	fmt.Fprintf(&b, "max_bytes = %d   # target visible bytes after compression; 0 = built-in default\n", c.Agent.ContextCompression.EffectiveMaxBytes())
-	b.WriteString("\n")
+	renderAgentConfig(&b, c, defaults, scope)
 
 	if shouldRenderProviders(c, defaults, scope) {
 		for _, p := range c.Providers {
@@ -390,38 +281,30 @@ func RenderTOMLForScope(c *Config, scope RenderScope) string {
 		}
 	}
 
-	b.WriteString("[tools]\n")
-	if len(c.Tools.Enabled) == 0 {
-		b.WriteString("enabled = []   # empty = all built-in tools\n")
-	} else {
-		b.WriteString("enabled = [")
-		for i, t := range c.Tools.Enabled {
-			if i > 0 {
-				b.WriteString(", ")
-			}
-			fmt.Fprintf(&b, "%q", t)
+	renderToolsConfig(&b, c, defaults, scope)
+
+	if shouldRenderCodegraph(c, defaults, scope) {
+		b.WriteString("[codegraph]\n")
+		fmt.Fprintf(&b, "enabled      = %v   # built-in MCP server; on by default for first-run sessions\n", c.Codegraph.Enabled)
+		fmt.Fprintf(&b, "auto_install = %v   # fetch the runtime when CodeGraph is enabled but missing\n", c.Codegraph.AutoInstall)
+		if c.Codegraph.Path != "" {
+			fmt.Fprintf(&b, "path         = %q   # optional launcher override\n", c.Codegraph.Path)
+		} else {
+			b.WriteString("# path       = \"\"   # empty = cache, then PATH, then a bundle beside maddog\n")
 		}
-		b.WriteString("]\n")
+		b.WriteString("\n")
 	}
-	fmt.Fprintf(&b, "bash_timeout_seconds = %d   # foreground safety cap; set 0 for no tool-local cap\n", c.BashTimeoutSeconds())
-	fmt.Fprintf(&b, "mcp_call_timeout_seconds = %d   # default MCP call safety cap; per-plugin/tool overrides may raise it\n\n", c.MCPCallTimeoutSeconds())
 
-	b.WriteString("[codegraph]\n")
-	fmt.Fprintf(&b, "enabled      = %v   # built-in MCP server; on by default for first-run sessions\n", c.Codegraph.Enabled)
-	fmt.Fprintf(&b, "auto_install = %v   # fetch the runtime when CodeGraph is enabled but missing\n", c.Codegraph.AutoInstall)
-	if c.Codegraph.Path != "" {
-		fmt.Fprintf(&b, "path         = %q   # optional launcher override\n", c.Codegraph.Path)
-	} else {
-		b.WriteString("# path       = \"\"   # empty = cache, then PATH, then a bundle beside maddog\n")
+	if shouldRenderCodeIntelligence(c, defaults, scope) {
+		renderCodeIntelligenceConfig(&b, c.CodeIntelligence)
 	}
-	b.WriteString("\n")
 
-	renderCodeIntelligenceConfig(&b, c.CodeIntelligence)
-
-	b.WriteString("[builtin_mcp]\n")
-	fmt.Fprintf(&b, "time_enabled = %v   # built-in Time MCP; off until manually enabled\n", c.BuiltInMCP.TimeEnabled)
-	fmt.Fprintf(&b, "context7_enabled = %v   # built-in Context7 MCP; off until manually enabled\n", c.BuiltInMCP.Context7Enabled)
-	b.WriteString("\n")
+	if shouldRenderBuiltInMCP(c, defaults, scope) {
+		b.WriteString("[builtin_mcp]\n")
+		fmt.Fprintf(&b, "time_enabled = %v   # built-in Time MCP; off until manually enabled\n", c.BuiltInMCP.TimeEnabled)
+		fmt.Fprintf(&b, "context7_enabled = %v   # built-in Context7 MCP; off until manually enabled\n", c.BuiltInMCP.Context7Enabled)
+		b.WriteString("\n")
+	}
 
 	if scope != RenderScopeProject {
 		b.WriteString("[builtin_mcp_updates]\n")
@@ -430,83 +313,93 @@ func RenderTOMLForScope(c *Config, scope RenderScope) string {
 		b.WriteString("\n")
 	}
 
-	renderLSPConfig(&b, c.LSP)
-
-	b.WriteString("[skills]\n")
-	if len(c.Skills.Paths) > 0 {
-		fmt.Fprintf(&b, "paths = %s   # extra custom skill roots\n", renderStringArray(c.Skills.Paths))
-	} else {
-		b.WriteString("# paths = [\"~/my-skills\", \"../shared/skills\"]   # extra custom skill roots\n")
-	}
-	if len(c.Skills.ExcludedPaths) > 0 {
-		fmt.Fprintf(&b, "excluded_paths = %s   # skill roots hidden from discovery\n", renderStringArray(c.Skills.ExcludedPaths))
-	} else {
-		b.WriteString("# excluded_paths = [\"~/.agents/skills\"]   # hide convention roots without deleting folders\n")
-	}
-	if c.Skills.MaxDepth != 0 {
-		fmt.Fprintf(&b, "max_depth = %d   # nested scan depth; default 3, set 1 for legacy root-only discovery\n", c.SkillMaxDepth())
-	} else {
-		b.WriteString("# max_depth = 3   # nested scan depth; set 1 for legacy root-only discovery\n")
-	}
-	fmt.Fprintf(&b, "runtime_orchestration = %v   # match existing skills and add turn-local hints\n", c.Skills.RuntimeOrchestration)
-	if c.Skills.DynamicSkills {
-		b.WriteString("dynamic_skills = true   # opt-in: generate temporary skills with the active model when no match exists\n")
-	} else {
-		b.WriteString("# dynamic_skills = true   # opt-in: may add an extra model call before each unmatched turn\n")
-	}
-	if disabled := c.DisabledSkillNames(); len(disabled) > 0 {
-		fmt.Fprintf(&b, "disabled_skills = %s   # hidden from the prompt, slash invocation, and skill tools\n\n", renderStringArray(disabled))
-	} else {
-		b.WriteString("# disabled_skills = [\"review\"]   # hide noisy or unwanted skills\n\n")
+	if shouldRenderLSP(c, defaults, scope) {
+		renderLSPConfig(&b, c.LSP)
 	}
 
-	b.WriteString("[permissions]\n")
-	b.WriteString("# Per-call gating. mode = writer fallback when no rule matches: ask|allow|deny.\n")
-	b.WriteString("# Readers always default to allow. Precedence: deny > ask > allow > fallback.\n")
-	b.WriteString("# Rules are \"Tool\" or \"Tool(specifier)\"; e.g. Bash(go test:*), Edit(src/**).\n")
-	mode := c.Permissions.Mode
-	if mode == "" {
-		mode = "ask"
+	if shouldRenderSkills(c, defaults, scope) {
+		b.WriteString("[skills]\n")
+		if len(c.Skills.Paths) > 0 {
+			fmt.Fprintf(&b, "paths = %s   # extra custom skill roots\n", renderStringArray(c.Skills.Paths))
+		} else {
+			b.WriteString("# paths = [\"~/my-skills\", \"../shared/skills\"]   # extra custom skill roots\n")
+		}
+		if len(c.Skills.ExcludedPaths) > 0 {
+			fmt.Fprintf(&b, "excluded_paths = %s   # skill roots hidden from discovery\n", renderStringArray(c.Skills.ExcludedPaths))
+		} else {
+			b.WriteString("# excluded_paths = [\"~/.agents/skills\"]   # hide convention roots without deleting folders\n")
+		}
+		if c.Skills.MaxDepth != 0 {
+			fmt.Fprintf(&b, "max_depth = %d   # nested scan depth; default 3, set 1 for legacy root-only discovery\n", c.SkillMaxDepth())
+		} else {
+			b.WriteString("# max_depth = 3   # nested scan depth; set 1 for legacy root-only discovery\n")
+		}
+		fmt.Fprintf(&b, "runtime_orchestration = %v   # match existing skills and add turn-local hints\n", c.Skills.RuntimeOrchestration)
+		if c.Skills.DynamicSkills {
+			b.WriteString("dynamic_skills = true   # opt-in: generate temporary skills with the active model when no match exists\n")
+		} else {
+			b.WriteString("# dynamic_skills = true   # opt-in: may add an extra model call before each unmatched turn\n")
+		}
+		if disabled := c.DisabledSkillNames(); len(disabled) > 0 {
+			fmt.Fprintf(&b, "disabled_skills = %s   # hidden from the prompt, slash invocation, and skill tools\n\n", renderStringArray(disabled))
+		} else {
+			b.WriteString("# disabled_skills = [\"review\"]   # hide noisy or unwanted skills\n\n")
+		}
 	}
-	fmt.Fprintf(&b, "mode  = %q\n", mode)
-	b.WriteString(renderRuleList("deny", c.Permissions.Deny, `["Bash(rm -rf*)", "Bash(git push*)"]   # hard-blocked in every mode`))
-	b.WriteString(renderRuleList("allow", c.Permissions.Allow, `["Bash(go test:*)", "Bash(git status:*)"]   # never prompted`))
-	b.WriteString(renderRuleList("ask", c.Permissions.Ask, `["Edit(src/**)"]   # force a prompt even if otherwise allowed`))
-	b.WriteString("\n")
 
-	b.WriteString("[sandbox]\n")
-	b.WriteString("# Confine tool blast radius. File-writers (write_file/edit_file/multi_edit/move_file)\n")
-	b.WriteString("# may only write under workspace_root (empty = current dir) and allow_write extras.\n")
-	b.WriteString("# bash = \"enforce\" (default) jails each command in an OS sandbox (macOS now;\n")
-	b.WriteString("# graceful fallback elsewhere); \"off\" disables it. network allows egress.\n")
-	if c.Sandbox.WorkspaceRoot != "" {
-		fmt.Fprintf(&b, "workspace_root = %q\n", c.Sandbox.WorkspaceRoot)
-	} else {
-		b.WriteString("# workspace_root = \"\"            # default: current working directory\n")
+	if shouldRenderPermissions(c, defaults, scope) {
+		b.WriteString("[permissions]\n")
+		b.WriteString("# Per-call gating. mode = writer fallback when no rule matches: ask|allow|deny.\n")
+		b.WriteString("# Readers always default to allow. Precedence: deny > ask > allow > fallback.\n")
+		b.WriteString("# Rules are \"Tool\" or \"Tool(specifier)\"; e.g. Bash(go test:*), Edit(src/**).\n")
+		mode := c.Permissions.Mode
+		if mode == "" {
+			mode = "ask"
+		}
+		fmt.Fprintf(&b, "mode  = %q\n", mode)
+		b.WriteString(renderRuleList("deny", c.Permissions.Deny, `["Bash(rm -rf*)", "Bash(git push*)"]   # hard-blocked in every mode`))
+		b.WriteString(renderRuleList("allow", c.Permissions.Allow, `["Bash(go test:*)", "Bash(git status:*)"]   # never prompted`))
+		b.WriteString(renderRuleList("ask", c.Permissions.Ask, `["Edit(src/**)"]   # force a prompt even if otherwise allowed`))
+		b.WriteString("\n")
 	}
-	if len(c.Sandbox.AllowWrite) > 0 {
-		fmt.Fprintf(&b, "allow_write = %s\n", renderStringArray(c.Sandbox.AllowWrite))
-	} else {
-		b.WriteString("# allow_write = [\"/tmp\"]          # extra dirs writers may also modify\n")
-	}
-	if len(c.Sandbox.ForbidRead) > 0 {
-		fmt.Fprintf(&b, "forbid_read = %s\n", renderStringArray(c.Sandbox.ForbidRead))
-	} else {
-		b.WriteString("# forbid_read = []                  # dirs the agent cannot read or list\n")
-	}
-	fmt.Fprintf(&b, "bash    = %q\n", c.BashMode())
-	fmt.Fprintf(&b, "network = %v\n", c.Sandbox.Network)
-	b.WriteString("\n")
 
-	b.WriteString("[statusline]\n")
-	b.WriteString("# A custom status line: a command whose first stdout line replaces the built-in\n")
-	b.WriteString("# data row. It receives {\"model\",\"contextUsed\",\"contextWindow\",\"cwd\"} as JSON on stdin.\n")
-	if c.Statusline.Command != "" {
-		fmt.Fprintf(&b, "command = %q\n", c.Statusline.Command)
-	} else {
-		b.WriteString("# command = \"my-statusline.sh\"\n")
+	if shouldRenderSandbox(c, defaults, scope) {
+		b.WriteString("[sandbox]\n")
+		b.WriteString("# Confine tool blast radius. File-writers (write_file/edit_file/multi_edit/move_file)\n")
+		b.WriteString("# may only write under workspace_root (empty = current dir) and allow_write extras.\n")
+		b.WriteString("# bash = \"enforce\" (default) jails each command in an OS sandbox (macOS now;\n")
+		b.WriteString("# graceful fallback elsewhere); \"off\" disables it. network allows egress.\n")
+		if c.Sandbox.WorkspaceRoot != "" {
+			fmt.Fprintf(&b, "workspace_root = %q\n", c.Sandbox.WorkspaceRoot)
+		} else {
+			b.WriteString("# workspace_root = \"\"            # default: current working directory\n")
+		}
+		if len(c.Sandbox.AllowWrite) > 0 {
+			fmt.Fprintf(&b, "allow_write = %s\n", renderStringArray(c.Sandbox.AllowWrite))
+		} else {
+			b.WriteString("# allow_write = [\"/tmp\"]          # extra dirs writers may also modify\n")
+		}
+		if len(c.Sandbox.ForbidRead) > 0 {
+			fmt.Fprintf(&b, "forbid_read = %s\n", renderStringArray(c.Sandbox.ForbidRead))
+		} else {
+			b.WriteString("# forbid_read = []                  # dirs the agent cannot read or list\n")
+		}
+		fmt.Fprintf(&b, "bash    = %q\n", c.BashMode())
+		fmt.Fprintf(&b, "network = %v\n", c.Sandbox.Network)
+		b.WriteString("\n")
 	}
-	b.WriteString("\n")
+
+	if shouldRenderStatusline(c, defaults, scope) {
+		b.WriteString("[statusline]\n")
+		b.WriteString("# A custom status line: a command whose first stdout line replaces the built-in\n")
+		b.WriteString("# data row. It receives {\"model\",\"contextUsed\",\"contextWindow\",\"cwd\"} as JSON on stdin.\n")
+		if c.Statusline.Command != "" {
+			fmt.Fprintf(&b, "command = %q\n", c.Statusline.Command)
+		} else {
+			b.WriteString("# command = \"my-statusline.sh\"\n")
+		}
+		b.WriteString("\n")
+	}
 
 	if shouldRenderBot(c, defaults, scope) {
 		b.WriteString("# Bot gateway: multi-channel IM bot for QQ, Feishu/Lark, and WeChat.\n")
@@ -588,17 +481,21 @@ func RenderTOMLForScope(c *Config, scope RenderScope) string {
 		b.WriteString("\n")
 	}
 
-	b.WriteString("# External MCP servers. type: \"stdio\" (default, a subprocess) | \"http\" | \"sse\".\n")
-	b.WriteString("# ${VAR} / ${VAR:-default} are expanded from the environment in command/args/env/url/headers.\n")
+	if scope != RenderScopeProject || len(c.Plugins) > 0 {
+		b.WriteString("# External MCP servers. type: \"stdio\" (default, a subprocess) | \"http\" | \"sse\".\n")
+		b.WriteString("# ${VAR} / ${VAR:-default} are expanded from the environment in command/args/env/url/headers.\n")
+	}
 	if len(c.Plugins) == 0 {
-		b.WriteString("# [[plugins]]\n")
-		b.WriteString("# name    = \"example\"\n")
-		b.WriteString("# command = \"maddog-plugin-example\"\n")
-		b.WriteString("# [[plugins]]                                  # a remote server over Streamable HTTP\n")
-		b.WriteString("# name    = \"stripe\"\n")
-		b.WriteString("# type    = \"http\"\n")
-		b.WriteString("# url     = \"https://mcp.stripe.com\"\n")
-		b.WriteString("# headers = { Authorization = \"Bearer ${STRIPE_KEY}\" }\n")
+		if scope != RenderScopeProject {
+			b.WriteString("# [[plugins]]\n")
+			b.WriteString("# name    = \"example\"\n")
+			b.WriteString("# command = \"maddog-plugin-example\"\n")
+			b.WriteString("# [[plugins]]                                  # a remote server over Streamable HTTP\n")
+			b.WriteString("# name    = \"stripe\"\n")
+			b.WriteString("# type    = \"http\"\n")
+			b.WriteString("# url     = \"https://mcp.stripe.com\"\n")
+			b.WriteString("# headers = { Authorization = \"Bearer ${STRIPE_KEY}\" }\n")
+		}
 	} else {
 		for _, pl := range c.Plugins {
 			b.WriteString("\n[[plugins]]\n")
@@ -747,6 +644,222 @@ func renderEnvironmentConfig(b *strings.Builder, cfg EnvironmentConfig) {
 	b.WriteString("\n")
 }
 
+func renderAgentConfig(b *strings.Builder, c, defaults *Config, scope RenderScope) {
+	b.WriteString("[agent]\n")
+	if shouldRenderSystemPrompt(c, defaults, scope) {
+		b.WriteString("system_prompt = \"\"\"\n")
+		b.WriteString(c.Agent.SystemPrompt)
+		b.WriteString("\"\"\"\n")
+	} else {
+		b.WriteString("# system_prompt = \"\"\"...\"\"\"   # omit to use the built-in prompt for this version\n")
+	}
+	if c.Agent.SystemPromptFile != "" {
+		fmt.Fprintf(b, "system_prompt_file = %q\n", c.Agent.SystemPromptFile)
+	} else if scope != RenderScopeProject {
+		b.WriteString("# system_prompt_file = \"prompts/system.md\"   # overrides system_prompt when set\n")
+	}
+	if scope == RenderScopeProject {
+		renderProjectAgentDelta(b, c, defaults)
+		return
+	}
+	if c.Agent.MaxSteps != defaults.Agent.MaxSteps {
+		fmt.Fprintf(b, "max_steps         = %d   # executor tool-call rounds; 0 = no limit\n", c.Agent.MaxSteps)
+	} else {
+		b.WriteString("# max_steps         = 0   # executor tool-call rounds; 0 = no limit\n")
+	}
+	if c.Agent.PlannerMaxSteps != defaults.Agent.PlannerMaxSteps {
+		fmt.Fprintf(b, "planner_max_steps = %d   # planner read-only tool-call rounds; 0 = no limit\n", c.Agent.PlannerMaxSteps)
+	} else {
+		b.WriteString("# planner_max_steps = 0    # planner read-only tool-call rounds; 0 = no limit\n")
+	}
+	fmt.Fprintf(b, "temperature       = %s\n", formatFloat(c.Agent.Temperature))
+	autoPlan := c.Agent.AutoPlan
+	switch strings.ToLower(strings.TrimSpace(autoPlan)) {
+	case "on", "ask":
+		autoPlan = "on"
+	default:
+		autoPlan = "off"
+	}
+	fmt.Fprintf(b, "auto_plan   = %q   # user-level only: off|on; off keeps plan mode manual\n", autoPlan)
+	fmt.Fprintf(b, "memory_compiler = { enabled = %v }   # user-level only: Memory v5 execution compiler\n", c.MemoryCompilerEnabled())
+	renderAgentBehaviorFields(b, c, defaults, false)
+	fmt.Fprintf(b, "\n[agent.context_compression]\n")
+	fmt.Fprintf(b, "policy = %q   # off|auto|aggressive\n", c.Agent.ContextCompression.EffectivePolicy())
+	fmt.Fprintf(b, "threshold_bytes = %d   # auto compresses tool output above this size; 0 = built-in default\n", c.Agent.ContextCompression.EffectiveThresholdBytes())
+	fmt.Fprintf(b, "max_bytes = %d   # target visible bytes after compression; 0 = built-in default\n", c.Agent.ContextCompression.EffectiveMaxBytes())
+	b.WriteString("\n")
+}
+
+func renderProjectAgentDelta(b *strings.Builder, c, defaults *Config) {
+	if c.Agent.Temperature != defaults.Agent.Temperature {
+		fmt.Fprintf(b, "temperature       = %s\n", formatFloat(c.Agent.Temperature))
+	}
+	renderAgentBehaviorFields(b, c, defaults, true)
+	if !reflect.DeepEqual(c.Agent.ContextCompression, defaults.Agent.ContextCompression) {
+		fmt.Fprintf(b, "\n[agent.context_compression]\n")
+		fmt.Fprintf(b, "policy = %q   # off|auto|aggressive\n", c.Agent.ContextCompression.EffectivePolicy())
+		fmt.Fprintf(b, "threshold_bytes = %d   # auto compresses tool output above this size; 0 = built-in default\n", c.Agent.ContextCompression.EffectiveThresholdBytes())
+		fmt.Fprintf(b, "max_bytes = %d   # target visible bytes after compression; 0 = built-in default\n", c.Agent.ContextCompression.EffectiveMaxBytes())
+	}
+	b.WriteString("\n")
+}
+
+func renderAgentBehaviorFields(b *strings.Builder, c, defaults *Config, projectDelta bool) {
+	if lang := c.ReasoningLanguage(); lang != "auto" {
+		fmt.Fprintf(b, "reasoning_language = %q   # visible reasoning language: auto|zh|en\n", lang)
+	} else if !projectDelta {
+		b.WriteString("# reasoning_language = \"zh\"   # visible reasoning language: auto|zh|en\n")
+	}
+	if c.Agent.AutoPlanClassifier != "" {
+		fmt.Fprintf(b, "auto_plan_classifier = %q   # optional provider/model for borderline auto-plan decisions\n", c.Agent.AutoPlanClassifier)
+	} else if !projectDelta {
+		b.WriteString("# auto_plan_classifier = \"deepseek-flash\"   # optional; only used for borderline tasks\n")
+	}
+	if !projectDelta || c.Agent.SoftCompactRatio != defaults.Agent.SoftCompactRatio {
+		fmt.Fprintf(b, "soft_compact_ratio  = %s   # notice only; keeps cache-first prefix intact\n", formatFloat(c.Agent.SoftCompactRatio))
+	}
+	if !projectDelta || c.Agent.ToolResultSnipRatio != defaults.Agent.ToolResultSnipRatio {
+		fmt.Fprintf(b, "tool_result_snip_ratio = %s   # snip stale tool results at this fraction before summary compaction\n", formatFloat(c.Agent.ToolResultSnipRatio))
+	}
+	if !projectDelta || c.Agent.CompactRatio != defaults.Agent.CompactRatio {
+		fmt.Fprintf(b, "compact_ratio       = %s   # try compacting when prompt reaches this fraction\n", formatFloat(c.Agent.CompactRatio))
+	}
+	if !projectDelta || c.Agent.CompactForceRatio != defaults.Agent.CompactForceRatio {
+		fmt.Fprintf(b, "compact_force_ratio = %s   # force compacting at this high-water mark\n", formatFloat(c.Agent.CompactForceRatio))
+	}
+	if c.Agent.Keep != nil {
+		fmt.Fprintf(b, "keep                = %s   # compaction keep policy: errors, user_marked\n", renderStringArray(c.Agent.Keep))
+	} else if !projectDelta {
+		b.WriteString("# keep                = [\"errors\"]   # compaction keep policy: errors, user_marked\n")
+	}
+	if c.Agent.RecentKeep > 0 {
+		fmt.Fprintf(b, "recent_keep         = %d   # minimum recent messages kept verbatim\n", c.Agent.RecentKeep)
+	} else if !projectDelta {
+		b.WriteString("# recent_keep         = 2   # minimum recent messages kept verbatim\n")
+	}
+	if !projectDelta || !reflect.DeepEqual(c.Agent.ColdResumePrune, defaults.Agent.ColdResumePrune) {
+		fmt.Fprintf(b, "cold_resume_prune   = %v   # elide stale tool results when reopening a session past the provider cache window\n", c.ColdResumePruneEnabled())
+	}
+	if len(c.Agent.PlanModeAllowedTools) > 0 {
+		fmt.Fprintf(b, "plan_mode_allowed_tools = %s   # extra read-only declarations for custom tools; cannot unlock known blocked tools or unsafe bash\n", renderStringArray(c.Agent.PlanModeAllowedTools))
+	} else if !projectDelta {
+		b.WriteString("# plan_mode_allowed_tools = [\"custom_reader\"]   # extra read-only declarations; cannot unlock known blocked tools or unsafe bash\n")
+	}
+	if c.Agent.PlannerModel != "" {
+		fmt.Fprintf(b, "planner_model = %q   # low-frequency planner (two-model collaboration)\n", c.Agent.PlannerModel)
+	} else if !projectDelta {
+		b.WriteString("# planner_model = \"deepseek-pro\"   # optional: enable two-model collaboration\n")
+	}
+	if c.Agent.SubagentModel != "" {
+		fmt.Fprintf(b, "subagent_model = %q   # default model for runAs=subagent skills\n", c.Agent.SubagentModel)
+	} else if !projectDelta {
+		b.WriteString("# subagent_model = \"deepseek-pro\"   # optional default for runAs=subagent skills\n")
+	}
+	if c.Agent.AdvisorModel != "" {
+		fmt.Fprintf(b, "advisor_model = %q   # dedicated model for automatic and /advisor consultations\n", c.Agent.AdvisorModel)
+	} else if !projectDelta {
+		b.WriteString("# advisor_model = \"deepseek-pro\"   # optional dedicated advisor model; falls back to subagent_models.advisor or subagent_model\n")
+	}
+	if len(c.Agent.SubagentModels) > 0 {
+		fmt.Fprintf(b, "subagent_models = %s   # per-skill overrides\n", renderStringMap(c.Agent.SubagentModels))
+	} else if !projectDelta {
+		b.WriteString("# subagent_models = { review = \"deepseek-pro\", security_review = \"deepseek-pro\" }   # per-skill overrides\n")
+	}
+	if c.Agent.SubagentEffort != "" {
+		fmt.Fprintf(b, "subagent_effort = %q   # default effort for subagent entry points\n", c.Agent.SubagentEffort)
+	} else if !projectDelta {
+		b.WriteString("# subagent_effort = \"high\"   # optional default effort for subagents\n")
+	}
+	if len(c.Agent.SubagentEfforts) > 0 {
+		fmt.Fprintf(b, "subagent_efforts = %s   # per-tool/skill effort overrides\n", renderStringMap(c.Agent.SubagentEfforts))
+	} else if !projectDelta {
+		b.WriteString("# subagent_efforts = { review = \"max\", task = \"high\" }   # per-tool/skill effort overrides\n")
+	}
+	if c.Agent.FrontierModel != "" {
+		fmt.Fprintf(b, "frontier_model = %q   # automatic upgrade target after repeated tool failures\n", c.Agent.FrontierModel)
+	} else if !projectDelta {
+		b.WriteString("# frontier_model = \"deepseek-pro\"   # optional automatic upgrade target\n")
+	}
+	if !projectDelta || c.Agent.UpgradeEnabled != defaults.Agent.UpgradeEnabled {
+		fmt.Fprintf(b, "upgrade_enabled = %t   # enable automatic frontier routing when frontier_model is set\n", c.Agent.UpgradeEnabled)
+	}
+	if !projectDelta || c.Agent.UpgradeThreshold != defaults.Agent.UpgradeThreshold {
+		fmt.Fprintf(b, "upgrade_threshold = %d   # consecutive tool failures before upgrading; 0 disables\n", c.Agent.UpgradeThreshold)
+	}
+	if !projectDelta || c.Agent.FrontierBudget != defaults.Agent.FrontierBudget {
+		fmt.Fprintf(b, "frontier_budget = %d   # session output-token budget for frontier calls; 0 = unlimited\n", c.Agent.FrontierBudget)
+	}
+	if c.Agent.OutputStyle != "" {
+		fmt.Fprintf(b, "output_style = %q   # persona/tone folded into the prompt\n", c.Agent.OutputStyle)
+	} else if !projectDelta {
+		b.WriteString("# output_style = \"explanatory\"   # explanatory | learning | concise | custom; empty = default\n")
+	}
+}
+
+func renderToolsConfig(b *strings.Builder, c, defaults *Config, scope RenderScope) {
+	if scope != RenderScopeProject || !reflect.DeepEqual(c.Tools.Enabled, defaults.Tools.Enabled) || !reflect.DeepEqual(c.Tools.BashTimeoutSeconds, defaults.Tools.BashTimeoutSeconds) || !reflect.DeepEqual(c.Tools.MCPCallTimeoutSeconds, defaults.Tools.MCPCallTimeoutSeconds) {
+		b.WriteString("[tools]\n")
+		if scope != RenderScopeProject || len(c.Tools.Enabled) > 0 {
+			if len(c.Tools.Enabled) == 0 {
+				b.WriteString("enabled = []   # empty = all built-in tools\n")
+			} else {
+				b.WriteString("enabled = [")
+				for i, t := range c.Tools.Enabled {
+					if i > 0 {
+						b.WriteString(", ")
+					}
+					fmt.Fprintf(b, "%q", t)
+				}
+				b.WriteString("]\n")
+			}
+		}
+		if scope != RenderScopeProject || !reflect.DeepEqual(c.Tools.BashTimeoutSeconds, defaults.Tools.BashTimeoutSeconds) {
+			fmt.Fprintf(b, "bash_timeout_seconds = %d   # foreground safety cap; set 0 for no tool-local cap\n", c.BashTimeoutSeconds())
+		}
+		if scope != RenderScopeProject || !reflect.DeepEqual(c.Tools.MCPCallTimeoutSeconds, defaults.Tools.MCPCallTimeoutSeconds) {
+			fmt.Fprintf(b, "mcp_call_timeout_seconds = %d   # default MCP call safety cap; per-plugin/tool overrides may raise it\n", c.MCPCallTimeoutSeconds())
+		}
+		b.WriteString("\n")
+	}
+	if scope != RenderScopeProject || !reflect.DeepEqual(c.Tools.BackgroundJobs, defaults.Tools.BackgroundJobs) {
+		b.WriteString("[tools.background_jobs]\n")
+		if c.Tools.BackgroundJobs.StalledWarningSeconds != nil {
+			fmt.Fprintf(b, "stalled_warning_seconds = %d   # warn when a background job produces no output for this many seconds\n", c.BackgroundJobStalledWarningSeconds())
+		} else if scope != RenderScopeProject {
+			b.WriteString("# stalled_warning_seconds = 900   # warn when a background job produces no output for this many seconds\n")
+		}
+		b.WriteString("\n")
+	}
+	if scope != RenderScopeProject || !reflect.DeepEqual(c.Tools.Search, defaults.Tools.Search) {
+		b.WriteString("[tools.search]\n")
+		if c.Tools.Search.Engine != "" {
+			fmt.Fprintf(b, "engine = %q   # auto|native|rg\n", c.Tools.Search.Engine)
+		} else if scope != RenderScopeProject {
+			b.WriteString("# engine = \"auto\"   # auto|native|rg\n")
+		}
+		if c.Tools.Search.RgPath != "" {
+			fmt.Fprintf(b, "rg_path = %q   # optional ripgrep executable override\n", c.Tools.Search.RgPath)
+		} else if scope != RenderScopeProject {
+			b.WriteString("# rg_path = \"\"   # optional ripgrep executable override\n")
+		}
+		b.WriteString("\n")
+	}
+	if scope != RenderScopeProject || !reflect.DeepEqual(c.Tools.Shell, defaults.Tools.Shell) {
+		b.WriteString("[tools.shell]\n")
+		if c.Tools.Shell.Prefer != "" {
+			fmt.Fprintf(b, "prefer = %q   # auto|bash|powershell|pwsh\n", c.Tools.Shell.Prefer)
+		} else if scope != RenderScopeProject {
+			b.WriteString("# prefer = \"auto\"   # auto|bash|powershell|pwsh\n")
+		}
+		if c.Tools.Shell.Path != "" {
+			fmt.Fprintf(b, "path = %q   # optional shell executable override\n", c.Tools.Shell.Path)
+		} else if scope != RenderScopeProject {
+			b.WriteString("# path = \"\"   # optional shell executable override\n")
+		}
+		b.WriteString("\n")
+	}
+}
+
 func shouldRenderProviders(c, defaults *Config, scope RenderScope) bool {
 	if scope != RenderScopeProject {
 		return true
@@ -782,6 +895,62 @@ func shouldRenderSystemPrompt(c, defaults *Config, scope RenderScope) bool {
 		return true
 	}
 	return strings.TrimSpace(c.Agent.SystemPrompt) != "" && c.Agent.SystemPrompt != defaults.Agent.SystemPrompt
+}
+
+func shouldRenderCodegraph(c, defaults *Config, scope RenderScope) bool {
+	if scope != RenderScopeProject {
+		return true
+	}
+	return !reflect.DeepEqual(c.Codegraph, defaults.Codegraph)
+}
+
+func shouldRenderCodeIntelligence(c, defaults *Config, scope RenderScope) bool {
+	if scope != RenderScopeProject {
+		return true
+	}
+	return !reflect.DeepEqual(c.CodeIntelligence, defaults.CodeIntelligence)
+}
+
+func shouldRenderBuiltInMCP(c, defaults *Config, scope RenderScope) bool {
+	if scope != RenderScopeProject {
+		return true
+	}
+	return !reflect.DeepEqual(c.BuiltInMCP, defaults.BuiltInMCP)
+}
+
+func shouldRenderLSP(c, defaults *Config, scope RenderScope) bool {
+	if scope != RenderScopeProject {
+		return true
+	}
+	return !reflect.DeepEqual(c.LSP, defaults.LSP)
+}
+
+func shouldRenderSkills(c, defaults *Config, scope RenderScope) bool {
+	if scope != RenderScopeProject {
+		return true
+	}
+	return !reflect.DeepEqual(c.Skills, defaults.Skills)
+}
+
+func shouldRenderPermissions(c, defaults *Config, scope RenderScope) bool {
+	if scope != RenderScopeProject {
+		return true
+	}
+	return !reflect.DeepEqual(c.Permissions, defaults.Permissions)
+}
+
+func shouldRenderSandbox(c, defaults *Config, scope RenderScope) bool {
+	if scope != RenderScopeProject {
+		return true
+	}
+	return !reflect.DeepEqual(c.Sandbox, defaults.Sandbox)
+}
+
+func shouldRenderStatusline(c, defaults *Config, scope RenderScope) bool {
+	if scope != RenderScopeProject {
+		return true
+	}
+	return !reflect.DeepEqual(c.Statusline, defaults.Statusline)
 }
 
 func renderLSPConfig(b *strings.Builder, cfg LSPConfig) {

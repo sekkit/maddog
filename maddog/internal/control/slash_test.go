@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 
+	"maddog/internal/config"
+	"maddog/internal/event"
 	"maddog/internal/hook"
 	"maddog/internal/memory"
 	"maddog/internal/skill"

@@ -4750,6 +4750,9 @@ func TestRunCodeIntelligenceBenchmarkUpdatesCapabilities(t *testing.T) {
 	if len(backend.Benchmark.Backends) == 0 || backend.Benchmark.Backends[0].ID == "" {
 		t.Fatalf("benchmark backend summary missing: %+v", backend.Benchmark)
 	}
+	if !strings.Contains(strings.ToLower(backend.Benchmark.Backends[0].Name), "local smoke") {
+		t.Fatalf("benchmark backend name = %q, want local smoke label", backend.Benchmark.Backends[0].Name)
+	}
 }
 
 func TestCodeIntelligenceBenchmarkRunningCountsConcurrentRuns(t *testing.T) {

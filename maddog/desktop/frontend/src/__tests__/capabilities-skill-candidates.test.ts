@@ -44,6 +44,8 @@ check(
     "targetRoot?: string;",
     "score?: number;",
     "guardrailPass?: boolean;",
+    "audit?: SkillCandidateAuditView[];",
+    "export interface SkillCandidateAuditView",
     "skillCandidates?: SkillCandidateView[];",
   ]),
 );
@@ -89,6 +91,8 @@ check(
     "caps.skillCandidateRollback",
     "caps.skillCandidateReject",
     "skillCandidateStatusLabel",
+    "skillCandidateAuditActionLabel",
+    "caps.skillCandidateAudit",
   ]),
 );
 
@@ -107,6 +111,9 @@ check(
     '"caps.skillCandidatePromote":',
     '"caps.skillCandidateRollback":',
     '"caps.skillCandidateReject":',
+    '"caps.skillCandidateAudit":',
+    '"caps.skillCandidateAudit.promote":',
+    '"caps.skillCandidateAudit.rollback":',
   ]) && includesAll(zh, [
     '"caps.skillCandidates":',
     '"caps.skillCandidatesSummary":',
@@ -120,6 +127,9 @@ check(
     '"caps.skillCandidatePromote":',
     '"caps.skillCandidateRollback":',
     '"caps.skillCandidateReject":',
+    '"caps.skillCandidateAudit":',
+    '"caps.skillCandidateAudit.promote":',
+    '"caps.skillCandidateAudit.rollback":',
   ]) && includesAll(zhTW, [
     '"caps.skillCandidates":',
     '"caps.skillCandidatesSummary":',
@@ -133,6 +143,9 @@ check(
     '"caps.skillCandidatePromote":',
     '"caps.skillCandidateRollback":',
     '"caps.skillCandidateReject":',
+    '"caps.skillCandidateAudit":',
+    '"caps.skillCandidateAudit.promote":',
+    '"caps.skillCandidateAudit.rollback":',
   ]),
 );
 

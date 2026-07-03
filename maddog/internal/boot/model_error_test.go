@@ -19,7 +19,7 @@ func TestBuildUnknownModelErrorIsActionable(t *testing.T) {
 	dir := robustTempDir(t)
 	t.Chdir(dir)
 	writeFile(t, dir, "maddog.toml", `
-default_model = "mimo"
+default_model = "legacy-missing"
 
 [codegraph]
 enabled = false

@@ -7,6 +7,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"maddog/internal/codegraph"
 	"maddog/internal/config"
 	"maddog/internal/mcpdiag"
 	"maddog/internal/plugin"
@@ -317,6 +318,9 @@ func (m chatTUI) buildMCPSnapshot() mcpSnapshot {
 				Tools: s.Tools, Prompts: s.Prompts, Resources: s.Resources,
 				ToolList: append([]plugin.ToolInfo(nil), s.ToolList...),
 			}
+			if cfg != nil && isCodegraphMCPName(s.Name) {
+				v = withMCPCodegraphConfig(v, cfg.Codegraph)
+			}
 			if p, ok := configured[s.Name]; ok {
 				v = withMCPPluginConfig(v, p)
 			}
@@ -327,6 +331,9 @@ func (m chatTUI) buildMCPSnapshot() mcpSnapshot {
 			v := mcpServerView{
 				Name: f.Name, Transport: fallbackText(f.Transport, "stdio"), Status: "failed",
 				Error: f.Error,
+			}
+			if cfg != nil && isCodegraphMCPName(f.Name) {
+				v = withMCPCodegraphConfig(v, cfg.Codegraph)
 			}
 			if p, ok := configured[f.Name]; ok {
 				v = withMCPPluginConfig(v, p)
@@ -339,12 +346,31 @@ func (m chatTUI) buildMCPSnapshot() mcpSnapshot {
 				continue
 			}
 			v := mcpServerView{Name: name, Status: "initializing"}
+			if cfg != nil && isCodegraphMCPName(name) {
+				v = withMCPCodegraphConfig(v, cfg.Codegraph)
+			}
 			if p, ok := configured[name]; ok {
 				v = withMCPPluginConfig(v, p)
 			}
 			snap.servers = append(snap.servers, v)
 			seen[name] = true
 		}
+	}
+	if cfg != nil && !seen["codegraph"] {
+		v := withMCPCodegraphConfig(mcpServerView{Name: "codegraph", Transport: "stdio"}, cfg.Codegraph)
+		switch {
+		case !cfg.Codegraph.Enabled:
+			v.Status = "disabled"
+		default:
+			if _, ok := codegraph.Resolve(cfg.Codegraph.Path); ok {
+				v.Status = "deferred"
+			} else {
+				v.Status = "failed"
+				v.Error = "codegraph not installed"
+			}
+		}
+		snap.servers = append(snap.servers, v)
+		seen["codegraph"] = true
 	}
 	for _, p := range configuredEntries {
 		if seen[p.Name] {
@@ -388,6 +414,20 @@ func withMCPPluginConfig(v mcpServerView, p config.PluginEntry) mcpServerView {
 	v.AuthStatus = auth.Status
 	v.AuthURL = auth.URL
 	return v
+}
+
+func withMCPCodegraphConfig(v mcpServerView, c config.CodegraphConfig) mcpServerView {
+	v.BuiltIn = true
+	v.Configured = true
+	v.AutoStart = c.ShouldAutoStart()
+	v.Tier = c.ResolvedTier()
+	v.Transport = fallbackText(v.Transport, "stdio")
+	v.Command = c.Path
+	return v
+}
+
+func isCodegraphMCPName(name string) bool {
+	return strings.EqualFold(strings.TrimSpace(name), "codegraph")
 }
 
 func visibleRange(total, sel, limit int) (int, int) {

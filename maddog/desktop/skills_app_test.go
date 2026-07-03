@@ -93,16 +93,12 @@ func TestEvaluateSkillCandidateFromDesktopRecordsOfflineReplay(t *testing.T) {
 	if got.Hash != candidate.Hash || got.Score == nil || *got.Score < 0.7 {
 		t.Fatalf("evaluated candidate score = %+v", got)
 	}
-	if got.GuardrailPass == nil || !*got.GuardrailPass || !strings.Contains(got.GuardrailReason, "passed guardrail") {
-		t.Fatalf("evaluated candidate guardrail = %+v", got)
+	if got.GuardrailPass == nil || *got.GuardrailPass || !strings.Contains(got.GuardrailReason, "need at least 5 bundles") {
+		t.Fatalf("evaluated candidate guardrail = %+v, want default min-bundle rejection", got)
 	}
 
-	path, err := app.PromoteSkillCandidate(candidate.Hash)
-	if err != nil {
-		t.Fatalf("PromoteSkillCandidate after evaluation: %v", err)
-	}
-	if !strings.HasPrefix(path, filepath.Join(dir, config.ProjectConventionDir, skill.SkillsDirname)) {
-		t.Fatalf("promoted path = %q, want project skill root", path)
+	if _, err := app.PromoteSkillCandidate(candidate.Hash); err == nil || !strings.Contains(err.Error(), "failed guardrail") {
+		t.Fatalf("PromoteSkillCandidate after one-bundle evaluation err = %v, want guardrail failure", err)
 	}
 }
 
@@ -183,6 +179,9 @@ func TestRollbackSkillCandidateFromDesktop(t *testing.T) {
 	view := app.Capabilities()
 	for _, c := range view.SkillCandidates {
 		if c.Hash == promotable.Hash && c.Status == string(skilleval.CandidateRolledBack) && strings.Contains(c.ValidationReason, "not needed") {
+			if len(c.Audit) < 2 || c.Audit[0].Action != "promote" || c.Audit[1].Action != "rollback" {
+				t.Fatalf("rolled back candidate audit = %+v, want promote and rollback", c.Audit)
+			}
 			return
 		}
 	}

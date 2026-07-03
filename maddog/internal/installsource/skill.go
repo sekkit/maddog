@@ -101,7 +101,7 @@ func (t *installSourceTool) skillInstallRoot(scope string) (string, error) {
 		if t.maddogHome == "" {
 			return "", newErr(ErrSourceUnreadable, "global skill install requires a Maddog home directory")
 		}
-		return filepath.Join(t.home, config.ProjectConventionDir, skill.SkillsDirname), nil
+		return filepath.Join(t.maddogHome, skill.SkillsDirname), nil
 	}
 	return filepath.Join(t.root, config.ProjectConventionDir, skill.SkillsDirname), nil
 }

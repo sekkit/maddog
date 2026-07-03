@@ -4119,21 +4119,30 @@ type SkillView struct {
 }
 
 type SkillCandidateView struct {
-	Hash             string   `json:"hash"`
-	Name             string   `json:"name"`
-	Description      string   `json:"description"`
-	Status           string   `json:"status"`
-	SourceTask       string   `json:"sourceTask,omitempty"`
-	SourceBundleID   string   `json:"sourceBundleId,omitempty"`
-	SourceBundlePath string   `json:"sourceBundlePath,omitempty"`
-	ValidationReason string   `json:"validationReason,omitempty"`
-	PromotedPath     string   `json:"promotedPath,omitempty"`
-	TargetRoot       string   `json:"targetRoot,omitempty"`
-	Score            *float64 `json:"score,omitempty"`
-	ScoreReason      string   `json:"scoreReason,omitempty"`
-	GuardrailPass    *bool    `json:"guardrailPass,omitempty"`
-	GuardrailReason  string   `json:"guardrailReason,omitempty"`
-	UpdatedAt        string   `json:"updatedAt,omitempty"`
+	Hash             string                    `json:"hash"`
+	Name             string                    `json:"name"`
+	Description      string                    `json:"description"`
+	Status           string                    `json:"status"`
+	SourceTask       string                    `json:"sourceTask,omitempty"`
+	SourceBundleID   string                    `json:"sourceBundleId,omitempty"`
+	SourceBundlePath string                    `json:"sourceBundlePath,omitempty"`
+	ValidationReason string                    `json:"validationReason,omitempty"`
+	PromotedPath     string                    `json:"promotedPath,omitempty"`
+	TargetRoot       string                    `json:"targetRoot,omitempty"`
+	Score            *float64                  `json:"score,omitempty"`
+	ScoreReason      string                    `json:"scoreReason,omitempty"`
+	GuardrailPass    *bool                     `json:"guardrailPass,omitempty"`
+	GuardrailReason  string                    `json:"guardrailReason,omitempty"`
+	UpdatedAt        string                    `json:"updatedAt,omitempty"`
+	Audit            []SkillCandidateAuditView `json:"audit,omitempty"`
+}
+
+type SkillCandidateAuditView struct {
+	Time   string `json:"time,omitempty"`
+	Action string `json:"action"`
+	Status string `json:"status,omitempty"`
+	Path   string `json:"path,omitempty"`
+	Reason string `json:"reason,omitempty"`
 }
 
 type SkillRootSkillView struct {
@@ -4417,6 +4426,9 @@ func skillCandidateView(workspaceRoot string, c skilleval.Candidate) SkillCandid
 		PromotedPath:     c.PromotedPath,
 		GuardrailReason:  c.GuardrailReason,
 	}
+	if audit, err := skilleval.NewCandidateStore(skillCandidateStoreDir(workspaceRoot)).AuditForHash(c.Hash); err == nil {
+		view.Audit = skillCandidateAuditViews(audit)
+	}
 	targetRoot := filepath.Join(strings.TrimSpace(workspaceRoot), config.ProjectConventionDir, skill.SkillsDirname)
 	if strings.TrimSpace(workspaceRoot) != "" {
 		view.TargetRoot = targetRoot
@@ -4432,6 +4444,26 @@ func skillCandidateView(workspaceRoot string, c skilleval.Candidate) SkillCandid
 		view.UpdatedAt = c.UpdatedAt.Format(time.RFC3339)
 	}
 	return view
+}
+
+func skillCandidateAuditViews(records []skilleval.AuditRecord) []SkillCandidateAuditView {
+	if len(records) == 0 {
+		return nil
+	}
+	out := make([]SkillCandidateAuditView, 0, len(records))
+	for _, record := range records {
+		view := SkillCandidateAuditView{
+			Action: strings.TrimSpace(record.Action),
+			Status: string(record.Status),
+			Path:   strings.TrimSpace(record.Path),
+			Reason: strings.TrimSpace(record.Reason),
+		}
+		if !record.Time.IsZero() {
+			view.Time = record.Time.UTC().Format(time.RFC3339)
+		}
+		out = append(out, view)
+	}
+	return out
 }
 
 func skillCandidateStoreDir(workspaceRoot string) string {
@@ -4973,7 +5005,7 @@ func (a *App) EvaluateSkillCandidate(hash string) (SkillCandidateView, error) {
 		[]skilleval.OutcomeInfo{replayed},
 		[]skilleval.ScoreResult{score},
 		candidate,
-		skilleval.GuardrailConfig{MinBundles: 1, MinScore: 0.7},
+		skilleval.GuardrailConfig{MinScore: 0.7},
 	)
 	updated, err := store.RecordEvaluation(candidate.Hash, score, guard)
 	if err != nil {
@@ -5569,9 +5601,9 @@ func (b *codeIntelligenceBenchmarkBackend) BenchmarkInfo() codegraph.BenchmarkBa
 
 func codeIntelligenceBenchmarkBackendName(id string) string {
 	if id == codegraph.BuiltInBackendID {
-		return "CodeGraph"
+		return "CodeGraph local smoke"
 	}
-	return id
+	return id + " local smoke"
 }
 
 func (a *App) connectConfiguredMCPServerForTab(tab *WorkspaceTab, name string) (int, error) {

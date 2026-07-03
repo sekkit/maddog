@@ -110,6 +110,31 @@ func (l *Ledger) Count() int {
 	return len(l.receipts)
 }
 
+// Snapshot returns a deep copy of the receipts recorded for the current turn.
+func (l *Ledger) Snapshot() []Receipt {
+	if l == nil {
+		return nil
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	out := make([]Receipt, len(l.receipts))
+	for i, r := range l.receipts {
+		out[i] = cloneReceipt(r)
+	}
+	return out
+}
+
+func cloneReceipt(r Receipt) Receipt {
+	r.Args = append(json.RawMessage(nil), r.Args...)
+	r.Paths = append([]string(nil), r.Paths...)
+	r.Todos = append([]TodoItem(nil), r.Todos...)
+	if r.TodoStep != nil {
+		step := *r.TodoStep
+		r.TodoStep = &step
+	}
+	return r
+}
+
 // FailureSignal computes current-turn failure health across all recorded tool
 // receipts. HealthScore uses a short recent window so routing reacts to local
 // trouble without being dominated by older successes.

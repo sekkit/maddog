@@ -1885,10 +1885,6 @@ func configAutoPlanCommand(args []string) int {
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
-	if *local {
-		fmt.Fprintln(os.Stderr, i18n.M.ErrorPrefix, "auto-plan is user-level only; --local is not supported")
-		return 2
-	}
 	rest := fs.Args()
 	if len(rest) > 1 {
 		configAutoPlanUsage()
@@ -1912,6 +1908,15 @@ func configAutoPlanCommand(args []string) int {
 	if path == "" {
 		fmt.Fprintln(os.Stderr, i18n.M.ErrorPrefix, "cannot resolve config path")
 		return 1
+	}
+	if *local {
+		mode, err := config.SaveMinimalProjectAutoPlan(path, rest[0])
+		if err != nil {
+			fmt.Fprintln(os.Stderr, i18n.M.ErrorPrefix, err)
+			return 2
+		}
+		fmt.Printf("auto_plan = %q (%s)\n", mode, displayPath(path))
+		return 0
 	}
 	cfg := config.LoadForEdit(path)
 	if err := cfg.SetAutoPlan(rest[0]); err != nil {
@@ -2042,6 +2047,12 @@ func configUsage() {
 func configAutoPlanUsage() {
 	fmt.Print(`Usage:
   maddog config auto-plan [--local] [off|on]
+`)
+}
+
+func configMemoryV5Usage() {
+	fmt.Print(`Usage:
+  maddog config memory-v5 [off|on|status]
 `)
 }
 

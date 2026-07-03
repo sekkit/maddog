@@ -478,6 +478,14 @@ func (a *Agent) Session() *Session {
 	return a.session
 }
 
+// EvidenceReceipts returns a copy of the current turn's host evidence ledger.
+func (a *Agent) EvidenceReceipts() []evidence.Receipt {
+	if a == nil || a.evidence == nil {
+		return nil
+	}
+	return a.evidence.Snapshot()
+}
+
 // SetSession replaces the agent's conversation wholesale. Used by
 // `maddog chat --resume` to load a saved JSONL transcript before the first turn,
 // so the model picks up exactly where it left off. Callers serialise it against a
@@ -486,6 +494,8 @@ func (a *Agent) SetSession(s *Session) {
 	a.sessMu.Lock()
 	a.session = s
 	a.sessMu.Unlock()
+	a.sessCacheHit.Store(0)
+	a.sessCacheMiss.Store(0)
 	a.clearRawToolResults()
 	if s != nil {
 		a.rebuildTodoState(s.Snapshot())
@@ -810,6 +820,7 @@ func New(prov provider.Provider, tools *tool.Registry, session *Session, opts Op
 		nativeAdvisor:         cloneNativeAdvisor(opts.NativeAdvisor),
 		sink:                  sink,
 		gate:                  gate,
+		planModeReadOnlyTrust: planModeReadOnlyTrust,
 		hooks:                 hooks,
 		jobs:                  opts.Jobs,
 		toolOutputCompressor:  toolOutputCompressor,
@@ -818,12 +829,15 @@ func New(prov provider.Provider, tools *tool.Registry, session *Session, opts Op
 		evidence:              evidence.NewLedger(),
 		projectChecks:         append([]instruction.VerifyCheck(nil), opts.ProjectChecks...),
 		memoryCompiler:        opts.MemoryCompiler,
+		classifier:            newHeuristicClassifier(),
 		planModeAllowedTools:  append([]string(nil), opts.PlanModeAllowedTools...),
 		contextWindow:         opts.ContextWindow,
 		softCompactRatio:      opts.SoftCompactRatio,
+		toolResultSnipRatio:   opts.ToolResultSnipRatio,
 		compactRatio:          opts.CompactRatio,
 		compactForceRatio:     opts.CompactForceRatio,
 		recentKeep:            opts.RecentKeep,
+		keepPolicy:            opts.KeepPolicy,
 		archiveDir:            opts.ArchiveDir,
 	}
 	a.SetReasoningLanguage(opts.ReasoningLanguage)
