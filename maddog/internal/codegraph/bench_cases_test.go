@@ -26,7 +26,7 @@ func TestDefaultBenchmarkCasesAreGeneratedFromTargetRepo(t *testing.T) {
 	for _, tc := range cases {
 		seen[tc.Capability] = tc
 		for _, bad := range append([]string{tc.Query}, tc.ExpectedIDs...) {
-			if bad == "RunBenchmark" || bad == "runner.go" || bad == "docs/cc/maddog-fusion--3949/tech.md" {
+			if bad == "RunBenchmark" || bad == "runner.go" || bad == "docs/cc/"+"maddog-fusion--3949/tech.md" || bad == "advisor frontier routing" {
 				t.Fatalf("generated case still uses Maddog-specific fixture %+v", tc)
 			}
 		}

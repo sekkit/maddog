@@ -194,7 +194,7 @@ func TestRenderTOMLRoundTrips(t *testing.T) {
 		Enabled: boolPtr(true),
 		Tools: map[string]string{
 			"symbol_search": "mcp__serena__find_symbol",
-			"context_pack":  "mcp__serena__read_context",
+			"context_pack":  "mcp__serena__get_symbols_overview",
 		},
 	}}
 	orig.BuiltInMCPUpdates = BuiltInMCPUpdatesConfig{Mode: BuiltInMCPUpdateModeDownload, CheckInterval: "12h"}
@@ -366,7 +366,7 @@ func TestRenderTOMLRoundTrips(t *testing.T) {
 	if len(got.CodeIntelligence.Backends) != 1 || got.CodeIntelligence.Backends[0].Name != "serena" {
 		t.Fatalf("code intelligence backends = %+v, want serena", got.CodeIntelligence.Backends)
 	}
-	if got.CodeIntelligence.Backends[0].Tools["context_pack"] != "mcp__serena__read_context" {
+	if got.CodeIntelligence.Backends[0].Tools["context_pack"] != "mcp__serena__get_symbols_overview" {
 		t.Fatalf("code intelligence context tool = %q", got.CodeIntelligence.Backends[0].Tools["context_pack"])
 	}
 	if got.Codegraph.Tier != "" {
@@ -492,7 +492,11 @@ func TestRenderTOMLDocumentsPlanModeAllowedTools(t *testing.T) {
 
 func TestRenderTOMLCodeIntelligenceSerenaExampleUsesRealToolNames(t *testing.T) {
 	rendered := RenderTOML(Default())
-	for _, bad := range []string{"mcp__serena__context", "mcp__serena__status"} {
+	for _, bad := range []string{
+		"mcp__serena__" + "context",
+		"mcp__serena__" + "status",
+		"mcp__serena__" + "read_context",
+	} {
 		if strings.Contains(rendered, bad) {
 			t.Fatalf("rendered code intelligence example contains fictitious Serena tool %q:\n%s", bad, rendered)
 		}

@@ -206,7 +206,7 @@ func TestHyperGraphRAGCLIHelperProcess(t *testing.T) {
 		_ = enc.Encode(map[string]bool{"indexed": true})
 	case "query":
 		_ = enc.Encode(map[string]any{"results": []codegraph.BenchmarkResult{{
-			ID:      "docs/cc/maddog-fusion--3949/tech.md",
+			ID:      "docs/architecture.md",
 			Title:   "advisor frontier routing",
 			Content: "advisor frontier routing evidence",
 		}}})

@@ -23,7 +23,7 @@ func TestBenchmarkBackendDrivesSidecarIndexAndQuery(t *testing.T) {
 			Name:        "semantic architecture search",
 			Query:       "advisor frontier routing",
 			Capability:  codegraph.BenchmarkCapabilitySemanticSearch,
-			ExpectedIDs: []string{"docs/cc/maddog-fusion--3949/tech.md"},
+			ExpectedIDs: []string{"docs/architecture.md"},
 			TopK:        3,
 		}},
 	})
@@ -99,7 +99,7 @@ func TestBenchmarkBackendQueryOnlyModeSkipsIndexCommands(t *testing.T) {
 			Name:        "semantic architecture search",
 			Query:       "advisor frontier routing",
 			Capability:  codegraph.BenchmarkCapabilitySemanticSearch,
-			ExpectedIDs: []string{"docs/cc/maddog-fusion--3949/tech.md"},
+			ExpectedIDs: []string{"docs/architecture.md"},
 			TopK:        3,
 		}},
 	})
@@ -168,7 +168,7 @@ func TestHyperGraphRAGSidecarHelper(t *testing.T) {
 			os.Exit(0)
 		}
 		_ = enc.Encode(QueryResponse{Results: []codegraph.BenchmarkResult{{
-			ID:      "docs/cc/maddog-fusion--3949/tech.md",
+			ID:      "docs/architecture.md",
 			Title:   "advisor frontier routing",
 			Content: "advisor and frontier routing design evidence",
 		}}})
