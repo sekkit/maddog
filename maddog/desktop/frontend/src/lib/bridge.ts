@@ -219,6 +219,7 @@ export interface AppBindings {
   RefreshSkills(): Promise<void>;
   ReloadCommands(): Promise<void>;
   SetSkillEnabled(name: string, enabled: boolean): Promise<void>;
+  EvaluateSkillCandidate(hash: string): Promise<SkillCandidateView>;
   PromoteSkillCandidate(hash: string): Promise<string>;
   RollbackSkillCandidate(hash: string, reason: string): Promise<void>;
   RejectSkillCandidate(hash: string, reason: string): Promise<void>;
@@ -590,7 +591,7 @@ function bridgeBreadcrumb(method: string): string {
   if (/^(CheckUpdate|ApplyUpdate|OpenDownloadPage)/.test(method)) return `update ${method}`;
   if (/^(AddMCPServer|UpdateMCPServer|RemoveMCPServer|ReconnectMCPServer|UpdateBuiltInMCPServer|BuiltInMCPUpdateStatuses|ClearMCPServerAuthentication|SetMCPServer|SetCodeIntelligenceBackendEnabled|RetryCodeIntelligenceBackend|RunCodeIntelligenceBenchmark|setCodeIntelligenceBackendEnabled|retryCodeIntelligenceBackend|runCodeIntelligenceBenchmark)/.test(method))
     return `mcp ${method}`;
-  if (/^(AddSkillPath|RemoveSkillPath|RefreshSkills|SetSkillEnabled|PromoteSkillCandidate|RollbackSkillCandidate|RejectSkillCandidate|AcceptSkillSuggestion)/.test(method))
+  if (/^(AddSkillPath|RemoveSkillPath|RefreshSkills|SetSkillEnabled|EvaluateSkillCandidate|PromoteSkillCandidate|RollbackSkillCandidate|RejectSkillCandidate|AcceptSkillSuggestion)/.test(method))
     return `skill ${method}`;
   if (/^(OpenProjectTab|OpenGlobalTab|OpenTopicSession|EnsureBlankTab|ActivateTopic|EnsureBlankSurface|SetActiveTab|CloseTab|ReorderTabs|CreateTopic|RenameTopic|DeleteTopic|TrashTopic|RenameProject|RemoveWorkspace|SwitchWorkspace|PickWorkspace)/.test(method))
     return `nav ${method}`;
@@ -2403,6 +2404,16 @@ function makeMockApp(): AppBindings {
     async SetSkillEnabled(name: string, enabled: boolean) {
       const skill = capSkills.find((s) => s.name === name);
       if (skill) skill.enabled = enabled;
+    },
+    async EvaluateSkillCandidate(hash: string) {
+      const candidate = capSkillCandidates.find((s) => s.hash === hash);
+      if (!candidate) throw new Error(`unknown skill candidate: ${hash}`);
+      candidate.score = 0.91;
+      candidate.scoreReason = "Offline replay dry-run passed";
+      candidate.guardrailPass = true;
+      candidate.guardrailReason = "passed guardrail: success 1.00 >= 1.00";
+      candidate.updatedAt = new Date().toISOString();
+      return { ...candidate };
     },
     async PromoteSkillCandidate(hash: string) {
       const candidate = capSkillCandidates.find((s) => s.hash === hash);

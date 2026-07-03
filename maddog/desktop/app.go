@@ -4399,35 +4399,39 @@ func skillCandidateViews(workspaceRoot string) []SkillCandidateView {
 	}
 	out := make([]SkillCandidateView, 0, len(candidates))
 	for _, c := range candidates {
-		view := SkillCandidateView{
-			Hash:             c.Hash,
-			Name:             c.Skill.Name,
-			Description:      c.Skill.Description,
-			Status:           string(c.Status),
-			SourceTask:       c.SourceTask,
-			SourceBundleID:   c.SourceBundleID,
-			SourceBundlePath: c.SourceBundlePath,
-			ValidationReason: c.ValidationReason,
-			PromotedPath:     c.PromotedPath,
-			GuardrailReason:  c.GuardrailReason,
-		}
-		targetRoot := filepath.Join(strings.TrimSpace(workspaceRoot), config.ProjectConventionDir, skill.SkillsDirname)
-		if strings.TrimSpace(workspaceRoot) != "" {
-			view.TargetRoot = targetRoot
-		}
-		if c.EvalScore != nil {
-			score := c.EvalScore.Score
-			view.Score = &score
-			view.ScoreReason = c.EvalScore.Reason
-			guardrailPass := c.GuardrailPass
-			view.GuardrailPass = &guardrailPass
-		}
-		if !c.UpdatedAt.IsZero() {
-			view.UpdatedAt = c.UpdatedAt.Format(time.RFC3339)
-		}
-		out = append(out, view)
+		out = append(out, skillCandidateView(workspaceRoot, c))
 	}
 	return out
+}
+
+func skillCandidateView(workspaceRoot string, c skilleval.Candidate) SkillCandidateView {
+	view := SkillCandidateView{
+		Hash:             c.Hash,
+		Name:             c.Skill.Name,
+		Description:      c.Skill.Description,
+		Status:           string(c.Status),
+		SourceTask:       c.SourceTask,
+		SourceBundleID:   c.SourceBundleID,
+		SourceBundlePath: c.SourceBundlePath,
+		ValidationReason: c.ValidationReason,
+		PromotedPath:     c.PromotedPath,
+		GuardrailReason:  c.GuardrailReason,
+	}
+	targetRoot := filepath.Join(strings.TrimSpace(workspaceRoot), config.ProjectConventionDir, skill.SkillsDirname)
+	if strings.TrimSpace(workspaceRoot) != "" {
+		view.TargetRoot = targetRoot
+	}
+	if c.EvalScore != nil {
+		score := c.EvalScore.Score
+		view.Score = &score
+		view.ScoreReason = c.EvalScore.Reason
+		guardrailPass := c.GuardrailPass
+		view.GuardrailPass = &guardrailPass
+	}
+	if !c.UpdatedAt.IsZero() {
+		view.UpdatedAt = c.UpdatedAt.Format(time.RFC3339)
+	}
+	return view
 }
 
 func skillCandidateStoreDir(workspaceRoot string) string {
@@ -4934,6 +4938,73 @@ func (a *App) SetSkillEnabled(name string, enabled bool) error {
 		a.invalidateSkillRootsCache()
 	}
 	return err
+}
+
+func (a *App) EvaluateSkillCandidate(hash string) (SkillCandidateView, error) {
+	root := a.activeWorkspaceRoot()
+	if strings.TrimSpace(root) == "" {
+		return SkillCandidateView{}, fmt.Errorf("no active workspace")
+	}
+	store := skilleval.NewCandidateStore(skillCandidateStoreDir(root))
+	candidate, err := store.Get(strings.TrimSpace(hash))
+	if err != nil {
+		return SkillCandidateView{}, err
+	}
+	bundlePath, err := resolveSkillCandidateBundlePath(root, candidate)
+	if err != nil {
+		return SkillCandidateView{}, err
+	}
+	bundle, err := skilleval.LoadBundle(bundlePath)
+	if err != nil {
+		return SkillCandidateView{}, fmt.Errorf("load source bundle %q: %w", bundlePath, err)
+	}
+	replayed := skilleval.DryRunReplay(*bundle, candidate)
+	ctx := a.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	score, err := skilleval.ScoreReplay(ctx, nil, bundle.Outcome, replayed)
+	if err != nil {
+		return SkillCandidateView{}, err
+	}
+	guard := skilleval.CheckPromotionGuardrail(
+		[]skilleval.BundleV2{*bundle},
+		[]skilleval.OutcomeInfo{bundle.Outcome},
+		[]skilleval.OutcomeInfo{replayed},
+		[]skilleval.ScoreResult{score},
+		candidate,
+		skilleval.GuardrailConfig{MinBundles: 1, MinScore: 0.7},
+	)
+	updated, err := store.RecordEvaluation(candidate.Hash, score, guard)
+	if err != nil {
+		return SkillCandidateView{}, err
+	}
+	if tabID := a.activeTabIDSnapshot(); tabID != "" {
+		a.noticeForTab(tabID, fmt.Sprintf("offline replay scored skill candidate %.2f", score.Score))
+	}
+	return skillCandidateView(root, updated), nil
+}
+
+func resolveSkillCandidateBundlePath(workspaceRoot string, candidate skilleval.Candidate) (string, error) {
+	raw := strings.TrimSpace(candidate.SourceBundlePath)
+	if raw == "" {
+		return "", fmt.Errorf("candidate %s has no source bundle path", candidate.Hash)
+	}
+	raw = filepath.FromSlash(raw)
+	if filepath.IsAbs(raw) {
+		return filepath.Clean(raw), nil
+	}
+	root := strings.TrimSpace(workspaceRoot)
+	candidates := []string{
+		filepath.Join(root, raw),
+		filepath.Join(skillCandidateStoreDir(root), raw),
+	}
+	for _, path := range candidates {
+		if _, err := os.Stat(path); err == nil {
+			return filepath.Clean(path), nil
+		}
+	}
+	return filepath.Clean(candidates[0]), nil
 }
 
 func (a *App) PromoteSkillCandidate(hash string) (string, error) {

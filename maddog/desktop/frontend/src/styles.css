@@ -10144,6 +10144,12 @@ body > .mermaid-diagram--fullscreen {
 .cap-codeintel-row__caps {
   margin-top: 6px;
 }
+.cap-codeintel-row__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 7px;
+}
 .cap-codeintel-row__error {
   margin-top: 6px;
   color: var(--err);
@@ -25239,9 +25245,9 @@ body > .mermaid-diagram--fullscreen {
 
 .app--creation .sidebar__brand-logo,
 :root[data-theme-style] .app--creation .sidebar__brand-logo {
-  width: 118px;
-  height: 28px;
-  margin-left: -15px;
+  width: 32px;
+  height: 32px;
+  margin-left: 0;
 }
 
 .app--creation .sidebar__new,

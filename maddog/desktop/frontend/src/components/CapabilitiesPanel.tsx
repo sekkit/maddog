@@ -320,6 +320,10 @@ export function CapabilitiesPanel({
                 <SkillCandidatesSection
                   candidates={view.skillCandidates ?? []}
                   busy={busy}
+                  onEvaluateAll={(hashes) => mutate(async () => {
+                    for (const hash of hashes) await app.EvaluateSkillCandidate(hash);
+                  })}
+                  onEvaluate={(hash) => mutate(() => app.EvaluateSkillCandidate(hash))}
                   onPromote={(hash) => mutate(() => app.PromoteSkillCandidate(hash))}
                   onRollback={(hash) => mutate(() => app.RollbackSkillCandidate(hash, t("caps.skillCandidateRollbackReason")))}
                   onReject={(hash) => mutate(() => app.RejectSkillCandidate(hash, t("caps.skillCandidateRejectReason")))}
@@ -480,20 +484,24 @@ function CodeIntelligenceSection({
 function SkillCandidatesSection({
   candidates,
   busy,
+  onEvaluateAll,
+  onEvaluate,
   onPromote,
   onRollback,
   onReject,
 }: {
   candidates: SkillCandidateView[];
   busy: boolean;
+  onEvaluateAll: (hashes: string[]) => void;
+  onEvaluate: (hash: string) => void;
   onPromote: (hash: string) => void;
   onRollback: (hash: string) => void;
   onReject: (hash: string) => void;
 }) {
   const t = useT();
   const [filter, setFilter] = useState<SkillCandidateFilter>("all");
-  if (candidates.length === 0) return null;
   const pending = candidates.filter((candidate) => candidate.status === "pending").length;
+  const evaluable = candidates.filter((candidate) => canEvaluateSkillCandidate(candidate));
   const filtered = filter === "all" ? candidates : candidates.filter((candidate) => candidate.status === filter);
   const filters: SkillCandidateFilter[] = ["all", "pending", "promoted", "rejected", "rolled_back"];
   return (
@@ -503,32 +511,42 @@ function SkillCandidatesSection({
           <div className="cap-codeintel__title">{t("caps.skillCandidates")}</div>
           <div className="cap-codeintel__summary">{t("caps.skillCandidatesSummary", { pending, total: candidates.length })}</div>
         </div>
+        <button className="btn btn--tiny" type="button" disabled={busy || evaluable.length === 0} onClick={() => onEvaluateAll(evaluable.map((candidate) => candidate.hash))}>
+          {t("caps.skillCandidateEvaluateAll")}
+        </button>
       </div>
-      <div className="cap-skill-candidates__filters" role="tablist" aria-label={t("caps.skillCandidates")}>
-        {filters.map((item) => (
-          <button
-            key={item}
-            className={`btn btn--tiny${filter === item ? " btn--active" : ""}`}
-            type="button"
-            onClick={() => setFilter(item)}
-            aria-pressed={filter === item}
-          >
-            {skillCandidateFilterLabel(item, t)}
-          </button>
-        ))}
-      </div>
-      <div className="cap-codeintel__list">
-        {filtered.map((candidate) => (
-          <SkillCandidateRow
-            key={candidate.hash}
-            candidate={candidate}
-            busy={busy}
-            onPromote={() => onPromote(candidate.hash)}
-            onRollback={() => onRollback(candidate.hash)}
-            onReject={() => onReject(candidate.hash)}
-          />
-        ))}
-      </div>
+      {candidates.length === 0 ? (
+        <div className="mem-empty">{t("caps.skillCandidatesEmpty")}</div>
+      ) : (
+        <>
+          <div className="cap-skill-candidates__filters" role="tablist" aria-label={t("caps.skillCandidates")}>
+            {filters.map((item) => (
+              <button
+                key={item}
+                className={`btn btn--tiny${filter === item ? " btn--active" : ""}`}
+                type="button"
+                onClick={() => setFilter(item)}
+                aria-pressed={filter === item}
+              >
+                {skillCandidateFilterLabel(item, t)}
+              </button>
+            ))}
+          </div>
+          <div className="cap-codeintel__list">
+            {filtered.map((candidate) => (
+              <SkillCandidateRow
+                key={candidate.hash}
+                candidate={candidate}
+                busy={busy}
+                onEvaluate={() => onEvaluate(candidate.hash)}
+                onPromote={() => onPromote(candidate.hash)}
+                onRollback={() => onRollback(candidate.hash)}
+                onReject={() => onReject(candidate.hash)}
+              />
+            ))}
+          </div>
+        </>
+      )}
     </div>
   );
 }
@@ -536,17 +554,20 @@ function SkillCandidatesSection({
 function SkillCandidateRow({
   candidate,
   busy,
+  onEvaluate,
   onPromote,
   onRollback,
   onReject,
 }: {
   candidate: SkillCandidateView;
   busy: boolean;
+  onEvaluate: () => void;
   onPromote: () => void;
   onRollback: () => void;
   onReject: () => void;
 }) {
   const t = useT();
+  const canEvaluate = canEvaluateSkillCandidate(candidate);
   const canPromote = candidate.status === "pending" && candidate.guardrailPass === true && typeof candidate.score === "number";
   const canReject = candidate.status === "pending";
   const canRollback = candidate.status === "promoted";
@@ -567,6 +588,9 @@ function SkillCandidateRow({
         {candidate.updatedAt && <span>{formatSkillCandidateDate(candidate.updatedAt)}</span>}
       </div>
       <div className="cap-codeintel-row__actions">
+        <button className="btn btn--tiny" disabled={busy || !canEvaluate} onClick={onEvaluate}>
+          {t("caps.skillCandidateEvaluate")}
+        </button>
         <button className="btn btn--tiny" disabled={busy || !canPromote} onClick={onPromote}>
           {t("caps.skillCandidatePromote")}
         </button>
@@ -586,6 +610,10 @@ function SkillCandidateRow({
       {candidate.description && <div className="cap-skill-card__desc cap-skill-card__desc--candidate">{candidate.description}</div>}
     </div>
   );
+}
+
+function canEvaluateSkillCandidate(candidate: SkillCandidateView): boolean {
+  return candidate.status === "pending" && Boolean(candidate.sourceBundlePath);
 }
 
 function skillCandidateTone(status: string): "ready" | "degraded" | "disabled" | "unknown" {
@@ -2317,6 +2345,10 @@ export function SkillsSettingsPage() {
 			<SkillCandidatesSection
 				candidates={view.skillCandidates ?? []}
 				busy={busy}
+				onEvaluateAll={(hashes) => mutate(async () => {
+					for (const hash of hashes) await app.EvaluateSkillCandidate(hash);
+				})}
+				onEvaluate={(hash) => mutate(() => app.EvaluateSkillCandidate(hash))}
 				onPromote={(hash) => mutate(() => app.PromoteSkillCandidate(hash))}
 				onRollback={(hash) => mutate(() => app.RollbackSkillCandidate(hash, t("caps.skillCandidateRollbackReason")))}
 				onReject={(hash) => mutate(() => app.RejectSkillCandidate(hash, t("caps.skillCandidateRejectReason")))}

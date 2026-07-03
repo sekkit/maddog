@@ -53,6 +53,59 @@ func TestCapabilitiesProjectsSkillCandidates(t *testing.T) {
 	}
 }
 
+func TestEvaluateSkillCandidateFromDesktopRecordsOfflineReplay(t *testing.T) {
+	isolateDesktopUserDirs(t)
+	dir := robustTempDir(t)
+	t.Chdir(dir)
+	app := NewApp()
+	app.setTestCtrl(control.New(control.Options{Host: plugin.NewHost()}), "")
+	app.tabs["test"].Scope = "project"
+	app.tabs["test"].WorkspaceRoot = dir
+	defer app.activeCtrl().Close()
+
+	evalDir := filepath.Join(dir, config.ProjectConventionDir, "skilleval")
+	store := skilleval.NewCandidateStore(evalDir)
+	testSkill := desktopTestSkill("parser-helper")
+	bundle, _, err := skilleval.CaptureBundle(skilleval.CaptureOptions{
+		SessionID: "session-replay",
+		Task:      "fix parser",
+		Skills:    []skill.Skill{testSkill},
+		Outcome: skilleval.OutcomeInfo{
+			Success:     true,
+			GoalMet:     true,
+			FinalAnswer: testSkill.Body,
+			TotalTurns:  1,
+		},
+		Dir: evalDir,
+	})
+	if err != nil {
+		t.Fatalf("CaptureBundle: %v", err)
+	}
+	candidate, err := store.Create(testSkill, *bundle, "fix parser")
+	if err != nil {
+		t.Fatalf("Create candidate: %v", err)
+	}
+
+	got, err := app.EvaluateSkillCandidate(candidate.Hash)
+	if err != nil {
+		t.Fatalf("EvaluateSkillCandidate: %v", err)
+	}
+	if got.Hash != candidate.Hash || got.Score == nil || *got.Score < 0.7 {
+		t.Fatalf("evaluated candidate score = %+v", got)
+	}
+	if got.GuardrailPass == nil || !*got.GuardrailPass || !strings.Contains(got.GuardrailReason, "passed guardrail") {
+		t.Fatalf("evaluated candidate guardrail = %+v", got)
+	}
+
+	path, err := app.PromoteSkillCandidate(candidate.Hash)
+	if err != nil {
+		t.Fatalf("PromoteSkillCandidate after evaluation: %v", err)
+	}
+	if !strings.HasPrefix(path, filepath.Join(dir, config.ProjectConventionDir, skill.SkillsDirname)) {
+		t.Fatalf("promoted path = %q, want project skill root", path)
+	}
+}
+
 func TestPromoteAndRejectSkillCandidateFromDesktop(t *testing.T) {
 	isolateDesktopUserDirs(t)
 	dir := robustTempDir(t)

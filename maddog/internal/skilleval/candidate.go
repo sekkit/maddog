@@ -68,6 +68,13 @@ func NewCandidateStore(dir string) *CandidateStore {
 	return &CandidateStore{Dir: dir, Now: time.Now}
 }
 
+func (s *CandidateStore) Get(hash string) (Candidate, error) {
+	if s == nil {
+		return Candidate{}, fmt.Errorf("candidate store is nil")
+	}
+	return s.load(hash)
+}
+
 func (s *CandidateStore) List() ([]Candidate, error) {
 	if s == nil {
 		return nil, fmt.Errorf("candidate store is nil")

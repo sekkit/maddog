@@ -131,6 +131,13 @@ ok(
 );
 
 ok(
+  finalDeclaration(".app--creation .sidebar__brand-logo", "width") === "32px" &&
+    finalDeclaration(".app--creation .sidebar__brand-logo", "height") === "32px" &&
+    finalDeclaration(".app--creation .sidebar__brand-logo", "margin-left") === "0",
+  "creation sidebar keeps the app logo visible as a square mark",
+);
+
+ok(
   /const \[transcriptRevealSignal, setTranscriptRevealSignal\] = useState\(0\);/.test(appSource) &&
     /revealActiveSignal=\{tabRevealSignal\}/.test(appSource) &&
     /revealSignal=\{transcriptRevealSignal\}/.test(appSource),
