@@ -117,6 +117,8 @@
   --z-crash-overlay: 99999;
 
   /* component recipes */
+  --window-controls-width: 138px;
+  --mac-window-controls-width: 68px;
   --list-row-height: 38px;
   --list-row-radius: 7px;
   --list-row-gap: 10px;
@@ -16598,9 +16600,18 @@ body > .mermaid-diagram--fullscreen {
   -webkit-app-region: no-drag;
 }
 
+.app--custom-chrome.app--windows .layout--workbench-chrome-hidden .topicbar,
+.app--custom-chrome.app--linux .layout--workbench-chrome-hidden .topicbar {
+  padding-right: calc(18px + var(--window-controls-width) + 8px);
+}
+
 .app--darwin .app-window-drag-rail {
   left: var(--mac-window-controls-width);
   right: 0;
+}
+
+.app--custom-chrome.app--darwin .layout--workbench-chrome-hidden .topicbar {
+  padding-left: max(96px, calc(18px + var(--mac-window-controls-width)));
 }
 
 .app--darwin .app-chrome--tabs {

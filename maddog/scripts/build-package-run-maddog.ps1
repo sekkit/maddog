@@ -8,6 +8,8 @@ param(
   [switch]$SkipBindings,
   [switch]$NoPackage,
   [switch]$NoLaunch,
+  [switch]$UseUserConfig,
+  [string]$LaunchProfileDir = "",
   [Parameter(ValueFromRemainingArguments = $true)]
   [string[]]$ExtraWailsArgs = @()
 )
@@ -18,6 +20,7 @@ Set-StrictMode -Version Latest
 $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $DesktopRoot = Join-Path $RepoRoot "desktop"
 $BuildBin = Join-Path $DesktopRoot "build\bin"
+$DefaultLaunchProfileDir = Join-Path $DesktopRoot "build\run-profile"
 $OutputName = "maddog-dev"
 $ProductName = "Maddog"
 
@@ -174,17 +177,64 @@ function New-PortablePackage {
   return $packagePath
 }
 
+function Resolve-LaunchProfileDir {
+  if ($LaunchProfileDir -ne "") {
+    if ([System.IO.Path]::IsPathRooted($LaunchProfileDir)) {
+      return $LaunchProfileDir
+    }
+    return (Join-Path $RepoRoot $LaunchProfileDir)
+  }
+  return $DefaultLaunchProfileDir
+}
+
+function Restore-EnvVar {
+  param(
+    [string]$Name,
+    [AllowNull()]
+    [string]$Value
+  )
+  if ($null -eq $Value) {
+    Remove-Item -LiteralPath "Env:$Name" -ErrorAction SilentlyContinue
+    return
+  }
+  Set-Item -LiteralPath "Env:$Name" -Value $Value
+}
+
 function Start-Maddog {
   param([string]$ArtifactPath)
 
-  if ($IsMacOSHost -and $ArtifactPath.EndsWith(".app", [System.StringComparison]::OrdinalIgnoreCase)) {
-    Start-Process -FilePath "open" -ArgumentList @($ArtifactPath) | Out-Null
-    Write-Host "Launched $ArtifactPath"
-    return
-  }
+  $oldHome = $env:MADDOG_HOME
+  $oldState = $env:MADDOG_STATE_HOME
+  $oldCache = $env:MADDOG_CACHE_HOME
 
-  $process = Start-Process -FilePath $ArtifactPath -WorkingDirectory $RepoRoot -PassThru
-  Write-Host "Launched $ArtifactPath (PID $($process.Id))"
+  try {
+    if (!$UseUserConfig) {
+      $profileRoot = Resolve-LaunchProfileDir
+      $homeDir = Join-Path $profileRoot "home"
+      $stateDir = Join-Path $profileRoot "state"
+      $cacheDir = Join-Path $profileRoot "cache"
+      New-Item -ItemType Directory -Force -Path $homeDir, $stateDir, $cacheDir | Out-Null
+      $env:MADDOG_HOME = (Resolve-Path -LiteralPath $homeDir).Path
+      $env:MADDOG_STATE_HOME = (Resolve-Path -LiteralPath $stateDir).Path
+      $env:MADDOG_CACHE_HOME = (Resolve-Path -LiteralPath $cacheDir).Path
+      Write-Host "Launch profile: isolated ($profileRoot). Pass -UseUserConfig to launch against the real user config."
+    } else {
+      Write-Host "Launch profile: real user config (-UseUserConfig)."
+    }
+
+    if ($IsMacOSHost -and $ArtifactPath.EndsWith(".app", [System.StringComparison]::OrdinalIgnoreCase)) {
+      Start-Process -FilePath "open" -ArgumentList @($ArtifactPath) | Out-Null
+      Write-Host "Launched $ArtifactPath"
+      return
+    }
+
+    $process = Start-Process -FilePath $ArtifactPath -WorkingDirectory $RepoRoot -PassThru
+    Write-Host "Launched $ArtifactPath (PID $($process.Id))"
+  } finally {
+    Restore-EnvVar "MADDOG_HOME" $oldHome
+    Restore-EnvVar "MADDOG_STATE_HOME" $oldState
+    Restore-EnvVar "MADDOG_CACHE_HOME" $oldCache
+  }
 }
 
 $GoExe = Resolve-GoExe $GoExe

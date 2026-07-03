@@ -46,6 +46,11 @@ func TestCapabilitiesProjectsSkillCandidates(t *testing.T) {
 	if got.GuardrailPass == nil || !*got.GuardrailPass || got.SourceTask != "fix parser" || !strings.Contains(got.TargetRoot, filepath.Join(config.ProjectConventionDir, skill.SkillsDirname)) {
 		t.Fatalf("candidate detail = %+v", got)
 	}
+
+	settings := app.SkillsSettings()
+	if len(settings.SkillCandidates) != 1 || settings.SkillCandidates[0].Hash != candidate.Hash {
+		t.Fatalf("SkillsSettings SkillCandidates = %+v, want candidate %s", settings.SkillCandidates, candidate.Hash)
+	}
 }
 
 func TestPromoteAndRejectSkillCandidateFromDesktop(t *testing.T) {

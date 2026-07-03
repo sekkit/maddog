@@ -604,6 +604,7 @@ export const app: AppBindings = new Proxy({} as AppBindings, {
     const codeIntelMethod = codeIntelligenceBridgeMethod(target, method);
     if (codeIntelMethod) return codeIntelMethod;
     const v = (target as unknown as Record<string, unknown>)[method];
+    if (method === "SkillsSettings" && typeof v !== "function") return () => skillsSettingsFromCapabilities(target);
     if (typeof v !== "function") return v;
     return (...args: unknown[]) => {
       const crumb = bridgeBreadcrumb(method);
@@ -624,6 +625,16 @@ export const app: AppBindings = new Proxy({} as AppBindings, {
     };
   },
 });
+
+async function skillsSettingsFromCapabilities(target: AppBindings): Promise<SkillsSettingsView> {
+  const capabilities = await target.Capabilities();
+  return {
+    skills: capabilities?.skills ?? [],
+    skillRoots: capabilities?.skillRoots ?? [],
+    skillCandidates: capabilities?.skillCandidates ?? [],
+    codeIntelligenceBackends: capabilities?.codeIntelligenceBackends ?? [],
+  };
+}
 
 function codeIntelligenceBridgeMethod(target: AppBindings, method: string): ((...args: unknown[]) => Promise<void>) | null {
   const methods = target as unknown as Record<string, unknown>;
@@ -2180,6 +2191,7 @@ function makeMockApp(): AppBindings {
       return {
         skills: capSkills.map((s) => ({ ...s })),
         skillRoots: capSkillRoots.map((s) => ({ ...s })),
+        skillCandidates: capSkillCandidates.map((s) => ({ ...s })),
       };
     },
     async AddMCPServer(input: MCPServerInput) {

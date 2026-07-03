@@ -4027,8 +4027,9 @@ type CapabilitiesView struct {
 // SkillsSettingsView is the skills management page's data, split from MCP
 // status so opening MCP settings does not scan skill roots.
 type SkillsSettingsView struct {
-	Skills     []SkillView     `json:"skills"`
-	SkillRoots []SkillRootView `json:"skillRoots"`
+	Skills          []SkillView          `json:"skills"`
+	SkillRoots      []SkillRootView      `json:"skillRoots"`
+	SkillCandidates []SkillCandidateView `json:"skillCandidates"`
 }
 
 // ServerView is one MCP server for the drawer. Status is "connected" (with
@@ -4173,23 +4174,10 @@ func (a *App) Capabilities() CapabilitiesView {
 	}
 
 	out.Servers = a.mcpServersView()
-	disabled := map[string]bool{}
-	if cfg, err := config.Load(); err == nil {
-		for _, name := range cfg.Skills.DisabledSkills {
-			if key := config.SkillNameKey(name); key != "" {
-				disabled[key] = true
-			}
-		}
-	}
-	for _, s := range ctrl.AllSkills() {
-		out.Skills = append(out.Skills, SkillView{
-			Name: s.Name, Description: s.Description,
-			Scope: string(s.Scope), RunAs: string(s.RunAs),
-			Enabled: !disabled[config.SkillNameKey(s.Name)],
-		})
-	}
-	out.SkillRoots = a.cachedSkillRootsView()
-	out.SkillCandidates = skillCandidateViews(workspaceRoot)
+	skills := a.skillsSettingsView(ctrl, workspaceRoot)
+	out.Skills = skills.Skills
+	out.SkillRoots = skills.SkillRoots
+	out.SkillCandidates = skills.SkillCandidates
 	if cfg, err := config.LoadForRoot(workspaceRoot); err == nil {
 		connected := map[string]plugin.ServerStatus{}
 		failed := map[string]plugin.Failure{}
@@ -4210,6 +4198,46 @@ func (a *App) Capabilities() CapabilitiesView {
 			a.codeIntelligenceBenchmarkRunning(),
 		)
 	}
+	return out
+}
+
+// SkillsSettings returns the skills management page data without also building
+// the MCP and code-intelligence projections.
+func (a *App) SkillsSettings() SkillsSettingsView {
+	a.mu.RLock()
+	tab := a.activeTabLocked()
+	var ctrl control.SessionAPI
+	workspaceRoot := ""
+	if tab != nil {
+		ctrl = tab.Ctrl
+		workspaceRoot = tab.WorkspaceRoot
+	}
+	a.mu.RUnlock()
+	return a.skillsSettingsView(ctrl, workspaceRoot)
+}
+
+func (a *App) skillsSettingsView(ctrl control.SessionAPI, workspaceRoot string) SkillsSettingsView {
+	out := SkillsSettingsView{Skills: []SkillView{}, SkillRoots: []SkillRootView{}, SkillCandidates: []SkillCandidateView{}}
+	if ctrl == nil {
+		return out
+	}
+	disabled := map[string]bool{}
+	if cfg, err := config.Load(); err == nil {
+		for _, name := range cfg.Skills.DisabledSkills {
+			if key := config.SkillNameKey(name); key != "" {
+				disabled[key] = true
+			}
+		}
+	}
+	for _, s := range ctrl.AllSkills() {
+		out.Skills = append(out.Skills, SkillView{
+			Name: s.Name, Description: s.Description,
+			Scope: string(s.Scope), RunAs: string(s.RunAs),
+			Enabled: !disabled[config.SkillNameKey(s.Name)],
+		})
+	}
+	out.SkillRoots = a.cachedSkillRootsView()
+	out.SkillCandidates = skillCandidateViews(workspaceRoot)
 	return out
 }
 
