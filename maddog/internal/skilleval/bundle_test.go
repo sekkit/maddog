@@ -158,6 +158,54 @@ func TestCaptureBundlePromotesExplicitVerificationEvidence(t *testing.T) {
 	}
 }
 
+func TestCaptureBundleUsesLastVerificationCommandResult(t *testing.T) {
+	bundle, _, err := CaptureBundle(CaptureOptions{
+		SessionID: "sess-stale-verification",
+		Messages: []provider.Message{
+			{Role: provider.RoleUser, Content: "fix parser"},
+			{Role: provider.RoleAssistant, Content: "parser fixed"},
+		},
+		Evidence: []evidence.Receipt{
+			{ToolName: "bash", Success: true, Command: "go test ./internal/parser"},
+			{ToolName: "edit", Success: true},
+			{ToolName: "bash", Success: false, Command: "go test ./internal/parser"},
+		},
+		Dir: t.TempDir(),
+		Now: time.Date(2026, 7, 4, 9, 2, 0, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatalf("CaptureBundle: %v", err)
+	}
+	if bundle.Outcome.Confidence == OutcomeConfidenceVerified || bundle.Outcome.Success || bundle.Outcome.GoalMet {
+		t.Fatalf("stale successful verification followed by failed verification should not verify outcome: %+v", bundle.Outcome)
+	}
+}
+
+func TestCaptureBundleDoesNotTreatCompileOnlyReceiptsAsGoalVerification(t *testing.T) {
+	for _, command := range []string{"go build ./...", "go vet ./...", "tsc --noEmit"} {
+		t.Run(command, func(t *testing.T) {
+			bundle, _, err := CaptureBundle(CaptureOptions{
+				SessionID: "sess-compile-only",
+				Messages: []provider.Message{
+					{Role: provider.RoleUser, Content: "fix parser"},
+					{Role: provider.RoleAssistant, Content: "parser fixed"},
+				},
+				Evidence: []evidence.Receipt{
+					{ToolName: "bash", Success: true, Command: command},
+				},
+				Dir: t.TempDir(),
+				Now: time.Date(2026, 7, 4, 9, 3, 0, 0, time.UTC),
+			})
+			if err != nil {
+				t.Fatalf("CaptureBundle: %v", err)
+			}
+			if bundle.Outcome.Confidence == OutcomeConfidenceVerified || bundle.Outcome.Success || bundle.Outcome.GoalMet {
+				t.Fatalf("compile-only command %q should not verify outcome: %+v", command, bundle.Outcome)
+			}
+		})
+	}
+}
+
 func TestCaptureBundleDoesNotVerifyGenericSuccessfulTool(t *testing.T) {
 	bundle, _, err := CaptureBundle(CaptureOptions{
 		SessionID: "sess-read-only",

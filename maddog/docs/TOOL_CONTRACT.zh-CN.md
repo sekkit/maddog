@@ -40,11 +40,12 @@ go test ./internal/tool -run TestBuiltinToolContractDocumentation
 
 默认 full-token boot 会发送上面的内置工具，并额外发送 session、memory、skill、subagent、LSP、install 和 slash-command 工具：
 
-`ask`, `explore`, `forget`, `history`, `install_skill`, `install_source`,
+`advisor`, `ask`, `explore`, `forget`, `history`, `install_skill`, `install_source`,
 `list_sessions`, `lsp_definition`, `lsp_diagnostics`, `lsp_hover`,
 `lsp_references`, `memory`, `parallel_tasks`, `read_only_skill`,
 `read_only_task`, `read_session`, `read_skill`, `remember`, `research`,
-`review`, `run_skill`, `security_review`, `slash_command`, `task`.
+`review`, `run_skill`, `security_review`, `slash_command`, `task`,
+`tool_result`.
 
 `internal/boot.TestBootToolContractMatchesProviderVisibleSurface` 会校验真实 boot registry 合约和 provider request 一致，包括 read-only 标记和 canonical schema。
 
@@ -52,7 +53,7 @@ go test ./internal/tool -run TestBuiltinToolContractDocumentation
 
 token economy 模式启动时保留核心编码、session、memory 工具，以及按需启用可选来源的 connector：
 
-`ask`, `connect_tool_source`, `forget`, `history`, `list_sessions`, `memory`,
-`read_session`, `remember`, `slash_command`.
+`advisor`, `ask`, `connect_tool_source`, `forget`, `history`, `list_sessions`,
+`memory`, `read_session`, `remember`, `slash_command`, `tool_result`.
 
 `bash`、`read_file`、`grep`、文件写工具、后台 job 工具和 `todo_write` 等核心内置工具在 economy 模式下仍可用，见上方内置工具表。

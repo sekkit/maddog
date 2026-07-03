@@ -554,8 +554,12 @@ func renderCodeIntelligenceConfig(b *strings.Builder, c CodeIntelligenceConfig) 
 		b.WriteString("# enabled = true\n")
 		b.WriteString("# [code_intelligence.backends.tools]\n")
 		b.WriteString("# symbol_search = \"mcp__serena__find_symbol\"\n")
-		b.WriteString("# context_pack = \"mcp__serena__context\"\n")
-		b.WriteString("# health = \"mcp__serena__status\"\n\n")
+		b.WriteString("# context_pack = \"mcp__serena__get_symbols_overview\"\n\n")
+		b.WriteString("# First-party preset notes:\n")
+		b.WriteString("# - serena: MCP symbol backend using mcp__serena__find_symbol and mcp__serena__get_symbols_overview.\n")
+		b.WriteString("# - claude-context: MCP context backend; configure server \"claude-context\" before enabling.\n")
+		b.WriteString("# - codebase-memory: MCP memory backend; configure server \"codebase-memory\" before enabling.\n")
+		b.WriteString("# - zvec: research-only vector library; Maddog does not provide a zvec MCP/backend adapter.\n\n")
 		return
 	}
 	for _, backend := range c.Backends {

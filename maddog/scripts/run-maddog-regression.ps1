@@ -372,7 +372,7 @@ $CoverageMatrix = @(
   },
   [pscustomobject]@{
     capability = "C2 offline replay, scorer, guardrail, and skill promotion"
-    evidence = @("core-go: internal/eval")
+    evidence = @("core-go: internal/skilleval")
     notes = "Offline mechanics are local/unit verified; live frontier scoring requires optional provider runs."
     status = if ($LiveReadiness.frontier_smoke_ready) { "verified" } else { "partial-live-pending" }
     remaining = if ($LiveReadiness.frontier_smoke_ready) { @() } else { @("Run live frontier scoring path with frontier provider credentials.") }
@@ -411,7 +411,7 @@ $CoreGoPackages = @(
   "./internal/cli",
   "./internal/config",
   "./internal/control",
-  "./internal/eval",
+  "./internal/skilleval",
   "./internal/evidence",
   "./internal/event",
   "./internal/provider",

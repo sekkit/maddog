@@ -27,7 +27,7 @@ func TestRunFrontierSmokeCoversProviderScorerCostAndAdvisor(t *testing.T) {
 		if got := body["reasoning"].(map[string]any)["effort"]; got != "high" {
 			t.Fatalf("reasoning effort = %v, want high", got)
 		}
-		if strings.Contains(strings.ToLower(toString(body)), "score the replayed outcome") {
+		if strings.Contains(strings.ToLower(toString(body)), "score the replayed skill-eval outcome") {
 			sawScorer = true
 		}
 		w.Header().Set("Content-Type", "text/event-stream")

@@ -285,6 +285,8 @@ type Agent struct {
 	rawToolResultDir      string
 	rawToolResultsMu      sync.RWMutex
 	rawToolResults        map[string]string
+	toolCompressionsMu    sync.Mutex
+	toolCompressions      []ToolCompressionRecord
 
 	// steerQueue holds mid-turn user messages queued while the agent is
 	// running. Each is consumed once per loop iteration, persisted to the
@@ -380,6 +382,11 @@ type Agent struct {
 	// stormSig: a model keeps doing the same successful write, so there is no
 	// error for the failure-only storm breaker to see.
 	repeatSuccessCounts map[string]int
+}
+
+type ToolCompressionRecord struct {
+	ToolName    string
+	Compression event.Compression
 }
 
 // KeepPolicy is a bitmask controlling which messages are preserved beyond the
@@ -484,6 +491,35 @@ func (a *Agent) EvidenceReceipts() []evidence.Receipt {
 		return nil
 	}
 	return a.evidence.Snapshot()
+}
+
+func (a *Agent) ToolCompressions() []ToolCompressionRecord {
+	if a == nil {
+		return nil
+	}
+	a.toolCompressionsMu.Lock()
+	defer a.toolCompressionsMu.Unlock()
+	out := make([]ToolCompressionRecord, len(a.toolCompressions))
+	copy(out, a.toolCompressions)
+	return out
+}
+
+func (a *Agent) resetToolCompressions() {
+	if a == nil {
+		return
+	}
+	a.toolCompressionsMu.Lock()
+	a.toolCompressions = nil
+	a.toolCompressionsMu.Unlock()
+}
+
+func (a *Agent) recordToolCompression(toolName string, c *event.Compression) {
+	if a == nil || c == nil {
+		return
+	}
+	a.toolCompressionsMu.Lock()
+	a.toolCompressions = append(a.toolCompressions, ToolCompressionRecord{ToolName: toolName, Compression: *c})
+	a.toolCompressionsMu.Unlock()
 }
 
 // SetSession replaces the agent's conversation wholesale. Used by
@@ -840,6 +876,12 @@ func New(prov provider.Provider, tools *tool.Registry, session *Session, opts Op
 		keepPolicy:            opts.KeepPolicy,
 		archiveDir:            opts.ArchiveDir,
 	}
+	if a.tools != nil {
+		a.tools.Add(rawToolResultTool{agent: a})
+		if a.advisorRunner != nil && a.nativeAdvisor == nil && a.advisor.MaxUsesPerTurn > 0 {
+			a.tools.Add(fallbackAdvisorTool{agent: a})
+		}
+	}
 	a.SetReasoningLanguage(opts.ReasoningLanguage)
 	return a
 }
@@ -866,6 +908,7 @@ func (a *Agent) Run(ctx context.Context, input string) (runErr error) {
 	if a.evidence != nil {
 		a.evidence.Reset()
 	}
+	a.resetToolCompressions()
 	a.repeatSuccessCounts = nil
 	a.sink.Emit(event.Event{Kind: event.TurnStarted})
 	rawInput := input
@@ -1123,11 +1166,11 @@ func (a *Agent) evaluateRoutingAfterTools(ctx context.Context, turn int) {
 		return
 	}
 	decision := a.upgradePolicy.Evaluate(a.evidence.FailureSignal(), turn, a.frontierTokens.Load())
-	if !decision.ShouldUpgrade {
-		return
-	}
 	if decision.TriggerAdvisor {
 		a.consultAdvisor(ctx, a.evidence.FailureSignal(), decision)
+	}
+	if !decision.ShouldUpgrade {
+		return
 	}
 	a.switchToFrontier(decision)
 	target := strings.TrimSpace(decision.TargetModel)
@@ -2072,6 +2115,7 @@ func (a *Agent) executeBatch(ctx context.Context, calls []provider.ToolCall) []s
 	for i, c := range calls {
 		o := outcomes[i]
 		t, ok := a.tools.Get(c.Name)
+		a.recordToolCompression(c.Name, o.compression)
 		a.sink.Emit(event.Event{Kind: event.ToolResult, Tool: event.Tool{
 			ID:          c.ID,
 			Name:        c.Name,
@@ -2466,6 +2510,10 @@ func (a *Agent) executeOne(ctx context.Context, call provider.ToolCall) toolOutc
 func (a *Agent) modelToolOutput(call provider.ToolCall, t tool.Tool, raw string) (string, string, *event.Compression) {
 	body := raw
 	var compression *event.Compression
+	if call.Name == "tool_result" {
+		output, truncMsg := truncateToolOutput(body)
+		return output, truncMsg, nil
+	}
 	if compressed, meta, ok := a.compressToolOutput(call, t, raw); ok {
 		body = compressed
 		compression = meta
@@ -2547,8 +2595,7 @@ func updateToolCompressionVisibleMetrics(c *event.Compression, visible string) {
 	} else {
 		c.SavedChars = 0
 	}
-	c.RawTokens = estimateToolCompressionTokens(c.RawChars)
-	c.CompressedTokens = estimateToolCompressionTokens(c.CompressedChars)
+	c.CompressedTokens = estimateToolCompressionTokens(visible)
 	if c.RawTokens > c.CompressedTokens {
 		c.SavedTokens = c.RawTokens - c.CompressedTokens
 	} else {
@@ -2556,11 +2603,30 @@ func updateToolCompressionVisibleMetrics(c *event.Compression, visible string) {
 	}
 }
 
-func estimateToolCompressionTokens(chars int) int {
-	if chars <= 0 {
+func estimateToolCompressionTokens(s string) int {
+	if s == "" {
 		return 0
 	}
-	return (chars + 3) / 4
+	ascii := 0
+	cjk := 0
+	other := 0
+	for _, r := range s {
+		switch {
+		case r <= 0x7f:
+			ascii++
+		case (r >= 0x4e00 && r <= 0x9fff) || (r >= 0x3400 && r <= 0x4dbf) || (r >= 0x3040 && r <= 0x30ff) || (r >= 0xac00 && r <= 0xd7af):
+			cjk++
+		default:
+			other++
+		}
+	}
+	tokens := (ascii + 3) / 4
+	tokens += cjk
+	tokens += (other + 1) / 2
+	if tokens == 0 {
+		return 1
+	}
+	return tokens
 }
 
 func formatCompressedToolOutput(result contextpack.Result, rawRef string) string {

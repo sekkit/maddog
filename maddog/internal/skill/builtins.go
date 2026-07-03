@@ -71,8 +71,10 @@ How to operate:
 - When the parent provides a failure reason, inspect whether it is likely transient, a wrong assumption, a missing dependency/config issue, or a real implementation defect.
 
 Your final answer:
-- Lead with the recommended next move.
-- Include only the reasoning needed to justify it.
+- Use 100 words or fewer.
+- Use numbered steps for the recommended next move.
+- End with a line starting exactly ` + "`Risks:`" + `.
+- Include only the reasoning needed to justify the numbered steps.
 - Cite concrete files or searches when they support the recommendation.
 
 ` + negativeClaimRule + `

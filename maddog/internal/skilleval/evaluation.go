@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"maddog/internal/provider"
+	"maddog/internal/tool"
 )
 
 type EvaluationRequest struct {
@@ -14,6 +15,7 @@ type EvaluationRequest struct {
 	BundlePaths []string
 	Bundles     []BundleV2
 	Provider    provider.Provider
+	Tools       *tool.Registry
 	Scorer      provider.Provider
 	ModelRef    string
 	DryRun      bool
@@ -70,6 +72,9 @@ func EvaluateCandidate(ctx context.Context, req EvaluationRequest) (EvaluationRe
 			return EvaluationResult{}, fmt.Errorf("promotion-grade skill evaluation requires a provider")
 		}
 		providerName = req.Provider.Name()
+		if req.Tools != nil && req.Tools.Len() > 0 {
+			mode = EvaluationModeAgentReplay
+		}
 	}
 	scorer := req.Scorer
 	if scorer == nil && !req.DryRun {
@@ -82,6 +87,11 @@ func EvaluateCandidate(ctx context.Context, req EvaluationRequest) (EvaluationRe
 		var replayed OutcomeInfo
 		if req.DryRun {
 			replayed = DryRunReplay(bundle, req.Candidate)
+		} else if req.Tools != nil && req.Tools.Len() > 0 {
+			replayed, err = (AgentReplayRunner{Provider: req.Provider, Tools: req.Tools, MaxSteps: 8}).Run(ctx, bundle, req.Candidate)
+			if err != nil {
+				return EvaluationResult{}, err
+			}
 		} else {
 			replayed, err = (ReplayRunner{Provider: req.Provider, MaxTokens: req.MaxTokens}).Run(ctx, bundle, req.Candidate)
 			if err != nil {

@@ -299,6 +299,7 @@ type subagentSkillTool struct {
 	store       *Store
 	runner      SubagentRunner
 	profile     ProfileResolver
+	prepareTask subagentTaskPreparer
 }
 
 func (t *subagentSkillTool) Name() string        { return t.toolName }
@@ -339,6 +340,13 @@ func (t *subagentSkillTool) Execute(ctx context.Context, args json.RawMessage) (
 	if opts.ContinueFrom != "" && opts.ForkFrom != "" {
 		return "", fmt.Errorf("%s: continue_from and fork_from are mutually exclusive; pass only continue_from", t.toolName)
 	}
+	if t.prepareTask != nil {
+		prepared, err := t.prepareTask(ctx, task)
+		if err != nil {
+			return "", fmt.Errorf("%s: prepare task: %w", t.toolName, err)
+		}
+		task = prepared
+	}
 	return t.runner(ctx, sk, task, opts)
 }
 
@@ -370,19 +378,24 @@ func BuiltinSubagentTools(store *Store, runner SubagentRunner, profileResolver .
 	}
 	specs := []struct {
 		toolName, skillName, description, taskDesc string
+		prepareTask                                subagentTaskPreparer
 	}{
 		{"explore", "explore",
 			"Run a focused read-only codebase investigation in an isolated subagent. Use for broad survey questions across many files — 'find all places that X', 'how does Y work across the project', 'audit Z'. Returns one distilled answer with file:line citations. Its reads + reasoning never enter your context, unlike chained read_file.",
-			"Concrete investigation question. The subagent has none of your context — write a self-contained prompt naming the symbol / pattern / behavior to survey."},
+			"Concrete investigation question. The subagent has none of your context — write a self-contained prompt naming the symbol / pattern / behavior to survey.",
+			nil},
 		{"research", "research",
 			"Combine web_fetch + code reading in an isolated subagent. Use when the answer needs both an external reference and local verification — 'is X supported by lib Y', 'compare our impl against the spec'. Returns one synthesis citing code (file:line) and web (URL).",
-			"Concrete research question. The subagent has none of your context — name the external thing to look up and the local code to compare against."},
+			"Concrete research question. The subagent has none of your context — name the external thing to look up and the local code to compare against.",
+			nil},
 		{"review", "review",
 			"Review the pending changes (current branch diff) in an isolated subagent — flags correctness / security / missing-tests / hidden behavior per file:line. Read-only; you decide what to act on. Use before suggesting a PR-shaped change or after finishing a multi-step edit.",
-			"What to focus the review on (e.g. 'focus on the auth changes' or 'general'). The subagent reads the diff itself."},
+			"What to focus the review on (e.g. 'focus on the auth changes' or 'general'). The subagent reads the diff itself.",
+			prepareSubagentReviewTask},
 		{"security_review", "security-review",
 			"Security-focused review of the current branch diff in an isolated subagent — injection / authz / secrets / deserialization / path-traversal / crypto, severity-tagged. Read-only. Use when shipping changes that touch auth, input parsing, file IO, or external requests.",
-			"Optional scope hint (e.g. 'focus on token handling in internal/auth/') or 'full' for everything in the diff."},
+			"Optional scope hint (e.g. 'focus on token handling in internal/auth/') or 'full' for everything in the diff.",
+			prepareSubagentReviewTask},
 	}
 	var out []tool.Tool
 	for _, s := range specs {
@@ -397,6 +410,7 @@ func BuiltinSubagentTools(store *Store, runner SubagentRunner, profileResolver .
 			store:       store,
 			runner:      runner,
 			profile:     pr,
+			prepareTask: s.prepareTask,
 		})
 	}
 	return out

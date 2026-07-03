@@ -96,6 +96,43 @@ func TestToolOutputCompressionFeedsModelCompressedAndKeepsRaw(t *testing.T) {
 	}
 }
 
+func TestCompressedRawToolResultCanBeRetrievedByModelTool(t *testing.T) {
+	rawOutput := strings.Repeat("INFO heartbeat ready\n", 90) +
+		"--- FAIL: TestAddsNumbers (0.01s)\n" +
+		"    math/add_test.go:42: expected 4, got 5\n"
+
+	reg := tool.NewRegistry()
+	reg.Add(contextpackStaticTool{name: "bash", output: rawOutput, readOnly: true})
+	prov := testutil.NewMock("mock",
+		testutil.Turn{ToolCalls: []provider.ToolCall{{ID: "tool-raw-source", Name: "bash", Arguments: `{"command":"go test ./..."}`}}},
+		testutil.Turn{ToolCalls: []provider.ToolCall{{ID: "tool-raw-read", Name: "tool_result", Arguments: `{"id":"tool-raw-source"}`}}},
+		testutil.Turn{Text: "done"},
+	)
+	a := New(prov, reg, NewSession(""), Options{
+		ToolOutputCompressor:  contextpack.DefaultCompressor{},
+		ToolOutputCompression: contextpack.Options{ThresholdBytes: 128, MaxBytes: 260},
+	}, event.Discard)
+
+	if err := a.Run(context.Background(), "run tests"); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	reqs := prov.Requests()
+	if len(reqs) < 3 {
+		t.Fatalf("provider requests = %d, want raw retrieval round", len(reqs))
+	}
+	var rawToolMsg provider.Message
+	for _, msg := range reqs[2].Messages {
+		if msg.Role == provider.RoleTool && msg.ToolCallID == "tool-raw-read" {
+			rawToolMsg = msg
+			break
+		}
+	}
+	if rawToolMsg.Content != rawOutput {
+		t.Fatalf("tool_result output length = %d, want raw length %d\n%s", len(rawToolMsg.Content), len(rawOutput), rawToolMsg.Content)
+	}
+}
+
 func TestToolOutputCompressionPolicyOffFeedsModelRawAndStoresNoRawRef(t *testing.T) {
 	rawOutput := strings.Repeat("INFO heartbeat ready\n", 90) + "panic: boom\n"
 
@@ -247,16 +284,35 @@ func TestToolOutputCompressionEmitsMetadataOnToolResult(t *testing.T) {
 	if got.SavedChars != got.RawChars-got.CompressedChars {
 		t.Fatalf("ToolResult saved chars = %d, want raw-compressed delta %d", got.SavedChars, got.RawChars-got.CompressedChars)
 	}
-	if got.CompressedTokens != estimatedTestTokens(got.CompressedChars) || got.SavedTokens != got.RawTokens-got.CompressedTokens {
+	if got.CompressedTokens != estimatedTestTokens(gotOutput) || got.SavedTokens != got.RawTokens-got.CompressedTokens {
 		t.Fatalf("ToolResult token metrics = %+v, want estimates from final output", got)
 	}
 }
 
-func estimatedTestTokens(chars int) int {
-	if chars <= 0 {
+func estimatedTestTokens(s string) int {
+	if s == "" {
 		return 0
 	}
-	return (chars + 3) / 4
+	ascii := 0
+	cjk := 0
+	other := 0
+	for _, r := range s {
+		switch {
+		case r <= 0x7f:
+			ascii++
+		case (r >= 0x4e00 && r <= 0x9fff) || (r >= 0x3400 && r <= 0x4dbf) || (r >= 0x3040 && r <= 0x30ff) || (r >= 0xac00 && r <= 0xd7af):
+			cjk++
+		default:
+			other++
+		}
+	}
+	tokens := (ascii + 3) / 4
+	tokens += cjk
+	tokens += (other + 1) / 2
+	if tokens == 0 {
+		return 1
+	}
+	return tokens
 }
 
 func TestToolOutputCompressorPanicFallsBackToTruncatedRawAndWarns(t *testing.T) {

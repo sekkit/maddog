@@ -68,7 +68,7 @@ func (v Validator) IsHighRisk(task string) bool {
 
 func IsHighRisk(task string) bool {
 	task = normalizeSafetyText(task)
-	return matchesForbidden(task, forbiddenTaskPatterns) || dangerousDeleteWithoutWhere(task)
+	return matchesForbidden(task, forbiddenTaskPatterns) || dangerousDeleteWithoutWhere(task) || dangerousChineseDestructiveTask(task)
 }
 
 func invalidValidation(reason string) ValidationResult {
@@ -98,13 +98,13 @@ var forbiddenTaskPatterns = compileSafetyPatterns([]string{
 	`dd\s+if=`,
 	`mkfs\.`,
 	`\bfdisk\b`,
+	`\btruncate\s+(table|database)\b`,
 	`chmod\s+777\s+/`,
 	`chown\s+[^ ]+\s+/`,
 	`>\s*/dev/sd`,
 	`: *\(\) *\{ *: *\| *: *& *\} *; *:`,
 	`drop\s+table`,
 	`drop\s+database`,
-	`\btruncate\b`,
 	`/etc/passwd`,
 	`/etc/shadow`,
 	`/etc/sudoers`,
@@ -128,8 +128,6 @@ var forbiddenBodyPatterns = compileSafetyPatterns([]string{
 	`system[_ -]?prompt`,
 	`override\s+(all\s+)?(system|developer|host|memory|instructions?)`,
 	`ignore\s+(all\s+)?(system|developer|host|memory|instructions?)`,
-	`\bremember\b`,
-	`\bforget\b`,
 })
 
 func compileSafetyPatterns(patterns []string) []*regexp.Regexp {
@@ -147,4 +145,20 @@ func dangerousDeleteWithoutWhere(s string) bool {
 	}
 	tail := s[idx:]
 	return !strings.Contains(tail, " where ")
+}
+
+func dangerousChineseDestructiveTask(s string) bool {
+	for _, phrase := range []string{
+		"删库",
+		"清空所有表",
+		"清空全部表",
+		"清空数据库",
+		"删除所有数据",
+		"删除全部数据",
+	} {
+		if strings.Contains(s, phrase) {
+			return true
+		}
+	}
+	return false
 }

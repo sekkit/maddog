@@ -46,6 +46,7 @@ import (
 	"maddog/internal/provider"
 	"maddog/internal/skill"
 	"maddog/internal/skilleval"
+	"maddog/internal/tool"
 )
 
 // eventChannel is the Wails runtime event name the frontend subscribes to for the
@@ -5009,7 +5010,11 @@ func (a *App) EvaluateSkillCandidate(hash string, req SkillCandidateEvaluationRe
 	if req.DryRun {
 		result, err = evaluateSkillCandidateDryRunPreview(ctx, root, candidate, req)
 	} else {
-		result, err = evaluateSkillCandidateProviderReplay(ctx, root, candidate, req)
+		var replayTools *tool.Registry
+		if tab := a.activeTab(); tab != nil && tab.Ctrl != nil && len(candidate.Skill.AllowedTools) > 0 {
+			replayTools = tab.Ctrl.ToolRegistry()
+		}
+		result, err = evaluateSkillCandidateProviderReplay(ctx, root, candidate, req, replayTools)
 	}
 	if err != nil {
 		return SkillCandidateView{}, err
@@ -5022,13 +5027,15 @@ func (a *App) EvaluateSkillCandidate(hash string, req SkillCandidateEvaluationRe
 		label := "provider replay"
 		if req.DryRun {
 			label = "dry-run preview"
+		} else if result.Mode == skilleval.EvaluationModeAgentReplay {
+			label = "agent replay"
 		}
 		a.noticeForTab(tabID, fmt.Sprintf("%s scored skill candidate %.2f", label, result.Score.Score))
 	}
 	return skillCandidateView(root, updated), nil
 }
 
-func evaluateSkillCandidateProviderReplay(ctx context.Context, root string, candidate skilleval.Candidate, req SkillCandidateEvaluationRequest) (skilleval.EvaluationResult, error) {
+func evaluateSkillCandidateProviderReplay(ctx context.Context, root string, candidate skilleval.Candidate, req SkillCandidateEvaluationRequest, replayTools *tool.Registry) (skilleval.EvaluationResult, error) {
 	bundlePaths := cleanSkillCandidateBundlePaths(req.BundlePaths)
 	if len(bundlePaths) == 0 {
 		var err error
@@ -5045,6 +5052,7 @@ func evaluateSkillCandidateProviderReplay(ctx context.Context, root string, cand
 		Candidate:   candidate,
 		BundlePaths: bundlePaths,
 		Provider:    prov,
+		Tools:       replayTools,
 		ModelRef:    modelRef,
 		MinBundles:  req.MinBundles,
 		MinScore:    req.MinScore,
@@ -5699,23 +5707,8 @@ func (a *App) RunCodeIntelligenceBenchmark(id string) error {
 		}()
 		ctx, cancel := context.WithTimeout(a.bootContext(), 2*time.Minute)
 		defer cancel()
-		cases := []codegraph.BenchmarkCase{{
-			Name:        "symbol search",
-			Query:       "RunBenchmark",
-			Capability:  codegraph.BenchmarkCapabilitySymbolSearch,
-			ExpectedIDs: []string{"runner.go"},
-			TopK:        5,
-		}}
-		if backend.Capabilities.SemanticSearch {
-			cases = append(cases, codegraph.BenchmarkCase{
-				Name:        "semantic context",
-				Query:       "advisor frontier routing",
-				Capability:  codegraph.BenchmarkCapabilitySemanticSearch,
-				ExpectedIDs: []string{"docs/cc/maddog-fusion--3949/tech.md"},
-				TopK:        5,
-			})
-		}
-		benchmarkBackend, err := codeIntelligenceBenchmarkBackendFor(backend, cases)
+		cases := codegraph.DefaultBenchmarkCases(root)
+		benchmarkBackend, err := codeIntelligenceBenchmarkBackendFor(backend, cases, tab.Ctrl.ToolRegistry())
 		if err != nil {
 			_, _ = codegraph.SaveBenchmarkReport(codegraph.BenchmarkReport{
 				StartedAt: time.Now().UTC(),
@@ -5744,20 +5737,21 @@ func (a *App) RunCodeIntelligenceBenchmark(id string) error {
 	return nil
 }
 
-func codeIntelligenceBenchmarkBackendFor(backend codegraph.Backend, cases []codegraph.BenchmarkCase) (codegraph.BenchmarkBackend, error) {
+func codeIntelligenceBenchmarkBackendFor(backend codegraph.Backend, cases []codegraph.BenchmarkCase, registry *tool.Registry) (codegraph.BenchmarkBackend, error) {
 	switch backend.Kind {
 	case codegraph.BackendKindBuiltIn:
 		return codegraph.NewMCPBenchmarkBackend("", cases), nil
 	case codegraph.BackendKindHyperGraphRAG:
 		return hypergraphrag.NewBenchmarkBackend(hypergraphrag.SidecarConfig{
-			ID:      backend.ID,
-			Name:    backend.Name,
-			Command: backend.Command,
-			Args:    backend.Args,
-			Env:     backend.Env,
+			ID:        backend.ID,
+			Name:      backend.Name,
+			Command:   backend.Command,
+			Args:      backend.Args,
+			Env:       backend.Env,
+			IndexMode: hypergraphrag.IndexModeQueryOnly,
 		}), nil
 	case codegraph.BackendKindMCP:
-		return nil, fmt.Errorf("MCP code intelligence backend %q does not expose a desktop benchmark adapter yet", backend.ID)
+		return codegraph.NewMappedMCPBenchmarkBackend(backend, registry), nil
 	default:
 		return nil, fmt.Errorf("code intelligence backend %q has unsupported benchmark kind %q", backend.ID, backend.Kind)
 	}

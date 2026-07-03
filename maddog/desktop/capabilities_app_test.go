@@ -62,8 +62,7 @@ server = "serena"
 
 [code_intelligence.backends.tools]
 symbol_search = "mcp__serena__find_symbol"
-context_pack = "mcp__serena__read_context"
-health = "mcp__serena__status"
+context_pack = "mcp__serena__get_symbols_overview"
 `), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -88,11 +87,11 @@ health = "mcp__serena__status"
 	if !got.Enabled || !got.Configured || got.Status != codegraph.BackendHealthDegraded || got.LastError != "" {
 		t.Fatalf("external backend state = %+v, want configured enabled degraded with no error", got)
 	}
-	if got.ToolCount != 3 || got.ToolMapping["symbol_search"] != "mcp__serena__find_symbol" {
+	if got.ToolCount != 2 || got.ToolMapping["symbol_search"] != "mcp__serena__find_symbol" {
 		t.Fatalf("external tools = count %d mapping %+v, want configured mapping", got.ToolCount, got.ToolMapping)
 	}
-	if !got.Capabilities.SymbolSearch || !got.Capabilities.ContextPack || !got.Capabilities.Health || got.Capabilities.GraphTrace {
-		t.Fatalf("external capabilities = %+v, want symbol/context/health only", got.Capabilities)
+	if !got.Capabilities.SymbolSearch || !got.Capabilities.ContextPack || got.Capabilities.Health || got.Capabilities.GraphTrace {
+		t.Fatalf("external capabilities = %+v, want symbol/context only", got.Capabilities)
 	}
 }
 
@@ -191,8 +190,7 @@ func codeIntelligenceTestConfig() *config.Config {
 		Server: "serena",
 		Tools: map[string]string{
 			"symbol_search": "mcp__serena__find_symbol",
-			"context_pack":  "mcp__serena__read_context",
-			"health":        "mcp__serena__status",
+			"context_pack":  "mcp__serena__get_symbols_overview",
 		},
 	}}
 	return cfg

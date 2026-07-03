@@ -8,12 +8,12 @@ import (
 	"sync/atomic"
 	"time"
 
-	"maddog/internal/eval"
 	"maddog/internal/netclient"
 	"maddog/internal/provider"
 	_ "maddog/internal/provider/anthropic"
 	"maddog/internal/provider/costwrap"
 	_ "maddog/internal/provider/openai"
+	"maddog/internal/skilleval"
 )
 
 const (
@@ -116,9 +116,9 @@ func runFrontierSmoke(cfg frontierSmokeConfig) frontierSmokeResult {
 		result.Costwrap.Error = "frontier provider did not report output tokens"
 	}
 
-	score, scoreErr := eval.Score(ctx, prov,
-		eval.OutcomeInfo{Success: true, GoalMet: true, FinalAnswer: "ok", ToolErrors: 1},
-		eval.OutcomeInfo{Success: true, GoalMet: true, FinalAnswer: "ok", ToolErrors: 0},
+	score, scoreErr := skilleval.ScoreReplay(ctx, prov,
+		skilleval.OutcomeInfo{Success: true, GoalMet: true, FinalAnswer: "ok", ToolErrors: 1},
+		skilleval.OutcomeInfo{Success: true, GoalMet: true, FinalAnswer: "ok", ToolErrors: 0},
 	)
 	result.Scorer.Score = score.Score
 	result.Scorer.Reason = score.Reason

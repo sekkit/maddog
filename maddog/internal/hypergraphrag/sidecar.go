@@ -18,15 +18,19 @@ const (
 	DefaultBackendID      = "hypergraphrag"
 	DefaultBackendName    = "HyperGraphRAG"
 	DefaultSidecarTimeout = 2 * time.Minute
+
+	IndexModeBuild     = "build"
+	IndexModeQueryOnly = "query_only"
 )
 
 type SidecarConfig struct {
-	ID      string
-	Name    string
-	Command string
-	Args    []string
-	Env     map[string]string
-	Timeout time.Duration
+	ID        string
+	Name      string
+	Command   string
+	Args      []string
+	Env       map[string]string
+	Timeout   time.Duration
+	IndexMode string
 }
 
 type HealthResponse struct {
@@ -78,6 +82,9 @@ func (b *BenchmarkBackend) BenchmarkInfo() codegraph.BenchmarkBackendInfo {
 }
 
 func (b *BenchmarkBackend) BuildIndex(ctx context.Context, root string) error {
+	if b.indexMode() == IndexModeQueryOnly {
+		return nil
+	}
 	if err := b.validate(); err != nil {
 		return err
 	}
@@ -88,6 +95,9 @@ func (b *BenchmarkBackend) BuildIndex(ctx context.Context, root string) error {
 }
 
 func (b *BenchmarkBackend) UpdateIndex(ctx context.Context, root string) error {
+	if b.indexMode() == IndexModeQueryOnly {
+		return nil
+	}
 	return b.BuildIndex(ctx, root)
 }
 
@@ -151,6 +161,18 @@ func (b *BenchmarkBackend) withTimeout(ctx context.Context) (context.Context, co
 		timeout = DefaultSidecarTimeout
 	}
 	return context.WithTimeout(ctx, timeout)
+}
+
+func (b *BenchmarkBackend) indexMode() string {
+	mode := strings.ToLower(strings.TrimSpace(b.cfg.IndexMode))
+	switch mode {
+	case "", IndexModeBuild:
+		return IndexModeBuild
+	case "prebuilt", "query-only", "query_only", "skip-update", "skip_update":
+		return IndexModeQueryOnly
+	default:
+		return IndexModeBuild
+	}
 }
 
 func (b *BenchmarkBackend) run(ctx context.Context, actionArgs ...string) ([]byte, error) {

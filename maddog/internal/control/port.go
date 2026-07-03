@@ -16,6 +16,7 @@ import (
 	"maddog/internal/plugin"
 	"maddog/internal/provider"
 	"maddog/internal/skill"
+	"maddog/internal/tool"
 )
 
 // This file defines the driving port: the typed, segregated interface surface
@@ -65,6 +66,7 @@ type TurnControl interface {
 	Turn() int
 	History() []provider.Message
 	ToolResult(toolID string) *ToolResultData
+	ToolRegistry() *tool.Registry
 }
 
 // Approvals covers tool-approval and ask prompts plus the runtime approval

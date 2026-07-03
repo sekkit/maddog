@@ -2,6 +2,7 @@ package skilleval
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -9,6 +10,7 @@ import (
 	"maddog/internal/evidence"
 	"maddog/internal/provider"
 	"maddog/internal/skill"
+	"maddog/internal/tool"
 )
 
 func TestReplayRunnerBuildsReadOnlyPromptAndReturnsOutcome(t *testing.T) {
@@ -28,7 +30,7 @@ func TestReplayRunnerBuildsReadOnlyPromptAndReturnsOutcome(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !out.Success || !out.GoalMet || out.FinalAnswer != "replayed answer" || out.TotalTurns != 1 {
+	if out.Success || out.GoalMet || out.FinalAnswer != "replayed answer" || out.TotalTurns != 1 {
 		t.Fatalf("outcome = %+v", out)
 	}
 	if out.Confidence == OutcomeConfidenceVerified {
@@ -46,6 +48,47 @@ func TestReplayRunnerBuildsReadOnlyPromptAndReturnsOutcome(t *testing.T) {
 	}
 }
 
+func TestAgentReplayRunnerExecutesToolLoop(t *testing.T) {
+	reg := tool.NewRegistry()
+	reg.Add(staticReplayTool{name: "inspect_fixture", result: "fixture says ok"})
+	prov := &scriptReplayProvider{turns: []providerTurn{
+		{call: &provider.ToolCall{ID: "call-1", Name: "inspect_fixture", Arguments: `{"path":"fixture.txt"}`}},
+		{text: "final answer after tool", usage: &provider.Usage{PromptTokens: 12, CompletionTokens: 5, TotalTokens: 17}},
+	}}
+	runner := AgentReplayRunner{Provider: prov, Tools: reg, MaxSteps: 4}
+	out, err := runner.Run(context.Background(), BundleV2{
+		ID:   "bundle-a",
+		Task: "inspect fixture",
+		Messages: []provider.Message{
+			{Role: provider.RoleUser, Content: "inspect fixture"},
+			{Role: provider.RoleAssistant, Content: "old answer"},
+		},
+		Outcome: OutcomeInfo{Confidence: OutcomeConfidenceVerified, Success: true, GoalMet: true},
+	}, Candidate{Hash: "abc", Skill: validSkill("inspect-helper"), Status: CandidatePending})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.FinalAnswer != "final answer after tool" || out.TotalTurns != 2 || out.Tokens != 17 {
+		t.Fatalf("outcome = %+v", out)
+	}
+	if out.Success || out.GoalMet || out.Confidence == OutcomeConfidenceVerified {
+		t.Fatalf("agent replay should not self-verify goal success: %+v", out)
+	}
+	if out.ToolErrors != 0 {
+		t.Fatalf("ToolErrors = %d, want 0", out.ToolErrors)
+	}
+	if prov.calls != 2 {
+		t.Fatalf("provider calls = %d, want 2", prov.calls)
+	}
+	if len(prov.requests[0].Tools) == 0 {
+		t.Fatalf("agent replay did not expose tool schemas")
+	}
+	second := prov.requests[1]
+	if !hasToolResult(second.Messages, "call-1", "fixture says ok") {
+		t.Fatalf("second provider request missing tool result: %+v", second.Messages)
+	}
+}
+
 func TestReplayRunnerRejectsRejectedCandidate(t *testing.T) {
 	runner := ReplayRunner{Provider: &scriptReplayProvider{turns: []providerTurn{{text: "unused"}}}}
 	_, err := runner.Run(context.Background(), BundleV2{ID: "bundle-a"}, Candidate{Hash: "abc", Status: CandidateRejected})
@@ -59,14 +102,16 @@ func TestDryRunReplayUsesCandidateBody(t *testing.T) {
 		Skill:  validSkill("parser-helper"),
 		Status: CandidatePending,
 	})
-	if !out.Success || !out.GoalMet || !strings.Contains(out.FinalAnswer, "Use the parser checklist") {
+	if out.Success || out.GoalMet || !strings.Contains(out.FinalAnswer, "Use the parser checklist") {
 		t.Fatalf("dry-run outcome = %+v, want candidate body reflected", out)
 	}
 }
 
 type providerTurn struct {
-	text string
-	err  error
+	text  string
+	call  *provider.ToolCall
+	usage *provider.Usage
+	err   error
 }
 
 type scriptReplayProvider struct {
@@ -90,12 +135,44 @@ func (p *scriptReplayProvider) Stream(ctx context.Context, req provider.Request)
 	ch := make(chan provider.Chunk, 2)
 	go func() {
 		defer close(ch)
+		if turn.call != nil {
+			ch <- provider.Chunk{Type: provider.ChunkToolCall, ToolCall: turn.call}
+		}
 		if turn.text != "" {
 			ch <- provider.Chunk{Type: provider.ChunkText, Text: turn.text}
+		}
+		if turn.usage != nil {
+			ch <- provider.Chunk{Type: provider.ChunkUsage, Usage: turn.usage}
 		}
 		ch <- provider.Chunk{Type: provider.ChunkDone}
 	}()
 	return ch, nil
+}
+
+type staticReplayTool struct {
+	name   string
+	result string
+}
+
+func (t staticReplayTool) Name() string { return t.name }
+func (t staticReplayTool) Description() string {
+	return "test replay tool"
+}
+func (t staticReplayTool) Schema() json.RawMessage {
+	return json.RawMessage(`{"type":"object","properties":{"path":{"type":"string"}}}`)
+}
+func (t staticReplayTool) Execute(context.Context, json.RawMessage) (string, error) {
+	return t.result, nil
+}
+func (t staticReplayTool) ReadOnly() bool { return true }
+
+func hasToolResult(messages []provider.Message, id string, text string) bool {
+	for _, msg := range messages {
+		if msg.Role == provider.RoleTool && msg.ToolCallID == id && strings.Contains(msg.Content, text) {
+			return true
+		}
+	}
+	return false
 }
 
 func validScoredSkill(name string, tools ...string) skill.Skill {

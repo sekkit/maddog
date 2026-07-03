@@ -266,6 +266,45 @@ func TestBuiltinSubagentToolsPassContinuationOptions(t *testing.T) {
 	}
 }
 
+func TestBuiltinReviewToolInjectsDeterministicRulePreflight(t *testing.T) {
+	old := subagentReviewDiff
+	subagentReviewDiff = func(context.Context) (string, error) {
+		return "diff --git a/app/config.go b/app/config.go\n@@ -1,0 +1,1 @@\n+api_key = \"example-token-value-for-redaction\"\n", nil
+	}
+	t.Cleanup(func() { subagentReviewDiff = old })
+
+	var gotTask string
+	runner := func(_ context.Context, _ Skill, task string, _ SubagentRunOptions) (string, error) {
+		gotTask = task
+		return "ok", nil
+	}
+	tools := BuiltinSubagentTools(New(Options{HomeDir: t.TempDir()}), runner)
+	var review interface {
+		Name() string
+		Execute(context.Context, json.RawMessage) (string, error)
+	}
+	for _, tl := range tools {
+		if tl.Name() == "review" {
+			review = tl
+			break
+		}
+	}
+	if review == nil {
+		t.Fatal("review wrapper tool not built")
+	}
+	if _, err := review.Execute(context.Background(), json.RawMessage(`{"task":"focus on config"}`)); err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	for _, want := range []string{"focus on config", "Deterministic review summary", "secret-like-token", "changed file with deterministic finding", "The diff is:"} {
+		if !strings.Contains(gotTask, want) {
+			t.Fatalf("review task missing %q:\n%s", want, gotTask)
+		}
+	}
+	if strings.Contains(gotTask, "example-token-value-for-redaction") {
+		t.Fatalf("review task leaked secret:\n%s", gotTask)
+	}
+}
+
 func TestRunSkillToolPassesLegacyForkOption(t *testing.T) {
 	var got SubagentRunOptions
 	runner := func(_ context.Context, _ Skill, _ string, opts SubagentRunOptions) (string, error) {

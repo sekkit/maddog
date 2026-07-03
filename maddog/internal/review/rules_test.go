@@ -92,6 +92,40 @@ func TestAnalyzeUnifiedDiffFlagsMissingErrorHandlingAndLargeDiff(t *testing.T) {
 	}
 }
 
+func TestAnalyzeUnifiedDiffDoesNotFlagBlankIdentifierRangeIndex(t *testing.T) {
+	diff := `diff --git a/server/main.go b/server/main.go
+@@ -1,0 +1,4 @@
++for _, item := range items {
++  println(item)
++}
+`
+	report := AnalyzeUnifiedDiff(diff, Options{})
+	if findFinding(report.Findings, RuleMissingErrorHandling) != nil {
+		t.Fatalf("range blank identifier should not be missing error handling: %+v", report.Findings)
+	}
+}
+
+func TestAnalyzeUnifiedDiffFlagsPythonAndJavaScriptErrorSwallowing(t *testing.T) {
+	diff := `diff --git a/app/worker.py b/app/worker.py
+@@ -1,0 +1,2 @@
++except Exception:
++    pass
+diff --git a/web/app.js b/web/app.js
+@@ -1,0 +1,1 @@
++fetch(url).catch(() => {})
+`
+	report := AnalyzeUnifiedDiff(diff, Options{})
+	findings := 0
+	for _, finding := range report.Findings {
+		if finding.RuleID == RuleMissingErrorHandling {
+			findings++
+		}
+	}
+	if findings != 2 {
+		t.Fatalf("missing error handling findings = %d, findings=%+v", findings, report.Findings)
+	}
+}
+
 func TestAnalyzeUnifiedDiffNoFindings(t *testing.T) {
 	report := AnalyzeUnifiedDiff("diff --git a/readme.md b/readme.md\n@@ -1 +1,2 @@\n+# Hello\n", Options{})
 	if len(report.Findings) != 0 {
