@@ -20338,6 +20338,7 @@ body > .mermaid-diagram--fullscreen {
   display: flex;
   flex: 0 0 36px;
   align-items: center;
+  gap: 9px;
   min-height: 36px;
   padding: 2px var(--sidebar-entry-content-inset);
   margin-bottom: 10px;
@@ -20353,6 +20354,16 @@ body > .mermaid-diagram--fullscreen {
   border-radius: 8px;
   object-fit: contain;
   object-position: left center;
+}
+
+.sidebar__brand-name {
+  min-width: 0;
+  color: var(--fg);
+  font-size: 15px;
+  font-weight: 720;
+  line-height: 1.2;
+  letter-spacing: 0;
+  white-space: nowrap;
 }
 
 .sidebar__new {
@@ -23284,9 +23295,9 @@ body > .mermaid-diagram--fullscreen {
 }
 
 .sidebar--workbench .sidebar__brand {
-  flex: 0 0 30px;
-  min-height: 30px;
-  gap: 10px;
+  flex: 0 0 32px;
+  min-height: 32px;
+  gap: 9px;
   padding: 0 12px;
   margin-bottom: 0;
   color: var(--fg);
@@ -23296,8 +23307,8 @@ body > .mermaid-diagram--fullscreen {
 }
 
 :root[data-theme-style] .sidebar--workbench .sidebar__brand {
-  flex: 0 0 30px;
-  min-height: 30px;
+  flex: 0 0 32px;
+  min-height: 32px;
   padding: 0 12px;
   margin-bottom: 0;
 }
@@ -23307,8 +23318,8 @@ body > .mermaid-diagram--fullscreen {
 }
 
 .sidebar--workbench .sidebar__brand-logo--workbench {
-  width: 24px;
-  height: 24px;
+  width: 28px;
+  height: 28px;
   margin-left: 0;
   border-radius: 6px;
 }
@@ -25238,7 +25249,7 @@ body > .mermaid-diagram--fullscreen {
 
 .app--creation .sidebar__brand,
 :root[data-theme-style] .app--creation .sidebar__brand {
-  min-height: 30px;
+  min-height: 36px;
   margin-bottom: 18px;
   padding-inline: 8px;
 }

@@ -138,6 +138,19 @@ ok(
 );
 
 ok(
+  /<span className="sidebar__brand-name">Maddog<\/span>/.test(appSource) &&
+    finalDeclaration(".sidebar__brand-name", "white-space") === "nowrap" &&
+    finalDeclaration(".sidebar__brand-name", "letter-spacing") === "0",
+  "sidebar brand renders a visible Maddog wordmark beside the icon",
+);
+
+ok(
+  finalDeclaration(".sidebar--workbench .sidebar__brand-logo--workbench", "width") === "28px" &&
+    finalDeclaration(".sidebar--workbench .sidebar__brand-logo--workbench", "height") === "28px",
+  "workbench sidebar keeps the app logo large enough to read",
+);
+
+ok(
   /const \[transcriptRevealSignal, setTranscriptRevealSignal\] = useState\(0\);/.test(appSource) &&
     /revealActiveSignal=\{tabRevealSignal\}/.test(appSource) &&
     /revealSignal=\{transcriptRevealSignal\}/.test(appSource),

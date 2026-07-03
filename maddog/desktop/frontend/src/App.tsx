@@ -2799,6 +2799,7 @@ export default function App() {
               <div className="sidebar__head" aria-hidden={sidebarCollapsed}>
                 <div className="sidebar__brand sidebar__brand--workbench">
                   <img src={maddogIcon} alt="Maddog" className="sidebar__brand-logo sidebar__brand-logo--workbench" draggable={false} />
+                  <span className="sidebar__brand-name">Maddog</span>
                 </div>
               </div>
 
@@ -2819,6 +2820,7 @@ export default function App() {
             <>
               <div className="sidebar__brand" aria-hidden={sidebarCollapsed}>
                 <img src={maddogIcon} alt="Maddog" className="sidebar__brand-logo" draggable={false} />
+                <span className="sidebar__brand-name">Maddog</span>
               </div>
 
               <button
