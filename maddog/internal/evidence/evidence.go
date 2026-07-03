@@ -50,10 +50,13 @@ type Receipt struct {
 // FailureSignal summarizes same-turn tool failures for routing decisions.
 // It is derived from receipts on demand, so it adds no prompt or session state.
 type FailureSignal struct {
-	ConsecutiveErrors int
-	ErrorStreak       int
-	LastErrorTool     string
-	HealthScore       float64
+	ConsecutiveErrors  int
+	ErrorStreak        int
+	LastErrorTool      string
+	HealthScore        float64
+	GoalAcceptanceLoop int
+	DifficultDecision  bool
+	DecisionSummary    string
 }
 
 // Ledger stores the receipts available to complete_step for the current turn.

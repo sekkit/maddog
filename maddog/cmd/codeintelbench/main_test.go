@@ -15,7 +15,7 @@ import (
 
 func TestRunCodeIntelBenchDefaultReportExcludesMockBackend(t *testing.T) {
 	repo := t.TempDir()
-	if err := os.WriteFile(filepath.Join(repo, "runner.go"), []byte("package fixture\nfunc RunBenchmark() {}\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(repo, "alpha.go"), []byte("package fixture\nfunc PortableSymbol() {}\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	outDir := t.TempDir()
@@ -55,11 +55,24 @@ func TestRunCodeIntelBenchDefaultReportExcludesMockBackend(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(outDir, "codeintel-bench", codegraph.BenchmarkLatestMarkdownName)); err != nil {
 		t.Fatalf("latest markdown missing: %v", err)
 	}
+	for _, backend := range report.Backends {
+		for _, query := range backend.Queries {
+			if query.Query == "RunBenchmark" {
+				t.Fatalf("default benchmark used Maddog-specific query in non-Maddog repo: %+v", query)
+			}
+		}
+	}
 }
 
 func TestRunCodeIntelBenchIncludesConfiguredHyperGraphRAGBackend(t *testing.T) {
 	repo := t.TempDir()
 	if err := os.WriteFile(filepath.Join(repo, "runner.go"), []byte("package fixture\nfunc RunBenchmark() {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(repo, "docs"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "docs", "notes.md"), []byte("# Portable Architecture\n\nHyperGraphRAG semantic fixture.\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	configBody := `
@@ -154,9 +167,9 @@ func TestHyperGraphRAGSidecarHelperProcess(t *testing.T) {
 		_ = enc.Encode(map[string]bool{"indexed": true})
 	case "query":
 		_ = enc.Encode(map[string]any{"results": []codegraph.BenchmarkResult{{
-			ID:      "docs/cc/maddog-fusion--3949/tech.md",
-			Title:   "advisor frontier routing",
-			Content: "advisor frontier routing evidence",
+			ID:      "docs/notes.md",
+			Title:   "Portable Architecture",
+			Content: "Portable Architecture semantic evidence",
 		}}})
 	default:
 		os.Exit(2)

@@ -1375,6 +1375,7 @@ func contractEntryNames(entries []tool.ContractEntry) []string {
 
 func defaultFullBootToolNames() []string {
 	return []string{
+		"advisor",
 		"ask",
 		"bash",
 		"bash_output",
@@ -1415,6 +1416,7 @@ func defaultFullBootToolNames() []string {
 		"slash_command",
 		"task",
 		"todo_write",
+		"tool_result",
 		"wait",
 		"web_fetch",
 		"write_file",
@@ -1423,6 +1425,7 @@ func defaultFullBootToolNames() []string {
 
 func economyBootToolNames() []string {
 	return []string{
+		"advisor",
 		"ask",
 		"bash",
 		"bash_output",
@@ -1445,6 +1448,7 @@ func economyBootToolNames() []string {
 		"remember",
 		"slash_command",
 		"todo_write",
+		"tool_result",
 		"wait",
 		"write_file",
 	}
@@ -1489,6 +1493,7 @@ command = "maddog-missing-mockmcp"
 	}
 	req := reqs[0]
 	wantTools := []string{
+		"advisor",
 		"ask",
 		"bash",
 		"bash_output",
@@ -1511,6 +1516,7 @@ command = "maddog-missing-mockmcp"
 		"remember",
 		"slash_command",
 		"todo_write",
+		"tool_result",
 		"wait",
 		"write_file",
 	}

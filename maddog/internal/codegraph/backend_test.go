@@ -42,8 +42,7 @@ func TestBackendRegistryIncludesExternalMCPBackend(t *testing.T) {
 		Enabled: &enabled,
 		Tools: map[string]string{
 			"symbol_search": "mcp__serena__find_symbol",
-			"context_pack":  "mcp__serena__read_context",
-			"health":        "mcp__serena__status",
+			"context_pack":  "mcp__serena__get_symbols_overview",
 		},
 	}}
 
@@ -62,7 +61,7 @@ func TestBackendRegistryIncludesExternalMCPBackend(t *testing.T) {
 	if got.Health.Status != BackendHealthDegraded {
 		t.Fatalf("external health = %q, want degraded before MCP connects", got.Health.Status)
 	}
-	if !got.Capabilities.SymbolSearch || !got.Capabilities.ContextPack || !got.Capabilities.Health {
+	if !got.Capabilities.SymbolSearch || !got.Capabilities.ContextPack || got.Capabilities.Health {
 		t.Fatalf("external capabilities = %+v, want derived from tool mapping", got.Capabilities)
 	}
 }
@@ -179,7 +178,7 @@ func TestBackendRegistryRejectsExternalBackendReservedBuiltInID(t *testing.T) {
 		Kind:   "mcp",
 		Server: "serena",
 		Tools: map[string]string{
-			"context_pack": "mcp__serena__context",
+			"context_pack": "mcp__serena__get_symbols_overview",
 		},
 	}}
 

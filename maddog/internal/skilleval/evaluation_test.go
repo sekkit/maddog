@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"maddog/internal/provider"
+	"maddog/internal/tool"
 )
 
 func TestEvaluateCandidateProviderReplayIsPromotionGrade(t *testing.T) {
@@ -49,6 +50,42 @@ func TestEvaluateCandidateProviderReplayIsPromotionGrade(t *testing.T) {
 	}
 	if prov.replayCalls != 5 || prov.scoreCalls != 5 {
 		t.Fatalf("provider calls replay=%d score=%d, want 5/5", prov.replayCalls, prov.scoreCalls)
+	}
+}
+
+func TestEvaluateCandidateUsesAgentReplayWhenToolsProvided(t *testing.T) {
+	dir := t.TempDir()
+	bundlePath := writeEvaluationBundle(t, dir, "held-out-a", "final answer after tool")
+	reg := tool.NewRegistry()
+	reg.Add(staticReplayTool{name: "inspect_fixture", result: "fixture says ok"})
+	replayProvider := &scriptReplayProvider{turns: []providerTurn{
+		{call: &provider.ToolCall{ID: "call-1", Name: "inspect_fixture", Arguments: `{}`}},
+		{text: "final answer after tool"},
+	}}
+	scorer := &evaluationScriptProvider{}
+
+	result, err := EvaluateCandidate(context.Background(), EvaluationRequest{
+		Candidate: Candidate{
+			Hash:       "abc",
+			Status:     CandidatePending,
+			Skill:      validSkill("parser-helper"),
+			Validation: ValidationInfo{Valid: true},
+		},
+		BundlePaths: []string{bundlePath},
+		Provider:    replayProvider,
+		Scorer:      scorer,
+		Tools:       reg,
+		MinBundles:  1,
+		MinScore:    0.7,
+	})
+	if err != nil {
+		t.Fatalf("EvaluateCandidate: %v", err)
+	}
+	if result.Mode != EvaluationModeAgentReplay {
+		t.Fatalf("Mode = %q, want %q", result.Mode, EvaluationModeAgentReplay)
+	}
+	if len(result.Replays) != 1 || result.Replays[0].TotalTurns < 2 || result.Replays[0].FinalAnswer != "final answer after tool" {
+		t.Fatalf("replays = %+v, want agent tool-loop replay", result.Replays)
 	}
 }
 

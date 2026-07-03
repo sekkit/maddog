@@ -39,7 +39,7 @@ func runCodeIntelBench(args []string, stdout, stderr io.Writer) int {
 
 	ctx, cancel := context.WithTimeout(context.Background(), *timeout)
 	defer cancel()
-	cases := defaultBenchmarkCases()
+	cases := codegraph.DefaultBenchmarkCases(*repo)
 	backends := []codegraph.BenchmarkBackend{codegraph.NewMCPBenchmarkBackend(*codegraphPath, cases)}
 	if *includeMock {
 		backends = append([]codegraph.BenchmarkBackend{mockBenchmarkBackend{}}, backends...)
@@ -77,22 +77,6 @@ func runCodeIntelBench(args []string, stdout, stderr io.Writer) int {
 	fmt.Fprintf(stdout, "  markdown: %s\n", saved.MarkdownPath)
 	fmt.Fprintf(stdout, "  latest: %s\n", codegraph.BenchmarkLatestJSONName)
 	return 0
-}
-
-func defaultBenchmarkCases() []codegraph.BenchmarkCase {
-	return []codegraph.BenchmarkCase{{
-		Name:        "symbol search",
-		Query:       "RunBenchmark",
-		Capability:  codegraph.BenchmarkCapabilitySymbolSearch,
-		ExpectedIDs: []string{"runner.go"},
-		TopK:        5,
-	}, {
-		Name:        "semantic context",
-		Query:       "advisor frontier routing",
-		Capability:  codegraph.BenchmarkCapabilitySemanticSearch,
-		ExpectedIDs: []string{"docs/cc/maddog-fusion--3949/tech.md"},
-		TopK:        5,
-	}}
 }
 
 type mockBenchmarkBackend struct{}

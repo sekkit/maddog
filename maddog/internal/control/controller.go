@@ -167,6 +167,9 @@ type Controller struct {
 	turn int
 
 	displayRecorder func(content, display string)
+
+	runtimeSkillMu    sync.Mutex
+	runtimeSkillNames []string
 }
 
 type approvalReply struct {
@@ -924,7 +927,7 @@ func (c *Controller) submitCommandOrTurn(trimmed, input, display string, scopedR
 		}
 		if sent, ok := c.RunSkill(trimmed); ok {
 			c.runGuarded(func(ctx context.Context) error {
-				return runGoalLoop(ctx, sent, sent, display)
+				return runGoalLoop(ctx, sent, trimmed, display)
 			})
 			return
 		}
@@ -1322,8 +1325,44 @@ func (c *Controller) orchestrateSkills(ctx context.Context, input string) string
 		}
 		return input
 	}
+	if res.Generated {
+		c.recordGeneratedRuntimeSkill(res.Skill.Name)
+	}
 	c.sink.Emit(res.Event())
 	return input + "\n\n" + res.Prompt
+}
+
+func (c *Controller) recordGeneratedRuntimeSkill(name string) {
+	name = strings.TrimSpace(name)
+	if c == nil || name == "" {
+		return
+	}
+	c.runtimeSkillMu.Lock()
+	defer c.runtimeSkillMu.Unlock()
+	for _, existing := range c.runtimeSkillNames {
+		if existing == name {
+			return
+		}
+	}
+	c.runtimeSkillNames = append(c.runtimeSkillNames, name)
+}
+
+func (c *Controller) cleanupGeneratedRuntimeSkills() {
+	if c == nil {
+		return
+	}
+	c.runtimeSkillMu.Lock()
+	names := append([]string(nil), c.runtimeSkillNames...)
+	c.runtimeSkillNames = nil
+	c.runtimeSkillMu.Unlock()
+	for _, name := range names {
+		if c.skillStore != nil {
+			c.skillStore.Remove(name)
+		}
+		if c.allSkillStore != nil && c.allSkillStore != c.skillStore {
+			c.allSkillStore.Remove(name)
+		}
+	}
 }
 
 // Run executes a turn synchronously, returning the agent's error. Used by the
@@ -1338,6 +1377,7 @@ func (c *Controller) Run(ctx context.Context, input string) error {
 	ctx = agent.WithUserImages(ctx, c.inputImages(input))
 	input = c.Compose(input)
 	input = c.orchestrateSkills(ctx, input)
+	defer c.cleanupGeneratedRuntimeSkills()
 	startMessages := c.messageCount()
 	defer c.snapshotActivityIfChanged(startMessages)
 	if c.guardianSess != nil {
@@ -1374,13 +1414,14 @@ func (c *Controller) captureReplayBundle(task string, startMessages int) {
 	if startMessages >= len(messages) {
 		return
 	}
-	finalAnswer := lastAssistantText(messages[startMessages:])
+	turnMessages := append([]provider.Message(nil), messages[startMessages:]...)
+	finalAnswer := lastAssistantText(turnMessages)
 	if strings.TrimSpace(finalAnswer) == "" {
 		return
 	}
 	receipts := c.executor.EvidenceReceipts()
 	skills := c.Skills()
-	dynamicSkill, dynamicSkillUsed := dynamicRunSkillUsed(messages[startMessages:], skills)
+	dynamicSkill, dynamicSkillUsed := dynamicSkillUsedForTurn(task, messages[startMessages:], skills)
 	sessionID := agent.BranchID(c.SessionPath())
 	if sessionID == "" {
 		sessionID = c.Label()
@@ -1398,8 +1439,13 @@ func (c *Controller) captureReplayBundle(task string, startMessages int) {
 		Task:      task,
 		Skills:    skills,
 		SkillName: dynamicSkill.Name,
-		Messages:  messages,
+		Messages:  turnMessages,
 		Evidence:  receipts,
+		History: []skilleval.HistoryItem{{
+			Kind: "turn",
+			Text: task,
+		}},
+		Metrics: compressionBundleMetrics(c.executor.ToolCompressions()),
 		Outcome: skilleval.OutcomeInfo{
 			Confidence:       skilleval.OutcomeConfidenceUnverified,
 			ConfidenceReason: "turn completed with a final answer but no verified goal signal",
@@ -1425,16 +1471,35 @@ func (c *Controller) captureReplayBundle(task string, startMessages int) {
 	}
 }
 
+func compressionBundleMetrics(records []agent.ToolCompressionRecord) skilleval.BundleMetrics {
+	if len(records) == 0 {
+		return skilleval.BundleMetrics{}
+	}
+	out := skilleval.BundleMetrics{Compressed: make([]skilleval.CompressionMetric, 0, len(records))}
+	for _, record := range records {
+		c := record.Compression
+		out.Compressed = append(out.Compressed, skilleval.CompressionMetric{
+			Name:            strings.TrimSpace(record.ToolName),
+			OriginalBytes:   c.RawChars,
+			CompressedBytes: c.CompressedChars,
+			TokenDelta:      c.SavedTokens,
+		})
+	}
+	return out
+}
+
+func dynamicSkillUsedForTurn(task string, messages []provider.Message, skills []skill.Skill) (skill.Skill, bool) {
+	if sk, ok := dynamicRunSkillUsed(messages, skills); ok {
+		return sk, true
+	}
+	return dynamicSlashSkillUsed(task, skills)
+}
+
 func dynamicRunSkillUsed(messages []provider.Message, skills []skill.Skill) (skill.Skill, bool) {
 	if len(messages) == 0 || len(skills) == 0 {
 		return skill.Skill{}, false
 	}
-	dynamicByName := map[string]skill.Skill{}
-	for _, sk := range skills {
-		if sk.Scope == skill.ScopeCustom && strings.TrimSpace(sk.Path) == "(dynamic)" {
-			dynamicByName[sk.Name] = sk
-		}
-	}
+	dynamicByName := dynamicSkillsByName(skills)
 	if len(dynamicByName) == 0 {
 		return skill.Skill{}, false
 	}
@@ -1459,6 +1524,29 @@ func dynamicRunSkillUsed(messages []provider.Message, skills []skill.Skill) (ski
 		}
 	}
 	return skill.Skill{}, false
+}
+
+func dynamicSlashSkillUsed(task string, skills []skill.Skill) (skill.Skill, bool) {
+	fields := strings.Fields(task)
+	if len(fields) == 0 || !strings.HasPrefix(fields[0], "/") {
+		return skill.Skill{}, false
+	}
+	name := strings.TrimPrefix(fields[0], "/")
+	if name == "" {
+		return skill.Skill{}, false
+	}
+	sk, ok := dynamicSkillsByName(skills)[name]
+	return sk, ok
+}
+
+func dynamicSkillsByName(skills []skill.Skill) map[string]skill.Skill {
+	dynamicByName := map[string]skill.Skill{}
+	for _, sk := range skills {
+		if sk.Scope == skill.ScopeCustom && strings.TrimSpace(sk.Path) == "(dynamic)" {
+			dynamicByName[sk.Name] = sk
+		}
+	}
+	return dynamicByName
 }
 
 func runSkillCallName(args string) string {
@@ -2800,6 +2888,17 @@ func (c *Controller) ToolResult(toolID string) *ToolResultData {
 		return out
 	}
 	return nil
+}
+
+// ToolRegistry returns the live session tool registry used by the executor.
+// Callers must use the registry's own thread-safe methods and must not replace
+// it. It is exposed for read-only integrations that need to resolve configured
+// MCP tool mappings.
+func (c *Controller) ToolRegistry() *tool.Registry {
+	if c == nil {
+		return nil
+	}
+	return c.mcp.registry()
 }
 
 func compressedToolOutputReferencesRaw(content string) bool {

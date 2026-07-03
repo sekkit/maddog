@@ -90,7 +90,7 @@ func (a *Agent) buildAdvisorRequest(sig evidence.FailureSignal, d UpgradeDecisio
 	}
 	return AdvisorRequest{
 		Reason:           reason,
-		Question:         advisorQuestion(reason),
+		Question:         advisorQuestion(reason, sig),
 		Context:          a.curateAdvisorContext(sig),
 		RemainingTurn:    turnRemaining,
 		RemainingSession: sessionRemaining,
@@ -99,8 +99,38 @@ func (a *Agent) buildAdvisorRequest(sig evidence.FailureSignal, d UpgradeDecisio
 	}
 }
 
-func advisorQuestion(reason string) string {
-	return "The executor is about to continue on a frontier model because " + reason + ". Give a concise correction plan, identify hidden assumptions, and name the safest next action."
+func advisorQuestion(reason string, sig evidence.FailureSignal) string {
+	var b strings.Builder
+	if sig.DifficultDecision && !strings.Contains(strings.ToLower(reason), "frontier") {
+		b.WriteString("The executor is facing a difficult decision")
+	} else {
+		b.WriteString("The executor is about to continue on a frontier model")
+	}
+	b.WriteString(" because ")
+	b.WriteString(reason)
+	b.WriteString(".")
+	if strings.TrimSpace(sig.LastErrorTool) != "" || sig.ErrorStreak > 0 || sig.HealthScore > 0 || sig.GoalAcceptanceLoop > 0 {
+		b.WriteString(" Failure surface:")
+		if strings.TrimSpace(sig.LastErrorTool) != "" {
+			b.WriteString(" last_error_tool=")
+			b.WriteString(strings.TrimSpace(sig.LastErrorTool))
+			b.WriteString(";")
+		}
+		if sig.ErrorStreak > 0 {
+			b.WriteString(fmt.Sprintf(" error_streak=%d;", sig.ErrorStreak))
+		}
+		if sig.ConsecutiveErrors > 0 {
+			b.WriteString(fmt.Sprintf(" consecutive_errors=%d;", sig.ConsecutiveErrors))
+		}
+		if sig.HealthScore > 0 {
+			b.WriteString(fmt.Sprintf(" health=%.0f%%;", sig.HealthScore*100))
+		}
+		if sig.GoalAcceptanceLoop > 0 {
+			b.WriteString(fmt.Sprintf(" goal_acceptance_loops=%d;", sig.GoalAcceptanceLoop))
+		}
+	}
+	b.WriteString(" Give a concise correction plan, identify hidden assumptions, and name the safest next action.")
+	return b.String()
 }
 
 // FormatAdvisorTask turns an AdvisorRequest into the standalone task passed to
@@ -112,6 +142,10 @@ func FormatAdvisorTask(req AdvisorRequest) string {
 	b.WriteString(req.Reason)
 	b.WriteString("\n\nQuestion:\n")
 	b.WriteString(req.Question)
+	b.WriteString("\n\nOutput contract:\n")
+	b.WriteString("- Use 100 words or fewer.\n")
+	b.WriteString("- Use numbered steps.\n")
+	b.WriteString("- End with a line starting exactly `Risks:`.\n")
 	b.WriteString("\n\nBudget:\n")
 	b.WriteString(fmt.Sprintf("- Remaining this turn: %d\n", req.RemainingTurn))
 	if req.RemainingSession >= 0 {
@@ -148,8 +182,8 @@ func FormatAdvisorGuidance(req AdvisorRequest, advice string, remainingTurn, rem
 
 func (a *Agent) curateAdvisorContext(sig evidence.FailureSignal) string {
 	var b strings.Builder
-	b.WriteString(fmt.Sprintf("Failure signal: consecutive_errors=%d, error_streak=%d, last_error_tool=%q, health_score=%.2f\n",
-		sig.ConsecutiveErrors, sig.ErrorStreak, sig.LastErrorTool, sig.HealthScore))
+	b.WriteString(fmt.Sprintf("Failure signal: consecutive_errors=%d, error_streak=%d, last_error_tool=%q, health_score=%.2f, goal_acceptance_loops=%d, difficult_decision=%v, decision=%q\n",
+		sig.ConsecutiveErrors, sig.ErrorStreak, sig.LastErrorTool, sig.HealthScore, sig.GoalAcceptanceLoop, sig.DifficultDecision, sig.DecisionSummary))
 
 	msgs := a.session.Messages
 	maxMessages := a.advisor.MaxContextMessages

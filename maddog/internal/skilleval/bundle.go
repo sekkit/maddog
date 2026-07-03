@@ -191,26 +191,35 @@ func verifiedOutcomeEvidenceReason(receipts []evidence.Receipt, review HumanRevi
 		}
 		return "verified by human review"
 	}
+	var lastStepProof string
+	var lastVerification *evidence.Receipt
 	for _, receipt := range receipts {
-		if !receipt.Success {
-			continue
-		}
 		if receipt.StepProof {
-			step := strings.TrimSpace(receipt.Step)
-			if step != "" {
-				return "verified by completed step: " + step
+			if receipt.Success {
+				step := strings.TrimSpace(receipt.Step)
+				if step != "" {
+					lastStepProof = "verified by completed step: " + step
+				} else {
+					lastStepProof = "verified by completed step"
+				}
 			}
-			return "verified by completed step"
 		}
 		if isVerificationCommand(receipt.ToolName, receipt.Command) {
-			cmd := strings.TrimSpace(receipt.Command)
-			if cmd == "" {
-				cmd = strings.TrimSpace(receipt.ToolName)
-			}
-			return "verified by command: " + cmd
+			r := receipt
+			lastVerification = &r
 		}
 	}
-	return ""
+	if lastVerification != nil {
+		if !lastVerification.Success {
+			return ""
+		}
+		cmd := strings.TrimSpace(lastVerification.Command)
+		if cmd == "" {
+			cmd = strings.TrimSpace(lastVerification.ToolName)
+		}
+		return "verified by command: " + cmd
+	}
+	return lastStepProof
 }
 
 func isVerificationCommand(toolName, command string) bool {
@@ -222,14 +231,13 @@ func isVerificationCommand(toolName, command string) bool {
 		return false
 	}
 	prefixes := []string{
-		"go test", "go build", "go vet",
-		"npm test", "npm run test", "npm run build", "npm run typecheck",
-		"pnpm test", "pnpm run test", "pnpm run build", "pnpm run typecheck",
-		"yarn test", "yarn build", "yarn typecheck",
+		"go test",
+		"npm test", "npm run test",
+		"pnpm test", "pnpm run test",
+		"yarn test",
 		"pytest", "python -m pytest", "python3 -m pytest",
-		"cargo test", "cargo build", "cargo clippy",
+		"cargo test",
 		"mvn test", "gradle test", "./gradlew test", "make test",
-		"tsc ", "tsc --noemit", "tsc --noemit",
 	}
 	for _, prefix := range prefixes {
 		if strings.HasPrefix(text, prefix) {
@@ -237,9 +245,7 @@ func isVerificationCommand(toolName, command string) bool {
 		}
 	}
 	return strings.Contains(text, " run test") ||
-		strings.Contains(text, " run test:") ||
-		strings.Contains(text, " run typecheck") ||
-		strings.Contains(text, " check:css")
+		strings.Contains(text, " run test:")
 }
 
 func LoadBundle(path string) (*BundleV2, error) {
@@ -252,6 +258,56 @@ func LoadBundle(path string) (*BundleV2, error) {
 		return nil, err
 	}
 	return &b, nil
+}
+
+func ApplyHumanReview(b *BundleV2, review HumanReview) {
+	if b == nil {
+		return
+	}
+	if review.At.IsZero() {
+		review.At = time.Now().UTC()
+	} else {
+		review.At = review.At.UTC()
+	}
+	b.Review = review
+	if review.Approved && !review.Denied && strings.TrimSpace(b.Outcome.FinalAnswer) != "" {
+		b.Outcome.Success = true
+		b.Outcome.GoalMet = true
+		b.Outcome.Confidence = OutcomeConfidenceVerified
+		b.Outcome.ConfidenceReason = verifiedOutcomeEvidenceReason(b.Evidence, review)
+		if b.Outcome.ConfidenceReason == "" {
+			b.Outcome.ConfidenceReason = "verified by human review"
+		}
+		b.Outcome.HumanReviews = 1
+	} else if review.Denied {
+		b.Outcome.Success = false
+		b.Outcome.GoalMet = false
+		b.Outcome.Confidence = OutcomeConfidenceUnverified
+		reason := strings.TrimSpace(review.Reason)
+		if reason == "" {
+			reason = "denied by human review"
+		} else {
+			reason = "denied by human review: " + reason
+		}
+		b.Outcome.ConfidenceReason = reason
+		b.Outcome.HumanReviews = 1
+	}
+	b.ID = bundleID(*b)
+}
+
+func SaveBundle(path string, b *BundleV2) error {
+	if strings.TrimSpace(path) == "" {
+		return fmt.Errorf("bundle path is required")
+	}
+	if b == nil {
+		return fmt.Errorf("bundle is nil")
+	}
+	b.Path = path
+	data, err := json.MarshalIndent(b, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, data, 0o600)
 }
 
 func bundleID(b BundleV2) string {

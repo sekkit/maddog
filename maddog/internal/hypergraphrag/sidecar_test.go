@@ -86,6 +86,36 @@ func TestBenchmarkInfoHealthCheckUsesConfiguredTimeout(t *testing.T) {
 	}
 }
 
+func TestBenchmarkBackendQueryOnlyModeSkipsIndexCommands(t *testing.T) {
+	cfg := helperSidecarConfig(t)
+	cfg.IndexMode = IndexModeQueryOnly
+	cfg.Env["GO_WANT_HYPERGRAPHRAG_FAIL_INDEX"] = "1"
+	backend := NewBenchmarkBackend(cfg)
+
+	report := codegraph.RunBenchmark(context.Background(), codegraph.BenchmarkOptions{
+		Root:     t.TempDir(),
+		Backends: []codegraph.BenchmarkBackend{backend},
+		Cases: []codegraph.BenchmarkCase{{
+			Name:        "semantic architecture search",
+			Query:       "advisor frontier routing",
+			Capability:  codegraph.BenchmarkCapabilitySemanticSearch,
+			ExpectedIDs: []string{"docs/cc/maddog-fusion--3949/tech.md"},
+			TopK:        3,
+		}},
+	})
+
+	got := report.Backends[0]
+	if got.Failures != 0 || got.Health != codegraph.BenchmarkHealthReady {
+		t.Fatalf("query-only benchmark = %+v, want no index failure", got)
+	}
+	if got.IndexBuildMillis != 0 || got.IncrementalUpdateMillis != 0 {
+		t.Fatalf("query-only index timings = build %d update %d, want zero", got.IndexBuildMillis, got.IncrementalUpdateMillis)
+	}
+	if got.Queries[0].Status != codegraph.BenchmarkQueryOK {
+		t.Fatalf("query-only query = %+v, want ok", got.Queries[0])
+	}
+}
+
 func helperSidecarConfig(t *testing.T) SidecarConfig {
 	t.Helper()
 	return SidecarConfig{
@@ -127,6 +157,10 @@ func TestHyperGraphRAGSidecarHelper(t *testing.T) {
 		}
 		_ = enc.Encode(HealthResponse{Status: codegraph.BenchmarkHealthReady})
 	case "index":
+		if os.Getenv("GO_WANT_HYPERGRAPHRAG_FAIL_INDEX") == "1" {
+			fmt.Fprintln(os.Stderr, "index should not be called")
+			os.Exit(5)
+		}
 		_ = enc.Encode(map[string]any{"indexed": true})
 	case "query":
 		if !strings.Contains(strings.Join(args, " "), "advisor frontier routing") {

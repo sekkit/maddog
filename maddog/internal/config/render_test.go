@@ -195,7 +195,6 @@ func TestRenderTOMLRoundTrips(t *testing.T) {
 		Tools: map[string]string{
 			"symbol_search": "mcp__serena__find_symbol",
 			"context_pack":  "mcp__serena__read_context",
-			"health":        "mcp__serena__status",
 		},
 	}}
 	orig.BuiltInMCPUpdates = BuiltInMCPUpdatesConfig{Mode: BuiltInMCPUpdateModeDownload, CheckInterval: "12h"}
@@ -488,6 +487,28 @@ func TestRenderTOMLDocumentsPlanModeAllowedTools(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got.Agent.PlanModeAllowedTools, cfg.Agent.PlanModeAllowedTools) {
 		t.Fatalf("PlanModeAllowedTools round trip = %v, want %v", got.Agent.PlanModeAllowedTools, cfg.Agent.PlanModeAllowedTools)
+	}
+}
+
+func TestRenderTOMLCodeIntelligenceSerenaExampleUsesRealToolNames(t *testing.T) {
+	rendered := RenderTOML(Default())
+	for _, bad := range []string{"mcp__serena__context", "mcp__serena__status"} {
+		if strings.Contains(rendered, bad) {
+			t.Fatalf("rendered code intelligence example contains fictitious Serena tool %q:\n%s", bad, rendered)
+		}
+	}
+	for _, want := range []string{"mcp__serena__find_symbol", "mcp__serena__get_symbols_overview"} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("rendered code intelligence example missing %q:\n%s", want, rendered)
+		}
+	}
+	for _, want := range []string{"claude-context", "codebase-memory", "zvec: research-only", "does not provide a zvec MCP/backend adapter"} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("rendered code intelligence preset notes missing %q:\n%s", want, rendered)
+		}
+	}
+	if strings.Contains(rendered, "mcp__zvec__") {
+		t.Fatalf("rendered config should not imply a zvec MCP backend:\n%s", rendered)
 	}
 }
 

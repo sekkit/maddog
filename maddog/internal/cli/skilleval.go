@@ -9,11 +9,13 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"maddog/internal/boot"
 	"maddog/internal/config"
 	"maddog/internal/provider"
 	"maddog/internal/skilleval"
+	"maddog/internal/tool"
 )
 
 type skillevalSummary struct {
@@ -39,6 +41,9 @@ func skillevalCommand(args []string) int {
 	if len(args) > 0 && args[0] == "list" {
 		return skillevalListCommand(args[1:])
 	}
+	if len(args) > 0 && args[0] == "review" {
+		return skillevalReviewCommand(args[1:])
+	}
 	fs := flag.NewFlagSet("skilleval", flag.ContinueOnError)
 	var bundlePaths multiValueFlag
 	fs.Var(&bundlePaths, "bundle", "path to bundle v2 JSON; repeat for held-out evaluation")
@@ -49,6 +54,7 @@ func skillevalCommand(args []string) int {
 	storeDir := fs.String("store-dir", "", "candidate store directory to persist score and guardrail")
 	minBundles := fs.Int("min-bundles", 5, "minimum bundles required by guardrail")
 	minScore := fs.Float64("min-score", 0.7, "minimum replay score")
+	timeout := fs.Duration("timeout", 2*time.Minute, "provider replay timeout")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -70,10 +76,13 @@ func skillevalCommand(args []string) int {
 			return 1
 		}
 	}
-	result, err := skilleval.EvaluateCandidate(context.Background(), skilleval.EvaluationRequest{
+	ctx, cancel := context.WithTimeout(context.Background(), *timeout)
+	defer cancel()
+	result, err := skilleval.EvaluateCandidate(ctx, skilleval.EvaluationRequest{
 		Candidate:   candidate,
 		BundlePaths: []string(bundlePaths),
 		Provider:    prov,
+		Tools:       skillEvalReplayTools(candidate),
 		ModelRef:    resolvedModelRef,
 		DryRun:      *dryRun,
 		MinBundles:  *minBundles,
@@ -120,6 +129,28 @@ func skillevalCommand(args []string) int {
 	}
 	fmt.Printf("bundles: %d\ncandidate: %s\nreplay: %s\nscore: %.2f\nrail: %s\n", summary.Bundles, summary.CandidateHash, summary.Replay.FinalAnswer, summary.Score.Score, summary.Guardrail)
 	return boolExit(result.Guardrail.Pass)
+}
+
+func skillEvalReplayTools(candidate skilleval.Candidate) *tool.Registry {
+	if len(candidate.Skill.AllowedTools) == 0 {
+		return nil
+	}
+	reg := tool.NewRegistry()
+	for _, name := range candidate.Skill.AllowedTools {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
+		tl, ok := tool.LookupBuiltin(name)
+		if !ok || tl == nil || !tl.ReadOnly() {
+			continue
+		}
+		reg.Add(tl)
+	}
+	if reg.Len() == 0 {
+		return nil
+	}
+	return reg
 }
 
 type multiValueFlag []string
@@ -199,6 +230,80 @@ func skillevalListCommand(args []string) int {
 		fmt.Printf("%s\t%s\t%s\t%s\n", c.Hash, c.Status, c.Skill.Name, c.GuardrailReason)
 	}
 	return 0
+}
+
+type skillevalReviewSummary struct {
+	BundleID   string                      `json:"bundle_id"`
+	BundlePath string                      `json:"bundle_path"`
+	Review     skilleval.HumanReview       `json:"review"`
+	Outcome    skilleval.OutcomeInfo       `json:"outcome"`
+	Confidence skilleval.OutcomeConfidence `json:"confidence"`
+}
+
+func skillevalReviewCommand(args []string) int {
+	fs := flag.NewFlagSet("skilleval review", flag.ContinueOnError)
+	bundlePath := fs.String("bundle", "", "path to bundle v2 JSON to review")
+	approve := fs.Bool("approve", false, "approve the captured outcome as verified")
+	deny := fs.Bool("deny", false, "deny the captured outcome")
+	reviewer := fs.String("reviewer", "", "reviewer identity")
+	reason := fs.String("reason", "", "review reason")
+	jsonOut := fs.Bool("json", false, "print reviewed bundle summary as JSON")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if strings.TrimSpace(*bundlePath) == "" {
+		fmt.Fprintln(os.Stderr, "skilleval review requires --bundle")
+		return 2
+	}
+	if *approve == *deny {
+		fmt.Fprintln(os.Stderr, "skilleval review requires exactly one of --approve or --deny")
+		return 2
+	}
+	bundle, err := skilleval.LoadBundle(*bundlePath)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	review := skilleval.HumanReview{
+		Approved: *approve,
+		Denied:   *deny,
+		Reviewer: strings.TrimSpace(*reviewer),
+		Reason:   strings.TrimSpace(*reason),
+		At:       time.Now().UTC(),
+	}
+	skilleval.ApplyHumanReview(bundle, review)
+	if err := skilleval.SaveBundle(*bundlePath, bundle); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	summary := skillevalReviewSummary{
+		BundleID:   bundle.ID,
+		BundlePath: *bundlePath,
+		Review:     bundle.Review,
+		Outcome:    bundle.Outcome,
+		Confidence: bundle.Outcome.Confidence,
+	}
+	if *jsonOut {
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		if err := enc.Encode(summary); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		return 0
+	}
+	fmt.Printf("bundle: %s\nreview: %s\nconfidence: %s\n", summary.BundleID, reviewVerb(review), summary.Confidence)
+	return 0
+}
+
+func reviewVerb(review skilleval.HumanReview) string {
+	if review.Approved && !review.Denied {
+		return "approved"
+	}
+	if review.Denied {
+		return "denied"
+	}
+	return "recorded"
 }
 
 func loadSkillEvalCandidates(dir string) ([]skilleval.Candidate, error) {

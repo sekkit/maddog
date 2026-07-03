@@ -41,11 +41,12 @@ The test checks that every registered built-in tool has a documented name, read-
 In a default full-token boot, Maddog sends the built-in tools above plus the
 session, memory, skill, subagent, LSP, install, and slash-command tools below:
 
-`ask`, `explore`, `forget`, `history`, `install_skill`, `install_source`,
+`advisor`, `ask`, `explore`, `forget`, `history`, `install_skill`, `install_source`,
 `list_sessions`, `lsp_definition`, `lsp_diagnostics`, `lsp_hover`,
 `lsp_references`, `memory`, `parallel_tasks`, `read_only_skill`,
 `read_only_task`, `read_session`, `read_skill`, `remember`, `research`,
-`review`, `run_skill`, `security_review`, `slash_command`, `task`.
+`review`, `run_skill`, `security_review`, `slash_command`, `task`,
+`tool_result`.
 
 `internal/boot.TestBootToolContractMatchesProviderVisibleSurface` verifies the
 actual boot registry contract against the provider request, including read-only
@@ -56,8 +57,8 @@ flags and canonical schemas.
 In token economy mode, Maddog starts with the core coding/session/memory tools
 and the connector used to enable optional sources on demand:
 
-`ask`, `connect_tool_source`, `forget`, `history`, `list_sessions`, `memory`,
-`read_session`, `remember`, `slash_command`.
+`advisor`, `ask`, `connect_tool_source`, `forget`, `history`, `list_sessions`,
+`memory`, `read_session`, `remember`, `slash_command`, `tool_result`.
 
 Core built-in tools such as `bash`, `read_file`, `grep`, file writers, job tools,
 and `todo_write` remain available in economy mode and are listed in the built-in

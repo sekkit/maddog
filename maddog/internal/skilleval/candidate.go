@@ -12,7 +12,6 @@ import (
 	"strings"
 	"time"
 
-	"maddog/internal/eval"
 	"maddog/internal/fileutil"
 	"maddog/internal/skill"
 )
@@ -251,6 +250,7 @@ type EvaluationProvenance struct {
 const (
 	EvaluationModeDryRunPreview  = "dry_run_preview"
 	EvaluationModeProviderReplay = "provider_replay"
+	EvaluationModeAgentReplay    = "agent_replay"
 )
 
 func (s *CandidateStore) RecordEvaluation(hash string, score ScoreResult, guardrail GuardrailResult) (Candidate, error) {
@@ -328,7 +328,7 @@ func (s *CandidateStore) Promote(hash string, activeStore *skill.Store, scope sk
 			return Candidate{}, "", err
 		}
 	}
-	path, _, err := eval.Promote(activeStore, c.Skill, scope)
+	path, err := PromoteSkill(activeStore, c.Skill, scope)
 	if err != nil {
 		if existing, ok := activeStore.Read(c.Skill.Name); ok && sameSkill(c.Skill, existing) {
 			c.Status = CandidatePromoted
@@ -390,7 +390,7 @@ func (s *CandidateStore) Rollback(hash string, activeStore *skill.Store, reason 
 	if err != nil {
 		return Candidate{}, err
 	}
-	if strings.TrimSpace(string(raw)) != strings.TrimSpace(eval.RenderSkillMarkdown(c.Skill)) {
+	if strings.TrimSpace(string(raw)) != strings.TrimSpace(RenderSkillMarkdown(c.Skill)) {
 		return Candidate{}, fmt.Errorf("promoted skill %q changed since promotion", c.Skill.Name)
 	}
 	if err := os.Remove(promotedPath); err != nil {
@@ -450,7 +450,7 @@ func (s *CandidateStore) now() time.Time {
 }
 
 func candidateHash(sk skill.Skill) string {
-	content := eval.RenderSkillMarkdown(sk)
+	content := RenderSkillMarkdown(sk)
 	sum := sha256.Sum256([]byte(content))
 	return hex.EncodeToString(sum[:])
 }

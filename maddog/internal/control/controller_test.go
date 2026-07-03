@@ -13,9 +13,11 @@ import (
 	"time"
 
 	"maddog/internal/agent"
+	agenttest "maddog/internal/agent/testutil"
 	"maddog/internal/checkpoint"
 	"maddog/internal/command"
 	"maddog/internal/config"
+	"maddog/internal/contextpack"
 	"maddog/internal/event"
 	"maddog/internal/hook"
 	"maddog/internal/jobs"
@@ -80,6 +82,22 @@ func (r runSkillRunner) Run(_ context.Context, input string) error {
 	r.session.Add(provider.Message{Role: provider.RoleTool, ToolCallID: callID, Name: "run_skill", Content: "skill completed"})
 	r.session.Add(provider.Message{Role: provider.RoleAssistant, Content: r.answer})
 	return nil
+}
+
+type controllerSkillProvider struct {
+	text string
+}
+
+func (p controllerSkillProvider) Name() string { return "controller-skill-provider" }
+
+func (p controllerSkillProvider) Stream(context.Context, provider.Request) (<-chan provider.Chunk, error) {
+	ch := make(chan provider.Chunk, 2)
+	go func() {
+		defer close(ch)
+		ch <- provider.Chunk{Type: provider.ChunkText, Text: p.text}
+		ch <- provider.Chunk{Type: provider.ChunkDone}
+	}()
+	return ch, nil
 }
 
 type handoffRunner struct {
@@ -148,6 +166,19 @@ func (fakeControlTool) Execute(context.Context, json.RawMessage) (string, error)
 	return "", nil
 }
 func (fakeControlTool) ReadOnly() bool { return true }
+
+type outputControlTool struct {
+	name   string
+	output string
+}
+
+func (t outputControlTool) Name() string          { return t.name }
+func (outputControlTool) Description() string     { return "fake output" }
+func (outputControlTool) Schema() json.RawMessage { return json.RawMessage(`{"type":"object"}`) }
+func (t outputControlTool) Execute(context.Context, json.RawMessage) (string, error) {
+	return t.output, nil
+}
+func (outputControlTool) ReadOnly() bool { return true }
 
 type startBackgroundJobTool struct {
 	started chan string
@@ -364,6 +395,8 @@ func TestRunCapturesOfflineReplayBundle(t *testing.T) {
 	workspace := t.TempDir()
 	path := filepath.Join(dir, "session.jsonl")
 	sess := agent.NewSession("sys")
+	sess.Add(provider.Message{Role: provider.RoleUser, Content: "previous task"})
+	sess.Add(provider.Message{Role: provider.RoleAssistant, Content: "previous answer"})
 	exec := agent.New(nil, nil, sess, agent.Options{}, event.Discard)
 	c := New(Options{
 		Runner:        answeringRunner{session: sess, answer: "done"},
@@ -394,6 +427,53 @@ func TestRunCapturesOfflineReplayBundle(t *testing.T) {
 	}
 	if len(bundle.Skills) != 1 || bundle.Skills[0].Name != "parser-helper" {
 		t.Fatalf("Skills = %+v, want parser-helper snapshot", bundle.Skills)
+	}
+	if len(bundle.Messages) != 2 || bundle.Messages[0].Content != "parse the log" || bundle.Messages[1].Content != "done" {
+		t.Fatalf("Messages = %+v, want only current turn messages", bundle.Messages)
+	}
+	if len(bundle.History) == 0 || bundle.History[0].Kind != "turn" || !strings.Contains(bundle.History[0].Text, "parse the log") {
+		t.Fatalf("History = %+v, want turn summary", bundle.History)
+	}
+}
+
+func TestRunCapturesCompressionMetricsInReplayBundle(t *testing.T) {
+	dir := t.TempDir()
+	workspace := t.TempDir()
+	rawOutput := strings.Repeat("INFO heartbeat ready\n", 90) +
+		"--- FAIL: TestAddsNumbers (0.01s)\n" +
+		"    math/add_test.go:42: expected 4, got 5\n" +
+		"FAIL\n"
+	reg := tool.NewRegistry()
+	reg.Add(outputControlTool{name: "inspect_logs", output: rawOutput})
+	prov := agenttest.NewMock("mock",
+		agenttest.Turn{ToolCalls: []provider.ToolCall{{ID: "tool-compress", Name: "inspect_logs", Arguments: `{}`}}},
+		agenttest.Turn{Text: "done"},
+	)
+	sess := agent.NewSession("sys")
+	exec := agent.New(prov, reg, sess, agent.Options{
+		ToolOutputCompressor:  contextpack.DefaultCompressor{},
+		ToolOutputCompression: contextpack.Options{ThresholdBytes: 128, MaxBytes: 260},
+	}, event.Discard)
+	c := New(Options{
+		Runner:        exec,
+		Executor:      exec,
+		SessionDir:    dir,
+		SessionPath:   filepath.Join(dir, "session.jsonl"),
+		Label:         "test",
+		WorkspaceRoot: workspace,
+	})
+
+	if err := c.Run(context.Background(), "inspect logs"); err != nil {
+		t.Fatal(err)
+	}
+
+	bundle := waitForSkillEvalBundle(t, workspace)
+	if len(bundle.Metrics.Compressed) != 1 {
+		t.Fatalf("Compressed metrics = %+v, want one compression metric", bundle.Metrics.Compressed)
+	}
+	metric := bundle.Metrics.Compressed[0]
+	if metric.Name != "inspect_logs" || metric.OriginalBytes <= metric.CompressedBytes || metric.TokenDelta <= 0 {
+		t.Fatalf("Compression metric = %+v, want saved bytes/tokens for inspect_logs", metric)
 	}
 }
 
@@ -448,6 +528,79 @@ func TestRunCapturesDynamicSkillCandidateAfterRunSkill(t *testing.T) {
 	}
 	if candidate.Skill.Name != dynamic.Name {
 		t.Fatalf("candidate skill = %q, want %q", candidate.Skill.Name, dynamic.Name)
+	}
+}
+
+func TestRunRemovesGeneratedDynamicSkillAfterCapture(t *testing.T) {
+	dir := t.TempDir()
+	workspace := t.TempDir()
+	sess := agent.NewSession("sys")
+	exec := agent.New(nil, nil, sess, agent.Options{}, event.Discard)
+	store := skill.New(skill.Options{HomeDir: t.TempDir(), ProjectRoot: workspace, DisableBuiltins: true})
+	generated := "---\nname: dynamic-docs\ndescription: Runtime docs helper\n---\nInspect the requested files and draft concise docs."
+	c := New(Options{
+		Runner:            answeringRunner{session: sess, answer: "done"},
+		Executor:          exec,
+		SessionDir:        dir,
+		SessionPath:       filepath.Join(dir, "session.jsonl"),
+		Label:             "test",
+		WorkspaceRoot:     workspace,
+		SkillStore:        store,
+		Skills:            store.List(),
+		SkillOrchestrator: skill.NewOrchestrator(store, skill.NewGenerator(controllerSkillProvider{text: generated})),
+	})
+
+	if err := c.Run(context.Background(), "draft docs for parser"); err != nil {
+		t.Fatal(err)
+	}
+
+	_ = waitForSkillEvalBundle(t, workspace)
+	if _, ok := store.Read("dynamic-docs"); ok {
+		t.Fatal("generated runtime skill should be removed after the turn is captured")
+	}
+	if got := c.Skills(); len(got) != 0 {
+		t.Fatalf("Skills() = %+v, want generated dynamic skill removed", got)
+	}
+}
+
+func TestSubmitSlashDynamicSkillCreatesCandidate(t *testing.T) {
+	dir := t.TempDir()
+	workspace := t.TempDir()
+	sess := agent.NewSession("sys")
+	exec := agent.New(nil, nil, sess, agent.Options{}, event.Discard)
+	store := skill.New(skill.Options{HomeDir: t.TempDir(), ProjectRoot: workspace, DisableBuiltins: true})
+	dynamic := skill.Skill{
+		Name:        "dynamic-parser",
+		Description: "Parses dynamic logs",
+		Body:        "Use the dynamic parser checklist.",
+		RunAs:       skill.RunInline,
+	}
+	if err := store.Inject(dynamic); err != nil {
+		t.Fatalf("Inject dynamic skill: %v", err)
+	}
+	events := make(chan event.Event, 4)
+	c := New(Options{
+		Runner:        answeringRunner{session: sess, answer: "done"},
+		Executor:      exec,
+		Sink:          event.FuncSink(func(e event.Event) { events <- e }),
+		SessionDir:    dir,
+		SessionPath:   filepath.Join(dir, "session.jsonl"),
+		Label:         "test",
+		WorkspaceRoot: workspace,
+		SkillStore:    store,
+		Skills:        store.List(),
+	})
+
+	c.Submit("/dynamic-parser parse the log")
+	waitForTurnDone(t, events)
+
+	bundle := waitForSkillEvalBundle(t, workspace)
+	if bundle.Task != "/dynamic-parser parse the log" {
+		t.Fatalf("Task = %q, want slash invocation", bundle.Task)
+	}
+	candidates := waitForSkillCandidates(t, workspace, 1)
+	if candidates[0].Skill.Name != dynamic.Name || candidates[0].SourceTask != "/dynamic-parser parse the log" {
+		t.Fatalf("candidate = %+v, want slash dynamic skill source", candidates[0])
 	}
 }
 

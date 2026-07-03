@@ -217,6 +217,15 @@ func TestRunBenchmarkScoresExpectedIDsFromResultContent(t *testing.T) {
 	}
 }
 
+func TestRunBenchmarkEstimatesCJKTokensFromContent(t *testing.T) {
+	results := []BenchmarkResult{{ID: "zh.md", Title: "中文", Content: strings.Repeat("测试", 20)}}
+	chars := benchmarkReturnedChars(results)
+	tokens := estimateBenchmarkTokens(results)
+	if tokens <= chars/4 {
+		t.Fatalf("CJK estimate tokens = %d for %d chars, want above 4 chars/token heuristic", tokens, chars)
+	}
+}
+
 type fakeBenchBackend struct {
 	id         string
 	name       string

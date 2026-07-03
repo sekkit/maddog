@@ -537,6 +537,18 @@ func TestBuiltinSubagentSkillsDeclareAllowedTools(t *testing.T) {
 	}
 }
 
+func TestBuiltinAdvisorDocumentsTinyctxOutputContract(t *testing.T) {
+	sk, ok := New(Options{HomeDir: t.TempDir()}).Read("advisor")
+	if !ok {
+		t.Fatal("built-in advisor skill not found")
+	}
+	for _, want := range []string{"100 words", "numbered", "Risks:"} {
+		if !strings.Contains(sk.Body, want) {
+			t.Fatalf("advisor skill body missing output contract %q:\n%s", want, sk.Body)
+		}
+	}
+}
+
 func TestBuiltinReviewMentionsHybridDeterministicRules(t *testing.T) {
 	st := New(Options{HomeDir: t.TempDir(), DisableBuiltins: false})
 	sk, ok := st.Read("review")
@@ -887,6 +899,41 @@ func TestValidatorAcceptsAndRejectsDynamicSkills(t *testing.T) {
 	}
 	if v.IsHighRisk("DELETE FROM users WHERE id = 1") {
 		t.Fatal("DELETE with WHERE should not be classified as high risk by the v1 rule")
+	}
+}
+
+func TestValidatorFlagsChineseHighRiskTasks(t *testing.T) {
+	v := NewValidator()
+	for _, task := range []string{
+		"帮我删库跑路",
+		"清空所有表然后重新导入",
+		"删除所有数据并重建数据库",
+	} {
+		if !v.IsHighRisk(task) {
+			t.Fatalf("IsHighRisk(%q) = false, want true", task)
+		}
+	}
+	if v.IsHighRisk("删除这条测试 fixture 中的临时注释") {
+		t.Fatal("specific benign Chinese deletion should not be classified as high risk")
+	}
+}
+
+func TestValidatorDoesNotRejectNaturalLanguageRememberOrTruncate(t *testing.T) {
+	v := NewValidator()
+	if got := v.Validate(Skill{
+		Name:        "dyn-safe",
+		Description: "safe helper",
+		Body:        "Remember to inspect the failing test output before editing.",
+	}, "fix log truncate helper"); !got.Valid {
+		t.Fatalf("natural-language remember/truncate should be allowed: %+v", got)
+	}
+	if got := v.Validate(Skill{
+		Name:         "dyn-memory",
+		Description:  "unsafe helper",
+		Body:         "Use durable memory.",
+		AllowedTools: []string{"remember"},
+	}, "summarize parser behavior"); got.Valid || !strings.Contains(strings.ToLower(got.Reason), "memory") {
+		t.Fatalf("explicit memory tool should still be rejected: %+v", got)
 	}
 }
 

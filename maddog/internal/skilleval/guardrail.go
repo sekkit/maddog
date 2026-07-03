@@ -48,9 +48,9 @@ func CheckPromotionGuardrail(bundles []BundleV2, baseline, replayed []OutcomeInf
 	if expanded := expandedAllowedTools(bundles, candidate); len(expanded) > 0 {
 		return GuardrailResult{Reason: "allowed tools expanded: " + strings.Join(expanded, ", ")}
 	}
-	oldRate := successRate(baseline[:len(bundles)])
-	newRate := successRate(replayed[:len(bundles)])
-	if newRate < oldRate {
+	oldRate, oldComparable := verifiedSuccessRate(baseline[:len(bundles)])
+	newRate, newComparable := verifiedSuccessRate(replayed[:len(bundles)])
+	if oldComparable && newComparable && newRate < oldRate {
 		return GuardrailResult{Reason: fmt.Sprintf("regression: new success %.2f < old %.2f", newRate, oldRate)}
 	}
 	if costSpike := abnormalCostIncrease(baseline[:len(bundles)], replayed[:len(bundles)]); costSpike != "" {
@@ -61,7 +61,10 @@ func CheckPromotionGuardrail(bundles []BundleV2, baseline, replayed []OutcomeInf
 			return GuardrailResult{Reason: fmt.Sprintf("score %.2f below threshold %.2f", scores[i].Score, cfg.MinScore)}
 		}
 	}
-	return GuardrailResult{Pass: true, Reason: fmt.Sprintf("passed guardrail: success %.2f >= %.2f", newRate, oldRate)}
+	if oldComparable && newComparable {
+		return GuardrailResult{Pass: true, Reason: fmt.Sprintf("passed guardrail: success %.2f >= %.2f", newRate, oldRate)}
+	}
+	return GuardrailResult{Pass: true, Reason: "passed guardrail: unverified replay quality accepted by promotion-grade scores"}
 }
 
 func unverifiedOutcomeReason(bundles []BundleV2, baseline, replayed []OutcomeInfo) string {
@@ -106,6 +109,18 @@ func successRate(results []OutcomeInfo) float64 {
 		}
 	}
 	return float64(ok) / float64(len(results))
+}
+
+func verifiedSuccessRate(results []OutcomeInfo) (float64, bool) {
+	if len(results) == 0 {
+		return 0, false
+	}
+	for _, r := range results {
+		if r.Confidence != OutcomeConfidenceVerified {
+			return 0, false
+		}
+	}
+	return successRate(results), true
 }
 
 func expandedAllowedTools(bundles []BundleV2, candidate Candidate) []string {

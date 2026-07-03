@@ -310,6 +310,47 @@ func validScoredSkillForCLI(name string) skill.Skill {
 	}
 }
 
+func TestSkillEvalReviewCommandApprovesBundle(t *testing.T) {
+	bundle, bundlePath, err := skilleval.CaptureBundle(skilleval.CaptureOptions{
+		SessionID: "reviewed",
+		Messages: []provider.Message{
+			{Role: provider.RoleUser, Content: "fix parser"},
+			{Role: provider.RoleAssistant, Content: "parser fixed"},
+		},
+		Outcome: skilleval.OutcomeInfo{
+			Confidence:       skilleval.OutcomeConfidenceUnverified,
+			ConfidenceReason: "no verified signal",
+		},
+		Dir: t.TempDir(),
+	})
+	if err != nil {
+		t.Fatalf("CaptureBundle: %v", err)
+	}
+	if bundle.Outcome.Confidence == skilleval.OutcomeConfidenceVerified {
+		t.Fatal("test setup expected unverified bundle")
+	}
+
+	out := captureStdout(t, func() {
+		rc := skillevalCommand([]string{"review", "--bundle", bundlePath, "--approve", "--reviewer", "qa", "--reason", "manual acceptance passed", "--json"})
+		if rc != 0 {
+			t.Fatalf("skilleval review rc = %d, want 0", rc)
+		}
+	})
+	if !strings.Contains(out, "\"approved\": true") || !strings.Contains(out, "\"confidence\": \"verified\"") {
+		t.Fatalf("unexpected review output: %s", out)
+	}
+	updated, err := skilleval.LoadBundle(bundlePath)
+	if err != nil {
+		t.Fatalf("LoadBundle: %v", err)
+	}
+	if !updated.Review.Approved || updated.Review.Reviewer != "qa" || updated.Outcome.Confidence != skilleval.OutcomeConfidenceVerified {
+		t.Fatalf("reviewed bundle = %+v, want approved verified bundle", updated)
+	}
+	if !updated.Outcome.Success || !updated.Outcome.GoalMet || updated.Outcome.HumanReviews != 1 {
+		t.Fatalf("reviewed outcome = %+v, want human verified success", updated.Outcome)
+	}
+}
+
 func verifiedSkillEvalOutcome(finalAnswer string) skilleval.OutcomeInfo {
 	return verifiedSkillEvalOutcomeWithErrors(finalAnswer, 0)
 }

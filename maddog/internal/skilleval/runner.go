@@ -5,7 +5,11 @@ import (
 	"fmt"
 	"strings"
 
+	"maddog/internal/agent"
+	"maddog/internal/event"
+	"maddog/internal/evidence"
 	"maddog/internal/provider"
+	"maddog/internal/tool"
 )
 
 type ReplayRunner struct {
@@ -13,16 +17,68 @@ type ReplayRunner struct {
 	MaxTokens int
 }
 
+type AgentReplayRunner struct {
+	Provider provider.Provider
+	Tools    *tool.Registry
+	MaxSteps int
+}
+
+func (r AgentReplayRunner) Run(ctx context.Context, bundle BundleV2, candidate Candidate) (OutcomeInfo, error) {
+	if r.Provider == nil {
+		return OutcomeInfo{}, fmt.Errorf("agent replay runner has no provider")
+	}
+	if err := validateReplayCandidate(candidate); err != nil {
+		return OutcomeInfo{}, err
+	}
+	reg := replayToolRegistry(r.Tools, candidate)
+	if reg.Len() == 0 {
+		return OutcomeInfo{}, fmt.Errorf("agent replay runner has no read-only tools allowed for candidate %s", candidate.Hash)
+	}
+	maxSteps := r.MaxSteps
+	if maxSteps <= 0 {
+		maxSteps = 8
+	}
+	sess := agent.NewSession(replaySystemPrompt(candidate))
+	a := agent.New(r.Provider, reg, sess, agent.Options{
+		MaxSteps:    maxSteps,
+		Temperature: 0,
+	}, event.Discard)
+	if err := a.Run(ctx, replayUserPrompt(bundle)); err != nil {
+		return OutcomeInfo{
+			Success:          false,
+			GoalMet:          false,
+			Confidence:       OutcomeConfidenceVerified,
+			ConfidenceReason: "agent replay returned an error",
+			TotalTurns:       countAssistantTurns(sess.Snapshot()),
+			ToolErrors:       countReceiptErrors(a.EvidenceReceipts()),
+		}, err
+	}
+	msgs := sess.Snapshot()
+	usageTokens := 0
+	if usage := a.LastUsage(); usage != nil {
+		usageTokens = usage.TotalTokens
+		if usageTokens == 0 {
+			usageTokens = usage.PromptTokens + usage.CompletionTokens
+		}
+	}
+	return OutcomeInfo{
+		Success:          false,
+		GoalMet:          false,
+		Confidence:       OutcomeConfidenceUnverified,
+		ConfidenceReason: "agent replay completion is unverified and scored separately",
+		FinalAnswer:      lastAssistantText(msgs),
+		TotalTurns:       countAssistantTurns(msgs),
+		ToolErrors:       countReceiptErrors(a.EvidenceReceipts()),
+		Tokens:           usageTokens,
+	}, nil
+}
+
 func (r ReplayRunner) Run(ctx context.Context, bundle BundleV2, candidate Candidate) (OutcomeInfo, error) {
 	if r.Provider == nil {
 		return OutcomeInfo{}, fmt.Errorf("replay runner has no provider")
 	}
-	switch candidate.Status {
-	case CandidatePending, CandidatePromoting, CandidatePromoted:
-	case CandidateRejected:
-		return OutcomeInfo{}, fmt.Errorf("candidate %s is rejected: %s", candidate.Hash, candidate.ValidationReason)
-	default:
-		return OutcomeInfo{}, fmt.Errorf("candidate %s has invalid status %q", candidate.Hash, candidate.Status)
+	if err := validateReplayCandidate(candidate); err != nil {
+		return OutcomeInfo{}, err
 	}
 	maxTokens := r.MaxTokens
 	if maxTokens == 0 {
@@ -52,13 +108,69 @@ func (r ReplayRunner) Run(ctx context.Context, bundle BundleV2, candidate Candid
 	}
 	answer := strings.TrimSpace(text.String())
 	return OutcomeInfo{
-		Success:          answer != "",
-		GoalMet:          answer != "",
+		Success:          false,
+		GoalMet:          false,
 		Confidence:       OutcomeConfidenceUnverified,
-		ConfidenceReason: "provider replay completion is scored separately",
+		ConfidenceReason: "provider replay completion is unverified and scored separately",
 		FinalAnswer:      answer,
 		TotalTurns:       1,
 	}, nil
+}
+
+func validateReplayCandidate(candidate Candidate) error {
+	switch candidate.Status {
+	case CandidatePending, CandidatePromoting, CandidatePromoted:
+		return nil
+	case CandidateRejected:
+		return fmt.Errorf("candidate %s is rejected: %s", candidate.Hash, candidate.ValidationReason)
+	default:
+		return fmt.Errorf("candidate %s has invalid status %q", candidate.Hash, candidate.Status)
+	}
+}
+
+func replayToolRegistry(src *tool.Registry, candidate Candidate) *tool.Registry {
+	dst := tool.NewRegistry()
+	if src == nil {
+		return dst
+	}
+	allowed := map[string]bool{}
+	for _, name := range candidate.Skill.AllowedTools {
+		name = strings.TrimSpace(name)
+		if name != "" {
+			allowed[name] = true
+		}
+	}
+	for _, name := range src.Names() {
+		if len(allowed) > 0 && !allowed[name] {
+			continue
+		}
+		tl, ok := src.Get(name)
+		if !ok || tl == nil || !tl.ReadOnly() {
+			continue
+		}
+		dst.Add(tl)
+	}
+	return dst
+}
+
+func countAssistantTurns(msgs []provider.Message) int {
+	n := 0
+	for _, msg := range msgs {
+		if msg.Role == provider.RoleAssistant {
+			n++
+		}
+	}
+	return n
+}
+
+func countReceiptErrors(receipts []evidence.Receipt) int {
+	n := 0
+	for _, receipt := range receipts {
+		if !receipt.Success {
+			n++
+		}
+	}
+	return n
 }
 
 func replaySystemPrompt(candidate Candidate) string {
@@ -75,8 +187,8 @@ func DryRunReplay(bundle BundleV2, candidate Candidate) OutcomeInfo {
 		return OutcomeInfo{Success: false, GoalMet: false, Confidence: OutcomeConfidenceUnverified, ConfidenceReason: "dry-run replay has no candidate body"}
 	}
 	return OutcomeInfo{
-		Success:          true,
-		GoalMet:          bundle.Outcome.GoalMet || bundle.Outcome.Success,
+		Success:          false,
+		GoalMet:          false,
 		Confidence:       OutcomeConfidenceUnverified,
 		ConfidenceReason: "dry-run replay does not execute a provider",
 		FinalAnswer:      body,

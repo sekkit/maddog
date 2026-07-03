@@ -122,8 +122,8 @@ func (DefaultCompressor) Compress(output ToolOutput, opts Options) Result {
 	if result.SavedChars < 0 {
 		result.SavedChars = 0
 	}
-	result.RawTokens = estimateTokens(result.RawChars)
-	result.CompressedTokens = estimateTokens(result.CompressedChars)
+	result.RawTokens = estimateTokens(raw)
+	result.CompressedTokens = estimateTokens(content)
 	result.SavedTokens = result.RawTokens - result.CompressedTokens
 	if result.SavedTokens < 0 {
 		result.SavedTokens = 0
@@ -447,9 +447,35 @@ func decimal(n int) string {
 	return string(digits[i:])
 }
 
-func estimateTokens(chars int) int {
-	if chars <= 0 {
+func estimateTokens(s string) int {
+	if s == "" {
 		return 0
 	}
-	return (chars + 3) / 4
+	ascii := 0
+	cjk := 0
+	other := 0
+	for _, r := range s {
+		switch {
+		case r <= 0x7f:
+			ascii++
+		case isCJKRune(r):
+			cjk++
+		default:
+			other++
+		}
+	}
+	tokens := (ascii + 3) / 4
+	tokens += cjk
+	tokens += (other + 1) / 2
+	if tokens == 0 {
+		return 1
+	}
+	return tokens
+}
+
+func isCJKRune(r rune) bool {
+	return (r >= 0x4e00 && r <= 0x9fff) ||
+		(r >= 0x3400 && r <= 0x4dbf) ||
+		(r >= 0x3040 && r <= 0x30ff) ||
+		(r >= 0xac00 && r <= 0xd7af)
 }

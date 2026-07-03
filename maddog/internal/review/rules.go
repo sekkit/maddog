@@ -142,10 +142,29 @@ func analyzeAddedLine(file string, line int, added string) []Finding {
 	if strings.Contains(lower, "drop table") || strings.Contains(lower, "truncate table") || (strings.Contains(lower, "delete from") && !strings.Contains(lower, " where ")) {
 		out = append(out, Finding{RuleID: RuleDestructiveSQL, Severity: SeverityP1, File: file, Line: line, Message: "destructive SQL added", Evidence: trimmed})
 	}
-	if strings.Contains(trimmed, ", _ :=") || strings.Contains(trimmed, ", _ =") || strings.Contains(trimmed, "_ = os.") {
+	if isIgnoredErrorPattern(trimmed, lower) {
 		out = append(out, Finding{RuleID: RuleMissingErrorHandling, Severity: SeverityP2, File: file, Line: line, Message: "new code appears to ignore an error", Evidence: trimmed})
 	}
 	return out
+}
+
+func isIgnoredErrorPattern(trimmed, lower string) bool {
+	if strings.Contains(trimmed, ", _ :=") || strings.Contains(trimmed, ", _ =") {
+		if strings.Contains(lower, " range ") || strings.Contains(lower, " range") {
+			return false
+		}
+		return true
+	}
+	if strings.Contains(trimmed, "_ = os.") {
+		return true
+	}
+	if strings.HasPrefix(lower, "except ") && strings.Contains(lower, "exception") {
+		return true
+	}
+	if strings.Contains(lower, ".catch(() => {})") || strings.Contains(lower, ".catch(function") && strings.Contains(lower, "{}") {
+		return true
+	}
+	return false
 }
 
 func parseDiffFile(line string) string {

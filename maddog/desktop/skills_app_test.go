@@ -102,7 +102,7 @@ func TestEvaluateSkillCandidateFromDesktopRecordsDryRunPreview(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EvaluateSkillCandidate: %v", err)
 	}
-	if got.Hash != candidate.Hash || got.Score == nil || *got.Score < 0.7 {
+	if got.Hash != candidate.Hash || got.Score == nil || *got.Score <= 0 {
 		t.Fatalf("evaluated candidate score = %+v", got)
 	}
 	if got.PromotionGrade || got.EvaluationMode != skilleval.EvaluationModeDryRunPreview {

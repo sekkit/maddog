@@ -56,6 +56,24 @@ func (p ThresholdUpgradePolicy) Evaluate(sig evidence.FailureSignal, turn int, f
 			TriggerAdvisor: true,
 		}
 	}
+	if sig.GoalAcceptanceLoop >= p.Threshold {
+		return UpgradeDecision{
+			ShouldUpgrade:  true,
+			Reason:         fmt.Sprintf("%d goal/acceptance control loops", sig.GoalAcceptanceLoop),
+			TargetModel:    target,
+			TriggerAdvisor: true,
+		}
+	}
+	if sig.DifficultDecision {
+		reason := "difficult decision"
+		if sig.DecisionSummary != "" {
+			reason += ": " + sig.DecisionSummary
+		}
+		return UpgradeDecision{
+			Reason:         reason,
+			TriggerAdvisor: true,
+		}
+	}
 	if sig.ErrorStreak > 0 && sig.HealthScore > 0 && sig.HealthScore < 0.3 {
 		return UpgradeDecision{
 			ShouldUpgrade:  true,

@@ -146,6 +146,9 @@ func TestCompressMultibyteOutputKeepsUTF8AndRuneMetrics(t *testing.T) {
 	if got.RawChars != rawRunes || got.CompressedChars != compressedRunes || got.SavedChars != rawRunes-compressedRunes {
 		t.Fatalf("rune metrics = %+v, want raw=%d compressed=%d saved=%d", got, rawRunes, compressedRunes, rawRunes-compressedRunes)
 	}
+	if got.RawTokens < rawRunes/2 {
+		t.Fatalf("CJK token estimate = %+v, want not based on 4 chars/token for %d runes", got, rawRunes)
+	}
 }
 
 func TestUTF8TrimmingHelpersDoNotSplitRunes(t *testing.T) {

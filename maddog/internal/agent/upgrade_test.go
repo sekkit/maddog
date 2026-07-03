@@ -32,6 +32,53 @@ func TestThresholdUpgradePolicy(t *testing.T) {
 	}
 }
 
+func TestThresholdUpgradePolicyTriggersOnGoalAcceptanceLoop(t *testing.T) {
+	policy := ThresholdUpgradePolicy{Threshold: 2, TargetModel: "frontier"}
+	got := policy.Evaluate(evidence.FailureSignal{GoalAcceptanceLoop: 2}, 3, 0)
+	if !got.ShouldUpgrade || !got.TriggerAdvisor || !strings.Contains(got.Reason, "goal/acceptance") {
+		t.Fatalf("goal acceptance loop decision = %+v, want upgrade with advisor", got)
+	}
+}
+
+func TestThresholdUpgradePolicyTriggersAdvisorOnlyForDifficultDecision(t *testing.T) {
+	policy := ThresholdUpgradePolicy{Threshold: 2, TargetModel: "frontier"}
+	got := policy.Evaluate(evidence.FailureSignal{DifficultDecision: true, DecisionSummary: "choose rollback strategy"}, 3, 0)
+	if got.ShouldUpgrade || !got.TriggerAdvisor || !strings.Contains(got.Reason, "choose rollback strategy") {
+		t.Fatalf("difficult decision = %+v, want advisor-only consultation", got)
+	}
+}
+
+func TestAutomaticAdvisorQuestionIncludesFailureSurface(t *testing.T) {
+	a := New(testutil.NewMock("mock"), echoRegistry(), NewSession(""), Options{
+		Advisor: AdvisorConfig{MaxUsesPerTurn: 1, MaxUsesPerSession: 1},
+	}, event.Discard)
+	req := a.buildAdvisorRequest(evidence.FailureSignal{
+		ConsecutiveErrors: 3,
+		ErrorStreak:       4,
+		LastErrorTool:     "bash",
+		HealthScore:       0.25,
+	}, UpgradeDecision{Reason: "3 consecutive tool failures", TriggerAdvisor: true})
+	for _, want := range []string{"bash", "4", "25%", "3 consecutive tool failures"} {
+		if !strings.Contains(req.Question, want) {
+			t.Fatalf("advisor question missing %q:\n%s", want, req.Question)
+		}
+	}
+}
+
+func TestFormatAdvisorTaskIncludesOutputContract(t *testing.T) {
+	task := FormatAdvisorTask(AdvisorRequest{
+		Reason:           "3 consecutive tool failures",
+		Question:         "What next?",
+		RemainingTurn:    1,
+		RemainingSession: 2,
+	})
+	for _, want := range []string{"100 words", "numbered", "Risks:"} {
+		if !strings.Contains(task, want) {
+			t.Fatalf("advisor task missing output contract %q:\n%s", want, task)
+		}
+	}
+}
+
 func TestRunConsultsAdvisorBeforeFrontierAfterRepeatedFailures(t *testing.T) {
 	defaultProv := testutil.NewMock("default",
 		testutil.Turn{ToolCalls: []provider.ToolCall{{ID: "c1", Name: "write_file", Arguments: `{}`}}},
@@ -162,6 +209,52 @@ func TestRunExposesNativeAdvisorWhenConfigured(t *testing.T) {
 	}
 	if req.NativeAdvisor.MaxTokens != 1024 {
 		t.Fatalf("native advisor max tokens = %d", req.NativeAdvisor.MaxTokens)
+	}
+}
+
+func TestRunExposesFallbackAdvisorToolWithSharedContext(t *testing.T) {
+	mp := testutil.NewMock("openai-compatible",
+		testutil.Turn{ToolCalls: []provider.ToolCall{{ID: "advisor-call", Name: "advisor", Arguments: `{"question":"What should I check next?"}`}}},
+		testutil.Turn{Text: "done"},
+	)
+	sink := &recordSink{}
+	var gotReq AdvisorRequest
+	a := New(mp, echoRegistry(), NewSession(""), Options{
+		Advisor: AdvisorConfig{
+			MaxUsesPerTurn:     1,
+			MaxUsesPerSession:  2,
+			MaxContextMessages: 6,
+			MaxContextChars:    1000,
+		},
+		AdvisorRunner: func(_ context.Context, req AdvisorRequest) (string, error) {
+			gotReq = req
+			return "1. Inspect the latest failure.\nRisks: stale context.", nil
+		},
+	}, sink)
+
+	if err := a.Run(context.Background(), "fix the parser after test failure"); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if gotReq.Question != "What should I check next?" {
+		t.Fatalf("advisor question = %q", gotReq.Question)
+	}
+	if !strings.Contains(gotReq.Context, "fix the parser after test failure") {
+		t.Fatalf("advisor context did not include parent conversation:\n%s", gotReq.Context)
+	}
+	if gotReq.RemainingTurn != 1 || gotReq.RemainingSession != 2 {
+		t.Fatalf("advisor budget = %+v", gotReq)
+	}
+	if events := sink.kinds(event.Advisor); len(events) != 1 || !strings.Contains(events[0].Advisor.Advice, "Inspect") {
+		t.Fatalf("advisor events = %+v, want one fallback advisor event", events)
+	}
+	var sawToolOutput bool
+	for _, msg := range a.Session().Messages {
+		if msg.Role == provider.RoleTool && msg.ToolCallID == "advisor-call" && strings.Contains(msg.Content, "Advisor guidance") && strings.Contains(msg.Content, "Inspect") {
+			sawToolOutput = true
+		}
+	}
+	if !sawToolOutput {
+		t.Fatalf("session missing advisor tool output: %+v", a.Session().Messages)
 	}
 }
 

@@ -1,23 +1,17 @@
-package eval
+package skilleval
 
 import (
 	"fmt"
 	"strings"
 
-	"maddog/internal/event"
 	"maddog/internal/skill"
 )
 
-func Promote(store *skill.Store, sk skill.Skill, scope skill.Scope) (string, event.Event, error) {
+func PromoteSkill(store *skill.Store, sk skill.Skill, scope skill.Scope) (string, error) {
 	if store == nil {
-		return "", event.Event{}, fmt.Errorf("skill store is nil")
+		return "", fmt.Errorf("skill store is nil")
 	}
-	content := RenderSkillMarkdown(sk)
-	path, err := store.CreateWithContent(sk.Name, scope, content)
-	if err != nil {
-		return "", event.Event{}, err
-	}
-	return path, event.Event{Kind: event.SkillPromoted, Level: event.LevelInfo, Text: "promoted skill " + sk.Name}, nil
+	return store.CreateWithContent(sk.Name, scope, RenderSkillMarkdown(sk))
 }
 
 func RenderSkillMarkdown(sk skill.Skill) string {
