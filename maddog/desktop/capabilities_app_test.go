@@ -95,6 +95,37 @@ context_pack = "mcp__serena__get_symbols_overview"
 	}
 }
 
+func TestCapabilitiesProjectsKnownCodeIntelligencePresets(t *testing.T) {
+	isolateDesktopUserDirs(t)
+	dir := robustTempDir(t)
+	t.Chdir(dir)
+
+	app := NewApp()
+	app.setTestCtrl(control.New(control.Options{Host: plugin.NewHost()}), "")
+	app.tabs["test"].Scope = "project"
+	app.tabs["test"].WorkspaceRoot = dir
+	defer app.activeCtrl().Close()
+
+	view := app.Capabilities()
+	serena, ok := findCodeIntelligenceBackend(view.CodeIntelligenceBackends, "serena")
+	if !ok {
+		t.Fatalf("serena preset missing from Capabilities: %+v", view.CodeIntelligenceBackends)
+	}
+	if serena.Configured || serena.Enabled || serena.Status != codegraph.BackendHealthUnknown {
+		t.Fatalf("serena preset state = %+v, want visible unconfigured disabled unknown preset", serena)
+	}
+	if serena.ToolMapping["symbol_search"] != "mcp__serena__find_symbol" || !serena.Capabilities.SymbolSearch {
+		t.Fatalf("serena preset mapping/capabilities = %+v", serena)
+	}
+	zvec, ok := findCodeIntelligenceBackend(view.CodeIntelligenceBackends, "zvec")
+	if !ok {
+		t.Fatalf("zvec research preset missing from Capabilities: %+v", view.CodeIntelligenceBackends)
+	}
+	if !zvec.ResearchOnly || zvec.Configured || zvec.Kind != "" {
+		t.Fatalf("zvec preset = %+v, want research-only non-configured preset", zvec)
+	}
+}
+
 func TestCodeIntelligenceBackendViewsReflectLiveExternalMCPState(t *testing.T) {
 	cfg := codeIntelligenceTestConfig()
 	reg := codegraph.NewBackendRegistry(cfg)

@@ -44,6 +44,7 @@ type Backend struct {
 	Enabled      bool
 	Command      string
 	Args         []string
+	IndexMode    string
 	Env          map[string]string
 	Capabilities BackendCapabilities
 	ToolMapping  map[string]string
@@ -133,6 +134,7 @@ func (r *BackendRegistry) addExternal(entry config.CodeIntelligenceBackendConfig
 		Enabled:     entry.IsEnabled(),
 		Command:     strings.TrimSpace(entry.Command),
 		Args:        cloneStringSlice(entry.Args),
+		IndexMode:   strings.TrimSpace(entry.IndexMode),
 		Env:         cloneStringMap(entry.Env),
 		ToolMapping: cloneStringMap(entry.Tools),
 	}

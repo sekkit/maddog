@@ -196,6 +196,34 @@ func TestTurnOrchestratorGoalContinuationRunsStopPerUnit(t *testing.T) {
 	}
 }
 
+func TestTurnOrchestratorGoalLoopSignalUpgradesExecutor(t *testing.T) {
+	defaultProv := &scriptedTurns{turns: [][]provider.Chunk{
+		textTurn("Still working.\n\n[goal:continue]"),
+		textTurn("Still working more.\n\n[goal:continue]"),
+	}}
+	frontierProv := &scriptedTurns{turns: [][]provider.Chunk{
+		textTurn("Finished on frontier.\n\n[goal:complete]"),
+	}}
+	ag := agent.New(defaultProv, tool.NewRegistry(), agent.NewSession(""), agent.Options{
+		UpgradePolicy:    agent.ThresholdUpgradePolicy{Threshold: 2, TargetModel: "frontier"},
+		FrontierProvider: frontierProv,
+	}, event.Discard)
+	c := New(Options{Runner: ag, Executor: ag})
+	c.SetGoal("finish a hard task")
+
+	o := newTurnOrchestrator(c)
+	if err := o.runGoalLoopWithRawDisplay(context.Background(), "Start pursuing the active goal now.", "finish a hard task", ""); err != nil {
+		t.Fatal(err)
+	}
+
+	if defaultProv.call != 2 {
+		t.Fatalf("default provider calls = %d, want exactly two before goal loop signal reaches threshold", defaultProv.call)
+	}
+	if frontierProv.call != 1 {
+		t.Fatalf("frontier provider calls = %d, want third goal turn to route to frontier", frontierProv.call)
+	}
+}
+
 func TestTurnOrchestratorApprovedPlanSharesOneStopHook(t *testing.T) {
 	prov := &scriptedTurns{turns: [][]provider.Chunk{
 		textTurn("Plan:\n1. Make the change\n2. Verify it"),

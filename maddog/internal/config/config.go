@@ -556,14 +556,15 @@ type CodeIntelligenceConfig struct {
 // abstract code-intelligence capabilities. Enabled nil means enabled; false
 // keeps the backend visible to management surfaces but out of the usable set.
 type CodeIntelligenceBackendConfig struct {
-	Name    string            `toml:"name"`
-	Kind    string            `toml:"kind"`
-	Server  string            `toml:"server"`
-	Enabled *bool             `toml:"enabled"`
-	Command string            `toml:"command"`
-	Args    []string          `toml:"args"`
-	Env     map[string]string `toml:"env"`
-	Tools   map[string]string `toml:"tools"`
+	Name      string            `toml:"name"`
+	Kind      string            `toml:"kind"`
+	Server    string            `toml:"server"`
+	Enabled   *bool             `toml:"enabled"`
+	Command   string            `toml:"command"`
+	Args      []string          `toml:"args"`
+	IndexMode string            `toml:"index_mode"`
+	Env       map[string]string `toml:"env"`
+	Tools     map[string]string `toml:"tools"`
 }
 
 func (c CodeIntelligenceBackendConfig) IsEnabled() bool {

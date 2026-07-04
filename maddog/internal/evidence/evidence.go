@@ -34,17 +34,20 @@ type TodoStepMatch struct {
 // Receipt is the host-runtime record of one tool call. It stays in memory for
 // the current agent turn and is not serialized into prompts or session state.
 type Receipt struct {
-	ToolName  string          `json:"tool_name"`
-	Args      json.RawMessage `json:"args,omitempty"`
-	Success   bool            `json:"success"`
-	Command   string          `json:"command,omitempty"`
-	Step      string          `json:"step,omitempty"`
-	StepProof bool            `json:"step_proof,omitempty"`
-	TodoStep  *TodoStepMatch  `json:"todo_step,omitempty"`
-	Paths     []string        `json:"paths,omitempty"`
-	Read      bool            `json:"read,omitempty"`
-	Write     bool            `json:"write,omitempty"`
-	Todos     []TodoItem      `json:"todos,omitempty"`
+	ToolName           string          `json:"tool_name"`
+	Args               json.RawMessage `json:"args,omitempty"`
+	Success            bool            `json:"success"`
+	Command            string          `json:"command,omitempty"`
+	Step               string          `json:"step,omitempty"`
+	StepProof          bool            `json:"step_proof,omitempty"`
+	TodoStep           *TodoStepMatch  `json:"todo_step,omitempty"`
+	Paths              []string        `json:"paths,omitempty"`
+	Read               bool            `json:"read,omitempty"`
+	Write              bool            `json:"write,omitempty"`
+	Todos              []TodoItem      `json:"todos,omitempty"`
+	GoalAcceptanceLoop int             `json:"goal_acceptance_loop,omitempty"`
+	DifficultDecision  bool            `json:"difficult_decision,omitempty"`
+	DecisionSummary    string          `json:"decision_summary,omitempty"`
 }
 
 // FailureSignal summarizes same-turn tool failures for routing decisions.
@@ -138,6 +141,17 @@ func cloneReceipt(r Receipt) Receipt {
 	return r
 }
 
+// ControlSignalReceipt converts host/controller observations into the same
+// ledger stream as tool receipts without treating them as tool health samples.
+func ControlSignalReceipt(sig FailureSignal) Receipt {
+	return Receipt{
+		ToolName:           "goal_control",
+		GoalAcceptanceLoop: sig.GoalAcceptanceLoop,
+		DifficultDecision:  sig.DifficultDecision,
+		DecisionSummary:    strings.TrimSpace(sig.DecisionSummary),
+	}
+}
+
 // FailureSignal computes current-turn failure health across all recorded tool
 // receipts. HealthScore uses a short recent window so routing reacts to local
 // trouble without being dominated by older successes.
@@ -162,27 +176,43 @@ func (l *Ledger) FailureSignalSince(index int) FailureSignal {
 	}
 	receipts := l.receipts[index:]
 	var sig FailureSignal
-	for i := len(receipts) - 1; i >= 0; i-- {
-		if receipts[i].Success {
+	toolReceipts := make([]Receipt, 0, len(receipts))
+	for _, r := range receipts {
+		if isControlSignalReceipt(r) {
+			if r.GoalAcceptanceLoop > sig.GoalAcceptanceLoop {
+				sig.GoalAcceptanceLoop = r.GoalAcceptanceLoop
+			}
+			if r.DifficultDecision {
+				sig.DifficultDecision = true
+				if strings.TrimSpace(r.DecisionSummary) != "" {
+					sig.DecisionSummary = strings.TrimSpace(r.DecisionSummary)
+				}
+			}
+			continue
+		}
+		toolReceipts = append(toolReceipts, r)
+	}
+	for i := len(toolReceipts) - 1; i >= 0; i-- {
+		if toolReceipts[i].Success {
 			break
 		}
 		sig.ConsecutiveErrors++
 		if sig.LastErrorTool == "" {
-			sig.LastErrorTool = receipts[i].ToolName
+			sig.LastErrorTool = toolReceipts[i].ToolName
 		}
 	}
-	for _, r := range receipts {
+	for _, r := range toolReceipts {
 		if !r.Success {
 			sig.ErrorStreak++
 			sig.LastErrorTool = r.ToolName
 		}
 	}
 	const window = 10
-	start := len(receipts) - window
+	start := len(toolReceipts) - window
 	if start < 0 {
 		start = 0
 	}
-	recent := receipts[start:]
+	recent := toolReceipts[start:]
 	if len(recent) > 0 {
 		successes := 0
 		for _, r := range recent {
@@ -193,6 +223,10 @@ func (l *Ledger) FailureSignalSince(index int) FailureSignal {
 		sig.HealthScore = float64(successes) / float64(len(recent))
 	}
 	return sig
+}
+
+func isControlSignalReceipt(r Receipt) bool {
+	return r.ToolName == "goal_control" || r.GoalAcceptanceLoop > 0 || r.DifficultDecision || strings.TrimSpace(r.DecisionSummary) != ""
 }
 
 func (l *Ledger) HasSuccessfulCommand(command string) bool {

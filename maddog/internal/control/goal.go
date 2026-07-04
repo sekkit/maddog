@@ -78,11 +78,12 @@ type goalAdvanceInput struct {
 // state to persist (built under mu when something changed); notice is surfaced
 // to the user; cont reports whether the goal loop should continue.
 type goalAdvanceResult struct {
-	notice string
-	cont   bool
-	path   string
-	data   []byte
-	ok     bool
+	notice        string
+	cont          bool
+	controlSignal evidence.FailureSignal
+	path          string
+	data          []byte
+	ok            bool
 }
 
 // goalStatePath derives a session's persisted goal-state sidecar.
@@ -192,12 +193,18 @@ func (g *goalMachine) advance(in goalAdvanceInput) goalAdvanceResult {
 	}
 	g.turns++
 	var notice string
+	var controlSignal evidence.FailureSignal
 	switch in.status {
 	case GoalStatusComplete:
 		if incomplete := formatIncompleteTodos(in.todos, in.readiness); len(incomplete) > 0 && (g.strict || g.intercepts == 0) {
 			// In strict mode every claim is blocked until todos are done;
 			// otherwise only the first consecutive claim is intercepted.
 			g.intercepts++
+			controlSignal = evidence.FailureSignal{
+				GoalAcceptanceLoop: g.turns,
+				DifficultDecision:  true,
+				DecisionSummary:    "goal completion was intercepted by readiness checks",
+			}
 			g.interceptMsg = incomplete
 			break
 		}
@@ -264,6 +271,14 @@ func (g *goalMachine) advance(in goalAdvanceInput) goalAdvanceResult {
 		notice = g.block
 	}
 	res := goalAdvanceResult{notice: notice, cont: notice == ""}
+	if res.cont {
+		res.controlSignal = controlSignal
+		res.controlSignal.GoalAcceptanceLoop = g.turns
+		if in.status == GoalStatusBlocked {
+			res.controlSignal.DifficultDecision = true
+			res.controlSignal.DecisionSummary = "goal blocked: " + cleanGoalBlockReason(in.reason)
+		}
+	}
 	if notice != "" {
 		res.path, res.data, res.ok = g.buildStateLocked(in.todos)
 	}

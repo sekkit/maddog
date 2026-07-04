@@ -820,6 +820,7 @@ function makeMockApp(): AppBindings {
       serverName: "codegraph",
       status: "disabled",
       indexStatus: "not_initialized",
+      indexMode: "build",
       enabled: false,
       builtIn: true,
       configured: true,

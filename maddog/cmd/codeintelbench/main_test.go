@@ -127,6 +127,47 @@ GO_WANT_HYPERGRAPHRAG_HELPER_PROCESS = "1"
 	}
 }
 
+func TestRunCodeIntelBenchHonorsHyperGraphRAGQueryOnlyIndexMode(t *testing.T) {
+	repo := t.TempDir()
+	if err := os.WriteFile(filepath.Join(repo, "alpha.go"), []byte("package fixture\nfunc PortableSymbol() {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	configBody := `
+[[code_intelligence.backends]]
+name = "project-hypergraph"
+kind = "hypergraphrag"
+command = "` + strings.ReplaceAll(os.Args[0], `\`, `\\`) + `"
+args = ["-test.run=TestHyperGraphRAGSidecarHelperProcess", "--"]
+index_mode = "query_only"
+[code_intelligence.backends.env]
+GO_WANT_HYPERGRAPHRAG_HELPER_PROCESS = "1"
+GO_FAIL_HYPERGRAPHRAG_INDEX = "1"
+`
+	if err := os.WriteFile(filepath.Join(repo, "maddog.toml"), []byte(configBody), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	outDir := t.TempDir()
+
+	var stdout, stderr bytes.Buffer
+	code := runCodeIntelBench([]string{"-repo", repo, "-out-dir", outDir, "-codegraph-path", filepath.Join(repo, "missing-codegraph")}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("exit = %d, stderr = %s", code, stderr.String())
+	}
+	raw, err := os.ReadFile(filepath.Join(outDir, "codeintel-bench", codegraph.BenchmarkLatestJSONName))
+	if err != nil {
+		t.Fatalf("latest json missing: %v", err)
+	}
+	var report codegraph.BenchmarkReport
+	if err := json.Unmarshal(raw, &report); err != nil {
+		t.Fatalf("decode latest json: %v", err)
+	}
+	for _, backend := range report.Backends {
+		if backend.ID == "project-hypergraph" && backend.Failures > 0 {
+			t.Fatalf("query_only HyperGraphRAG backend should not fail by calling index: %+v", backend)
+		}
+	}
+}
+
 func TestCodeGraphBenchmarkUpdateWaitsForReadinessFixture(t *testing.T) {
 	search := &delayedSearchTool{outputs: []string{"index pending", "runner.go: func RunBenchmark()"}}
 	backend := &codeGraphMCPBenchmarkBackend{
@@ -164,6 +205,9 @@ func TestHyperGraphRAGSidecarHelperProcess(t *testing.T) {
 	case "health":
 		_ = enc.Encode(map[string]string{"status": codegraph.BenchmarkHealthReady})
 	case "index":
+		if os.Getenv("GO_FAIL_HYPERGRAPHRAG_INDEX") == "1" {
+			os.Exit(9)
+		}
 		_ = enc.Encode(map[string]bool{"indexed": true})
 	case "query":
 		_ = enc.Encode(map[string]any{"results": []codegraph.BenchmarkResult{{

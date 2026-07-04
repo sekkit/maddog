@@ -37,8 +37,11 @@ check(
   includesAll(types, [
     "export interface CodeIntelligenceBackendView",
     'status: "ready" | "unknown" | "degraded" | "disabled" | "invalid" | string;',
+    "notes?: string;",
     'indexStatus?: "initialized" | "not_initialized" | string;',
+    'indexMode?: "build" | "query_only" | string;',
     "capabilities: CodeIntelligenceBackendCapabilities;",
+    "researchOnly?: boolean;",
     "toolMapping?: Record<string, string>;",
     "benchmark?: CodeIntelligenceBenchmarkView;",
     "benchmarkRunning?: boolean;",

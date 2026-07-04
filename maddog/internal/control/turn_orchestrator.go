@@ -245,6 +245,9 @@ func (o *turnOrchestrator) advanceGoalAfterTurn() bool {
 	if res.notice == goalCompleteNotice && c.executor != nil {
 		c.completeRemainingGoalTodos()
 	}
+	if res.cont && c.executor != nil {
+		c.executor.RecordControlSignal(res.controlSignal)
+	}
 	return res.cont
 }
 

@@ -301,6 +301,11 @@ type Agent struct {
 	// complete_step validate that cited evidence happened before the claim.
 	evidence *evidence.Ledger
 
+	// pendingControlSignals are host/controller observations that should seed the
+	// next run's routing ledger after the per-turn reset.
+	pendingControlMu      sync.Mutex
+	pendingControlSignals []evidence.FailureSignal
+
 	// todoState is the host's canonical task list: the latest successful
 	// todo_write with completions applied by complete_step. Unlike the per-turn
 	// ledger it survives turn boundaries and compaction (it never rides in the
@@ -907,6 +912,7 @@ func (a *Agent) Run(ctx context.Context, input string) (runErr error) {
 	a.steerMu.Unlock()
 	if a.evidence != nil {
 		a.evidence.Reset()
+		a.applyPendingControlSignals()
 	}
 	a.resetToolCompressions()
 	a.repeatSuccessCounts = nil
@@ -952,6 +958,7 @@ func (a *Agent) Run(ctx context.Context, input string) (runErr error) {
 		}
 	}
 	a.session.Add(provider.Message{Role: provider.RoleUser, Content: input, Images: userImages(ctx)})
+	a.evaluateInitialRouting(ctx)
 
 	finalReadinessBlocks := 0
 	emptyFinalBlocks := 0
@@ -1149,6 +1156,61 @@ func (a *Agent) resetRoutingForTurn() {
 		a.pricing = a.defaultPricing
 		a.contextWindow = a.defaultContextWindow
 	}
+}
+
+// RecordControlSignal queues a controller/host observation for the next Run.
+// Run resets the per-turn ledger first, then records these signals so routing
+// decisions are based on real control-flow events rather than test-only structs.
+func (a *Agent) RecordControlSignal(sig evidence.FailureSignal) {
+	if a == nil || (sig.GoalAcceptanceLoop <= 0 && !sig.DifficultDecision && strings.TrimSpace(sig.DecisionSummary) == "") {
+		return
+	}
+	a.pendingControlMu.Lock()
+	a.pendingControlSignals = append(a.pendingControlSignals, sig)
+	a.pendingControlMu.Unlock()
+}
+
+func (a *Agent) applyPendingControlSignals() {
+	if a == nil || a.evidence == nil {
+		return
+	}
+	a.pendingControlMu.Lock()
+	signals := append([]evidence.FailureSignal(nil), a.pendingControlSignals...)
+	a.pendingControlSignals = nil
+	a.pendingControlMu.Unlock()
+	for _, sig := range signals {
+		a.evidence.Record(evidence.ControlSignalReceipt(sig))
+	}
+}
+
+func (a *Agent) evaluateInitialRouting(ctx context.Context) {
+	if a.upgradePolicy == nil || a.evidence == nil || a.upgraded || a.frontierProv == nil {
+		return
+	}
+	sig := a.evidence.FailureSignal()
+	if sig.GoalAcceptanceLoop <= 0 && !sig.DifficultDecision {
+		return
+	}
+	decision := a.upgradePolicy.Evaluate(sig, 0, a.frontierTokens.Load())
+	if decision.TriggerAdvisor {
+		a.consultAdvisor(ctx, sig, decision)
+	}
+	if !decision.ShouldUpgrade {
+		return
+	}
+	a.switchToFrontier(decision)
+	target := strings.TrimSpace(decision.TargetModel)
+	if target == "" {
+		target = strings.TrimSpace(a.frontierTarget)
+	}
+	if target == "" && a.frontierProv != nil {
+		target = a.frontierProv.Name()
+	}
+	text := "upgraded to " + target
+	if strings.TrimSpace(decision.Reason) != "" {
+		text += ": " + strings.TrimSpace(decision.Reason)
+	}
+	a.sink.Emit(event.Event{Kind: event.Upgrade, Level: event.LevelInfo, Text: text})
 }
 
 func (a *Agent) evaluateRoutingAfterTools(ctx context.Context, turn int) {

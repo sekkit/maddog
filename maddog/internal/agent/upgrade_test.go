@@ -138,6 +138,45 @@ func TestRunConsultsAdvisorBeforeFrontierAfterRepeatedFailures(t *testing.T) {
 	}
 }
 
+func TestRunConsumesPendingGoalControlSignalBeforeModelCall(t *testing.T) {
+	defaultProv := testutil.NewMock("default", testutil.Turn{Text: "default should not run"})
+	frontierProv := testutil.NewMock("frontier", testutil.Turn{Text: "frontier handles loop"})
+	sink := &recordSink{}
+	var advisorReqs []AdvisorRequest
+
+	a := New(defaultProv, echoRegistry(), NewSession(""), Options{
+		UpgradePolicy:    ThresholdUpgradePolicy{Threshold: 2, TargetModel: "frontier-model"},
+		FrontierProvider: frontierProv,
+		FrontierTarget:   "frontier-model",
+		Advisor: AdvisorConfig{
+			MaxUsesPerTurn:    1,
+			MaxUsesPerSession: 1,
+		},
+		AdvisorRunner: func(_ context.Context, req AdvisorRequest) (string, error) {
+			advisorReqs = append(advisorReqs, req)
+			return "1. Continue on frontier.\nRisks: goal loop may still need user input.", nil
+		},
+	}, sink)
+	a.RecordControlSignal(evidence.FailureSignal{
+		GoalAcceptanceLoop: 2,
+		DifficultDecision:  true,
+		DecisionSummary:    "goal completion was intercepted by readiness checks",
+	})
+
+	if err := a.Run(context.Background(), "Continue pursuing the active goal."); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if defaultProv.CallCount() != 0 {
+		t.Fatalf("default provider calls = %d, want pending control signal to switch before first call", defaultProv.CallCount())
+	}
+	if frontierProv.CallCount() != 1 {
+		t.Fatalf("frontier provider calls = %d, want 1", frontierProv.CallCount())
+	}
+	if len(advisorReqs) != 1 || !strings.Contains(advisorReqs[0].Question, "goal_acceptance_loops=2") {
+		t.Fatalf("advisor requests = %+v, want goal loop signal in question", advisorReqs)
+	}
+}
+
 func TestAdvisorSessionBudgetPreventsRepeatedAutomaticConsults(t *testing.T) {
 	defaultProv := testutil.NewMock("default",
 		testutil.Turn{ToolCalls: []provider.ToolCall{{ID: "c1", Name: "write_file", Arguments: `{}`}}},

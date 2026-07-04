@@ -53,11 +53,12 @@ func runCodeIntelBench(args []string, stdout, stderr io.Writer) int {
 					continue
 				}
 				backends = append(backends, hypergraphrag.NewBenchmarkBackend(hypergraphrag.SidecarConfig{
-					ID:      backend.Name,
-					Name:    "HyperGraphRAG",
-					Command: backend.Command,
-					Args:    backend.Args,
-					Env:     backend.Env,
+					ID:        backend.Name,
+					Name:      "HyperGraphRAG",
+					Command:   backend.Command,
+					Args:      backend.Args,
+					Env:       backend.Env,
+					IndexMode: backend.IndexMode,
 				}))
 			}
 		}

@@ -689,10 +689,13 @@ export interface CodeIntelligenceBackendView {
   serverName?: string;
   status: "ready" | "unknown" | "degraded" | "disabled" | "invalid" | string;
   lastError?: string;
+  notes?: string;
   indexStatus?: "initialized" | "not_initialized" | string;
+  indexMode?: "build" | "query_only" | string;
   enabled: boolean;
   builtIn?: boolean;
   configured: boolean;
+  researchOnly?: boolean;
   capabilities: CodeIntelligenceBackendCapabilities;
   toolMapping?: Record<string, string>;
   toolCount: number;

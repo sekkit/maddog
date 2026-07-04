@@ -4077,10 +4077,13 @@ type CodeIntelligenceBackendView struct {
 	ServerName       string                         `json:"serverName,omitempty"`
 	Status           string                         `json:"status"`
 	LastError        string                         `json:"lastError,omitempty"`
+	Notes            string                         `json:"notes,omitempty"`
 	IndexStatus      string                         `json:"indexStatus,omitempty"`
+	IndexMode        string                         `json:"indexMode,omitempty"`
 	Enabled          bool                           `json:"enabled"`
 	BuiltIn          bool                           `json:"builtIn,omitempty"`
 	Configured       bool                           `json:"configured"`
+	ResearchOnly     bool                           `json:"researchOnly,omitempty"`
 	Capabilities     codegraph.BackendCapabilities  `json:"capabilities"`
 	ToolMapping      map[string]string              `json:"toolMapping,omitempty"`
 	ToolCount        int                            `json:"toolCount"`
@@ -4498,8 +4501,10 @@ func skillCandidateStoreDir(workspaceRoot string) string {
 
 func codeIntelligenceBackendViews(reg codegraph.BackendRegistry, workspaceRoot string, connected map[string]plugin.ServerStatus, failed map[string]plugin.Failure, benchmark CodeIntelligenceBenchmarkView, running map[string]bool) []CodeIntelligenceBackendView {
 	backends := append(reg.Backends(), reg.InvalidBackends()...)
-	out := make([]CodeIntelligenceBackendView, 0, len(backends))
+	out := make([]CodeIntelligenceBackendView, 0, len(backends)+len(codegraph.KnownBackendPresets()))
+	seen := map[string]bool{}
 	for _, backend := range backends {
+		seen[backend.ID] = true
 		indexStatus := ""
 		if backend.Kind == codegraph.BackendKindBuiltIn {
 			indexStatus = "not_initialized"
@@ -4528,6 +4533,7 @@ func codeIntelligenceBackendViews(reg codegraph.BackendRegistry, workspaceRoot s
 			Status:       status,
 			LastError:    lastError,
 			IndexStatus:  indexStatus,
+			IndexMode:    backend.IndexMode,
 			Enabled:      backend.Enabled,
 			BuiltIn:      backend.Kind == codegraph.BackendKindBuiltIn,
 			Configured:   true,
@@ -4541,12 +4547,59 @@ func codeIntelligenceBackendViews(reg codegraph.BackendRegistry, workspaceRoot s
 		}
 		out = append(out, view)
 	}
+	for _, preset := range codegraph.KnownBackendPresets() {
+		if seen[preset.ID] {
+			continue
+		}
+		backend := preset.Backend
+		view := CodeIntelligenceBackendView{
+			ID:           preset.ID,
+			Name:         preset.Name,
+			Kind:         backend.Kind,
+			ServerName:   backend.Server,
+			Status:       codegraph.BackendHealthUnknown,
+			Notes:        preset.Notes,
+			IndexMode:    backend.IndexMode,
+			Enabled:      false,
+			Configured:   false,
+			ResearchOnly: preset.ResearchOnly,
+			Capabilities: presetCapabilities(backend.Tools),
+			ToolMapping:  cloneStringMap(backend.Tools),
+			ToolCount:    len(backend.Tools),
+		}
+		out = append(out, view)
+	}
 	sort.SliceStable(out, func(i, j int) bool {
 		if out[i].BuiltIn != out[j].BuiltIn {
 			return out[i].BuiltIn
 		}
 		return out[i].ID < out[j].ID
 	})
+	return out
+}
+
+func presetCapabilities(tools map[string]string) codegraph.BackendCapabilities {
+	_, symbol := tools["symbol_search"]
+	_, semantic := tools["semantic_search"]
+	_, contextPack := tools["context_pack"]
+	_, graphTrace := tools["graph_trace"]
+	_, edit := tools["edit_refactor"]
+	_, health := tools["health"]
+	return codegraph.BackendCapabilities{
+		SymbolSearch:   symbol,
+		SemanticSearch: semantic,
+		ContextPack:    contextPack,
+		GraphTrace:     graphTrace,
+		EditRefactor:   edit,
+		Health:         health,
+	}
+}
+
+func cloneStringMap(in map[string]string) map[string]string {
+	out := map[string]string{}
+	for k, v := range in {
+		out[k] = v
+	}
 	return out
 }
 
@@ -5742,13 +5795,17 @@ func codeIntelligenceBenchmarkBackendFor(backend codegraph.Backend, cases []code
 	case codegraph.BackendKindBuiltIn:
 		return codegraph.NewMCPBenchmarkBackend("", cases), nil
 	case codegraph.BackendKindHyperGraphRAG:
+		indexMode := strings.TrimSpace(backend.IndexMode)
+		if indexMode == "" {
+			indexMode = hypergraphrag.IndexModeQueryOnly
+		}
 		return hypergraphrag.NewBenchmarkBackend(hypergraphrag.SidecarConfig{
 			ID:        backend.ID,
 			Name:      backend.Name,
 			Command:   backend.Command,
 			Args:      backend.Args,
 			Env:       backend.Env,
-			IndexMode: hypergraphrag.IndexModeQueryOnly,
+			IndexMode: indexMode,
 		}), nil
 	case codegraph.BackendKindMCP:
 		return codegraph.NewMappedMCPBenchmarkBackend(backend, registry), nil

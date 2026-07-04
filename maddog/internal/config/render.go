@@ -577,6 +577,9 @@ func renderCodeIntelligenceConfig(b *strings.Builder, c CodeIntelligenceConfig) 
 		if len(backend.Args) > 0 {
 			fmt.Fprintf(b, "args = %s\n", renderStringArray(backend.Args))
 		}
+		if strings.TrimSpace(backend.IndexMode) != "" {
+			fmt.Fprintf(b, "index_mode = %q\n", strings.TrimSpace(backend.IndexMode))
+		}
 		if backend.Enabled != nil {
 			fmt.Fprintf(b, "enabled = %v\n", *backend.Enabled)
 		}

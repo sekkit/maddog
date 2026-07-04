@@ -699,11 +699,12 @@ func TestRenderCodeIntelligenceToolKeysRoundTripWhenQuoted(t *testing.T) {
 func TestRenderHyperGraphRAGCodeIntelligenceBackendRoundTrip(t *testing.T) {
 	c := Default()
 	c.CodeIntelligence.Backends = []CodeIntelligenceBackendConfig{{
-		Name:    "project-hypergraph",
-		Kind:    "hypergraphrag",
-		Command: "maddog-hypergraphrag",
-		Args:    []string{"--workdir", ".maddog/hypergraph"},
-		Enabled: boolPtr(false),
+		Name:      "project-hypergraph",
+		Kind:      "hypergraphrag",
+		Command:   "maddog-hypergraphrag",
+		Args:      []string{"--workdir", ".maddog/hypergraph"},
+		IndexMode: "query_only",
+		Enabled:   boolPtr(false),
 		Env: map[string]string{
 			"OPENAI_API_KEY": "${OPENAI_API_KEY}",
 		},
@@ -714,6 +715,7 @@ func TestRenderHyperGraphRAGCodeIntelligenceBackendRoundTrip(t *testing.T) {
 		`kind = "hypergraphrag"`,
 		`command = "maddog-hypergraphrag"`,
 		`args = ["--workdir", ".maddog/hypergraph"]`,
+		`index_mode = "query_only"`,
 		`[code_intelligence.backends.env]`,
 		`OPENAI_API_KEY = "${OPENAI_API_KEY}"`,
 	} {
@@ -726,7 +728,7 @@ func TestRenderHyperGraphRAGCodeIntelligenceBackendRoundTrip(t *testing.T) {
 		t.Fatalf("decode rendered TOML: %v\n---\n%s", err, rendered)
 	}
 	backend := got.CodeIntelligence.Backends[0]
-	if backend.Kind != "hypergraphrag" || backend.Command != "maddog-hypergraphrag" || len(backend.Args) != 2 || backend.Env["OPENAI_API_KEY"] != "${OPENAI_API_KEY}" {
+	if backend.Kind != "hypergraphrag" || backend.Command != "maddog-hypergraphrag" || len(backend.Args) != 2 || backend.IndexMode != "query_only" || backend.Env["OPENAI_API_KEY"] != "${OPENAI_API_KEY}" {
 		t.Fatalf("HyperGraphRAG backend did not round-trip: %+v", backend)
 	}
 	if backend.Enabled == nil || *backend.Enabled {

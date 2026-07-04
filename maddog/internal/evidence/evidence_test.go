@@ -80,6 +80,28 @@ func TestLedgerReportsFinalReadinessReceiptsAfterWriter(t *testing.T) {
 	}
 }
 
+func TestLedgerFailureSignalIncludesProductionControlSignals(t *testing.T) {
+	ledger := NewLedger()
+	ledger.Record(Receipt{ToolName: "bash", Success: true, Command: "go test ./..."})
+	ledger.Record(Receipt{
+		ToolName:           "goal_control",
+		GoalAcceptanceLoop: 2,
+		DifficultDecision:  true,
+		DecisionSummary:    "goal completion was intercepted by readiness checks",
+	})
+
+	sig := ledger.FailureSignal()
+	if sig.GoalAcceptanceLoop != 2 {
+		t.Fatalf("GoalAcceptanceLoop = %d, want 2", sig.GoalAcceptanceLoop)
+	}
+	if !sig.DifficultDecision || sig.DecisionSummary != "goal completion was intercepted by readiness checks" {
+		t.Fatalf("difficult decision signal not preserved: %+v", sig)
+	}
+	if sig.HealthScore != 1 {
+		t.Fatalf("control signal should not dilute tool health, got %.2f", sig.HealthScore)
+	}
+}
+
 func TestLedgerResetClearsTurnReceipts(t *testing.T) {
 	ledger := NewLedger()
 	ledger.Record(Receipt{ToolName: "bash", Success: true, Command: "go test ./..."})
