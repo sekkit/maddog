@@ -51,6 +51,57 @@ func TestGoalCommandAutoContinuesUntilComplete(t *testing.T) {
 	}
 }
 
+func TestGoalAdvanceHealthyContinuationDoesNotEmitAcceptanceSignal(t *testing.T) {
+	var g goalMachine
+	g.set("ship it", GoalResearchAuto, nil)
+
+	res := g.advance(goalAdvanceInput{status: GoalStatusRunning, toolCalled: true})
+
+	if !res.cont {
+		t.Fatal("healthy continuation should keep goal loop running")
+	}
+	if res.controlSignal.GoalAcceptanceLoop != 0 || res.controlSignal.DifficultDecision || res.controlSignal.DecisionSummary != "" {
+		t.Fatalf("healthy continuation signal = %+v, want no goal/acceptance signal", res.controlSignal)
+	}
+}
+
+func TestGoalAdvanceInterceptSignalCountsInterceptsNotTotalTurns(t *testing.T) {
+	var g goalMachine
+	g.set("ship it", GoalResearchAuto, nil)
+	if res := g.advance(goalAdvanceInput{status: GoalStatusRunning, toolCalled: true}); !res.cont {
+		t.Fatal("setup continuation should keep goal loop running")
+	}
+
+	res := g.advance(goalAdvanceInput{
+		status: GoalStatusComplete,
+		todos:  []evidence.TodoItem{{Content: "Verify", Status: "pending"}},
+	})
+
+	if res.controlSignal.GoalAcceptanceLoop != 1 {
+		t.Fatalf("intercept signal loops = %d, want first intercept count 1", res.controlSignal.GoalAcceptanceLoop)
+	}
+	if !res.controlSignal.DifficultDecision || !strings.Contains(res.controlSignal.DecisionSummary, "intercepted") {
+		t.Fatalf("intercept signal = %+v, want difficult decision with intercepted reason", res.controlSignal)
+	}
+}
+
+func TestGoalAdvanceBlockedSignalCountsRepeatedBlockedReasons(t *testing.T) {
+	var g goalMachine
+	g.set("ship it", GoalResearchAuto, nil)
+	if res := g.advance(goalAdvanceInput{status: GoalStatusRunning, toolCalled: true}); !res.cont {
+		t.Fatal("setup continuation should keep goal loop running")
+	}
+
+	res := g.advance(goalAdvanceInput{status: GoalStatusBlocked, reason: "needs credentials"})
+
+	if res.controlSignal.GoalAcceptanceLoop != 1 {
+		t.Fatalf("blocked signal loops = %d, want first repeated-block audit count 1", res.controlSignal.GoalAcceptanceLoop)
+	}
+	if !res.controlSignal.DifficultDecision || !strings.Contains(res.controlSignal.DecisionSummary, "needs credentials") {
+		t.Fatalf("blocked signal = %+v, want difficult decision with blocker reason", res.controlSignal)
+	}
+}
+
 func TestGoalModeSkipsAutoPlanApproval(t *testing.T) {
 	prov := &scriptedTurns{turns: [][]provider.Chunk{
 		textTurn("Implemented the requested work.\n\n[goal:complete]"),

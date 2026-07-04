@@ -201,7 +201,7 @@ func (g *goalMachine) advance(in goalAdvanceInput) goalAdvanceResult {
 			// otherwise only the first consecutive claim is intercepted.
 			g.intercepts++
 			controlSignal = evidence.FailureSignal{
-				GoalAcceptanceLoop: g.turns,
+				GoalAcceptanceLoop: g.intercepts,
 				DifficultDecision:  true,
 				DecisionSummary:    "goal completion was intercepted by readiness checks",
 			}
@@ -273,8 +273,8 @@ func (g *goalMachine) advance(in goalAdvanceInput) goalAdvanceResult {
 	res := goalAdvanceResult{notice: notice, cont: notice == ""}
 	if res.cont {
 		res.controlSignal = controlSignal
-		res.controlSignal.GoalAcceptanceLoop = g.turns
 		if in.status == GoalStatusBlocked {
+			res.controlSignal.GoalAcceptanceLoop = g.blocks
 			res.controlSignal.DifficultDecision = true
 			res.controlSignal.DecisionSummary = "goal blocked: " + cleanGoalBlockReason(in.reason)
 		}

@@ -102,6 +102,34 @@ func TestLedgerFailureSignalIncludesProductionControlSignals(t *testing.T) {
 	}
 }
 
+func TestLedgerFailureSignalSinceScopesControlSignals(t *testing.T) {
+	ledger := NewLedger()
+	ledger.Record(ControlSignalReceipt(FailureSignal{
+		GoalAcceptanceLoop: 3,
+		DifficultDecision:  true,
+		DecisionSummary:    "prior goal loop",
+	}))
+	ledger.Record(Receipt{ToolName: "bash", Success: true, Command: "go test ./..."})
+	start := ledger.Count()
+	ledger.Record(ControlSignalReceipt(FailureSignal{
+		GoalAcceptanceLoop: 1,
+		DifficultDecision:  true,
+		DecisionSummary:    "current goal loop",
+	}))
+	ledger.Record(Receipt{ToolName: "read_file", Success: true, Read: true, Paths: []string{"internal/evidence/evidence.go"}})
+
+	sig := ledger.FailureSignalSince(start)
+	if sig.GoalAcceptanceLoop != 1 {
+		t.Fatalf("GoalAcceptanceLoop since index = %d, want current scoped signal only", sig.GoalAcceptanceLoop)
+	}
+	if !sig.DifficultDecision || sig.DecisionSummary != "current goal loop" {
+		t.Fatalf("scoped difficult decision signal not preserved: %+v", sig)
+	}
+	if sig.HealthScore != 1 {
+		t.Fatalf("control receipts should not affect scoped tool health, got %.2f", sig.HealthScore)
+	}
+}
+
 func TestLedgerResetClearsTurnReceipts(t *testing.T) {
 	ledger := NewLedger()
 	ledger.Record(Receipt{ToolName: "bash", Success: true, Command: "go test ./..."})

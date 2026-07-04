@@ -196,19 +196,33 @@ func TestTurnOrchestratorGoalContinuationRunsStopPerUnit(t *testing.T) {
 	}
 }
 
-func TestTurnOrchestratorGoalLoopSignalUpgradesExecutor(t *testing.T) {
+func TestTurnOrchestratorHealthyLongGoalDoesNotUpgradeExecutor(t *testing.T) {
 	defaultProv := &scriptedTurns{turns: [][]provider.Chunk{
 		textTurn("Still working.\n\n[goal:continue]"),
 		textTurn("Still working more.\n\n[goal:continue]"),
+		textTurn("Finished without friction.\n\n[goal:complete]"),
 	}}
 	frontierProv := &scriptedTurns{turns: [][]provider.Chunk{
-		textTurn("Finished on frontier.\n\n[goal:complete]"),
+		textTurn("frontier should not run"),
 	}}
+	var advisorCalls int
+	var events []event.Event
+	sink := event.FuncSink(func(e event.Event) {
+		events = append(events, e)
+	})
 	ag := agent.New(defaultProv, tool.NewRegistry(), agent.NewSession(""), agent.Options{
 		UpgradePolicy:    agent.ThresholdUpgradePolicy{Threshold: 2, TargetModel: "frontier"},
 		FrontierProvider: frontierProv,
-	}, event.Discard)
-	c := New(Options{Runner: ag, Executor: ag})
+		Advisor: agent.AdvisorConfig{
+			MaxUsesPerTurn:    1,
+			MaxUsesPerSession: 1,
+		},
+		AdvisorRunner: func(context.Context, agent.AdvisorRequest) (string, error) {
+			advisorCalls++
+			return "1. Continue on default.\nRisks: none.", nil
+		},
+	}, sink)
+	c := New(Options{Runner: ag, Executor: ag, Sink: sink})
 	c.SetGoal("finish a hard task")
 
 	o := newTurnOrchestrator(c)
@@ -216,11 +230,125 @@ func TestTurnOrchestratorGoalLoopSignalUpgradesExecutor(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	if defaultProv.call != 3 {
+		t.Fatalf("default provider calls = %d, want healthy goal to finish on default provider", defaultProv.call)
+	}
+	if frontierProv.call != 0 {
+		t.Fatalf("frontier provider calls = %d, want no upgrade for healthy goal continuation", frontierProv.call)
+	}
+	if advisorCalls != 0 {
+		t.Fatalf("advisor calls = %d, want no advisor for healthy goal continuation", advisorCalls)
+	}
+	for _, e := range events {
+		if e.Kind == event.Advisor || e.Kind == event.Upgrade {
+			t.Fatalf("unexpected routing event for healthy goal continuation: %+v", e)
+		}
+	}
+}
+
+func TestTurnOrchestratorInterceptedCompletionProducesControlSignal(t *testing.T) {
+	defaultProv := &scriptedTurns{turns: [][]provider.Chunk{
+		textTurn("I think this is done.\n\n[goal:complete]"),
+		textTurn("Overriding after controller feedback.\n\n[goal:complete]"),
+	}}
+	frontierProv := &scriptedTurns{turns: [][]provider.Chunk{
+		textTurn("frontier should not run"),
+	}}
+	var advisorReqs []agent.AdvisorRequest
+	ag := agent.New(defaultProv, tool.NewRegistry(), agent.NewSession(""), agent.Options{
+		UpgradePolicy:    agent.ThresholdUpgradePolicy{Threshold: 2, TargetModel: "frontier"},
+		FrontierProvider: frontierProv,
+		Advisor: agent.AdvisorConfig{
+			MaxUsesPerTurn:    1,
+			MaxUsesPerSession: 2,
+		},
+		AdvisorRunner: func(_ context.Context, req agent.AdvisorRequest) (string, error) {
+			advisorReqs = append(advisorReqs, req)
+			return "1. Check the unfinished todo before finalizing.\nRisks: premature completion.", nil
+		},
+	}, event.Discard)
+	ag.ReplaceTodoState([]evidence.TodoItem{{Content: "write the regression test", Status: "in_progress"}})
+	c := New(Options{Runner: ag, Executor: ag})
+	c.SetGoal("finish a task with one todo")
+
+	o := newTurnOrchestrator(c)
+	if err := o.runGoalLoopWithRawDisplay(context.Background(), "Start pursuing the active goal now.", "finish a task with one todo", ""); err != nil {
+		t.Fatal(err)
+	}
+
 	if defaultProv.call != 2 {
-		t.Fatalf("default provider calls = %d, want exactly two before goal loop signal reaches threshold", defaultProv.call)
+		t.Fatalf("default provider calls = %d, want intercepted completion to retry on default", defaultProv.call)
+	}
+	if frontierProv.call != 0 {
+		t.Fatalf("frontier provider calls = %d, want advisor-only signal below threshold", frontierProv.call)
+	}
+	if len(advisorReqs) != 1 {
+		t.Fatalf("advisor requests = %d, want one advisor-only consultation", len(advisorReqs))
+	}
+	if !strings.Contains(advisorReqs[0].Question, "goal_acceptance_loops=1") ||
+		!strings.Contains(advisorReqs[0].Question, "goal completion was intercepted by readiness checks") {
+		t.Fatalf("advisor question did not include intercepted completion signal:\n%s", advisorReqs[0].Question)
+	}
+}
+
+func TestTurnOrchestratorRepeatedBlockedTurnsProduceUpgradeSignal(t *testing.T) {
+	defaultProv := &scriptedTurns{turns: [][]provider.Chunk{
+		textTurn("Blocked.\n\n[goal:blocked:needs credentials]"),
+		textTurn("Still blocked.\n\n[goal:blocked: needs-credentials]"),
+	}}
+	frontierProv := &scriptedTurns{turns: [][]provider.Chunk{
+		textTurn("Frontier can resolve the route.\n\n[goal:complete]"),
+	}}
+	var advisorReqs []agent.AdvisorRequest
+	var events []event.Event
+	sink := event.FuncSink(func(e event.Event) {
+		events = append(events, e)
+	})
+	ag := agent.New(defaultProv, tool.NewRegistry(), agent.NewSession(""), agent.Options{
+		UpgradePolicy:    agent.ThresholdUpgradePolicy{Threshold: 2, TargetModel: "frontier"},
+		FrontierProvider: frontierProv,
+		FrontierTarget:   "frontier",
+		Advisor: agent.AdvisorConfig{
+			MaxUsesPerTurn:    1,
+			MaxUsesPerSession: 3,
+		},
+		AdvisorRunner: func(_ context.Context, req agent.AdvisorRequest) (string, error) {
+			advisorReqs = append(advisorReqs, req)
+			return "1. Move the blocked loop to frontier.\nRisks: user input may still be required.", nil
+		},
+	}, sink)
+	c := New(Options{Runner: ag, Executor: ag, Sink: sink})
+	c.SetGoal("finish a credential-sensitive task")
+
+	o := newTurnOrchestrator(c)
+	if err := o.runGoalLoopWithRawDisplay(context.Background(), "Start pursuing the active goal now.", "finish a credential-sensitive task", ""); err != nil {
+		t.Fatal(err)
+	}
+
+	if defaultProv.call != 2 {
+		t.Fatalf("default provider calls = %d, want two blocked turns before upgrade", defaultProv.call)
 	}
 	if frontierProv.call != 1 {
-		t.Fatalf("frontier provider calls = %d, want third goal turn to route to frontier", frontierProv.call)
+		t.Fatalf("frontier provider calls = %d, want upgrade on repeated blocked signal", frontierProv.call)
+	}
+	var upgradeEvents int
+	for _, e := range events {
+		if e.Kind == event.Upgrade {
+			upgradeEvents++
+			if !strings.Contains(e.Text, "2 goal/acceptance control loops") {
+				t.Fatalf("upgrade event text = %q, want repeated goal loop reason", e.Text)
+			}
+		}
+	}
+	if upgradeEvents != 1 {
+		t.Fatalf("upgrade events = %d, want one frontier upgrade", upgradeEvents)
+	}
+	if len(advisorReqs) != 1 {
+		t.Fatalf("advisor requests = %d, want one consultation for the first blocked decision", len(advisorReqs))
+	}
+	if !strings.Contains(advisorReqs[0].Question, "goal_acceptance_loops=1") ||
+		!strings.Contains(advisorReqs[0].Question, "goal blocked: needs credentials") {
+		t.Fatalf("advisor question did not include blocked signal:\n%s", advisorReqs[0].Question)
 	}
 }
 
