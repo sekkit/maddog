@@ -18,7 +18,7 @@ Unicode true
 ##      a build that did not write InstallLocation yet, .onInit falls back to the
 ##      old DisplayIcon path before using the default. Without this, every release
 ##      forces the user back to %LOCALAPPDATA%\Programs\Maddog even if they had
-##      moved the install to a different drive (e.g. D:\Tools\Maddog Dev); the silent
+##      moved the install to a different drive (e.g. D:\Tools\Maddog); the silent
 ##      auto-updater would re-run with /S into the wrong dir, leaving the old
 ##      install orphaned.
 ##
@@ -96,7 +96,7 @@ ShowInstDetails show # This will always show the installation details.
     # Persist the resolved install path so a subsequent update picks it up
     # via InstallDirRegKey above. Without this, every release would force the
     # user back to %LOCALAPPDATA%\Programs\Maddog even if they had moved
-    # the install to a different drive (e.g. D:\Tools\Maddog Dev). The auto-
+    # the install to a different drive (e.g. D:\Tools\Maddog). The auto-
     # updater re-runs this installer with /S and trusts the persisted path,
     # so it has to be present before the silent re-install.
     WriteRegStr HKCU "${UNINST_KEY}" "InstallLocation" "$INSTDIR"
@@ -151,7 +151,9 @@ SectionEnd
 Section "uninstall"
     !insertmacro wails.setShellContext
 
-    RMDir /r "$AppData\${PRODUCT_EXECUTABLE}" # Remove the WebView2 DataPath
+    ; Keep AppData/WebView2 state intact. The updater may invoke uninstall
+    ; semantics during replacement, and deleting this path makes desktop
+    ; preferences and migrated localStorage look reset after packaging updates.
 
     ; Precision uninstall: delete main application files
     Delete "$INSTDIR\${PRODUCT_EXECUTABLE}"

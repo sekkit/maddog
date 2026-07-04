@@ -1,4 +1,4 @@
-# Maddog Dev Desktop (Wails shell)
+# Maddog Desktop (Wails shell)
 
 A native desktop window around the Maddog Go kernel. The same
 transport-agnostic `control.Controller` that backs the chat TUI and the HTTP/SSE

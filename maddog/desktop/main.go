@@ -1,4 +1,4 @@
-// Command maddog-dev is the Wails shell around the Maddog kernel: a native
+// Command maddog is the Wails shell around the Maddog kernel: a native
 // window hosting a webview frontend, with the Go-side control.Controller bound
 // directly to the UI (no HTTP hop — bindings in, runtime events out). It lives in
 // a nested module (maddog/desktop) so the CGO/WebKit desktop build never touches

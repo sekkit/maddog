@@ -219,6 +219,86 @@ func TestAdvisorSessionBudgetPreventsRepeatedAutomaticConsults(t *testing.T) {
 	}
 }
 
+func TestRunResetsAdvisorTurnBudgetAcrossTurns(t *testing.T) {
+	defaultProv := testutil.NewMock("default",
+		testutil.Turn{ToolCalls: []provider.ToolCall{{ID: "c1", Name: "write_file", Arguments: `{}`}}},
+		testutil.Turn{ToolCalls: []provider.ToolCall{{ID: "c2", Name: "write_file", Arguments: `{}`}}},
+	)
+	frontierProv := testutil.NewMock("frontier",
+		testutil.Turn{Text: "frontier answer one"},
+		testutil.Turn{Text: "frontier answer two"},
+	)
+	sink := &recordSink{}
+	reg := echoRegistry()
+	reg.Add(failTool{name: "write_file"})
+
+	var advisorCalls int
+	a := New(defaultProv, reg, NewSession(""), Options{
+		UpgradePolicy:    ThresholdUpgradePolicy{Threshold: 1, TargetModel: "frontier"},
+		FrontierProvider: frontierProv,
+		FrontierTarget:   "frontier",
+		Advisor: AdvisorConfig{
+			MaxUsesPerTurn:    1,
+			MaxUsesPerSession: 3,
+		},
+		AdvisorRunner: func(context.Context, AdvisorRequest) (string, error) {
+			advisorCalls++
+			return "1. use frontier.\nRisks: low.", nil
+		},
+	}, sink)
+
+	if err := a.Run(context.Background(), "first failure"); err != nil {
+		t.Fatalf("Run #1: %v", err)
+	}
+	if err := a.Run(context.Background(), "second failure"); err != nil {
+		t.Fatalf("Run #2: %v", err)
+	}
+	if advisorCalls != 2 {
+		t.Fatalf("advisor calls = %d, want per-turn budget to reset so both turns consult once", advisorCalls)
+	}
+	if events := sink.kinds(event.Advisor); len(events) != 2 {
+		t.Fatalf("advisor events = %d, want 2", len(events))
+	}
+}
+
+func TestRunDoesNotStickToFrontierAcrossTurns(t *testing.T) {
+	defaultProv := testutil.NewMock("default",
+		testutil.Turn{ToolCalls: []provider.ToolCall{{ID: "c1", Name: "write_file", Arguments: `{}`}}},
+		testutil.Turn{ToolCalls: []provider.ToolCall{{ID: "c2", Name: "write_file", Arguments: `{}`}}},
+		testutil.Turn{Text: "default handled the healthy turn"},
+	)
+	frontierProv := testutil.NewMock("frontier", testutil.Turn{Text: "frontier fixed it"})
+	sink := &recordSink{}
+	reg := echoRegistry()
+	reg.Add(failTool{name: "write_file"})
+
+	a := New(defaultProv, reg, NewSession(""), Options{
+		UpgradePolicy:    ThresholdUpgradePolicy{Threshold: 2, TargetModel: "frontier-model"},
+		FrontierProvider: frontierProv,
+		FrontierTarget:   "frontier-model",
+	}, sink)
+
+	if err := a.Run(context.Background(), "turn with repeated failures"); err != nil {
+		t.Fatalf("Run #1: %v", err)
+	}
+	if frontierProv.CallCount() != 1 {
+		t.Fatalf("frontier calls after run #1 = %d, want 1", frontierProv.CallCount())
+	}
+	if err := a.Run(context.Background(), "healthy follow-up turn"); err != nil {
+		t.Fatalf("Run #2: %v", err)
+	}
+	if defaultProv.CallCount() != 3 {
+		t.Fatalf("default calls = %d, want healthy turn to start back on default", defaultProv.CallCount())
+	}
+	if frontierProv.CallCount() != 1 {
+		t.Fatalf("frontier calls = %d, want upgrade scoped to the turn that earned it", frontierProv.CallCount())
+	}
+	last := a.Session().Messages[len(a.Session().Messages)-1]
+	if last.Role != provider.RoleAssistant || last.Content != "default handled the healthy turn" {
+		t.Fatalf("final assistant message = %+v, want default provider answer", last)
+	}
+}
+
 func TestRunExposesNativeAdvisorWhenConfigured(t *testing.T) {
 	mp := testutil.NewMock("anthropic", testutil.Turn{Text: "done"})
 	a := New(mp, echoRegistry(), NewSession(""), Options{

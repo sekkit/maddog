@@ -127,15 +127,15 @@ func trayMenuLabels(locale string) trayLabels {
 	if locale == "zh" {
 		return trayLabels{
 			openTitle:   "打开",
-			openTooltip: "打开 Maddog Dev 窗口",
+			openTooltip: "打开 Maddog 窗口",
 			quitTitle:   "退出",
-			quitTooltip: "退出 Maddog Dev",
+			quitTooltip: "退出 Maddog",
 		}
 	}
 	return trayLabels{
 		openTitle:   "Open",
-		openTooltip: "Open the Maddog Dev window",
+		openTooltip: "Open the Maddog window",
 		quitTitle:   "Quit",
-		quitTooltip: "Quit Maddog Dev",
+		quitTooltip: "Quit Maddog",
 	}
 }

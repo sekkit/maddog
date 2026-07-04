@@ -20,8 +20,8 @@ Set-StrictMode -Version Latest
 $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $DesktopRoot = Join-Path $RepoRoot "desktop"
 $BuildBin = Join-Path $DesktopRoot "build\bin"
-$DefaultLaunchProfileDir = Join-Path $DesktopRoot "build\run-profile"
-$OutputName = "maddog-dev"
+$DefaultLaunchProfileDir = Join-Path $RepoRoot ".maddog\desktop-run-profile"
+$OutputName = "maddog"
 $ProductName = "Maddog"
 
 $IsWindowsHost = [System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform([System.Runtime.InteropServices.OSPlatform]::Windows)

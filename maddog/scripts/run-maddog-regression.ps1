@@ -389,7 +389,7 @@ $CoverageMatrix = @(
   [pscustomobject]@{
     capability = "Maddog naming, config/storage isolation, desktop GUI settings, and app build"
     evidence = @("core-go", "desktop-go", "frontend", "manifest", "desktop build smoke optional")
-    notes = "Desktop Go tests pin maddog-dev native binary naming, Maddog storage roots, release packaging names, settings wiring, signing, and updater helpers; -IncludeDesktopBuildSmoke runs Wails and asserts desktop/build/bin/maddog-dev.exe on Windows."
+    notes = "Desktop Go tests pin stable maddog native binary naming, Maddog storage roots, release packaging names, settings wiring, signing, and updater helpers; -IncludeDesktopBuildSmoke runs Wails and asserts desktop/build/bin/maddog.exe on Windows."
     status = "verified-offline"
     remaining = @()
     optional_remaining = @("Run -IncludeDesktopBuildSmoke before release to build the Windows desktop executable; run packaged installer/runtime smoke on a signed release build.")
@@ -541,14 +541,14 @@ if ($IncludeDesktopBuildSmoke) {
     Invoke-Step `
       -Name "desktop-build-smoke" `
       -Command "wails build -skipbindings" `
-      -Coverage @("desktop-app", "desktop-build", "maddog-dev.exe") `
+      -Coverage @("desktop-app", "desktop-build", "maddog.exe") `
       -Required $true `
       -Action { throw "wails is not available on PATH and was not found under `$env:USERPROFILE\go\bin\wails.exe; pass -WailsExe C:\path\to\wails.exe" }
   } else {
     Invoke-Step `
       -Name "desktop-build-smoke" `
-      -Command "$resolvedWails build -skipbindings; assert desktop/build/bin/maddog-dev.exe" `
-      -Coverage @("desktop-app", "desktop-build", "maddog-dev.exe") `
+      -Command "$resolvedWails build -skipbindings; assert desktop/build/bin/maddog.exe" `
+      -Coverage @("desktop-app", "desktop-build", "maddog.exe") `
       -Required $true `
       -Action {
         $goDir = Split-Path $GoExe
@@ -561,14 +561,14 @@ if ($IncludeDesktopBuildSmoke) {
           Pop-Location
           $env:PATH = $oldPath
         }
-        $desktopExe = Join-Path $RepoRoot "desktop\build\bin\maddog-dev.exe"
+        $desktopExe = Join-Path $RepoRoot "desktop\build\bin\maddog.exe"
         if (!(Test-Path $desktopExe)) {
           throw "desktop build did not produce $desktopExe"
         }
       }
   }
 } else {
-  Add-SkipStep -Name "desktop-build-smoke" -Reason "Skipped by default. Use -IncludeDesktopBuildSmoke to run a Wails Windows build and assert desktop/build/bin/maddog-dev.exe." -Coverage @("desktop-build", "maddog-dev.exe")
+  Add-SkipStep -Name "desktop-build-smoke" -Reason "Skipped by default. Use -IncludeDesktopBuildSmoke to run a Wails Windows build and assert desktop/build/bin/maddog.exe." -Coverage @("desktop-build", "maddog.exe")
 }
 
 if ($IncludeE2E) {

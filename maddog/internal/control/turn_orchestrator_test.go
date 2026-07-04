@@ -343,12 +343,18 @@ func TestTurnOrchestratorRepeatedBlockedTurnsProduceUpgradeSignal(t *testing.T) 
 	if upgradeEvents != 1 {
 		t.Fatalf("upgrade events = %d, want one frontier upgrade", upgradeEvents)
 	}
-	if len(advisorReqs) != 1 {
-		t.Fatalf("advisor requests = %d, want one consultation for the first blocked decision", len(advisorReqs))
+	// Two consultations under per-turn advisor budgets: the first blocked turn
+	// is a difficult-decision consult, and the upgrade turn runs the
+	// advisor-before-frontier consult.
+	if len(advisorReqs) != 2 {
+		t.Fatalf("advisor requests = %d, want blocked-decision consult plus advisor-before-frontier consult", len(advisorReqs))
 	}
 	if !strings.Contains(advisorReqs[0].Question, "goal_acceptance_loops=1") ||
 		!strings.Contains(advisorReqs[0].Question, "goal blocked: needs credentials") {
-		t.Fatalf("advisor question did not include blocked signal:\n%s", advisorReqs[0].Question)
+		t.Fatalf("first advisor question did not include blocked signal:\n%s", advisorReqs[0].Question)
+	}
+	if !strings.Contains(advisorReqs[1].Question, "goal_acceptance_loops=2") {
+		t.Fatalf("second advisor question did not include repeated goal loop signal:\n%s", advisorReqs[1].Question)
 	}
 }
 

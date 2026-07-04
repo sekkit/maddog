@@ -25,7 +25,7 @@ arch="${PLATFORM#*/}"
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 APPNAME="Maddog"            # wails.json productName -> Maddog.app
-BINNAME="maddog-dev"        # wails.json outputfilename -> native binary name
+BINNAME="maddog"            # wails.json outputfilename -> native binary name
 
 cd "$ROOT/desktop"
 
@@ -53,7 +53,7 @@ mkdir -p "$ROOT/dist"
 
 case "$os" in
 darwin)
-	# Wails names the bundle after outputfilename (maddog-dev.app); repackage
+	# Wails names the bundle after outputfilename (maddog.app); repackage
 	# it as Maddog.app for a clean user-facing name. Ad-hoc sign the copy (still
 	# not notarized — the real fix is a Developer ID cert); this cuts down the
 	# Gatekeeper "is damaged / can't be opened" error on a downloaded build, though

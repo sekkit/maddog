@@ -5,12 +5,12 @@ package main
 import "testing"
 
 func TestInstallerCommandPassesUnquotedDFlagLast(t *testing.T) {
-	cmd := installerCommand(`C:\Temp\maddog-update-1.exe`, `D:\Tools\Maddog Dev`)
+	cmd := installerCommand(`C:\Temp\maddog-update-1.exe`, `D:\Tools\Maddog`)
 	if cmd.SysProcAttr == nil {
 		t.Fatal("expected a raw command line forcing the install dir")
 	}
 	got := cmd.SysProcAttr.CmdLine
-	want := `"C:\Temp\maddog-update-1.exe" /D=D:\Tools\Maddog Dev`
+	want := `"C:\Temp\maddog-update-1.exe" /D=D:\Tools\Maddog`
 	if got != want {
 		t.Fatalf("CmdLine = %q, want %q", got, want)
 	}

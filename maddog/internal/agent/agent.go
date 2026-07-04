@@ -910,6 +910,7 @@ func (a *Agent) Run(ctx context.Context, input string) (runErr error) {
 	a.steerMu.Lock()
 	a.steerConsumed = false
 	a.steerMu.Unlock()
+	a.resetRoutingForTurn()
 	if a.evidence != nil {
 		a.evidence.Reset()
 		a.applyPendingControlSignals()
@@ -1146,6 +1147,11 @@ func (a *Agent) Run(ctx context.Context, input string) (runErr error) {
 	return fmt.Errorf("paused after %d tool-call rounds (%s) — the work so far is saved; send another message to continue, or set max_steps higher or to 0 for no limit", a.maxSteps, key)
 }
 
+// resetRoutingForTurn scopes frontier upgrades and the advisor turn budget to a
+// single Run: each turn starts on the default provider and re-decides routing
+// from this turn's signals (including pending goal control signals applied right
+// after). frontierTokens is intentionally not reset — the frontier budget is
+// session-wide.
 func (a *Agent) resetRoutingForTurn() {
 	a.upgraded = false
 	a.onFrontier = false
