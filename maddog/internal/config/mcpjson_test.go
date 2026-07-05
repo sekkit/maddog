@@ -370,6 +370,7 @@ command = "local-bin"
 func TestLoadMergesPluginsAcrossTOMLSources(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("HOME", root)
+	t.Setenv("USERPROFILE", root)
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(root, "xdg"))
 	t.Setenv("AppData", filepath.Join(root, "AppData")) // os.UserConfigDir reads AppData on Windows
 	t.Chdir(t.TempDir())
@@ -404,6 +405,7 @@ func TestLoadMergesPluginsAcrossTOMLSources(t *testing.T) {
 func TestLoadNormalizesTOMLPastedCommandLine(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "xdg"))
 	t.Setenv("AppData", filepath.Join(home, "AppData"))
 	t.Chdir(t.TempDir())

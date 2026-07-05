@@ -72,14 +72,14 @@ func TestDesktopStatePathsUseMaddogRoot(t *testing.T) {
 			switch strings.ToLower(part) {
 			case "maddog-dev":
 				t.Fatalf("%s = %q, should not use the legacy maddog-dev desktop state root", name, path)
-			case "maddog":
+			case "maddog", ".maddog":
 				hasMaddogRoot = true
 			case "desktop":
 				hasDesktopRoot = true
 			}
 		}
 		if !hasMaddogRoot {
-			t.Fatalf("%s = %q, want path under maddog", name, path)
+			t.Fatalf("%s = %q, want path under .maddog", name, path)
 		}
 		if !hasDesktopRoot {
 			t.Fatalf("%s = %q, want path under maddog desktop state subdirectory", name, path)

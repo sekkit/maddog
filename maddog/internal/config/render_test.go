@@ -4,7 +4,6 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -23,9 +22,6 @@ func isolateUserConfigHome(t *testing.T) string {
 }
 
 func expectedDefaultMaddogHome(home string) string {
-	if runtime.GOOS == "windows" {
-		return filepath.Join(home, "AppData", "Roaming", "maddog")
-	}
 	return filepath.Join(home, ".maddog")
 }
 
@@ -62,7 +58,33 @@ func TestUserConfigPathHonorsMaddogHome(t *testing.T) {
 	}
 }
 
-func TestLoadForRootUsesWindowsHomeFallbackWhenConfigDirUnavailable(t *testing.T) {
+func TestMaddogHomeDefaultsToDotMaddogOnWindows(t *testing.T) {
+	home := t.TempDir()
+
+	oldGOOS := runtimeGOOS
+	oldConfigDir := osUserConfigDir
+	oldHomeDir := osUserHomeDir
+	runtimeGOOS = "windows"
+	osUserConfigDir = func() string { return filepath.Join(home, "AppData", "Roaming") }
+	osUserHomeDir = func() (string, error) { return home, nil }
+	t.Cleanup(func() {
+		runtimeGOOS = oldGOOS
+		osUserConfigDir = oldConfigDir
+		osUserHomeDir = oldHomeDir
+	})
+
+	t.Setenv("MADDOG_HOME", "")
+
+	want := filepath.Join(home, ".maddog")
+	if got := MaddogHomeDir(); filepath.Clean(got) != filepath.Clean(want) {
+		t.Fatalf("MaddogHomeDir() = %q, want %q", got, want)
+	}
+	if got := UserConfigPath(); filepath.Clean(got) != filepath.Clean(filepath.Join(want, "config.toml")) {
+		t.Fatalf("UserConfigPath() = %q, want under %q", got, want)
+	}
+}
+
+func TestLoadForRootReadsLegacyWindowsAppDataConfigWhenDotMaddogMissing(t *testing.T) {
 	home := t.TempDir()
 	project := t.TempDir()
 
@@ -70,7 +92,7 @@ func TestLoadForRootUsesWindowsHomeFallbackWhenConfigDirUnavailable(t *testing.T
 	oldConfigDir := osUserConfigDir
 	oldHomeDir := osUserHomeDir
 	runtimeGOOS = "windows"
-	osUserConfigDir = func() string { return "" }
+	osUserConfigDir = func() string { return filepath.Join(home, "AppData", "Roaming") }
 	osUserHomeDir = func() (string, error) { return home, nil }
 	t.Cleanup(func() {
 		runtimeGOOS = oldGOOS

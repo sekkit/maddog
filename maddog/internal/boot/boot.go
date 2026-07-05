@@ -1248,14 +1248,57 @@ func migrateLegacySessionSources(sink event.Sink, sessionDir string) {
 	if sessionDir == "" {
 		return
 	}
-	n, err := agent.MigrateLegacySessionsFromConfigDir(sessionDir, sessionDir, config.ProjectSessionDir)
-	if err != nil {
-		sink.Emit(event.Event{Kind: event.Notice, Level: event.LevelWarn, Text: "session migration skipped: " + err.Error()})
-		return
+	var sources []string
+	if !isDefaultDotMaddogSessionDir(sessionDir) {
+		sources = append(sources, sessionDir)
 	}
-	if n > 0 {
-		sink.Emit(event.Event{Kind: event.Notice, Level: event.LevelInfo, Text: fmt.Sprintf("imported %d past session(s) from %s — resume them with --resume or the history panel", n, sessionDir)})
+	for _, legacyConfig := range config.LegacyUserConfigPaths() {
+		legacySessionDir := filepath.Join(filepath.Dir(legacyConfig), "sessions")
+		if legacySessionDir == "" {
+			continue
+		}
+		duplicate := false
+		for _, existing := range sources {
+			if bootSamePath(existing, legacySessionDir) {
+				duplicate = true
+				break
+			}
+		}
+		if !duplicate {
+			sources = append(sources, legacySessionDir)
+		}
 	}
+	for _, source := range sources {
+		n, err := agent.MigrateLegacySessionsFromConfigDir(source, sessionDir, config.ProjectSessionDir)
+		if err != nil {
+			sink.Emit(event.Event{Kind: event.Notice, Level: event.LevelWarn, Text: "session migration skipped: " + err.Error()})
+			continue
+		}
+		if n > 0 {
+			sink.Emit(event.Event{Kind: event.Notice, Level: event.LevelInfo, Text: fmt.Sprintf("imported %d past session(s) from %s — resume them with --resume or the history panel", n, source)})
+		}
+	}
+}
+
+func bootSamePath(a, b string) bool {
+	if strings.TrimSpace(a) == "" || strings.TrimSpace(b) == "" {
+		return false
+	}
+	if abs, err := filepath.Abs(a); err == nil {
+		a = abs
+	}
+	if abs, err := filepath.Abs(b); err == nil {
+		b = abs
+	}
+	return strings.EqualFold(filepath.Clean(a), filepath.Clean(b))
+}
+
+func isDefaultDotMaddogSessionDir(dir string) bool {
+	home, err := os.UserHomeDir()
+	if err != nil || strings.TrimSpace(home) == "" {
+		return false
+	}
+	return bootSamePath(dir, filepath.Join(home, ".maddog", "sessions"))
 }
 
 func rememberPermissionConfigPath(workspaceRoot string) string {

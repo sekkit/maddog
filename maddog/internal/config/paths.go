@@ -35,15 +35,6 @@ func maddogHomeDir() string {
 	if dir := cleanEnvDir("MADDOG_HOME"); dir != "" {
 		return dir
 	}
-	if runtimeGOOS == "windows" {
-		if dir := osUserConfigDir(); dir != "" {
-			return filepath.Join(dir, "maddog")
-		}
-		if home, err := osUserHomeDir(); err == nil && home != "" {
-			return filepath.Join(home, "AppData", "Roaming", "maddog")
-		}
-		return ""
-	}
 	if home, err := osUserHomeDir(); err == nil && home != "" {
 		return filepath.Join(home, ".maddog")
 	}
@@ -196,8 +187,7 @@ func samePath(a, b string) bool {
 }
 
 // userConfigDisplayPath is userConfigPath collapsed to a ~-relative form for
-// comments rendered into the user's own config.toml, so Windows users see the
-// real location instead of a hardcoded ~/.maddog path.
+// comments rendered into the user's own config.toml.
 func userConfigDisplayPath() string {
 	p := userConfigPath()
 	if p == "" {
@@ -212,10 +202,8 @@ func userConfigDisplayPath() string {
 }
 
 // UserConfigPath is the user-global config.toml. It lives under Maddog home:
-// MADDOG_HOME/config.toml, then ~/.maddog/config.toml on Unix-like systems,
-// or %AppData%/maddog/config.toml on Windows. If %AppData% is unavailable on
-// Windows, it falls back to %USERPROFILE%/AppData/Roaming/maddog/config.toml.
-// "" when the user config dir can't be resolved.
+// MADDOG_HOME/config.toml, then ~/.maddog/config.toml. "" when the user config
+// dir can't be resolved.
 func UserConfigPath() string { return userConfigPath() }
 
 // LegacyUserConfigPath is the old OS app-support config.toml path when it
@@ -246,10 +234,8 @@ func LegacyUserConfigPaths() []string {
 	return out
 }
 
-// MaddogHomeDir is the current Maddog home directory. It honors
-// MADDOG_HOME, then uses ~/.maddog on macOS/Linux or %APPDATA%/maddog on
-// Windows, with a %USERPROFILE%/AppData/Roaming fallback when %APPDATA% is
-// unavailable.
+// MaddogHomeDir is the current Maddog home directory. It honors MADDOG_HOME,
+// then uses ~/.maddog on every platform.
 func MaddogHomeDir() string { return maddogHomeDir() }
 
 // UserCredentialsPath is the maddog-owned global .env file under Maddog

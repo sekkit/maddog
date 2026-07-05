@@ -9,6 +9,8 @@ import (
 
 func TestUserStatePathsUseMaddogRoot(t *testing.T) {
 	root := t.TempDir()
+	t.Setenv("HOME", root)
+	t.Setenv("USERPROFILE", root)
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(root, ".config"))
 	t.Setenv("AppData", filepath.Join(root, "AppData"))
 
@@ -25,7 +27,7 @@ func TestUserStatePathsUseMaddogRoot(t *testing.T) {
 		parts := strings.Split(clean, string(filepath.Separator))
 		hasMaddog := false
 		for _, p := range parts {
-			if p == "maddog" {
+			if p == "maddog" || p == ".maddog" {
 				hasMaddog = true
 			}
 		}
@@ -33,11 +35,25 @@ func TestUserStatePathsUseMaddogRoot(t *testing.T) {
 			t.Fatalf("%s path = %q, want path under maddog", name, path)
 		}
 	}
+
+	wantHome := filepath.Join(root, ".maddog")
+	for name, path := range map[string]string{
+		"config":      UserConfigPath(),
+		"credentials": UserCredentialsPath(),
+		"archive":     ArchiveDir(),
+		"sessions":    SessionDir(),
+		"memory":      MemoryUserDir(),
+	} {
+		if !strings.HasPrefix(filepath.Clean(path), filepath.Clean(wantHome)) {
+			t.Fatalf("%s path = %q, want under %q", name, path, wantHome)
+		}
+	}
 }
 
 func TestProjectConfigReadsMaddogProjectConfig(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("HOME", root)
+	t.Setenv("USERPROFILE", root)
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(root, ".config"))
 	t.Setenv("AppData", filepath.Join(root, "AppData"))
 
