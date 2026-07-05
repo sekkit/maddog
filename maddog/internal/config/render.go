@@ -757,6 +757,11 @@ func renderAgentBehaviorFields(b *strings.Builder, c, defaults *Config, projectD
 	} else if !projectDelta {
 		b.WriteString("# planner_model = \"deepseek-pro\"   # optional: enable two-model collaboration\n")
 	}
+	if c.Agent.ImageFallbackModel != "" {
+		fmt.Fprintf(b, "image_fallback_model = %q   # vision-capable model used to summarize @image refs for text-only models\n", c.Agent.ImageFallbackModel)
+	} else if !projectDelta {
+		b.WriteString("# image_fallback_model = \"lmstudio-vision\"   # optional: summarize @image refs for text-only models\n")
+	}
 	if c.Agent.SubagentModel != "" {
 		fmt.Fprintf(b, "subagent_model = %q   # default model for runAs=subagent skills\n", c.Agent.SubagentModel)
 	} else if !projectDelta {

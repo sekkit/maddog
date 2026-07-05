@@ -126,6 +126,7 @@ func TestRemoveProviderMigratesDanglingRefs(t *testing.T) {
 	c := testModelFallbackConfig(t)
 	c.DefaultModel = "model-a2"
 	c.Agent.PlannerModel = "prov-a"
+	c.Agent.ImageFallbackModel = "prov-a/model-a1"
 	c.Agent.SubagentModel = "prov-a/model-a1"
 	c.Agent.AdvisorModel = "prov-a/model-a2"
 	c.Agent.SubagentModels = map[string]string{
@@ -145,6 +146,9 @@ func TestRemoveProviderMigratesDanglingRefs(t *testing.T) {
 	}
 	if c.Agent.PlannerModel != "prov-b" {
 		t.Fatalf("planner_model = %q, want prov-b", c.Agent.PlannerModel)
+	}
+	if c.Agent.ImageFallbackModel != "prov-b" {
+		t.Fatalf("image_fallback_model = %q, want prov-b", c.Agent.ImageFallbackModel)
 	}
 	if c.Agent.SubagentModel != "prov-b" {
 		t.Fatalf("subagent_model = %q, want prov-b", c.Agent.SubagentModel)
@@ -184,6 +188,7 @@ func TestRemoveProviderClearsOptionalRefsWithoutFallback(t *testing.T) {
 	c := testModelFallbackConfig(t)
 	c.DefaultModel = "prov-b"
 	c.Agent.PlannerModel = "prov-a/model-a1"
+	c.Agent.ImageFallbackModel = "prov-a/model-a1"
 	c.Agent.SubagentModel = "prov-a"
 	c.Agent.AdvisorModel = "prov-a/model-a2"
 	c.Agent.SubagentModels = map[string]string{"review": "prov-a/model-a2"}
@@ -194,6 +199,9 @@ func TestRemoveProviderClearsOptionalRefsWithoutFallback(t *testing.T) {
 	}
 	if c.Agent.PlannerModel != "" {
 		t.Fatalf("planner_model = %q, want cleared", c.Agent.PlannerModel)
+	}
+	if c.Agent.ImageFallbackModel != "" {
+		t.Fatalf("image_fallback_model = %q, want cleared", c.Agent.ImageFallbackModel)
 	}
 	if c.Agent.SubagentModel != "" {
 		t.Fatalf("subagent_model = %q, want cleared", c.Agent.SubagentModel)

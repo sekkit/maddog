@@ -1055,6 +1055,7 @@ type AgentConfig struct {
 	PlannerMaxSteps           int               `toml:"planner_max_steps"` // planner read-only tool-call rounds; 0 = unlimited
 	Temperature               float64           `toml:"temperature"`
 	PlannerModel              string            `toml:"planner_model"`
+	ImageFallbackModel        string            `toml:"image_fallback_model"`
 	SubagentModel             string            `toml:"subagent_model"`
 	AdvisorModel              string            `toml:"advisor_model"`
 	SubagentModels            map[string]string `toml:"subagent_models"`

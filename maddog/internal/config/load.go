@@ -761,6 +761,7 @@ func legacyMimoConfigRefs(c *Config) []string {
 	refs := []string{
 		c.DefaultModel,
 		c.Agent.PlannerModel,
+		c.Agent.ImageFallbackModel,
 		c.Agent.SubagentModel,
 		c.Agent.AutoPlanClassifier,
 		c.Bot.Model,
@@ -1092,6 +1093,7 @@ func firstKnownModel(current string, models []string, fallback string) string {
 func retargetDesktopOfficialRefs(c *Config, access map[string]bool) {
 	c.DefaultModel = retargetDesktopOfficialRef(c.DefaultModel, access)
 	c.Agent.PlannerModel = retargetDesktopOfficialRef(c.Agent.PlannerModel, access)
+	c.Agent.ImageFallbackModel = retargetDesktopOfficialRef(c.Agent.ImageFallbackModel, access)
 	c.Agent.SubagentModel = retargetDesktopOfficialRef(c.Agent.SubagentModel, access)
 	c.Agent.AutoPlanClassifier = retargetDesktopOfficialRef(c.Agent.AutoPlanClassifier, access)
 	for skill, ref := range c.Agent.SubagentModels {

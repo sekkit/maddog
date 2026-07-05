@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -60,6 +61,102 @@ func (s *recordSink) kinds(k event.Kind) []event.Event {
 	return out
 }
 
+const bootImageFallbackTestProviderKind = "boot-image-fallback-test"
+
+var (
+	bootImageFallbackTestProviderOnce    sync.Once
+	bootImageFallbackTestProviderCurrent map[string]*bootImageFallbackTestProvider
+	bootImageFallbackTestProviderMu      sync.Mutex
+)
+
+func registerBootImageFallbackTestProvider() {
+	bootImageFallbackTestProviderOnce.Do(func() {
+		provider.Register(bootImageFallbackTestProviderKind, func(cfg provider.Config) (provider.Provider, error) {
+			bootImageFallbackTestProviderMu.Lock()
+			defer bootImageFallbackTestProviderMu.Unlock()
+			if bootImageFallbackTestProviderCurrent == nil {
+				return nil, errors.New("boot image fallback test provider is not installed")
+			}
+			p := bootImageFallbackTestProviderCurrent[cfg.Name]
+			if p == nil {
+				return nil, fmt.Errorf("boot image fallback test provider %q is not installed", cfg.Name)
+			}
+			return p, nil
+		})
+	})
+}
+
+func setBootImageFallbackTestProviders(t *testing.T, providers map[string]*bootImageFallbackTestProvider) {
+	t.Helper()
+	bootImageFallbackTestProviderMu.Lock()
+	bootImageFallbackTestProviderCurrent = providers
+	bootImageFallbackTestProviderMu.Unlock()
+	t.Cleanup(func() {
+		bootImageFallbackTestProviderMu.Lock()
+		if reflect.DeepEqual(bootImageFallbackTestProviderCurrent, providers) {
+			bootImageFallbackTestProviderCurrent = nil
+		}
+		bootImageFallbackTestProviderMu.Unlock()
+	})
+}
+
+type bootImageFallbackTestProvider struct {
+	name string
+	text string
+
+	mu       sync.Mutex
+	requests []provider.Request
+}
+
+func (p *bootImageFallbackTestProvider) Name() string { return p.name }
+
+func (p *bootImageFallbackTestProvider) Stream(ctx context.Context, req provider.Request) (<-chan provider.Chunk, error) {
+	p.mu.Lock()
+	p.requests = append(p.requests, req)
+	text := p.text
+	p.mu.Unlock()
+
+	ch := make(chan provider.Chunk, 2)
+	go func() {
+		defer close(ch)
+		select {
+		case <-ctx.Done():
+			ch <- provider.Chunk{Type: provider.ChunkError, Err: ctx.Err()}
+		case ch <- provider.Chunk{Type: provider.ChunkText, Text: text}:
+			ch <- provider.Chunk{Type: provider.ChunkDone}
+		}
+	}()
+	return ch, nil
+}
+
+func (p *bootImageFallbackTestProvider) requestsSnapshot() []provider.Request {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	out := make([]provider.Request, len(p.requests))
+	copy(out, p.requests)
+	return out
+}
+
+func lastUserMessage(t *testing.T, req provider.Request) provider.Message {
+	t.Helper()
+	for i := len(req.Messages) - 1; i >= 0; i-- {
+		if req.Messages[i].Role == provider.RoleUser {
+			return req.Messages[i]
+		}
+	}
+	t.Fatal("request has no user message")
+	return provider.Message{}
+}
+
+func bootTestBase64(t *testing.T, value string) []byte {
+	t.Helper()
+	raw, err := base64.StdEncoding.DecodeString(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return raw
+}
+
 // TestBuildFoldsProjectMemoryIntoSystemPrompt is the end-to-end proof of the
 // cache-first wiring: a project MADDOG.md is discovered at boot and folded
 // into the session's system message (the cached prefix), and the `remember`
@@ -105,6 +202,80 @@ api_key_env = "MADDOG_TEST_KEY_UNSET"
 
 	if mem := ctrl.Memory(); mem == nil || len(mem.Docs) == 0 {
 		t.Fatal("controller memory set is empty after discovering MADDOG.md")
+	}
+}
+
+func TestBuildWiresImageFallbackProvider(t *testing.T) {
+	isolateConfigHome(t)
+	registerBootImageFallbackTestProvider()
+	dir := robustTempDir(t)
+	t.Chdir(dir)
+
+	mainProvider := &bootImageFallbackTestProvider{name: "main", text: "main answer"}
+	visionProvider := &bootImageFallbackTestProvider{name: "vision", text: "vision summary: blue toolbar"}
+	setBootImageFallbackTestProviders(t, map[string]*bootImageFallbackTestProvider{
+		"main":   mainProvider,
+		"vision": visionProvider,
+	})
+
+	writeFile(t, dir, "maddog.toml", fmt.Sprintf(`
+default_model = "main"
+
+[agent]
+system_prompt = "BASE"
+image_fallback_model = "vision"
+
+[[providers]]
+name = "main"
+kind = %q
+base_url = "https://main.example.invalid"
+model = "text-only"
+
+[[providers]]
+name = "vision"
+kind = %q
+base_url = "https://vision.example.invalid"
+model = "vision-small"
+vision = true
+`, bootImageFallbackTestProviderKind, bootImageFallbackTestProviderKind))
+	if err := os.WriteFile(filepath.Join(dir, "diagram.png"), bootTestBase64(t, "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	ctrl, err := Build(context.Background(), Options{Sink: event.Discard})
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	defer ctrl.Close()
+	if err := ctrl.Run(context.Background(), "align @diagram.png"); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	visionReqs := visionProvider.requestsSnapshot()
+	if len(visionReqs) != 1 {
+		t.Fatalf("vision provider requests = %d, want 1", len(visionReqs))
+	}
+	visionUser := lastUserMessage(t, visionReqs[0])
+	if len(visionUser.Images) != 1 || !strings.HasPrefix(visionUser.Images[0], "data:image/png;base64,") {
+		t.Fatalf("vision fallback images = %#v, want one data URL", visionUser.Images)
+	}
+	if !strings.Contains(visionUser.Content, "diagram.png") {
+		t.Fatalf("vision fallback prompt missing image ref:\n%s", visionUser.Content)
+	}
+
+	mainReqs := mainProvider.requestsSnapshot()
+	if len(mainReqs) != 1 {
+		t.Fatalf("main provider requests = %d, want 1", len(mainReqs))
+	}
+	mainUser := lastUserMessage(t, mainReqs[0])
+	if len(mainUser.Images) != 0 {
+		t.Fatalf("main provider images = %#v, want none for text-only model", mainUser.Images)
+	}
+	if !strings.Contains(mainUser.Content, "<image_fallback") || !strings.Contains(mainUser.Content, "blue toolbar") {
+		t.Fatalf("main provider prompt missing fallback summary:\n%s", mainUser.Content)
+	}
+	if strings.Contains(mainUser.Content, "data:image/png;base64,") {
+		t.Fatalf("main provider prompt should not contain image bytes:\n%s", mainUser.Content)
 	}
 }
 

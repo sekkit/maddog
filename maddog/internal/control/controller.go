@@ -67,12 +67,13 @@ var errNoSessionPath = errors.New("session has content but no session path; conv
 // Controller drives one chat session. Construct with New; drive with the command
 // methods; observe through the Sink passed in Options.
 type Controller struct {
-	runner       agent.Runner
-	executor     *agent.Agent
-	guardianSess *guardian.Session // nil when guardian is disabled
-	guardianPath string            // persisted guardian session file ("" when disabled)
-	sink         event.Sink
-	policy       permission.Policy
+	runner        agent.Runner
+	executor      *agent.Agent
+	imageFallback provider.Provider
+	guardianSess  *guardian.Session // nil when guardian is disabled
+	guardianPath  string            // persisted guardian session file ("" when disabled)
+	sink          event.Sink
+	policy        permission.Policy
 
 	label             string
 	systemPrompt      string
@@ -250,26 +251,27 @@ type externalFolderToolRefs interface {
 // lets the controller mint and rotate session files; Host/Commands are surfaced
 // to frontends that resolve MCP prompts and slash commands.
 type Options struct {
-	Runner            agent.Runner
-	Executor          *agent.Agent
-	Sink              event.Sink
-	Policy            permission.Policy
-	Label             string
-	SystemPrompt      string
-	SessionDir        string
-	SessionPath       string
-	ModelRef          string
-	Host              *plugin.Host
-	Guardian          *guardian.Session
-	Commands          []command.Command
-	Skills            []skill.Skill
-	AllSkills         []skill.Skill
-	SkillStore        *skill.Store
-	AllSkillStore     *skill.Store
-	SkillOrchestrator *skill.Orchestrator
-	Hooks             *hook.Runner
-	Memory            *memory.Set
-	Cleanup           func()
+	Runner                agent.Runner
+	Executor              *agent.Agent
+	ImageFallbackProvider provider.Provider
+	Sink                  event.Sink
+	Policy                permission.Policy
+	Label                 string
+	SystemPrompt          string
+	SessionDir            string
+	SessionPath           string
+	ModelRef              string
+	Host                  *plugin.Host
+	Guardian              *guardian.Session
+	Commands              []command.Command
+	Skills                []skill.Skill
+	AllSkills             []skill.Skill
+	SkillStore            *skill.Store
+	AllSkillStore         *skill.Store
+	SkillOrchestrator     *skill.Orchestrator
+	Hooks                 *hook.Runner
+	Memory                *memory.Set
+	Cleanup               func()
 	// BalanceURL/BalanceKey wire the active provider's optional wallet-balance
 	// endpoint and bearer key; empty when the provider declares no balance_url.
 	BalanceURL    string
@@ -337,6 +339,7 @@ func New(opts Options) *Controller {
 	c := &Controller{
 		runner:                     opts.Runner,
 		executor:                   opts.Executor,
+		imageFallback:              opts.ImageFallbackProvider,
 		sink:                       sink,
 		policy:                     opts.Policy,
 		label:                      opts.Label,
@@ -619,6 +622,7 @@ func (c *Controller) runTurnWithRawDisplay(ctx context.Context, input, raw, disp
 	ctx = agent.WithParentSession(ctx, parentSession)
 	ctx = jobs.WithSession(ctx, parentSession)
 	ctx = agent.WithUserImages(ctx, c.inputImages(input))
+	input = c.withImageFallback(ctx, input)
 	input = c.Compose(input)
 	input = c.orchestrateSkills(ctx, input)
 	startMessages := c.messageCount()
@@ -1375,6 +1379,7 @@ func (c *Controller) Run(ctx context.Context, input string) error {
 	ctx = agent.WithParentSession(ctx, parentSession)
 	ctx = jobs.WithSession(ctx, parentSession)
 	ctx = agent.WithUserImages(ctx, c.inputImages(input))
+	input = c.withImageFallback(ctx, input)
 	input = c.Compose(input)
 	input = c.orchestrateSkills(ctx, input)
 	defer c.cleanupGeneratedRuntimeSkills()

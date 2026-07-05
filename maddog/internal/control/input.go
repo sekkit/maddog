@@ -80,7 +80,8 @@ func StripReferencedContextPrefix(content string) string {
 		}
 		// Check for a reference block start.
 		if !strings.HasPrefix(s, "<file ") && !strings.HasPrefix(s, "<dir ") &&
-			!strings.HasPrefix(s, "<resource ") && !strings.HasPrefix(s, "<image ") {
+			!strings.HasPrefix(s, "<resource ") && !strings.HasPrefix(s, "<image ") &&
+			!strings.HasPrefix(s, "<image_fallback ") {
 			break
 		}
 		// Find the matching close tag.

@@ -472,6 +472,7 @@ func (c *Config) RemoveProvider(name string) error {
 
 	defaultRefsProvider := c.modelRefTargetsProvider(c.DefaultModel, name)
 	plannerRefsProvider := c.modelRefTargetsProvider(c.Agent.PlannerModel, name)
+	imageFallbackRefsProvider := c.modelRefTargetsProvider(c.Agent.ImageFallbackModel, name)
 	subagentRefsProvider := c.modelRefTargetsProvider(c.Agent.SubagentModel, name)
 	advisorRefsProvider := c.modelRefTargetsProvider(c.Agent.AdvisorModel, name)
 	frontierRefsProvider := c.modelRefTargetsProvider(c.Agent.FrontierModel, name)
@@ -483,7 +484,7 @@ func (c *Config) RemoveProvider(name string) error {
 	}
 
 	fallback := ""
-	if defaultRefsProvider || plannerRefsProvider || subagentRefsProvider || advisorRefsProvider || frontierRefsProvider || len(subagentModelRefsProvider) > 0 {
+	if defaultRefsProvider || plannerRefsProvider || imageFallbackRefsProvider || subagentRefsProvider || advisorRefsProvider || frontierRefsProvider || len(subagentModelRefsProvider) > 0 {
 		fallback = c.providerRemovalFallback(name)
 	}
 	if defaultRefsProvider && fallback == "" {
@@ -497,6 +498,9 @@ func (c *Config) RemoveProvider(name string) error {
 	}
 	if plannerRefsProvider {
 		c.Agent.PlannerModel = fallback
+	}
+	if imageFallbackRefsProvider {
+		c.Agent.ImageFallbackModel = fallback
 	}
 	if subagentRefsProvider {
 		c.Agent.SubagentModel = fallback

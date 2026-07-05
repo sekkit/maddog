@@ -1194,6 +1194,27 @@ func Build(ctx context.Context, opts Options) (*control.Controller, error) {
 			return rememberMCPReadOnlyTrust(root, serverName, rawToolName)
 		},
 	}
+	if imageFallbackModel := strings.TrimSpace(cfg.Agent.ImageFallbackModel); imageFallbackModel != "" {
+		ie, ok := cfg.ResolveModel(imageFallbackModel)
+		if !ok {
+			sink.Emit(event.Event{Kind: event.Notice, Level: event.LevelWarn,
+				Text: fmt.Sprintf("image_fallback_model %q is not configured — image fallback disabled", imageFallbackModel)})
+		} else if !config.EffectiveVision(ie) {
+			sink.Emit(event.Event{Kind: event.Notice, Level: event.LevelWarn,
+				Text: fmt.Sprintf("image_fallback_model %q does not declare vision support — image fallback disabled", imageFallbackModel)})
+		} else if ie.AuthEnvName() != "" && !ie.Configured() {
+			sink.Emit(event.Event{Kind: event.Notice, Level: event.LevelWarn,
+				Text: fmt.Sprintf("image_fallback_model %q selected but %s is not set — image fallback disabled", imageFallbackModel, ie.AuthEnvName())})
+		} else {
+			imageFallbackProv, err := NewProviderWithProxy(ie, proxySpec)
+			if err != nil {
+				sink.Emit(event.Event{Kind: event.Notice, Level: event.LevelWarn,
+					Text: fmt.Sprintf("image_fallback_model %q failed to initialize (%v) — image fallback disabled", imageFallbackModel, err)})
+			} else {
+				ctrlOpts.ImageFallbackProvider = imageFallbackProv
+			}
+		}
+	}
 	// Guardian: when guardian_model is configured, spawn an LLM safety reviewer
 	// that can auto-allow safe Ask decisions and annotate risky ones before
 	// escalating to the human approval prompt.

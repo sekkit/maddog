@@ -34,6 +34,7 @@ tool_result_snip_ratio = 0.6   # snip stale tool results before summary compacti
 compact_ratio       = 0.8   # try compacting when prompt reaches this fraction
 compact_force_ratio = 0.9   # force compacting at this high-water mark
 # planner_model = "deepseek-pro"   # optional: enable two-model collaboration
+# image_fallback_model = "lmstudio-vision"   # optional: summarize @image refs for text-only models
 # subagent_model = "deepseek-pro"   # optional default for runAs=subagent skills
 # subagent_models = { review = "deepseek-pro", security_review = "deepseek-pro" }   # per-skill overrides
 # output_style = "explanatory"   # persona/tone folded into the prompt: explanatory | learning | concise,
@@ -76,6 +77,17 @@ effort      = "high"
 # reasoning_protocol = "openai"   # auto|deepseek|openai|none
 # supported_efforts = ["low", "medium", "high"]
 # default_effort    = "high"
+
+# Local LM Studio vision fallback for text-only main models. Start LM Studio's
+# OpenAI-compatible server on 127.0.0.1:1234, load a vision model, then set
+# [agent].image_fallback_model = "lmstudio-vision".
+#
+# [[providers]]
+# name      = "lmstudio-vision"
+# kind      = "openai"
+# base_url  = "http://127.0.0.1:1234/v1"
+# model     = "your-local-vision-model"
+# vision    = true
 
 # Anthropic (Claude) — the "anthropic" kind speaks the Messages API directly (no
 # OpenAI shim). base_url is optional (defaults to https://api.anthropic.com). Note:

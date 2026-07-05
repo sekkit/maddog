@@ -379,6 +379,18 @@ func TestRunTurnAutoPlanScoresRawPromptNotResolvedRefs(t *testing.T) {
 	}
 }
 
+func TestStripReferencedContextPrefixSkipsImageFallback(t *testing.T) {
+	content := "Referenced context:\n\n" +
+		"<image_fallback source=\"diagram.png\" provider=\"lmstudio-vision\">\nsummary\n</image_fallback>\n\n" +
+		"<file path=\"notes.txt\">\nnotes\n</file>\n\n" +
+		"align @diagram.png"
+
+	got := StripReferencedContextPrefix(content)
+	if got != "align @diagram.png" {
+		t.Fatalf("StripReferencedContextPrefix() = %q, want original prompt", got)
+	}
+}
+
 func TestRunTurnAppliesRuntimeSkillOrchestrationHint(t *testing.T) {
 	home := t.TempDir()
 	writeControlSkill(t, home, ".maddog/skills/docs.md", "---\nname: docs\ndescription: documentation writing helper\n---\nbody")

@@ -56,6 +56,9 @@ func (o *turnOrchestrator) runOrchestratedTurn(ctx context.Context, turn orchest
 	ctx = agent.WithParentSession(ctx, parentSession)
 	ctx = jobs.WithSession(ctx, parentSession)
 	ctx = agent.WithUserImages(ctx, c.inputImages(turn.input))
+	if !turn.synthetic {
+		turn.input = c.withImageFallback(ctx, turn.input)
+	}
 	// Synthetic, controller-injected turns (goal-loop continuation,
 	// plan-approved execution, …) must not be Memory v5-compiled: compiling them
 	// re-injects a contract the model echoes back, which spins the goal loop

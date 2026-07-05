@@ -919,6 +919,7 @@ func TestRenderTOMLRoundTripsPerModelPrices(t *testing.T) {
 
 func TestRenderTOMLRoundTripsVisionModels(t *testing.T) {
 	orig := Default()
+	orig.Agent.ImageFallbackModel = "lmstudio-vision"
 	orig.Providers = []ProviderEntry{
 		{
 			Name:         "custom",
@@ -951,10 +952,16 @@ func TestRenderTOMLRoundTripsVisionModels(t *testing.T) {
 	if !strings.Contains(rendered, `vision_detail = "low"`) {
 		t.Fatalf("rendered TOML missing vision_detail:\n%s", rendered)
 	}
+	if !strings.Contains(rendered, `image_fallback_model = "lmstudio-vision"`) {
+		t.Fatalf("rendered TOML missing image_fallback_model:\n%s", rendered)
+	}
 
 	var got Config
 	if _, err := toml.Decode(rendered, &got); err != nil {
 		t.Fatalf("rendered TOML does not parse: %v", err)
+	}
+	if got.Agent.ImageFallbackModel != "lmstudio-vision" {
+		t.Fatalf("image_fallback_model after round trip = %q, want lmstudio-vision", got.Agent.ImageFallbackModel)
 	}
 	p, ok := got.Provider("custom")
 	if !ok {
