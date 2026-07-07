@@ -24,10 +24,9 @@ const (
 	Version = "v0.9.7"
 	cgRepo  = "colbymchenry/codegraph"
 
-	officialMirrorBase         = "https://dl.maddog.io/codegraph"
-	officialMainlandMirrorBase = ""
-	perSourceDownloadTimeout   = 10 * time.Minute
-	activeVersionFile          = "active-version"
+	codegraphMirrorsEnv      = "MADDOG_CODEGRAPH_DOWNLOAD_MIRRORS"
+	perSourceDownloadTimeout = 10 * time.Minute
+	activeVersionFile        = "active-version"
 
 	renameAttempts = 5
 	renameBackoff  = 200 * time.Millisecond
@@ -43,6 +42,15 @@ var (
 type UpdateResult struct {
 	Version string
 	Path    string
+}
+
+// InstallOptions controls CodeGraph download behavior. DownloadMirrors are
+// release-base URLs tried before GitHub. A mirror may either include {version}
+// or end before the version directory; both shapes are normalized.
+type InstallOptions struct {
+	Client          *http.Client
+	DownloadMirrors []string
+	Log             func(string)
 }
 
 // CacheDir is where the CodeGraph bundle is unpacked on first use:
@@ -229,6 +237,14 @@ func Install(ctx context.Context, log func(string)) (string, error) {
 // InstallWithClient is Install with an explicit HTTP client, used when Maddog
 // network proxy settings should apply.
 func InstallWithClient(ctx context.Context, client *http.Client, log func(string)) (string, error) {
+	return InstallWithOptions(ctx, InstallOptions{Client: client, Log: log})
+}
+
+// InstallWithOptions is Install with an explicit HTTP client and optional mirror
+// list, used when Maddog network proxy settings and user download mirrors should
+// apply.
+func InstallWithOptions(ctx context.Context, opts InstallOptions) (string, error) {
+	client := opts.Client
 	if client == nil {
 		client = http.DefaultClient
 	}
@@ -236,12 +252,12 @@ func InstallWithClient(ctx context.Context, client *http.Client, log func(string
 		return p, nil
 	}
 	asset := assetName()
-	logf(log, "codegraph: downloading %s (%s, one-time)…", asset, Version)
+	logf(opts.Log, "codegraph: downloading %s (%s, one-time)…", asset, Version)
 	want := expectedAssetSHA256(asset)
 	if want == "" {
 		return "", fmt.Errorf("codegraph: no embedded checksum for %s (%s)", asset, Version)
 	}
-	return installVersionWithClient(ctx, client, Version, want, downloadBases(), false, log)
+	return installVersionWithClient(ctx, client, Version, want, downloadBases(opts.DownloadMirrors, Version), false, opts.Log)
 }
 
 func UpdateWithClient(ctx context.Context, client *http.Client, log func(string)) (UpdateResult, error) {
@@ -255,7 +271,23 @@ func UpdateWithClient(ctx context.Context, client *http.Client, log func(string)
 	return res, nil
 }
 
+func UpdateWithOptions(ctx context.Context, opts InstallOptions) (UpdateResult, error) {
+	res, err := DownloadLatestWithOptions(ctx, opts)
+	if err != nil {
+		return UpdateResult{}, err
+	}
+	if err := writeActiveVersion(res.Version); err != nil {
+		return UpdateResult{}, err
+	}
+	return res, nil
+}
+
 func DownloadLatestWithClient(ctx context.Context, client *http.Client, log func(string)) (UpdateResult, error) {
+	return DownloadLatestWithOptions(ctx, InstallOptions{Client: client, Log: log})
+}
+
+func DownloadLatestWithOptions(ctx context.Context, opts InstallOptions) (UpdateResult, error) {
+	client := opts.Client
 	if client == nil {
 		client = http.DefaultClient
 	}
@@ -275,8 +307,8 @@ func DownloadLatestWithClient(ctx context.Context, client *http.Client, log func
 	if err != nil {
 		return UpdateResult{}, err
 	}
-	logf(log, "codegraph: downloading %s (%s)…", asset, version)
-	path, err := installVersionWithClient(ctx, client, version, want, []string{githubReleaseDownloadBase(version)}, true, log)
+	logf(opts.Log, "codegraph: downloading %s (%s)…", asset, version)
+	path, err := installVersionWithClient(ctx, client, version, want, downloadBases(opts.DownloadMirrors, version), true, opts.Log)
 	if err != nil {
 		return UpdateResult{}, err
 	}
@@ -401,13 +433,44 @@ func expectedAssetSHA256(asset string) string {
 	return releaseAssetSHA256[asset]
 }
 
-func downloadBases() []string {
-	bases := []string{officialMirrorBase + "/" + Version}
-	if strings.TrimSpace(officialMainlandMirrorBase) != "" {
-		bases = append(bases, strings.TrimRight(officialMainlandMirrorBase, "/")+"/"+Version)
-	}
-	bases = append(bases, fmt.Sprintf("https://github.com/%s/releases/download/%s", cgRepo, Version))
+func downloadBases(mirrors []string, version string) []string {
+	var bases []string
+	bases = append(bases, releaseBases(envDownloadMirrors(), version)...)
+	bases = append(bases, releaseBases(mirrors, version)...)
+	bases = append(bases, githubReleaseDownloadBase(version))
 	return dedupeStrings(bases)
+}
+
+func envDownloadMirrors() []string {
+	return strings.FieldsFunc(os.Getenv(codegraphMirrorsEnv), func(r rune) bool {
+		return r == ',' || r == ';' || r == '\n' || r == '\r' || r == '\t'
+	})
+}
+
+func releaseBases(mirrors []string, version string) []string {
+	var bases []string
+	for _, mirror := range mirrors {
+		if base := releaseBase(mirror, version); base != "" {
+			bases = append(bases, base)
+		}
+	}
+	return bases
+}
+
+func releaseBase(mirror, version string) string {
+	mirror = strings.TrimSpace(mirror)
+	if mirror == "" {
+		return ""
+	}
+	mirror = strings.ReplaceAll(mirror, "{version}", version)
+	mirror = strings.TrimRight(mirror, "/")
+	if mirror == "" {
+		return ""
+	}
+	if strings.HasSuffix(mirror, "/"+version) {
+		return mirror
+	}
+	return mirror + "/" + version
 }
 
 func dedupeStrings(values []string) []string {

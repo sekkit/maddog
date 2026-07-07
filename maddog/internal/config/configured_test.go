@@ -2,6 +2,30 @@ package config
 
 import "testing"
 
+func TestDefaultIncludesPxpipeForFableAndGPT56(t *testing.T) {
+	cfg := Default()
+	claude, ok := cfg.Provider("pxpipe-claude")
+	if !ok {
+		t.Fatal("default config missing pxpipe-claude provider")
+	}
+	if claude.Kind != "anthropic" || claude.BaseURL != "http://127.0.0.1:47821" {
+		t.Fatalf("pxpipe-claude kind/base_url = %q/%q, want anthropic local pxpipe", claude.Kind, claude.BaseURL)
+	}
+	if claude.Model != "claude-fable-5" || claude.APIKeyEnv != "ICE_API_KEY" {
+		t.Fatalf("pxpipe-claude model/key = %q/%q, want claude-fable-5/ICE_API_KEY", claude.Model, claude.APIKeyEnv)
+	}
+	gpt, ok := cfg.Provider("pxpipe-gpt")
+	if !ok {
+		t.Fatal("default config missing pxpipe-gpt provider")
+	}
+	if gpt.Kind != "openai" || gpt.BaseURL != "http://127.0.0.1:47821/v1" {
+		t.Fatalf("pxpipe-gpt kind/base_url = %q/%q, want openai local pxpipe", gpt.Kind, gpt.BaseURL)
+	}
+	if gpt.Model != "gpt-5.6" || gpt.WireAPI != "responses" || gpt.ReasoningProtocol != "openai" {
+		t.Fatalf("pxpipe-gpt model/wire/reasoning = %q/%q/%q, want gpt-5.6/responses/openai", gpt.Model, gpt.WireAPI, gpt.ReasoningProtocol)
+	}
+}
+
 // TestProviderConfigured verifies Configured tracks whether the provider can be
 // selected. Providers with no api_key_env are explicit no-auth providers; if an
 // env var is configured, it must resolve to a non-empty value.

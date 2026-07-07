@@ -292,6 +292,11 @@ func RenderTOMLForScope(c *Config, scope RenderScope) string {
 		} else {
 			b.WriteString("# path       = \"\"   # empty = cache, then PATH, then a bundle beside maddog\n")
 		}
+		if len(c.Codegraph.DownloadMirrors) > 0 {
+			fmt.Fprintf(&b, "download_mirrors = %s   # optional release-base URLs tried before GitHub; {version} is supported\n", renderStringArray(c.Codegraph.DownloadMirrors))
+		} else {
+			b.WriteString("# download_mirrors = [\"https://mirror.example.com/codegraph\"]   # optional release-base URLs tried before GitHub; {version} is supported\n")
+		}
 		b.WriteString("\n")
 	}
 
@@ -800,6 +805,9 @@ func renderAgentBehaviorFields(b *strings.Builder, c, defaults *Config, projectD
 	}
 	if !projectDelta || c.Agent.FrontierBudget != defaults.Agent.FrontierBudget {
 		fmt.Fprintf(b, "frontier_budget = %d   # session output-token budget for frontier calls; 0 = unlimited\n", c.Agent.FrontierBudget)
+	}
+	if c.Agent.MaxParallelTools > 0 {
+		fmt.Fprintf(b, "max_parallel_tools = %d   # concurrent read-only tool calls / parallel subagents; 0 = default (8)\n", c.Agent.MaxParallelTools)
 	}
 	if c.Agent.OutputStyle != "" {
 		fmt.Fprintf(b, "output_style = %q   # persona/tone folded into the prompt\n", c.Agent.OutputStyle)

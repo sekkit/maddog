@@ -168,6 +168,22 @@ func TestDesktopPreferencesAreSeparateFromCLI(t *testing.T) {
 	}
 }
 
+func TestSetDesktopAppearanceEmptyThemeKeepsAutoDefault(t *testing.T) {
+	c := Default()
+	if err := c.SetDesktopAppearance("", ""); err != nil {
+		t.Fatalf("SetDesktopAppearance: %v", err)
+	}
+	if got := c.DesktopTheme(); got != "auto" {
+		t.Fatalf("desktop theme for empty input = %q, want auto", got)
+	}
+	if got := c.Desktop.Theme; got != "auto" {
+		t.Fatalf("stored desktop theme for empty input = %q, want auto", got)
+	}
+	if got := c.DesktopThemeStyle(); got != "" {
+		t.Fatalf("desktop theme style for empty input = %q, want empty", got)
+	}
+}
+
 func TestDesktopLayoutStyleNormalizes(t *testing.T) {
 	if got := Default().DesktopLayoutStyle(); got != "workbench" {
 		t.Fatalf("default desktop layout style = %q, want workbench", got)

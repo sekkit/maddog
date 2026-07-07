@@ -181,12 +181,13 @@ type ToolHooks interface {
 // Agent drives a single task: a Provider, a tool Registry, and a Session wired
 // into the main loop.
 type Agent struct {
-	prov        provider.Provider
-	tools       *tool.Registry
-	session     *Session
-	sessMu      sync.Mutex // guards the session pointer for external Session()/SetSession
-	maxSteps    int
-	maxStepsKey string
+	prov             provider.Provider
+	tools            *tool.Registry
+	session          *Session
+	sessMu           sync.Mutex // guards the session pointer for external Session()/SetSession
+	maxSteps         int
+	maxStepsKey      string
+	maxParallelTools int
 	// executorHandoffGuard is enabled by Coordinator for the executor agent. The
 	// per-turn marker check in Run keeps ordinary single-model turns unaffected.
 	executorHandoffGuard bool
@@ -755,6 +756,10 @@ type Options struct {
 	ArchiveDir          string
 	KeepPolicy          KeepPolicy
 
+	// MaxParallelTools caps how many read-only tool calls (including parallel
+	// subagent dispatches) run concurrently in one batch. <= 0 = default (8).
+	MaxParallelTools int
+
 	// Hooks fires PreToolUse / PostToolUse shell hooks around tool calls. nil
 	// disables hook firing.
 	Hooks ToolHooks
@@ -846,6 +851,7 @@ func New(prov provider.Provider, tools *tool.Registry, session *Session, opts Op
 		session:               session,
 		maxSteps:              opts.MaxSteps,
 		maxStepsKey:           maxStepsKey,
+		maxParallelTools:      opts.MaxParallelTools,
 		temperature:           opts.Temperature,
 		pricing:               opts.Pricing,
 		upgradePolicy:         opts.UpgradePolicy,
@@ -2148,7 +2154,7 @@ func (a *Agent) executeBatch(ctx context.Context, calls []provider.ToolCall) []s
 			break
 		}
 		if batch.parallel && batch.end-batch.start > 1 {
-			ranUntil := runParallel(ctx, batch.start, batch.end, run)
+			ranUntil := runParallel(ctx, a.maxParallelTools, batch.start, batch.end, run)
 			// After parallel execution completes, check if context was cancelled.
 			// The individual tool executions should have detected ctx.Done(), but
 			// we verify here to ensure we don't continue to subsequent batches.
@@ -2284,9 +2290,15 @@ func parallelisable(r *tool.Registry, name string) bool {
 	return ok && t.ReadOnly()
 }
 
-func runParallel(ctx context.Context, start, end int, run func(int)) int {
-	const maxParallel = 8
-	sem := make(chan struct{}, maxParallel)
+// defaultMaxParallelTools is the concurrency cap applied when the
+// agent.max_parallel_tools config is unset (or <= 0).
+const defaultMaxParallelTools = 8
+
+func runParallel(ctx context.Context, limit, start, end int, run func(int)) int {
+	if limit <= 0 {
+		limit = defaultMaxParallelTools
+	}
+	sem := make(chan struct{}, limit)
 	var wg sync.WaitGroup
 	ranUntil := start
 launch:

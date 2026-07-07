@@ -8,7 +8,7 @@ import (
 	"maddog/internal/codegraph"
 )
 
-var updateBuiltInCodegraph = codegraph.UpdateWithClient
+var updateBuiltInCodegraph = codegraph.UpdateWithOptions
 
 func (a *App) withActiveWorkspace(fn func() (string, error)) (string, error) {
 	var result string

@@ -528,13 +528,16 @@ type StatuslineConfig struct {
 // enabled but missing; set false to require an explicit `maddog codegraph
 // install` (e.g. for air-gapped or headless runs). Path overrides binary
 // resolution; empty resolves the cache, then a `codegraph` on PATH, then a
-// bundle beside the executable. CodeGraph always starts in the background when
-// enabled; legacy tier values are ignored and removed during config load.
+// bundle beside the executable. DownloadMirrors are optional release-base URLs
+// tried before GitHub; each may include {version} or point to a parent directory.
+// CodeGraph always starts in the background when enabled; legacy tier values are
+// ignored and removed during config load.
 type CodegraphConfig struct {
-	Enabled     bool   `toml:"enabled"`
-	AutoInstall bool   `toml:"auto_install"`
-	Path        string `toml:"path"`
-	Tier        string `toml:"tier"`
+	Enabled         bool     `toml:"enabled"`
+	AutoInstall     bool     `toml:"auto_install"`
+	Path            string   `toml:"path"`
+	DownloadMirrors []string `toml:"download_mirrors"`
+	Tier            string   `toml:"tier"`
 }
 
 func (c CodegraphConfig) ShouldAutoStart() bool {
@@ -1065,6 +1068,7 @@ type AgentConfig struct {
 	UpgradeThreshold          int               `toml:"upgrade_threshold"`
 	FrontierBudget            int64             `toml:"frontier_budget"`
 	UpgradeEnabled            bool              `toml:"upgrade_enabled"`
+	MaxParallelTools          int               `toml:"max_parallel_tools"` // concurrent read-only tool calls / parallel subagents; 0 = default (8)
 	AdvisorMaxUsesPerTurn     int               `toml:"advisor_max_uses_per_turn"`
 	AdvisorMaxUsesPerSession  int               `toml:"advisor_max_uses_per_session"`
 	AdvisorMaxContextMessages int               `toml:"advisor_max_context_messages"`
@@ -1630,6 +1634,8 @@ func Default() *Config {
 		Providers: []ProviderEntry{
 			{Name: "deepseek-flash", Kind: "openai", BaseURL: "https://api.deepseek.com", Model: "deepseek-v4-flash", APIKeyEnv: "DEEPSEEK_API_KEY", BalanceURL: "https://api.deepseek.com/user/balance", ContextWindow: 1_000_000, Price: deepSeekV4FlashPrice()},
 			{Name: "deepseek-pro", Kind: "openai", BaseURL: "https://api.deepseek.com", Model: "deepseek-v4-pro", APIKeyEnv: "DEEPSEEK_API_KEY", BalanceURL: "https://api.deepseek.com/user/balance", ContextWindow: 1_000_000, Price: deepSeekV4ProPrice()},
+			{Name: "pxpipe-claude", Kind: "anthropic", BaseURL: "http://127.0.0.1:47821", Model: "claude-fable-5", APIKeyEnv: "ICE_API_KEY", ContextWindow: 1_000_000, Thinking: "adaptive", Effort: "high", NoProxy: true},
+			{Name: "pxpipe-gpt", Kind: "openai", BaseURL: "http://127.0.0.1:47821/v1", Model: "gpt-5.6", APIKeyEnv: "ICE_API_KEY", ContextWindow: 1_000_000, WireAPI: "responses", ReasoningProtocol: "openai", SupportedEfforts: []string{"low", "medium", "high"}, DefaultEffort: "high", NoProxy: true},
 		},
 	}
 }

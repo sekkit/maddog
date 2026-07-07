@@ -430,7 +430,10 @@ func Build(ctx context.Context, opts Options) (*control.Controller, error) {
 				notify("codegraph: install skipped (" + err.Error() + ")")
 			} else {
 				go func() {
-					if _, err := codegraph.InstallWithClient(context.WithoutCancel(ctx), codegraphClient, nil); err != nil {
+					if _, err := codegraph.InstallWithOptions(context.WithoutCancel(ctx), codegraph.InstallOptions{
+						Client:          codegraphClient,
+						DownloadMirrors: cfg.Codegraph.DownloadMirrors,
+					}); err != nil {
 						notify("codegraph: install failed (" + err.Error() + ") — using grep/glob; retries next session")
 					} else {
 						notify("codegraph: installed — symbol-graph tools available next session")
@@ -669,7 +672,8 @@ func Build(ctx context.Context, opts Options) (*control.Controller, error) {
 			cfg.Agent.Temperature, archiveDir, "", headlessGate,
 			keepPolicy, taskModel, taskEffort, resolveSubagentProvider).
 			WithTranscripts(subagentStore, root, modelName, entry.Effort).
-			WithTranscriptIdentityResolver(subagentIdentity)
+			WithTranscriptIdentityResolver(subagentIdentity).
+			WithMaxParallel(cfg.Agent.MaxParallelTools)
 		reg.Add(taskTool)
 		reg.Add(agent.NewParallelTasksTool(taskTool, reg))
 		return "enabled task."
@@ -683,7 +687,8 @@ func Build(ctx context.Context, opts Options) (*control.Controller, error) {
 			entry.ContextWindow, cfg.Agent.RecentKeep, cfg.Agent.SoftCompactRatio, cfg.Agent.ToolResultSnipRatio, cfg.Agent.CompactRatio, cfg.Agent.CompactForceRatio,
 			cfg.Agent.Temperature, archiveDir, "", headlessGate,
 			keepPolicy, taskModel, taskEffort, resolveSubagentProvider).
-			WithTranscriptIdentityResolver(subagentIdentity)
+			WithTranscriptIdentityResolver(subagentIdentity).
+			WithMaxParallel(cfg.Agent.MaxParallelTools)
 		reg.Add(agent.NewReadOnlyTaskTool(taskTool))
 		return "enabled read_only_task."
 	}
@@ -757,6 +762,7 @@ func Build(ctx context.Context, opts Options) (*control.Controller, error) {
 			ToolResultSnipRatio: cfg.Agent.ToolResultSnipRatio,
 			CompactRatio:        cfg.Agent.CompactRatio,
 			CompactForceRatio:   cfg.Agent.CompactForceRatio,
+			MaxParallelTools:    cfg.Agent.MaxParallelTools,
 			ArchiveDir:          config.ArchiveDir(),
 			KeepPolicy:          keepPolicy,
 			ReasoningLanguage:   agent.ReasoningLanguageFromContext(sctx),
@@ -837,6 +843,7 @@ func Build(ctx context.Context, opts Options) (*control.Controller, error) {
 			SoftCompactRatio:  cfg.Agent.SoftCompactRatio,
 			CompactRatio:      cfg.Agent.CompactRatio,
 			CompactForceRatio: cfg.Agent.CompactForceRatio,
+			MaxParallelTools:  cfg.Agent.MaxParallelTools,
 			ArchiveDir:        archiveDir,
 			ReasoningLanguage: agent.ReasoningLanguageFromContext(sctx),
 			UsageRole:         subagentUsageRole(sk),
@@ -1104,6 +1111,7 @@ func Build(ctx context.Context, opts Options) (*control.Controller, error) {
 		SoftCompactRatio:  cfg.Agent.SoftCompactRatio,
 		CompactRatio:      cfg.Agent.CompactRatio,
 		CompactForceRatio: cfg.Agent.CompactForceRatio,
+		MaxParallelTools:  cfg.Agent.MaxParallelTools,
 		ArchiveDir:        archiveDir,
 	}, sink)
 
@@ -1152,6 +1160,7 @@ func Build(ctx context.Context, opts Options) (*control.Controller, error) {
 				SoftCompactRatio:  cfg.Agent.SoftCompactRatio,
 				CompactRatio:      cfg.Agent.CompactRatio,
 				CompactForceRatio: cfg.Agent.CompactForceRatio,
+				MaxParallelTools:  cfg.Agent.MaxParallelTools,
 				ArchiveDir:        archiveDir,
 			}, executor, cfg.Agent.Temperature, sink, control.TaskWarrantsPlanner)
 			label = entry.Model + " + planner " + pe.Model

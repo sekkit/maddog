@@ -178,6 +178,7 @@ type TaskTool struct {
 	baseModel           string
 	baseEffort          string
 	identityProfile     func(modelRef, effort string) (string, string)
+	maxParallel         int // cap for parallel_tasks dispatch; <= 0 = default (8)
 }
 
 // NewTaskTool wires a task tool to the parent agent's environment so its
@@ -227,6 +228,13 @@ func (t *TaskTool) WithTranscripts(store *SubagentStore, workspaceRoot, baseMode
 
 func (t *TaskTool) WithTranscriptIdentityResolver(resolve func(modelRef, effort string) (string, string)) *TaskTool {
 	t.identityProfile = resolve
+	return t
+}
+
+// WithMaxParallel caps how many parallel_tasks sub-agents run concurrently.
+// n <= 0 keeps the default (defaultMaxParallelTools).
+func (t *TaskTool) WithMaxParallel(n int) *TaskTool {
+	t.maxParallel = n
 	return t
 }
 

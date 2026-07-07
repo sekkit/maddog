@@ -1,6 +1,7 @@
 package skill
 
 import (
+	_ "embed"
 	"sort"
 	"strings"
 
@@ -11,6 +12,14 @@ import (
 // (explore / research / review / security_review) plus the inline `test`
 // playbook. A user/project file with the same name overrides the built-in (see
 // Store.List / Store.Read). Tool names in the bodies match internal/tool/builtin.
+
+// builtinImproveBody is the improve advisor playbook (adapted from
+// github.com/shadcn/improve, MIT). It is self-contained: the audit playbook,
+// closing-the-loop flows, and plan template ride along as appendices, so a
+// fresh install needs no companion files on disk.
+//
+//go:embed improve_builtin.md
+var builtinImproveBody string
 
 // negativeClaimRule keeps subagents honest about "found nothing" answers.
 const negativeClaimRule = `When you claim something does NOT exist (no caller, no usage, not implemented), say which searches you ran to reach that conclusion — a negative claim is only as trustworthy as the search behind it.`
@@ -370,6 +379,14 @@ func builtinSkills() []Skill {
 			Name:        "test",
 			Description: "Run the project's test suite, diagnose failures, propose+apply fixes, re-run until green (or stop after 2 attempts on the same failure). Inlined — runs in the parent loop. Detects go/npm/pnpm/yarn/pytest/cargo.",
 			Body:        builtinTestBody,
+			Scope:       ScopeBuiltin,
+			Path:        "(builtin)",
+			RunAs:       RunInline,
+		},
+		{
+			Name:        "improve",
+			Description: "Audit the codebase as a read-only senior advisor and write prioritized, self-contained implementation plans under plans/ for other (cheaper) agents to execute — never edits source code itself. Variants: quick | deep | branch | next | plan <desc> | review-plan <file> | execute <plan> | reconcile | --issues. Inlined — orchestrates read-only audit subagents and asks the user which findings to plan.",
+			Body:        builtinImproveBody,
 			Scope:       ScopeBuiltin,
 			Path:        "(builtin)",
 			RunAs:       RunInline,

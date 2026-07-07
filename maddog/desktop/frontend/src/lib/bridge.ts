@@ -45,6 +45,7 @@ import type {
   MemoryView,
   Meta,
   Mode,
+  ModelRecommendationRefs,
   ModelInfo,
   NetworkView,
   ProjectNode,
@@ -276,6 +277,7 @@ export interface AppBindings {
   SaveHooksSettingsForRoot(scope: string, projectRoot: string, hooks: HookConfigView[]): Promise<void>;
   TrustProjectHooks(): Promise<void>;
   TrustProjectHooksForRoot(projectRoot: string): Promise<void>;
+  RecommendModels(): Promise<ModelRecommendationRefs>;
   SetDefaultModel(ref: string): Promise<void>;
   SetPlannerModel(ref: string): Promise<void>;
   SetSubagentModel(ref: string): Promise<void>;
@@ -2775,6 +2777,9 @@ function makeMockApp(): AppBindings {
     },
     async Settings() {
       return JSON.parse(JSON.stringify(settings)) as SettingsView;
+    },
+    async RecommendModels() {
+      throw new Error("RecommendModels requires the Wails runtime");
     },
     async HooksSettings(scope: string) {
       const key = scope === "project" ? "project" : "global";

@@ -33,6 +33,7 @@ check(
   "settings GUI exposes default, small/background, and frontier model controls",
   includesAll(settingsPanel, [
     "app.SetDefaultModel(ref)",
+    "app.RecommendModels()",
     "app.SetSubagentModel(ref)",
     "app.SetAdvisorModel(ref)",
     "app.SetSubagentEffort(e.target.value)",

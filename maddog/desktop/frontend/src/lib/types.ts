@@ -1195,6 +1195,14 @@ export interface SettingsView {
   bypass: boolean; // legacy JSON key for live YOLO/full-access tool auto-approval
 }
 
+export interface ModelRecommendationRefs {
+  defaultModel: string;
+  plannerModel: string;
+  subagentModel: string;
+  advisorModel: string;
+  frontierModel: string;
+}
+
 export interface DesktopStartupSettingsView {
   bot: BotSettingsView;
   desktopLanguage: string; // "" | "en" | "zh"; empty = auto

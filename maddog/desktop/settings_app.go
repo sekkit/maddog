@@ -875,9 +875,9 @@ func (a *App) loadDesktopUserConfigForEdit() (*config.Config, string, error) {
 	if userPath == "" {
 		return nil, "", fmt.Errorf("cannot resolve user config directory")
 	}
-	if _, err := os.Stat(userPath); err == nil {
-		cfg := config.LoadForEdit(userPath)
-		if err := normalizeLegacyDesktopProviderAccessForSettings(cfg, userPath); err != nil {
+	if loadPath := existingDesktopUserConfigPath(userPath); loadPath != "" {
+		cfg := config.LoadForEdit(loadPath)
+		if err := normalizeLegacyDesktopProviderAccessForSettings(cfg, loadPath); err != nil {
 			return nil, "", err
 		}
 		if err := a.migrateLegacyBotConfigToUser(cfg, userPath); err != nil {
@@ -909,13 +909,13 @@ func (a *App) loadDesktopUserConfigForView() (*config.Config, string, error) {
 	if userPath == "" {
 		return nil, "", fmt.Errorf("cannot resolve user config directory")
 	}
-	if _, err := os.Stat(userPath); err == nil {
-		cfg := config.LoadForEditWithoutCredentials(userPath)
-		if err := normalizeLegacyDesktopProviderAccessForSettings(cfg, userPath); err != nil {
+	if loadPath := existingDesktopUserConfigPath(userPath); loadPath != "" {
+		cfg := config.LoadForEditWithoutCredentials(loadPath)
+		if err := normalizeLegacyDesktopProviderAccessForSettings(cfg, loadPath); err != nil {
 			return nil, "", err
 		}
 		legacyPath := config.SourcePathForRoot(a.activeWorkspaceRoot())
-		if legacyPath != "" && !sameConfigPath(legacyPath, userPath) {
+		if legacyPath != "" && !sameConfigPath(legacyPath, loadPath) {
 			legacyCfg := config.LoadForEditWithoutCredentials(legacyPath)
 			if err := migrateLegacyBotConfigToUser(cfg, legacyCfg, userPath); err != nil {
 				return nil, "", err
@@ -940,6 +940,24 @@ func (a *App) loadDesktopUserConfigForView() (*config.Config, string, error) {
 		return nil, "", err
 	}
 	return legacyCfg, userPath, nil
+}
+
+func existingDesktopUserConfigPath(userPath string) string {
+	if strings.TrimSpace(userPath) == "" {
+		return ""
+	}
+	if _, err := os.Stat(userPath); err == nil {
+		return userPath
+	}
+	for _, path := range config.LegacyUserConfigPaths() {
+		if path == "" || sameConfigPath(path, userPath) {
+			continue
+		}
+		if _, err := os.Stat(path); err == nil {
+			return path
+		}
+	}
+	return ""
 }
 
 func (a *App) migrateLegacyBotConfigToUser(userCfg *config.Config, userPath string) error {

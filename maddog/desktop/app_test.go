@@ -743,6 +743,51 @@ status_bar_items = ["model", "cache", "balance"]
 	}
 }
 
+func TestDesktopStartupSettingsReadsLegacyUserConfigWhenPrimaryMissing(t *testing.T) {
+	isolateDesktopUserDirs(t)
+
+	legacyPaths := config.LegacyUserConfigPaths()
+	if len(legacyPaths) == 0 {
+		t.Fatal("expected at least one legacy user config path")
+	}
+	legacyPath := legacyPaths[0]
+	if sameConfigPath(legacyPath, config.UserConfigPath()) {
+		t.Fatalf("legacy user config path %q should differ from primary %q", legacyPath, config.UserConfigPath())
+	}
+	if err := os.MkdirAll(filepath.Dir(legacyPath), 0o755); err != nil {
+		t.Fatalf("mkdir legacy config dir: %v", err)
+	}
+	if err := os.WriteFile(legacyPath, []byte(`
+[desktop]
+theme = "light"
+theme_style = "glacier"
+close_behavior = "quit"
+`), 0o644); err != nil {
+		t.Fatalf("write legacy config: %v", err)
+	}
+	if _, err := os.Stat(config.UserConfigPath()); !os.IsNotExist(err) {
+		t.Fatalf("primary config should be absent before migration, stat err = %v", err)
+	}
+
+	app := NewApp()
+	startup := app.DesktopStartupSettings()
+	if startup.DesktopTheme != "light" || startup.DesktopThemeStyle != "glacier" {
+		t.Fatalf("startup settings = theme:%q style:%q, want legacy prefs", startup.DesktopTheme, startup.DesktopThemeStyle)
+	}
+	settings := app.Settings()
+	if settings.DesktopTheme != "light" || settings.DesktopThemeStyle != "glacier" || settings.CloseBehavior != "quit" {
+		t.Fatalf("settings = theme:%q style:%q close:%q, want legacy prefs", settings.DesktopTheme, settings.DesktopThemeStyle, settings.CloseBehavior)
+	}
+
+	if err := app.SetDesktopAppearance("dark", "graphite"); err != nil {
+		t.Fatalf("SetDesktopAppearance: %v", err)
+	}
+	primary := config.LoadForEdit(config.UserConfigPath())
+	if primary.DesktopTheme() != "dark" || primary.DesktopThemeStyle() != "graphite" || primary.DesktopCloseBehavior() != "quit" {
+		t.Fatalf("primary config after save = theme:%q style:%q close:%q, want migrated legacy prefs plus edit", primary.DesktopTheme(), primary.DesktopThemeStyle(), primary.DesktopCloseBehavior())
+	}
+}
+
 func TestSettingsSubagentDefaultsRoundTrip(t *testing.T) {
 	isolateDesktopUserDirs(t)
 	setDesktopTestCredential(t, "DEEPSEEK_API_KEY", "sk-test")
@@ -4804,6 +4849,7 @@ func TestUpdateBuiltInMCPServerUpdatesCodegraphRuntime(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "maddog.toml"), []byte(`
 [codegraph]
 enabled = false
+download_mirrors = ["https://mirror.example/codegraph"]
 `), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -4811,13 +4857,16 @@ enabled = false
 	orig := updateBuiltInCodegraph
 	defer func() { updateBuiltInCodegraph = orig }()
 	called := false
-	updateBuiltInCodegraph = func(ctx context.Context, client *http.Client, log func(string)) (codegraph.UpdateResult, error) {
+	updateBuiltInCodegraph = func(ctx context.Context, opts codegraph.InstallOptions) (codegraph.UpdateResult, error) {
 		called = true
 		if ctx == nil {
 			t.Fatal("context is nil")
 		}
-		if client == nil {
+		if opts.Client == nil {
 			t.Fatal("http client is nil")
+		}
+		if len(opts.DownloadMirrors) != 1 || opts.DownloadMirrors[0] != "https://mirror.example/codegraph" {
+			t.Fatalf("download mirrors = %#v, want configured mirror", opts.DownloadMirrors)
 		}
 		return codegraph.UpdateResult{Version: "v9.9.9", Path: filepath.Join(dir, "cache", "codegraph")}, nil
 	}
@@ -4866,11 +4915,11 @@ func TestBuiltInMCPBackgroundNotifyDoesNotDownload(t *testing.T) {
 	checkCodegraphLatest = func(ctx context.Context, client *http.Client) (string, error) {
 		return "v99.99.99", nil
 	}
-	downloadLatestCodegraph = func(ctx context.Context, client *http.Client, log func(string)) (codegraph.UpdateResult, error) {
+	downloadLatestCodegraph = func(ctx context.Context, opts codegraph.InstallOptions) (codegraph.UpdateResult, error) {
 		t.Fatal("notify mode should not download")
 		return codegraph.UpdateResult{}, nil
 	}
-	updateBuiltInCodegraph = func(ctx context.Context, client *http.Client, log func(string)) (codegraph.UpdateResult, error) {
+	updateBuiltInCodegraph = func(ctx context.Context, opts codegraph.InstallOptions) (codegraph.UpdateResult, error) {
 		t.Fatal("notify mode should not activate")
 		return codegraph.UpdateResult{}, nil
 	}
@@ -4925,20 +4974,24 @@ func TestBuiltInMCPBackgroundDownloadDoesNotActivate(t *testing.T) {
 		return "v99.99.99", nil
 	}
 	downloaded := false
-	downloadLatestCodegraph = func(ctx context.Context, client *http.Client, log func(string)) (codegraph.UpdateResult, error) {
+	downloadLatestCodegraph = func(ctx context.Context, opts codegraph.InstallOptions) (codegraph.UpdateResult, error) {
 		downloaded = true
+		if opts.Client == nil {
+			t.Fatal("http client is nil")
+		}
 		if deadline, ok := ctx.Deadline(); ok && time.Until(deadline) <= httpTimeout+time.Second {
 			t.Fatalf("download context inherited manifest timeout; deadline=%v", deadline)
 		}
 		return codegraph.UpdateResult{Version: "v99.99.99", Path: filepath.Join(t.TempDir(), "codegraph")}, nil
 	}
-	updateBuiltInCodegraph = func(ctx context.Context, client *http.Client, log func(string)) (codegraph.UpdateResult, error) {
+	updateBuiltInCodegraph = func(ctx context.Context, opts codegraph.InstallOptions) (codegraph.UpdateResult, error) {
 		t.Fatal("download mode should not activate")
 		return codegraph.UpdateResult{}, nil
 	}
 
 	cfg := config.Default()
 	cfg.BuiltInMCPUpdates.Mode = config.BuiltInMCPUpdateModeDownload
+	cfg.Codegraph.DownloadMirrors = []string{"https://mirror.example/codegraph"}
 	statuses, err := NewApp().runBuiltInMCPUpdateCheck(cfg)
 	if err != nil {
 		t.Fatalf("runBuiltInMCPUpdateCheck: %v", err)
@@ -4970,13 +5023,19 @@ func TestBuiltInMCPBackgroundAutoNextSessionActivates(t *testing.T) {
 		}
 		return "v99.99.99", nil
 	}
-	downloadLatestCodegraph = func(ctx context.Context, client *http.Client, log func(string)) (codegraph.UpdateResult, error) {
+	downloadLatestCodegraph = func(ctx context.Context, opts codegraph.InstallOptions) (codegraph.UpdateResult, error) {
 		t.Fatal("auto_next_session mode should activate through the updater")
 		return codegraph.UpdateResult{}, nil
 	}
 	activated := false
-	updateBuiltInCodegraph = func(ctx context.Context, client *http.Client, log func(string)) (codegraph.UpdateResult, error) {
+	updateBuiltInCodegraph = func(ctx context.Context, opts codegraph.InstallOptions) (codegraph.UpdateResult, error) {
 		activated = true
+		if opts.Client == nil {
+			t.Fatal("http client is nil")
+		}
+		if len(opts.DownloadMirrors) != 1 || opts.DownloadMirrors[0] != "https://mirror.example/codegraph" {
+			t.Fatalf("download mirrors = %#v, want configured mirror", opts.DownloadMirrors)
+		}
 		if deadline, ok := ctx.Deadline(); ok && time.Until(deadline) <= httpTimeout+time.Second {
 			t.Fatalf("activation context inherited manifest timeout; deadline=%v", deadline)
 		}
@@ -4985,6 +5044,7 @@ func TestBuiltInMCPBackgroundAutoNextSessionActivates(t *testing.T) {
 
 	cfg := config.Default()
 	cfg.BuiltInMCPUpdates.Mode = config.BuiltInMCPUpdateModeAutoNextSession
+	cfg.Codegraph.DownloadMirrors = []string{"https://mirror.example/codegraph"}
 	statuses, err := NewApp().runBuiltInMCPUpdateCheck(cfg)
 	if err != nil {
 		t.Fatalf("runBuiltInMCPUpdateCheck: %v", err)

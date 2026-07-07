@@ -21,7 +21,7 @@ const (
 	icodeEasyAPIKeyEnv   = "ICODEEASY_API_KEY"
 	openAIAPIKeyEnv      = "OPENAI_API_KEY"
 	anthropicAPIKeyEnv   = "ANTHROPIC_API_KEY"
-	defaultIcodeEasyURL  = "https://api.icodeeasy.cc/v1"
+	defaultIcodeEasyURL  = "https://jp.icodeeasy.cc"
 	defaultOpenAIURL     = "https://api.openai.com/v1"
 	defaultAnthropicURL  = "https://api.anthropic.com"
 	defaultFrontierModel = "gpt-5.5"

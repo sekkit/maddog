@@ -3144,6 +3144,7 @@ function ModelsSection({ s, busy, apply, backgroundApply }: ModelsSectionProps) 
   const plannerLabel = plannerSelectRef || t("settings.plannerNone");
   const subagentLabel = subagentRef || t("settings.subagentModelDefault");
   const frontierLabel = frontierRef || t("settings.frontierModelNone");
+  const canApplyRecommendations = refs.length > 0;
   const upgradeLabel = s.upgradeEnabled && frontierRef ? t("settings.frontierEnabled") : t("settings.frontierDisabled");
   const keyStatusLabel = defaultProviderView?.keySet ? t("settings.keySet") : t("settings.noKey");
   const agent = s.agent ?? defaultAgentView();
@@ -3162,6 +3163,18 @@ function ModelsSection({ s, busy, apply, backgroundApply }: ModelsSectionProps) 
     const threshold = sanitizeInteger(next.upgradeThreshold !== undefined ? next.upgradeThreshold : s.upgradeThreshold, 0);
     const budget = sanitizeInteger(next.frontierBudget !== undefined ? next.frontierBudget : s.frontierBudget, 0);
     return app.SetFrontierRoute(model, enabled, threshold, budget);
+  };
+  const applyRecommendedModels = () => {
+    void apply(async () => {
+      const rec = await app.RecommendModels();
+      if (rec.defaultModel) await app.SetDefaultModel(rec.defaultModel);
+      await app.SetPlannerModel(rec.plannerModel);
+      await app.SetSubagentModel(rec.subagentModel);
+      await app.SetAdvisorModel(rec.advisorModel);
+      if (rec.frontierModel) {
+        await app.SetFrontierRoute(rec.frontierModel, true, s.upgradeThreshold > 0 ? s.upgradeThreshold : 2, s.frontierBudget ?? 0);
+      }
+    });
   };
 
   useEffect(() => {
@@ -3223,6 +3236,18 @@ function ModelsSection({ s, busy, apply, backgroundApply }: ModelsSectionProps) 
       {subtab === "usage" ? (
         <>
         <SettingsSection title={t("settings.modelUsage")}>
+          <SettingsField label={t("settings.recommendedModels")} hint={t("settings.recommendedModelsHint")}>
+            <button
+              type="button"
+              className="btn btn--primary btn--small"
+              disabled={busy || !canApplyRecommendations}
+              onClick={applyRecommendedModels}
+              title={canApplyRecommendations ? t("settings.recommendedModelsTitle") : t("settings.recommendedModelsUnavailable")}
+            >
+              {t("settings.applyRecommendedModels")}
+            </button>
+          </SettingsField>
+
           <SettingsField label={t("settings.defaultModel")}>
             <ModelPicker
               s={s}

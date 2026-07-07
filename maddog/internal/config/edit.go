@@ -241,11 +241,11 @@ func (c *Config) SetDesktopLanguage(lang string) error {
 // CLI theme settings or provider-visible request data.
 func (c *Config) SetDesktopAppearance(theme, style string) error {
 	switch strings.ToLower(strings.TrimSpace(theme)) {
-	case "auto":
+	case "", "auto":
 		c.Desktop.Theme = "auto"
 	case "light":
 		c.Desktop.Theme = "light"
-	case "", "dark":
+	case "dark":
 		c.Desktop.Theme = "dark"
 	default:
 		return fmt.Errorf("desktop theme %q: must be auto|dark|light", theme)

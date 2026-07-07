@@ -45,7 +45,11 @@ func codegraphInstall() int {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	p, err := codegraph.InstallWithClient(context.Background(), client, func(m string) { fmt.Println(m) })
+	p, err := codegraph.InstallWithOptions(context.Background(), codegraph.InstallOptions{
+		Client:          client,
+		DownloadMirrors: cfg.Codegraph.DownloadMirrors,
+		Log:             func(m string) { fmt.Println(m) },
+	})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
@@ -65,7 +69,11 @@ func codegraphUpdate() int {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	res, err := codegraph.UpdateWithClient(context.Background(), client, func(m string) { fmt.Println(m) })
+	res, err := codegraph.UpdateWithOptions(context.Background(), codegraph.InstallOptions{
+		Client:          client,
+		DownloadMirrors: cfg.Codegraph.DownloadMirrors,
+		Log:             func(m string) { fmt.Println(m) },
+	})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1

@@ -16,7 +16,7 @@ import (
 
 var (
 	checkCodegraphLatest    = codegraph.LatestVersionWithClient
-	downloadLatestCodegraph = codegraph.DownloadLatestWithClient
+	downloadLatestCodegraph = codegraph.DownloadLatestWithOptions
 	builtInMCPUpdateNow     = time.Now
 )
 
@@ -88,7 +88,10 @@ func (a *App) runBuiltInMCPUpdateCheck(cfg *config.Config) ([]BuiltInMCPUpdateSt
 	}
 	switch mode {
 	case config.BuiltInMCPUpdateModeDownload:
-		res, err := downloadLatestCodegraph(a.reqCtx(), client, nil)
+		res, err := downloadLatestCodegraph(a.reqCtx(), codegraph.InstallOptions{
+			Client:          client,
+			DownloadMirrors: cfg.Codegraph.DownloadMirrors,
+		})
 		if err != nil {
 			status.Phase = "error"
 			status.Err = err.Error()
@@ -98,7 +101,10 @@ func (a *App) runBuiltInMCPUpdateCheck(cfg *config.Config) ([]BuiltInMCPUpdateSt
 		status.Path = res.Path
 		status.Phase = "downloaded"
 	case config.BuiltInMCPUpdateModeAutoNextSession:
-		res, err := updateBuiltInCodegraph(a.reqCtx(), client, nil)
+		res, err := updateBuiltInCodegraph(a.reqCtx(), codegraph.InstallOptions{
+			Client:          client,
+			DownloadMirrors: cfg.Codegraph.DownloadMirrors,
+		})
 		if err != nil {
 			status.Phase = "error"
 			status.Err = err.Error()
@@ -136,7 +142,12 @@ func (a *App) UpdateBuiltInMCPServer(name string) (BuiltInMCPUpdateResult, error
 	}
 	ctx, cancel := context.WithTimeout(a.reqCtx(), httpTimeout)
 	defer cancel()
-	res, err := updateBuiltInCodegraph(ctx, client, nil)
+	cfg, _ := config.Load()
+	opts := codegraph.InstallOptions{Client: client}
+	if cfg != nil {
+		opts.DownloadMirrors = cfg.Codegraph.DownloadMirrors
+	}
+	res, err := updateBuiltInCodegraph(ctx, opts)
 	if err != nil {
 		status.Phase = "error"
 		status.Err = err.Error()

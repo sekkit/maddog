@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -110,6 +111,12 @@ func makeTarGz(t *testing.T, files map[string]struct {
 	tw.Close()
 	gz.Close()
 	return buf.Bytes()
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
 }
 
 func TestExtractTarGzPreservesExecBit(t *testing.T) {
@@ -318,10 +325,30 @@ func TestDownloadAssetRejectsMirrorChecksumMismatch(t *testing.T) {
 }
 
 func TestDownloadBasesUseOfficialSourcesBeforeGitHub(t *testing.T) {
-	got := downloadBases()
+	t.Setenv(codegraphMirrorsEnv, "")
+	got := downloadBases(nil, Version)
+	want := []string{githubReleaseDownloadBase(Version)}
+	if len(got) != len(want) {
+		t.Fatalf("downloadBases = %#v, want %#v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("downloadBases[%d] = %q, want %q (all=%#v)", i, got[i], want[i], got)
+		}
+	}
+}
+
+func TestDownloadBasesUseEnvAndConfigMirrorsBeforeGitHub(t *testing.T) {
+	t.Setenv(codegraphMirrorsEnv, "https://env.example/codegraph; https://versioned.example/codegraph/{version}")
+	got := downloadBases([]string{
+		"https://cfg.example/codegraph",
+		"https://env.example/codegraph/v0.9.7",
+	}, Version)
 	want := []string{
-		officialMirrorBase + "/" + Version,
-		fmt.Sprintf("https://github.com/%s/releases/download/%s", cgRepo, Version),
+		"https://env.example/codegraph/v0.9.7",
+		"https://versioned.example/codegraph/v0.9.7",
+		"https://cfg.example/codegraph/v0.9.7",
+		githubReleaseDownloadBase(Version),
 	}
 	if len(got) != len(want) {
 		t.Fatalf("downloadBases = %#v, want %#v", got, want)
@@ -330,6 +357,61 @@ func TestDownloadBasesUseOfficialSourcesBeforeGitHub(t *testing.T) {
 		if got[i] != want[i] {
 			t.Fatalf("downloadBases[%d] = %q, want %q (all=%#v)", i, got[i], want[i], got)
 		}
+	}
+}
+
+func TestInstallWithOptionsUsesConfiguredMirrorAndClient(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("uses a tar.gz fixture")
+	}
+	t.Setenv(codegraphMirrorsEnv, "")
+	t.Setenv("MADDOG_CACHE_DIR", t.TempDir())
+	asset := assetName()
+	body := makeTarGz(t, map[string]struct {
+		body string
+		mode int64
+	}{
+		"codegraph-test/bin/codegraph": {"#!/bin/sh\n", 0o755},
+	})
+	sum := sha256.Sum256(body)
+	prev, hadPrev := releaseAssetSHA256[asset]
+	releaseAssetSHA256[asset] = fmt.Sprintf("%x", sum)
+	t.Cleanup(func() {
+		if hadPrev {
+			releaseAssetSHA256[asset] = prev
+		} else {
+			delete(releaseAssetSHA256, asset)
+		}
+	})
+
+	var requested []string
+	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		requested = append(requested, req.URL.String())
+		if req.URL.Host != "mirror.example" {
+			t.Fatalf("unexpected host %q; installer did not use configured mirror first", req.URL.Host)
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Status:     "200 OK",
+			Header:     make(http.Header),
+			Body:       io.NopCloser(bytes.NewReader(body)),
+			Request:    req,
+		}, nil
+	})}
+
+	got, err := InstallWithOptions(context.Background(), InstallOptions{
+		Client:          client,
+		DownloadMirrors: []string{"https://mirror.example/codegraph"},
+	})
+	if err != nil {
+		t.Fatalf("InstallWithOptions: %v", err)
+	}
+	wantURL := "https://mirror.example/codegraph/" + Version + "/" + asset
+	if len(requested) != 1 || requested[0] != wantURL {
+		t.Fatalf("requested URLs = %#v, want only %q", requested, wantURL)
+	}
+	if wantPath := filepath.Join(CacheDir(), "bin", "codegraph"); got != wantPath {
+		t.Fatalf("path = %q, want %q", got, wantPath)
 	}
 }
 

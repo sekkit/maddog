@@ -130,6 +130,14 @@ func (p *ParallelTasksTool) Execute(ctx context.Context, args json.RawMessage) (
 	doneCh := make(chan subResult, n)
 	var wg sync.WaitGroup
 
+	// Concurrency cap: dependency-free tasks all dispatch (their cards render
+	// immediately), but only maxParallel sub-agents run at once.
+	limit := p.taskTool.maxParallel
+	if limit <= 0 {
+		limit = defaultMaxParallelTools
+	}
+	sem := make(chan struct{}, limit)
+
 	wisdomDir, _ := os.MkdirTemp("", "parallel-wisdom-*")
 	if wisdomDir != "" {
 		defer os.RemoveAll(wisdomDir)
@@ -183,6 +191,18 @@ func (p *ParallelTasksTool) Execute(ctx context.Context, args json.RawMessage) (
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			select {
+			case sem <- struct{}{}:
+			case <-ctx.Done():
+				err := ctx.Err()
+				sink.Emit(event.Event{
+					Kind: event.ToolResult,
+					Tool: event.Tool{ID: subID, ParentID: parentID, Name: "task", Err: "cancelled: " + err.Error()},
+				})
+				doneCh <- subResult{index: idx, err: err}
+				return
+			}
+			defer func() { <-sem }()
 			nested := subSinkFor(subID, sink)
 			modelRef, effortRef := p.taskTool.effectiveProfile(t.Model, t.Effort)
 			subReg := p.taskTool.buildSubReg(t.Tools)
