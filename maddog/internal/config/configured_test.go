@@ -1,8 +1,11 @@
 package config
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
-func TestDefaultIncludesPxpipeForFableAndGPT56(t *testing.T) {
+func TestDefaultIncludesResolvablePxpipeClaudeProvider(t *testing.T) {
 	cfg := Default()
 	claude, ok := cfg.Provider("pxpipe-claude")
 	if !ok {
@@ -14,6 +17,17 @@ func TestDefaultIncludesPxpipeForFableAndGPT56(t *testing.T) {
 	if claude.Model != "claude-fable-5" || claude.APIKeyEnv != "ICE_API_KEY" {
 		t.Fatalf("pxpipe-claude model/key = %q/%q, want claude-fable-5/ICE_API_KEY", claude.Model, claude.APIKeyEnv)
 	}
+	resolved, ok := cfg.ResolveModel("pxpipe-claude")
+	if !ok {
+		t.Fatal("ResolveModel(pxpipe-claude) failed")
+	}
+	if resolved.Name != "pxpipe-claude" || resolved.Model != "claude-fable-5" {
+		t.Fatalf("resolved pxpipe-claude = %s/%s, want pxpipe-claude/claude-fable-5", resolved.Name, resolved.Model)
+	}
+}
+
+func TestDefaultPxpipeGPTRequiresDiscoveredOrConfiguredModel(t *testing.T) {
+	cfg := Default()
 	gpt, ok := cfg.Provider("pxpipe-gpt")
 	if !ok {
 		t.Fatal("default config missing pxpipe-gpt provider")
@@ -21,8 +35,28 @@ func TestDefaultIncludesPxpipeForFableAndGPT56(t *testing.T) {
 	if gpt.Kind != "openai" || gpt.BaseURL != "http://127.0.0.1:47821/v1" {
 		t.Fatalf("pxpipe-gpt kind/base_url = %q/%q, want openai local pxpipe", gpt.Kind, gpt.BaseURL)
 	}
-	if gpt.Model != "gpt-5.6" || gpt.WireAPI != "responses" || gpt.ReasoningProtocol != "openai" {
-		t.Fatalf("pxpipe-gpt model/wire/reasoning = %q/%q/%q, want gpt-5.6/responses/openai", gpt.Model, gpt.WireAPI, gpt.ReasoningProtocol)
+	if len(gpt.ModelList()) != 0 {
+		t.Fatalf("pxpipe-gpt models = %v, want empty list populated only by provider /models response", gpt.ModelList())
+	}
+	if gpt.WireAPI != "responses" || gpt.ReasoningProtocol != "openai" {
+		t.Fatalf("pxpipe-gpt wire/reasoning = %q/%q, want responses/openai", gpt.WireAPI, gpt.ReasoningProtocol)
+	}
+	if _, ok := cfg.ResolveModel("pxpipe-gpt"); ok {
+		t.Fatal("ResolveModel(pxpipe-gpt) succeeded with no configured or discovered model")
+	}
+	t.Setenv("ICE_API_KEY", "test-key")
+	err := cfg.Validate("pxpipe-gpt")
+	if err == nil || !strings.Contains(err.Error(), "no models configured") {
+		t.Fatalf("Validate(pxpipe-gpt) = %v, want actionable no-models error", err)
+	}
+	gpt.Models = []string{"gpt-5.6"}
+	gpt.Default = "gpt-5.6"
+	resolved, ok := cfg.ResolveModel("pxpipe-gpt/gpt-5.6")
+	if !ok {
+		t.Fatal("ResolveModel(pxpipe-gpt/gpt-5.6) failed")
+	}
+	if resolved.Model != "gpt-5.6" || resolved.WireAPI != "responses" {
+		t.Fatalf("resolved pxpipe-gpt = model %q wire %q, want gpt-5.6 responses", resolved.Model, resolved.WireAPI)
 	}
 }
 

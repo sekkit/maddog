@@ -102,7 +102,7 @@ func (s *TextSink) Emit(e event.Event) {
 			fmt.Fprintln(s.out)
 			s.textWritten = false
 		}
-		s.usageLine(e.Usage, e.Pricing, e.CacheDiagnostics)
+		s.usageLine(e.Usage, e.Pricing, e.CacheDiagnostics, e.Pxpipe)
 
 	case event.Notice, event.Upgrade, event.SkillGenerated, event.BudgetExceeded, event.SkillPromoted, event.Advisor:
 		glyph := "·"
@@ -167,8 +167,8 @@ func (s *TextSink) closeTextStream(text, reasoning string) {
 }
 
 // usageLine writes the one-line token/cache summary; no-op when usage is unset.
-func (s *TextSink) usageLine(u *provider.Usage, p *provider.Pricing, d *event.CacheDiagnostics) {
-	if line := FormatUsageLine(u, p, d); line != "" {
+func (s *TextSink) usageLine(u *provider.Usage, p *provider.Pricing, d *event.CacheDiagnostics, px *event.PxpipeSummary) {
+	if line := FormatUsageLine(u, p, d, px); line != "" {
 		fmt.Fprintln(s.out, line)
 		s.wroteAnything = true
 	}
@@ -182,7 +182,7 @@ func (s *TextSink) usageLine(u *provider.Usage, p *provider.Pricing, d *event.Ca
 // denominator just grew. Reasoning tokens (a subset of completion) show the
 // chain-of-thought cost. Shared by TextSink and the chat TUI so both frontends
 // render the line identically.
-func FormatUsageLine(u *provider.Usage, p *provider.Pricing, d *event.CacheDiagnostics) string {
+func FormatUsageLine(u *provider.Usage, p *provider.Pricing, d *event.CacheDiagnostics, pxs ...*event.PxpipeSummary) string {
 	if u == nil || u.TotalTokens == 0 {
 		return ""
 	}
@@ -213,8 +213,40 @@ func FormatUsageLine(u *provider.Usage, p *provider.Pricing, d *event.CacheDiagn
 		}
 		churn = fmt.Sprintf(" · cache prefix changed: %s", reasons)
 	}
+	pxpipe := ""
+	if len(pxs) > 0 {
+		pxpipe = formatPxpipeSummary(pxs[0])
+	}
 	return fmt.Sprintf("  · %d tok · in %d%s · out %d%s%s%s",
-		u.TotalTokens, u.PromptTokens, cacheCol, u.CompletionTokens, reasoning, cost, churn)
+		u.TotalTokens, u.PromptTokens, cacheCol, u.CompletionTokens, reasoning, cost, churn) + pxpipe
+}
+
+func formatPxpipeSummary(s *event.PxpipeSummary) string {
+	if s == nil || s.Requests == 0 {
+		return ""
+	}
+	parts := make([]string, 0, 3)
+	if s.Compressed > 0 {
+		parts = append(parts, fmt.Sprintf("%d compressed", s.Compressed))
+	}
+	if s.PassThrough > 0 {
+		parts = append(parts, fmt.Sprintf("%d pass-through", s.PassThrough))
+	}
+	if s.UnknownCompression > 0 {
+		parts = append(parts, fmt.Sprintf("%d observed", s.UnknownCompression))
+	}
+	if len(parts) == 0 {
+		parts = append(parts, fmt.Sprintf("%d observed", s.Requests))
+	}
+	out := " · pxpipe " + strings.Join(parts, " / ")
+	if s.Images > 0 {
+		label := "images"
+		if s.Images == 1 {
+			label = "image"
+		}
+		out += fmt.Sprintf(", %d %s", s.Images, label)
+	}
+	return out
 }
 
 // dimText wraps s in the ANSI dim SGR sequence so reasoning streams visually

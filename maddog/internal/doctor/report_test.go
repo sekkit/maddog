@@ -185,3 +185,63 @@ func TestCollectReportRedactsBenchmarkReadErrors(t *testing.T) {
 		t.Fatalf("benchmark error leaked cache root: %q", got.Codegraph.Benchmark.Error)
 	}
 }
+
+func TestCollectReportIncludesEnvironmentSection(t *testing.T) {
+	t.Setenv("MADDOG_HOME", filepath.Join(t.TempDir(), "maddog"))
+	report := Collect(Options{Version: "1.2.3", Config: config.Default()})
+	if len(report.Environment) == 0 {
+		t.Fatal("expected environment section in report")
+	}
+	got := map[string]bool{}
+	for _, tool := range report.Environment {
+		got[tool.Name] = true
+	}
+	for _, want := range []string{"wails", "pxpipe", "npx"} {
+		if !got[want] {
+			t.Fatalf("expected %s in environment section: %+v", want, report.Environment)
+		}
+	}
+	text := RenderText(report)
+	if !strings.Contains(text, "environment") {
+		t.Fatalf("doctor text missing environment section:\n%s", text)
+	}
+}
+
+func TestCollectReportIncludesPxpipeMetadataWithoutLogContent(t *testing.T) {
+	home := filepath.Join(t.TempDir(), "maddog")
+	t.Setenv("MADDOG_HOME", home)
+	logPath := filepath.Join(home, "pxpipe", "events.jsonl")
+	if err := os.MkdirAll(filepath.Dir(logPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	secretPrompt := "secret prompt sk-live-pxpipe"
+	if err := os.WriteFile(logPath, []byte(secretPrompt), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	report := Collect(Options{Version: "test", Config: config.Default()})
+	text := RenderText(report)
+	raw, err := json.Marshal(report)
+	if err != nil {
+		t.Fatal(err)
+	}
+	combined := text + "\n" + string(raw)
+
+	if report.Pxpipe.State == "" || report.Pxpipe.Dashboard == "" {
+		t.Fatalf("pxpipe report missing status metadata: %+v", report.Pxpipe)
+	}
+	if !report.Pxpipe.LogExists || report.Pxpipe.LogBytes != int64(len(secretPrompt)) {
+		t.Fatalf("pxpipe log metadata = exists:%v bytes:%d", report.Pxpipe.LogExists, report.Pxpipe.LogBytes)
+	}
+	if len(report.Pxpipe.Providers) == 0 {
+		t.Fatalf("expected pxpipe provider diagnostics: %+v", report.Pxpipe)
+	}
+	for _, provider := range report.Pxpipe.Providers {
+		if !provider.Loopback {
+			t.Fatalf("pxpipe provider should point to loopback: %+v", provider)
+		}
+	}
+	if strings.Contains(combined, secretPrompt) || strings.Contains(combined, "sk-live-pxpipe") {
+		t.Fatalf("doctor leaked pxpipe event content:\n%s", combined)
+	}
+}

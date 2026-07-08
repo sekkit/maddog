@@ -70,3 +70,27 @@ func TestUsageLineReportsPrefixChurn(t *testing.T) {
 		t.Errorf("usage line = %q (want cache prefix change reason)", out)
 	}
 }
+
+func TestUsageLineReportsPxpipeStatusWithoutSavingsClaim(t *testing.T) {
+	u := &provider.Usage{PromptTokens: 100, CompletionTokens: 10, TotalTokens: 110}
+	var b strings.Builder
+	NewTextSink(&b, nil, 80).Emit(event.Event{
+		Kind:  event.Usage,
+		Usage: u,
+		Pxpipe: &event.PxpipeSummary{
+			Requests:    2,
+			Compressed:  1,
+			PassThrough: 1,
+			Images:      3,
+		},
+	})
+	out := b.String()
+	for _, want := range []string{"pxpipe", "1 compressed", "1 pass-through", "3 images"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("usage line = %q (want %q)", out, want)
+		}
+	}
+	if strings.Contains(strings.ToLower(out), "saved") || strings.Contains(strings.ToLower(out), "saving") {
+		t.Fatalf("usage line must not claim pxpipe savings before validation: %q", out)
+	}
+}

@@ -112,6 +112,12 @@ func Run(args []string, version string) int {
 	case "doctor":
 		configureCLIThemeFromConfigNoProbe()
 		return doctorCommand(rest, version)
+	case "env":
+		configureCLIThemeFromConfigNoProbe()
+		return envCommand(rest)
+	case "pxpipe":
+		configureCLIThemeFromConfigNoProbe()
+		return pxpipeCommand(rest)
 	case "review":
 		configureCLIThemeFromConfigNoProbe()
 		return reviewCommand(rest)
@@ -1519,6 +1525,9 @@ func groupByFamily(providers []config.ProviderEntry) ([]string, map[string][]int
 	members := map[string][]int{}
 	info := map[string]providerFamily{}
 	for i, p := range providers {
+		if setupOptionalProvider(p) {
+			continue
+		}
 		f := familyOf(p.Name)
 		if _, seen := members[f.key]; !seen {
 			order = append(order, f.key)
@@ -1626,6 +1635,10 @@ func providersWithMissingKeys(cfg *config.Config) []config.ProviderEntry {
 	return out
 }
 
+func setupOptionalProvider(p config.ProviderEntry) bool {
+	return strings.HasPrefix(p.Name, "pxpipe-")
+}
+
 // configureKeys reconciles each enabled provider's API key with the
 // environment. For every distinct api_key_env: if the variable is already set,
 // setup asks whether to re-enter it; Enter keeps and re-pins the existing value.
@@ -1640,6 +1653,9 @@ func configureKeys(selected []config.ProviderEntry, r io.Reader, w io.Writer) []
 	seen := map[string]bool{}
 	var envLines []string
 	for _, p := range selected {
+		if setupOptionalProvider(p) {
+			continue
+		}
 		if p.APIKeyEnv == "" || seen[p.APIKeyEnv] {
 			continue
 		}

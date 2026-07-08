@@ -2,6 +2,9 @@ package config
 
 import (
 	"fmt"
+	"io"
+	"os"
+	"path/filepath"
 	"strings"
 )
 
@@ -39,13 +42,119 @@ func (r *MigrationResult) Notice() string {
 	return b.String()
 }
 
-// MigrateLegacyIfNeeded used to import old Maddog config into the current user
-// config. Maddog now intentionally keeps its configuration isolated from an
-// installed DeepSeek Maddog, so startup must not read or copy Maddog-owned
-// files. Kept as a no-op for callers compiled against the old migration hook.
+// MigrateLegacyIfNeeded imports non-config support data from the old OS support
+// directory into Maddog's current home. It intentionally does not import
+// legacy config.json/config.toml contents, so a separate DeepSeek Maddog install
+// cannot silently alter this Maddog's provider configuration.
 func MigrateLegacyIfNeeded() (*MigrationResult, error) {
-	if userConfigPath() == "" {
+	dest := userConfigDir()
+	src := legacyOSSupportDir()
+	if dest == "" || src == "" {
 		return nil, nil
 	}
-	return nil, nil
+	if samePath(src, dest) {
+		return nil, nil
+	}
+	if _, err := os.Stat(src); err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	copied, warnings, err := migrateSupportData(src, dest)
+	if err != nil {
+		return nil, err
+	}
+	if copied == 0 {
+		return nil, nil
+	}
+	return &MigrationResult{From: src, To: dest, Warnings: warnings}, nil
+}
+
+func migrateSupportData(src, dest string) (int, []string, error) {
+	var copied int
+	var warnings []string
+	roots := []string{"hooks.json", "sessions", "projects", "skills", "archive"}
+	for _, rel := range roots {
+		n, err := copySupportPath(filepath.Join(src, rel), filepath.Join(dest, rel))
+		if err != nil {
+			warnings = append(warnings, fmt.Sprintf("%s: %v", rel, err))
+			continue
+		}
+		copied += n
+	}
+	return copied, warnings, nil
+}
+
+func copySupportPath(src, dest string) (int, error) {
+	info, err := os.Stat(src)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return 0, nil
+		}
+		return 0, err
+	}
+	if !info.IsDir() {
+		if _, err := os.Stat(dest); err == nil {
+			return 0, nil
+		}
+		if err := copyFile(src, dest, info.Mode().Perm()); err != nil {
+			return 0, err
+		}
+		return 1, nil
+	}
+	copied := 0
+	err = filepath.WalkDir(src, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(src, path)
+		if err != nil {
+			return err
+		}
+		target := filepath.Join(dest, rel)
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			return os.MkdirAll(target, info.Mode().Perm())
+		}
+		if _, err := os.Stat(target); err == nil {
+			return nil
+		}
+		if err := copyFile(path, target, info.Mode().Perm()); err != nil {
+			return err
+		}
+		copied++
+		return nil
+	})
+	return copied, err
+}
+
+func copyFile(src, dest string, perm os.FileMode) error {
+	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
+		return err
+	}
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	out, err := os.OpenFile(dest, os.O_CREATE|os.O_EXCL|os.O_WRONLY, perm)
+	if err != nil {
+		return err
+	}
+	ok := false
+	defer func() {
+		_ = out.Close()
+		if !ok {
+			_ = os.Remove(dest)
+		}
+	}()
+	if _, err := io.Copy(out, in); err != nil {
+		return err
+	}
+	ok = true
+	return nil
 }

@@ -69,6 +69,34 @@ func TestUsageEventUsesResolvedModelAndEffort(t *testing.T) {
 	}
 }
 
+func TestUsageEventCarriesOptionalPxpipeSummary(t *testing.T) {
+	prov := testutil.NewMock("pxpipe-claude", testutil.Turn{
+		Text:  "done",
+		Usage: &provider.Usage{PromptTokens: 10, CompletionTokens: 3, TotalTokens: 13},
+	})
+	sink := &recordSink{}
+	a := New(prov, echoRegistry(), NewSession(""), Options{
+		PxpipeSummary: &event.PxpipeSummary{
+			Requests:    1,
+			Compressed:  1,
+			PassThrough: 0,
+			Images:      2,
+		},
+	}, sink)
+
+	if err := a.Run(context.Background(), "hello"); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	usages := sink.kinds(event.Usage)
+	if len(usages) != 1 {
+		t.Fatalf("usage events = %d, want 1", len(usages))
+	}
+	if usages[0].Pxpipe == nil || usages[0].Pxpipe.Compressed != 1 || usages[0].Pxpipe.Images != 2 {
+		t.Fatalf("pxpipe summary = %+v, want compressed/images aggregate", usages[0].Pxpipe)
+	}
+}
+
 func TestProviderStatusEventClassifiesProviderErrors(t *testing.T) {
 	tests := []struct {
 		name      string

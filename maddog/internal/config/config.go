@@ -1635,7 +1635,7 @@ func Default() *Config {
 			{Name: "deepseek-flash", Kind: "openai", BaseURL: "https://api.deepseek.com", Model: "deepseek-v4-flash", APIKeyEnv: "DEEPSEEK_API_KEY", BalanceURL: "https://api.deepseek.com/user/balance", ContextWindow: 1_000_000, Price: deepSeekV4FlashPrice()},
 			{Name: "deepseek-pro", Kind: "openai", BaseURL: "https://api.deepseek.com", Model: "deepseek-v4-pro", APIKeyEnv: "DEEPSEEK_API_KEY", BalanceURL: "https://api.deepseek.com/user/balance", ContextWindow: 1_000_000, Price: deepSeekV4ProPrice()},
 			{Name: "pxpipe-claude", Kind: "anthropic", BaseURL: "http://127.0.0.1:47821", Model: "claude-fable-5", APIKeyEnv: "ICE_API_KEY", ContextWindow: 1_000_000, Thinking: "adaptive", Effort: "high", NoProxy: true},
-			{Name: "pxpipe-gpt", Kind: "openai", BaseURL: "http://127.0.0.1:47821/v1", Model: "gpt-5.6", APIKeyEnv: "ICE_API_KEY", ContextWindow: 1_000_000, WireAPI: "responses", ReasoningProtocol: "openai", SupportedEfforts: []string{"low", "medium", "high"}, DefaultEffort: "high", NoProxy: true},
+			{Name: "pxpipe-gpt", Kind: "openai", BaseURL: "http://127.0.0.1:47821/v1", APIKeyEnv: "ICE_API_KEY", ContextWindow: 1_000_000, WireAPI: "responses", ReasoningProtocol: "openai", SupportedEfforts: []string{"low", "medium", "high"}, DefaultEffort: "high", NoProxy: true},
 		},
 	}
 }
@@ -2512,6 +2512,9 @@ func (c *Config) ResolveModel(ref string) (*ProviderEntry, bool) {
 	}
 	// a provider name → its default model
 	if e, found := c.Provider(ref); found {
+		if e.DefaultModel() == "" {
+			return nil, false
+		}
 		cp := *e
 		cp.Model = e.DefaultModel()
 		cp.applyModelPrice()
@@ -2724,6 +2727,20 @@ func (c *Config) ResolveSystemPromptForRoot(root string) (string, error) {
 func (c *Config) Validate(model string) error {
 	e, ok := c.ResolveModel(model)
 	if !ok {
+		if p, found := c.Provider(model); found {
+			if len(p.ModelList()) == 0 {
+				return fmt.Errorf("provider %q: no models configured (set model, models, or models_url)", model)
+			}
+			return fmt.Errorf("provider %q: default model is not configured", model)
+		}
+		if prov, wanted, hasModel := strings.Cut(model, "/"); hasModel {
+			if p, found := c.Provider(prov); found {
+				if len(p.ModelList()) == 0 {
+					return fmt.Errorf("provider %q: no models configured (set model, models, or models_url)", prov)
+				}
+				return fmt.Errorf("provider %q: model %q is not configured (available: %s)", prov, wanted, strings.Join(p.ModelList(), ", "))
+			}
+		}
 		return fmt.Errorf("unknown model %q (configured: %s)", model, c.providerNames())
 	}
 	if e.Kind == "" {

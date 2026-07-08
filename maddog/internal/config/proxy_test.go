@@ -20,6 +20,20 @@ func TestDirectProxyHostsFromNoProxyProviders(t *testing.T) {
 	}
 }
 
+func TestDefaultPxpipeNoProxyHostsDeduplicateLoopback(t *testing.T) {
+	c := Default()
+	spec := c.NetworkProxySpec()
+	count := 0
+	for _, h := range spec.DirectHosts {
+		if h == "127.0.0.1" {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Fatalf("127.0.0.1 DirectHosts count = %d in %v, want exactly one", count, spec.DirectHosts)
+	}
+}
+
 func TestExplicitProxyOverridesProviderNoProxy(t *testing.T) {
 	// An explicit custom proxy (e.g. a mandatory corporate proxy) must apply to
 	// every provider, including no_proxy ones, so it isn't unreachable

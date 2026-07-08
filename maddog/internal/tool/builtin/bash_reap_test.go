@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"maddog/internal/proc"
+	"maddog/internal/sandbox"
 )
 
 // TestReapTreeKillsGroupStragglers covers #3702: a foreground command that

@@ -149,6 +149,20 @@ command = "maddog-plugin-example"
 
 ## 文档
 
+### pxpipe 网关（可选）
+
+Maddog 可以把 Anthropic Messages 和 OpenAI Responses 流量路由到本地
+pxpipe sidecar，用于请求压缩：
+
+```sh
+maddog pxpipe status
+maddog pxpipe start --models claude-fable-5,gpt-5.6
+```
+
+只有在 pxpipe 运行在 loopback 时，才选择 `pxpipe-claude` 或显式配置好的
+`pxpipe-gpt/<model>` provider。非一方网关请显式设置 upstream URL；精确 ID、hash、
+secret 和失败日志应保留在文本路径。详见 [`docs/PXPIPE.md`](docs/PXPIPE.md)。
+
 ### 插件（MCP）
 
 Maddog 是一个 MCP 客户端。`[[plugins]]` 的 `type` 选择传输：`stdio`（默认）启动本地子进

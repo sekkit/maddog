@@ -1308,6 +1308,36 @@ func migrateLegacySessionSources(sink event.Sink, sessionDir string) {
 			sink.Emit(event.Event{Kind: event.Notice, Level: event.LevelInfo, Text: fmt.Sprintf("imported %d past session(s) from %s — resume them with --resume or the history panel", n, source)})
 		}
 	}
+	migrateLegacyProjectSessionSources(sink)
+}
+
+func migrateLegacyProjectSessionSources(sink event.Sink) {
+	destRoot := config.MemoryUserDir()
+	if strings.TrimSpace(destRoot) == "" {
+		return
+	}
+	for _, legacyConfig := range config.LegacyUserConfigPaths() {
+		projectsRoot := filepath.Join(filepath.Dir(legacyConfig), "projects")
+		entries, err := os.ReadDir(projectsRoot)
+		if err != nil {
+			continue
+		}
+		for _, entry := range entries {
+			if !entry.IsDir() {
+				continue
+			}
+			source := filepath.Join(projectsRoot, entry.Name(), "sessions")
+			dest := filepath.Join(destRoot, "projects", entry.Name(), "sessions")
+			n, err := agent.MigrateLegacySessionsFromConfigDir(source, dest, config.ProjectSessionDir)
+			if err != nil {
+				sink.Emit(event.Event{Kind: event.Notice, Level: event.LevelWarn, Text: "project session migration skipped: " + err.Error()})
+				continue
+			}
+			if n > 0 {
+				sink.Emit(event.Event{Kind: event.Notice, Level: event.LevelInfo, Text: fmt.Sprintf("imported %d past project session(s) from %s — resume them with --resume or the history panel", n, source)})
+			}
+		}
+	}
 }
 
 func bootSamePath(a, b string) bool {

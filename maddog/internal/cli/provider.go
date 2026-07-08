@@ -50,6 +50,9 @@ func (m *chatTUI) showProviders() {
 		if len(models) == 0 {
 			models = p.ModelList()
 		}
+		if len(models) == 0 {
+			continue
+		}
 
 		status := ""
 		if p.Name == curProvider {

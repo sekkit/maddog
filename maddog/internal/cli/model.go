@@ -154,6 +154,9 @@ func providerNames() []string {
 		if !p.Configured() {
 			continue
 		}
+		if len(p.ModelList()) == 0 {
+			continue
+		}
 		out = append(out, p.Name)
 	}
 	return out

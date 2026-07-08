@@ -77,7 +77,8 @@ func (b *BenchmarkBackend) BenchmarkInfo() codegraph.BenchmarkBackendInfo {
 			ContextPack:    true,
 			Health:         true,
 		},
-		Health: health,
+		Health:    health,
+		SkipIndex: b.indexMode() == IndexModeQueryOnly,
 	}
 }
 

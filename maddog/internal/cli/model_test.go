@@ -43,6 +43,31 @@ func TestModelRefsSkipsUnconfigured(t *testing.T) {
 	}
 }
 
+func TestModelAndProviderRefsSkipPxpipeProviderWithoutModels(t *testing.T) {
+	isolateUserConfig(t)
+	if _, err := config.SetCredential("ICE_API_KEY", "test-key"); err != nil {
+		t.Fatalf("SetCredential: %v", err)
+	}
+
+	refs := modelRefs()
+	if !containsString(refs, "pxpipe-claude/claude-fable-5") {
+		t.Fatalf("model refs = %v, want pxpipe-claude/claude-fable-5", refs)
+	}
+	for _, ref := range refs {
+		if strings.HasPrefix(ref, "pxpipe-gpt/") || ref == "pxpipe-gpt" {
+			t.Fatalf("model refs should skip pxpipe-gpt without configured models, got %v", refs)
+		}
+	}
+
+	names := providerNames()
+	if !containsString(names, "pxpipe-claude") {
+		t.Fatalf("provider names = %v, want pxpipe-claude", names)
+	}
+	if containsString(names, "pxpipe-gpt") {
+		t.Fatalf("provider names should skip pxpipe-gpt without configured models, got %v", names)
+	}
+}
+
 // TestModelArgCompletion verifies "/model " completes to the configured refs
 // through the shared completion path.
 func TestModelArgCompletion(t *testing.T) {

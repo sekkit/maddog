@@ -155,6 +155,21 @@ honours `deny`. See [`docs/SPEC.md`](docs/SPEC.md) for the full schema and contr
 
 ## Documentation
 
+### pxpipe gateway (optional)
+
+Maddog can route Anthropic Messages and OpenAI Responses traffic through a local
+pxpipe sidecar for request compression:
+
+```sh
+maddog pxpipe status
+maddog pxpipe start --models claude-fable-5,gpt-5.6
+```
+
+Use the `pxpipe-claude` or explicitly configured `pxpipe-gpt/<model>` provider
+only when pxpipe is running on loopback. Set upstream URLs explicitly for
+non-first-party gateways, and keep exact IDs, hashes, secrets, and failure logs
+on a text path. See [`docs/PXPIPE.md`](docs/PXPIPE.md).
+
 ### Plugins (MCP)
 
 Maddog is an MCP client. A `[[plugins]]` entry's `type` selects the transport:

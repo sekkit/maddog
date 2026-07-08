@@ -193,6 +193,7 @@ type Agent struct {
 	executorHandoffGuard bool
 	temperature          float64
 	pricing              *provider.Pricing
+	pxpipeSummary        *event.PxpipeSummary
 	reasoningLanguage    atomic.Value // string: auto|zh|en
 	responseLanguage     atomic.Value // string: auto|zh|en
 
@@ -736,6 +737,9 @@ type Options struct {
 	Temperature float64
 	Pricing     *provider.Pricing // optional, for per-turn cost display
 	UsageSource string            // optional billable usage source; default executor
+	// PxpipeSummary is optional content-free gateway telemetry from the safe
+	// pxpipe event parser. Nil disables pxpipe reporting on Usage events.
+	PxpipeSummary *event.PxpipeSummary
 
 	// Gate is the per-call permission gate. nil disables gating.
 	Gate Gate
@@ -854,6 +858,7 @@ func New(prov provider.Provider, tools *tool.Registry, session *Session, opts Op
 		maxParallelTools:      opts.MaxParallelTools,
 		temperature:           opts.Temperature,
 		pricing:               opts.Pricing,
+		pxpipeSummary:         clonePxpipeSummary(opts.PxpipeSummary),
 		upgradePolicy:         opts.UpgradePolicy,
 		frontierProv:          opts.FrontierProvider,
 		frontierPricing:       opts.FrontierPricing,
@@ -903,6 +908,40 @@ func usageSourceOrDefault(source, fallback string) string {
 		return source
 	}
 	return fallback
+}
+
+func clonePxpipeSummary(in *event.PxpipeSummary) *event.PxpipeSummary {
+	if in == nil {
+		return nil
+	}
+	out := *in
+	out.Statuses = cloneIntCountMap(in.Statuses)
+	out.Paths = cloneStringCountMap(in.Paths)
+	out.Models = cloneStringCountMap(in.Models)
+	out.Reasons = cloneStringCountMap(in.Reasons)
+	return &out
+}
+
+func cloneStringCountMap(in map[string]int) map[string]int {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]int, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
+}
+
+func cloneIntCountMap(in map[int]int) map[int]int {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[int]int, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
 }
 
 // Run appends the user input and drives the tool loop until the model returns a
@@ -1043,6 +1082,7 @@ func (a *Agent) Run(ctx context.Context, input string) (runErr error) {
 			a.sink.Emit(event.Event{Kind: event.Usage, Usage: usage, Pricing: pricing,
 				Profile:          profile,
 				ProviderStatus:   providerStatusForProfile(profile, nil),
+				Pxpipe:           clonePxpipeSummary(a.pxpipeSummary),
 				CacheDiagnostics: &cacheDiagnostics,
 				SessionHit:       int(a.sessCacheHit.Load()), SessionMiss: int(a.sessCacheMiss.Load())})
 		}

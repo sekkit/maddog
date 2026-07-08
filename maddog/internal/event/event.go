@@ -303,6 +303,31 @@ type CacheDiagnostics struct {
 	CacheHitTokens      int
 }
 
+// PxpipeSummary carries content-free pxpipe gateway observability on Usage
+// events. It is deliberately aggregate-only: no prompt text, image bytes,
+// gzipped body samples, dashboard HTML, or exact request payloads.
+type PxpipeSummary struct {
+	Requests             int
+	Compressed           int
+	PassThrough          int
+	UnknownCompression   int
+	Malformed            int
+	Images               int
+	BaselineTokens       int // counted only for ok/legacy probes, never as savings truth
+	BaselineProbeOK      int
+	BaselineProbePartial int
+	BaselineProbeFailed  int
+	InputTokens          int
+	OutputTokens         int
+	CacheCreateTokens    int
+	CacheReadTokens      int
+	CachedTokens         int
+	Statuses             map[int]int
+	Paths                map[string]int
+	Models               map[string]int
+	Reasons              map[string]int
+}
+
 const (
 	UsageSourceExecutor   = "executor"
 	UsageSourcePlanner    = "planner"
@@ -325,6 +350,7 @@ type Event struct {
 	Profile          *Profile                  // Usage: provider role/model/effort
 	ProviderStatus   *ProviderStatus           // Usage: provider health/auth/rate snapshot
 	Pricing          *provider.Pricing         // Usage: for cost display (nil = omit cost)
+	Pxpipe           *PxpipeSummary            // Usage: optional pxpipe gateway aggregate
 	Source           string                    // optional display/event source (executor, planner, subagent, ...)
 	UsageSource      string                    // Usage: billable call source; empty means executor for compatibility
 	CacheDiagnostics *CacheDiagnostics         // Usage: cache-churn attribution (nil = N/A)

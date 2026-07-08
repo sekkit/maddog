@@ -48,6 +48,14 @@ need_cmd() {
 	command -v "$1" >/dev/null 2>&1 || fail "missing required command: $1"
 }
 
+resolve_tool_from_registry() {
+	go run ./cmd/maddog-env path "$1" 2>/dev/null || true
+}
+
+resolve_wails_from_registry() {
+	resolve_tool_from_registry wails
+}
+
 go_bin_dir() {
 	local gobin
 	gobin="$(go env GOBIN)"
@@ -112,6 +120,11 @@ install_or_check_tools() {
 	need_cmd node
 	export PATH="$(go_bin_dir):$PATH"
 
+	local resolved_pnpm
+	resolved_pnpm="$(resolve_tool_from_registry pnpm)"
+	if [[ -n "$resolved_pnpm" ]]; then
+		export PATH="$(dirname -- "$resolved_pnpm"):$PATH"
+	fi
 	if ! command -v pnpm >/dev/null 2>&1; then
 		if [[ "$install_tools" == "1" ]]; then
 			echo "==> installing pnpm"
@@ -127,6 +140,11 @@ install_or_check_tools() {
 		fi
 	fi
 
+	local resolved_wails
+	resolved_wails="$(resolve_wails_from_registry)"
+	if [[ -n "$resolved_wails" ]]; then
+		export PATH="$(dirname -- "$resolved_wails"):$PATH"
+	fi
 	if ! command -v wails >/dev/null 2>&1; then
 		if [[ "$install_tools" == "1" ]]; then
 			echo "==> installing Wails CLI"
@@ -138,6 +156,11 @@ install_or_check_tools() {
 
 	case "$os" in
 	darwin)
+		local resolved_create_dmg
+		resolved_create_dmg="$(resolve_tool_from_registry create-dmg)"
+		if [[ -n "$resolved_create_dmg" ]]; then
+			export PATH="$(dirname -- "$resolved_create_dmg"):$PATH"
+		fi
 		if ! command -v create-dmg >/dev/null 2>&1; then
 			if [[ "$install_tools" == "1" && -x "$(command -v brew 2>/dev/null || true)" ]]; then
 				echo "==> installing create-dmg"
@@ -148,6 +171,11 @@ install_or_check_tools() {
 		fi
 		;;
 	linux)
+		local resolved_nfpm
+		resolved_nfpm="$(resolve_tool_from_registry nfpm)"
+		if [[ -n "$resolved_nfpm" ]]; then
+			export PATH="$(dirname -- "$resolved_nfpm"):$PATH"
+		fi
 		if ! command -v nfpm >/dev/null 2>&1; then
 			if [[ "$install_tools" == "1" ]]; then
 				echo "==> installing nfpm"
@@ -158,6 +186,11 @@ install_or_check_tools() {
 		fi
 		;;
 	windows)
+		local resolved_makensis
+		resolved_makensis="$(resolve_tool_from_registry makensis)"
+		if [[ -n "$resolved_makensis" ]]; then
+			export PATH="$(dirname -- "$resolved_makensis"):$PATH"
+		fi
 		command -v makensis >/dev/null 2>&1 || fail "makensis not found. Install NSIS first."
 		;;
 	esac

@@ -2,8 +2,10 @@
 package doctor
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -13,7 +15,9 @@ import (
 	"maddog/internal/agent"
 	"maddog/internal/codegraph"
 	"maddog/internal/config"
+	"maddog/internal/environment"
 	"maddog/internal/netclient"
+	"maddog/internal/pxpipe"
 	"maddog/internal/sandbox"
 )
 
@@ -23,20 +27,22 @@ type Options struct {
 }
 
 type Report struct {
-	Version    string           `json:"version"`
-	OS         string           `json:"os"`
-	Arch       string           `json:"arch"`
-	CWD        string           `json:"cwd,omitempty"`
-	Config     ConfigReport     `json:"config"`
-	Providers  []ProviderReport `json:"providers"`
-	Plugins    []PluginReport   `json:"plugins,omitempty"`
-	Codegraph  CodegraphReport  `json:"codegraph"`
-	LSP        LSPReport        `json:"lsp"`
-	Sessions   SessionsReport   `json:"sessions"`
-	Sandbox    SandboxReport    `json:"sandbox"`
-	Network    NetworkReport    `json:"network"`
-	Permission PermissionReport `json:"permission"`
-	Warnings   []string         `json:"warnings,omitempty"`
+	Version     string                  `json:"version"`
+	OS          string                  `json:"os"`
+	Arch        string                  `json:"arch"`
+	CWD         string                  `json:"cwd,omitempty"`
+	Config      ConfigReport            `json:"config"`
+	Providers   []ProviderReport        `json:"providers"`
+	Plugins     []PluginReport          `json:"plugins,omitempty"`
+	Codegraph   CodegraphReport         `json:"codegraph"`
+	LSP         LSPReport               `json:"lsp"`
+	Sessions    SessionsReport          `json:"sessions"`
+	Sandbox     SandboxReport           `json:"sandbox"`
+	Network     NetworkReport           `json:"network"`
+	Pxpipe      PxpipeReport            `json:"pxpipe"`
+	Permission  PermissionReport        `json:"permission"`
+	Environment []EnvironmentToolReport `json:"environment,omitempty"`
+	Warnings    []string                `json:"warnings,omitempty"`
 }
 
 type ConfigReport struct {
@@ -116,11 +122,43 @@ type NetworkReport struct {
 	NoProxy   bool   `json:"no_proxy"`
 }
 
+type PxpipeReport struct {
+	State     string                 `json:"state"`
+	Installed bool                   `json:"installed"`
+	Binary    string                 `json:"binary,omitempty"`
+	Dashboard string                 `json:"dashboard,omitempty"`
+	LogPath   string                 `json:"log_path,omitempty"`
+	LogExists bool                   `json:"log_exists,omitempty"`
+	LogBytes  int64                  `json:"log_bytes,omitempty"`
+	Managed   bool                   `json:"managed"`
+	PID       int                    `json:"pid,omitempty"`
+	Providers []PxpipeProviderReport `json:"providers,omitempty"`
+	LastError string                 `json:"last_error,omitempty"`
+}
+
+type PxpipeProviderReport struct {
+	Name        string `json:"name"`
+	Kind        string `json:"kind"`
+	BaseURLHost string `json:"base_url_host,omitempty"`
+	Loopback    bool   `json:"loopback"`
+}
+
 type PermissionReport struct {
 	Mode       string `json:"mode"`
 	AllowRules int    `json:"allow_rules"`
 	AskRules   int    `json:"ask_rules"`
 	DenyRules  int    `json:"deny_rules"`
+}
+
+type EnvironmentToolReport struct {
+	Name         string `json:"name"`
+	SelectedPath string `json:"selected_path,omitempty"`
+	Version      string `json:"version,omitempty"`
+	Expected     string `json:"expected,omitempty"`
+	Source       string `json:"source,omitempty"`
+	Status       string `json:"status,omitempty"`
+	RegistryPath string `json:"registry_path,omitempty"`
+	LastError    string `json:"last_error,omitempty"`
 }
 
 func Collect(opts Options) Report {
@@ -178,6 +216,7 @@ func Collect(opts Options) Report {
 			Proxy:     netclient.Summary(cfg.NetworkProxySpec()),
 			NoProxy:   strings.TrimSpace(cfg.Network.NoProxy) != "",
 		},
+		Pxpipe: collectPxpipe(cfg),
 		Permission: PermissionReport{
 			Mode:       cfg.Permissions.Mode,
 			AllowRules: len(cfg.Permissions.Allow),
@@ -187,6 +226,13 @@ func Collect(opts Options) Report {
 		Warnings: warnings,
 	}
 	report.Sessions.Dir = redactHome(report.Sessions.Dir)
+	for _, name := range []string{"wails", "pxpipe", "npx"} {
+		if tool, err := environment.ResolveTool(cwd, name); err == nil {
+			report.Environment = append(report.Environment, environmentToolReport(tool))
+		} else {
+			warnings = append(warnings, err.Error())
+		}
+	}
 	for i := range cfg.Providers {
 		p := cfg.Providers[i]
 		models := p.ModelList()
@@ -214,6 +260,7 @@ func Collect(opts Options) Report {
 			Target:    pluginTarget(p),
 		})
 	}
+	report.Warnings = warnings
 	return report
 }
 
@@ -304,6 +351,55 @@ func RenderText(r Report) string {
 	fmt.Fprintf(&b, "  proxy        %s\n", r.Network.Proxy)
 	fmt.Fprintf(&b, "  no_proxy     %v\n", r.Network.NoProxy)
 
+	fmt.Fprintf(&b, "\npxpipe\n")
+	fmt.Fprintf(&b, "  state        %s\n", valueOr(r.Pxpipe.State, "unknown"))
+	fmt.Fprintf(&b, "  installed    %v\n", r.Pxpipe.Installed)
+	fmt.Fprintf(&b, "  managed      %v\n", r.Pxpipe.Managed)
+	if strings.TrimSpace(r.Pxpipe.Binary) != "" {
+		fmt.Fprintf(&b, "  binary       %s\n", r.Pxpipe.Binary)
+	}
+	if strings.TrimSpace(r.Pxpipe.Dashboard) != "" {
+		fmt.Fprintf(&b, "  dashboard    %s\n", r.Pxpipe.Dashboard)
+	}
+	if strings.TrimSpace(r.Pxpipe.LogPath) != "" {
+		logState := "missing"
+		if r.Pxpipe.LogExists {
+			logState = fmt.Sprintf("%d bytes", r.Pxpipe.LogBytes)
+		}
+		fmt.Fprintf(&b, "  log          %s (%s)\n", r.Pxpipe.LogPath, logState)
+	}
+	for _, p := range r.Pxpipe.Providers {
+		fmt.Fprintf(&b, "  provider     %-16s %-8s %-18s loopback:%v\n", p.Name, p.Kind, valueOr(p.BaseURLHost, "(no host)"), p.Loopback)
+	}
+	if strings.TrimSpace(r.Pxpipe.LastError) != "" {
+		fmt.Fprintf(&b, "  warning      %s\n", r.Pxpipe.LastError)
+	}
+
+	fmt.Fprintf(&b, "\nenvironment\n")
+	if len(r.Environment) == 0 {
+		fmt.Fprintf(&b, "  none detected\n")
+	} else {
+		for _, tool := range r.Environment {
+			line := fmt.Sprintf("  %-12s %-8s %s", tool.Name, valueOr(tool.Status, "unknown"), valueOr(tool.SelectedPath, "(not selected)"))
+			if strings.TrimSpace(tool.Version) != "" {
+				line += " version:" + tool.Version
+			}
+			if strings.TrimSpace(tool.Expected) != "" {
+				line += " expected:" + tool.Expected
+			}
+			if strings.TrimSpace(tool.Source) != "" {
+				line += " source:" + tool.Source
+			}
+			fmt.Fprintf(&b, "%s\n", line)
+			if strings.TrimSpace(tool.RegistryPath) != "" {
+				fmt.Fprintf(&b, "  registry     %s\n", tool.RegistryPath)
+			}
+			if strings.TrimSpace(tool.LastError) != "" {
+				fmt.Fprintf(&b, "  warning      %s\n", tool.LastError)
+			}
+		}
+	}
+
 	fmt.Fprintf(&b, "\npermissions\n")
 	fmt.Fprintf(&b, "  mode         %s\n", valueOr(r.Permission.Mode, "ask"))
 	fmt.Fprintf(&b, "  rules        allow:%d ask:%d deny:%d\n", r.Permission.AllowRules, r.Permission.AskRules, r.Permission.DenyRules)
@@ -332,6 +428,51 @@ func collectSessions(dir string) SessionsReport {
 		r.Error = err.Error()
 	}
 	return r
+}
+
+func collectPxpipe(cfg *config.Config) PxpipeReport {
+	status := pxpipe.NewManager().Status(context.Background(), pxpipe.StartOptions{Config: cfg})
+	out := PxpipeReport{
+		State:     status.State,
+		Installed: status.Installed,
+		Binary:    redactHome(status.Binary),
+		Dashboard: status.DashboardURL,
+		LogPath:   redactHome(status.LogPath),
+		Managed:   status.Managed,
+		PID:       status.PID,
+		LastError: redactHome(status.Error),
+	}
+	if strings.TrimSpace(status.LogPath) != "" {
+		if info, err := os.Stat(status.LogPath); err == nil && !info.IsDir() {
+			out.LogExists = true
+			out.LogBytes = info.Size()
+		}
+	}
+	for _, p := range cfg.Providers {
+		if !strings.HasPrefix(p.Name, "pxpipe-") {
+			continue
+		}
+		out.Providers = append(out.Providers, PxpipeProviderReport{
+			Name:        p.Name,
+			Kind:        p.Kind,
+			BaseURLHost: hostOnly(p.BaseURL),
+			Loopback:    isLoopbackURL(p.BaseURL),
+		})
+	}
+	return out
+}
+
+func environmentToolReport(tool environment.ToolResult) EnvironmentToolReport {
+	return EnvironmentToolReport{
+		Name:         tool.Record.Name,
+		SelectedPath: redactHome(tool.Record.Selected),
+		Version:      tool.Record.Version,
+		Expected:     tool.Record.Expected,
+		Source:       tool.Record.Source,
+		Status:       tool.Record.Status,
+		RegistryPath: redactHome(tool.RegistryPath),
+		LastError:    redactHome(tool.Record.LastError),
+	}
 }
 
 func collectCodeIntelligenceBenchmark(cacheDir string) CodeIntelligenceBenchmarkReport {
@@ -389,6 +530,16 @@ func hostOnly(raw string) string {
 		return u.Hostname() + ":" + port
 	}
 	return u.Hostname()
+}
+
+func isLoopbackURL(raw string) bool {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil {
+		return false
+	}
+	host := u.Hostname()
+	ip := net.ParseIP(host)
+	return host == "localhost" || (ip != nil && ip.IsLoopback())
 }
 
 func valueOr(s, fallback string) string {

@@ -39,6 +39,7 @@ type BenchmarkBackendInfo struct {
 	Name         string              `json:"name"`
 	Capabilities BackendCapabilities `json:"capabilities"`
 	Health       string              `json:"health,omitempty"`
+	SkipIndex    bool                `json:"skip_index,omitempty"`
 }
 
 type BenchmarkResult struct {
@@ -213,19 +214,22 @@ func RunBenchmark(ctx context.Context, opts BenchmarkOptions) BenchmarkReport {
 			defer closer.Close()
 		}
 
-		start := now()
-		if err := backend.BuildIndex(ctx, opts.Root); err != nil {
-			backendReport.Failures++
-			backendReport.Health = BackendHealthDegraded
-		}
-		backendReport.IndexBuildMillis = elapsedMillis(start, now())
+		var start time.Time
+		if !info.SkipIndex {
+			start = now()
+			if err := backend.BuildIndex(ctx, opts.Root); err != nil {
+				backendReport.Failures++
+				backendReport.Health = BackendHealthDegraded
+			}
+			backendReport.IndexBuildMillis = elapsedMillis(start, now())
 
-		start = now()
-		if err := backend.UpdateIndex(ctx, opts.Root); err != nil {
-			backendReport.Failures++
-			backendReport.Health = BackendHealthDegraded
+			start = now()
+			if err := backend.UpdateIndex(ctx, opts.Root); err != nil {
+				backendReport.Failures++
+				backendReport.Health = BackendHealthDegraded
+			}
+			backendReport.IncrementalUpdateMillis = elapsedMillis(start, now())
 		}
-		backendReport.IncrementalUpdateMillis = elapsedMillis(start, now())
 
 		for _, tc := range opts.Cases {
 			qr := BenchmarkQueryReport{

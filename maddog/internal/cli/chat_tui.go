@@ -3193,7 +3193,7 @@ func (m *chatTUI) ingestEvent(e event.Event) {
 		if e.Usage != nil {
 			m.turnTokens += e.Usage.CompletionTokens
 		}
-		if line := agent.FormatUsageLine(e.Usage, e.Pricing, e.CacheDiagnostics); line != "" {
+		if line := agent.FormatUsageLine(e.Usage, e.Pricing, e.CacheDiagnostics, e.Pxpipe); line != "" {
 			m.finalizeStreamed()
 			m.commitLine(line)
 		}

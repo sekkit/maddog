@@ -288,6 +288,31 @@ func ProjectSessionDir(workspaceRoot string) string {
 	return filepath.Join(base, "projects", WorkspaceSlug(root), "sessions")
 }
 
+// ProjectEnvironmentDir is the project-scoped state directory for discovered
+// environment/toolchain facts. Empty when either the state root or workspaceRoot
+// does not resolve.
+func ProjectEnvironmentDir(workspaceRoot string) string {
+	base := MemoryUserDir()
+	root := strings.TrimSpace(workspaceRoot)
+	if base == "" || root == "" {
+		return ""
+	}
+	if abs, err := filepath.Abs(root); err == nil {
+		root = abs
+	}
+	return filepath.Join(base, "projects", WorkspaceSlug(root), "environment")
+}
+
+// ProjectEnvironmentRegistryPath is the JSON registry path for discovered
+// environment/toolchain facts for a workspace.
+func ProjectEnvironmentRegistryPath(workspaceRoot string) string {
+	dir := ProjectEnvironmentDir(workspaceRoot)
+	if dir == "" {
+		return ""
+	}
+	return filepath.Join(dir, "registry.json")
+}
+
 // MemoryCompilerDir is the project-scoped state directory for the Memory v5
 // execution compiler. Empty means persistent compiler state is unavailable.
 func MemoryCompilerDir(workspaceRoot string) string {

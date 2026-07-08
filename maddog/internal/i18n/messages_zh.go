@@ -389,6 +389,8 @@ var Chinese = Messages{
   maddog config auto-plan [off|on]                    配置自动计划模式
   maddog mcp <add|remove|list>                        管理 maddog.toml 里的 MCP 服务器
   maddog hypergraphrag [status]                       查看 HyperGraphRAG 代码智能后端
+  maddog env [list|refresh|show]                      查看项目环境/工具路径
+  maddog pxpipe [status|start|stop]                    管理本地 pxpipe 请求压缩 sidecar
   maddog doctor [--json]                              输出脱敏的本地诊断信息
   maddog version
   maddog help
@@ -403,6 +405,6 @@ var Chinese = Messages{
 配置：
   优先级：flag > ./maddog.toml > ~/.config/maddog/config.toml > 内置默认值
   密钥通过 api_key_env 从环境变量注入（如 DEEPSEEK_API_KEY）。
-  运行 'maddog setup' 生成配置；详见 docs/SPEC.md。
+  运行 'maddog setup' 生成配置；详见 docs/SPEC.md 和 docs/ENVIRONMENT_REGISTRY.md。
 `,
 }

@@ -90,12 +90,16 @@ effort      = "high"
 # model     = "your-local-vision-model"
 # vision    = true
 
-# pxpipe local request-compression proxy. Start it separately, for example:
-#   ANTHROPIC_UPSTREAM=https://jp.icodeeasy.cc OPENAI_UPSTREAM=https://jp.icodeeasy.cc npx pxpipe-proxy
-# pxpipe itself defaults PXPIPE_MODELS to claude-fable-5,gpt-5.6; all other
+# pxpipe local request-compression proxy. Start it with Maddog:
+#   maddog pxpipe start --anthropic-upstream https://api.anthropic.com --openai-upstream https://api.openai.com/v1
+# Or run it manually:
+#   ANTHROPIC_UPSTREAM=https://api.anthropic.com OPENAI_UPSTREAM=https://api.openai.com/v1 npx pxpipe-proxy
+# pxpipe compresses only the model scope configured in PXPIPE_MODELS; all other
 # models pass through unchanged. Claude uses Anthropic Messages; GPT uses OpenAI
 # Responses, so keep them as separate providers even though they share the same
-# local proxy process.
+# local proxy process. Keep exact IDs, hashes, secrets, and failure logs on a
+# text path; imaged context is not byte-perfect. For GPT, configure or fetch an
+# explicit supported model before selecting pxpipe-gpt.
 #
 # [[providers]]
 # name = "pxpipe-claude"
@@ -112,7 +116,8 @@ effort      = "high"
 # name = "pxpipe-gpt"
 # kind = "openai"
 # base_url = "http://127.0.0.1:47821/v1"
-# model = "gpt-5.6"
+# models = ["gpt-5.6"]
+# default = "gpt-5.6"
 # api_key_env = "ICE_API_KEY"
 # context_window = 1000000
 # wire_api = "responses"

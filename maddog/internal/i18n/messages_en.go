@@ -387,6 +387,8 @@ Usage:
   maddog config auto-plan [off|on]                    configure automatic plan mode
   maddog mcp <add|remove|list>                        manage MCP servers in maddog.toml
   maddog hypergraphrag [status]                       inspect HyperGraphRAG code-intelligence backends
+  maddog env [list|refresh|show]                      inspect project environment/tool paths
+  maddog pxpipe [status|start|stop]                    manage local pxpipe request-compression sidecar
   maddog doctor [--json]                              print redacted local diagnostics
   maddog version
   maddog help
@@ -401,6 +403,6 @@ Examples:
 Configuration:
   Resolution: flag > ./maddog.toml > ~/.config/maddog/config.toml > built-in defaults
   Secrets come from the environment via api_key_env (e.g. DEEPSEEK_API_KEY).
-  Run 'maddog setup' to scaffold a config; see docs/SPEC.md.
+  Run 'maddog setup' to scaffold a config; see docs/SPEC.md and docs/ENVIRONMENT_REGISTRY.md.
 `,
 }
