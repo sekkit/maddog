@@ -178,6 +178,51 @@ func TestStreamUsesAPIKeyAuthByDefault(t *testing.T) {
 	}
 }
 
+func TestStreamUsesClaudeCodeClientProfile(t *testing.T) {
+	var gotPath, gotBeta, gotAccept, gotUserAgent string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.RequestURI()
+		gotBeta = r.Header.Get("anthropic-beta")
+		gotAccept = r.Header.Get("Accept")
+		gotUserAgent = r.Header.Get("User-Agent")
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n")
+	}))
+	defer srv.Close()
+
+	p, err := New(provider.Config{
+		Name:    "pxpipe-claude",
+		BaseURL: srv.URL,
+		Model:   "claude-fable-5",
+		APIKey:  "api-key",
+		Extra: map[string]any{
+			"client_profile": "claude_code",
+			"client_version": "2.1.202",
+		},
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	ch, err := p.Stream(context.Background(), provider.Request{Messages: []provider.Message{{Role: provider.RoleUser, Content: "hi"}}})
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	for range ch {
+	}
+	if gotPath != "/v1/messages?beta=true" {
+		t.Fatalf("path = %q, want Claude Code beta messages path", gotPath)
+	}
+	if !strings.Contains(gotBeta, "claude-code-20250219") {
+		t.Fatalf("anthropic-beta = %q, want Claude Code beta marker", gotBeta)
+	}
+	if gotAccept != "application/json" {
+		t.Fatalf("Accept = %q, want application/json for Claude Code profile", gotAccept)
+	}
+	if gotUserAgent != "claude-cli/2.1.202 (external, cli)" {
+		t.Fatalf("User-Agent = %q, want Claude Code CLI agent", gotUserAgent)
+	}
+}
+
 func TestStreamUsesBearerTokenAuth(t *testing.T) {
 	var gotAPIKey, gotBearer string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

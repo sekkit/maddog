@@ -62,11 +62,16 @@ func (s *recordSink) kinds(k event.Kind) []event.Event {
 }
 
 const bootImageFallbackTestProviderKind = "boot-image-fallback-test"
+const bootClientProfileForwardTestProviderKind = "boot-client-profile-forward-test"
 
 var (
 	bootImageFallbackTestProviderOnce    sync.Once
 	bootImageFallbackTestProviderCurrent map[string]*bootImageFallbackTestProvider
 	bootImageFallbackTestProviderMu      sync.Mutex
+
+	bootClientProfileForwardTestProviderOnce sync.Once
+	bootClientProfileForwardTestProviderMu   sync.Mutex
+	bootClientProfileForwardTestLastConfig   provider.Config
 )
 
 func registerBootImageFallbackTestProvider() {
@@ -84,6 +89,29 @@ func registerBootImageFallbackTestProvider() {
 			return p, nil
 		})
 	})
+}
+
+func registerBootClientProfileForwardTestProvider() {
+	bootClientProfileForwardTestProviderOnce.Do(func() {
+		provider.Register(bootClientProfileForwardTestProviderKind, func(cfg provider.Config) (provider.Provider, error) {
+			bootClientProfileForwardTestProviderMu.Lock()
+			bootClientProfileForwardTestLastConfig = cfg
+			bootClientProfileForwardTestProviderMu.Unlock()
+			return bootClientProfileForwardTestProvider{name: cfg.Name}, nil
+		})
+	})
+}
+
+type bootClientProfileForwardTestProvider struct {
+	name string
+}
+
+func (p bootClientProfileForwardTestProvider) Name() string { return p.name }
+
+func (p bootClientProfileForwardTestProvider) Stream(context.Context, provider.Request) (<-chan provider.Chunk, error) {
+	ch := make(chan provider.Chunk)
+	close(ch)
+	return ch, nil
 }
 
 func setBootImageFallbackTestProviders(t *testing.T, providers map[string]*bootImageFallbackTestProvider) {
@@ -1154,6 +1182,31 @@ func TestNewProviderAppliesConfiguredDefaultEffort(t *testing.T) {
 	}
 	if got := gotReq["reasoning_effort"]; got != "medium" {
 		t.Fatalf("reasoning_effort = %#v, want medium from default_effort", got)
+	}
+}
+
+func TestNewProviderForwardsClientProfile(t *testing.T) {
+	registerBootClientProfileForwardTestProvider()
+	bootClientProfileForwardTestProviderMu.Lock()
+	bootClientProfileForwardTestLastConfig = provider.Config{}
+	bootClientProfileForwardTestProviderMu.Unlock()
+
+	_, err := NewProvider(&config.ProviderEntry{
+		Name:          "pxpipe-claude",
+		Kind:          bootClientProfileForwardTestProviderKind,
+		Model:         "claude-fable-5",
+		ClientProfile: "claude_code",
+		ClientVersion: "2.1.202",
+	})
+	if err != nil {
+		t.Fatalf("NewProvider: %v", err)
+	}
+
+	bootClientProfileForwardTestProviderMu.Lock()
+	got := bootClientProfileForwardTestLastConfig
+	bootClientProfileForwardTestProviderMu.Unlock()
+	if got.Extra["client_profile"] != "claude_code" || got.Extra["client_version"] != "2.1.202" {
+		t.Fatalf("client profile/version = %#v/%#v, want claude_code/2.1.202", got.Extra["client_profile"], got.Extra["client_version"])
 	}
 }
 

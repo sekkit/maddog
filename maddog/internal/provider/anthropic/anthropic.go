@@ -45,6 +45,8 @@ const (
 	anthropicVersion = "2023-06-01"
 	// advisorBetaHeader enables Anthropic's advisor server-side tool beta.
 	advisorBetaHeader = "advisor-tool-2026-03-01"
+	// claudeCodeBetaHeader enables Claude Code-compatible gateway behavior.
+	claudeCodeBetaHeader = "claude-code-20250219"
 	// defaultBaseURL is the first-party endpoint; config may override it (e.g. a
 	// gateway). Bedrock/Vertex use a different request shape and are out of scope.
 	defaultBaseURL = "https://api.anthropic.com"
@@ -78,6 +80,8 @@ func New(cfg provider.Config) (provider.Provider, error) {
 	thinking, _ := cfg.Extra["thinking"].(string)
 	effort, _ := cfg.Extra["effort"].(string)
 	vision, _ := cfg.Extra["vision"].(bool)
+	clientProfile, _ := cfg.Extra["client_profile"].(string)
+	clientVersion, _ := cfg.Extra["client_version"].(string)
 	httpClient, err := newHTTPClient(cfg)
 	if err != nil {
 		return nil, fmt.Errorf("anthropic: network: %w", err)
@@ -98,18 +102,20 @@ func New(cfg provider.Config) (provider.Provider, error) {
 		root = defaultBaseURL
 	}
 	return &client{
-		name:        name,
-		apiKey:      cfg.APIKey,
-		keyEnv:      keyEnv,
-		keySource:   keySource,
-		auth:        auth,
-		baseURL:     root,
-		model:       cfg.Model,
-		thinking:    thinking,
-		effort:      effort,
-		vision:      vision,
-		idleTimeout: defaultStreamIdleTimeout,
-		http:        httpClient, // no overall timeout; lifecycle is ctx-driven
+		name:          name,
+		apiKey:        cfg.APIKey,
+		keyEnv:        keyEnv,
+		keySource:     keySource,
+		auth:          auth,
+		baseURL:       root,
+		model:         cfg.Model,
+		thinking:      thinking,
+		effort:        effort,
+		vision:        vision,
+		clientProfile: strings.ToLower(strings.TrimSpace(clientProfile)),
+		clientVersion: strings.TrimSpace(clientVersion),
+		idleTimeout:   defaultStreamIdleTimeout,
+		http:          httpClient, // no overall timeout; lifecycle is ctx-driven
 	}, nil
 }
 
@@ -119,21 +125,23 @@ func newHTTPClient(cfg provider.Config) (*http.Client, error) {
 }
 
 type client struct {
-	name        string
-	apiKey      string
-	keyEnv      string // api_key_env name, surfaced in auth errors
-	keySource   string // human-readable source of keyEnv, when known
-	auth        provider.AuthConfig
-	baseURL     string
-	model       string
-	thinking    string // "adaptive" enables extended thinking; "" = off (config-driven)
-	effort      string // output_config.effort: low|medium|high|xhigh|max; "" = provider default
-	vision      bool
-	http        *http.Client
-	authed      atomic.Bool
-	idleTimeout time.Duration
-	authMu      sync.Mutex
-	authExp     time.Time
+	name          string
+	apiKey        string
+	keyEnv        string // api_key_env name, surfaced in auth errors
+	keySource     string // human-readable source of keyEnv, when known
+	auth          provider.AuthConfig
+	baseURL       string
+	model         string
+	thinking      string // "adaptive" enables extended thinking; "" = off (config-driven)
+	effort        string // output_config.effort: low|medium|high|xhigh|max; "" = provider default
+	vision        bool
+	clientProfile string
+	clientVersion string
+	http          *http.Client
+	authed        atomic.Bool
+	idleTimeout   time.Duration
+	authMu        sync.Mutex
+	authExp       time.Time
 }
 
 func (c *client) Name() string { return c.name }
@@ -170,16 +178,33 @@ func (c *client) Stream(ctx context.Context, req provider.Request) (<-chan provi
 		if err != nil {
 			return nil, err
 		}
-		httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/v1/messages", bytes.NewReader(body))
+		url := c.baseURL + "/v1/messages"
+		if c.clientProfile == "claude_code" {
+			url += "?beta=true"
+		}
+		httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 		if err != nil {
 			return nil, err
 		}
 		httpReq.Header.Set("Content-Type", "application/json")
 		httpReq.Header.Set("Accept", "text/event-stream")
+		if c.clientProfile == "claude_code" {
+			httpReq.Header.Set("Accept", "application/json")
+			if c.clientVersion != "" {
+				httpReq.Header.Set("User-Agent", "claude-cli/"+c.clientVersion+" (external, cli)")
+			}
+		}
 		auth.Header(httpReq, "x-api-key")
 		httpReq.Header.Set("anthropic-version", anthropicVersion)
+		var betas []string
 		if req.NativeAdvisor != nil {
-			httpReq.Header.Set("anthropic-beta", advisorBetaHeader)
+			betas = append(betas, advisorBetaHeader)
+		}
+		if c.clientProfile == "claude_code" {
+			betas = append(betas, claudeCodeBetaHeader)
+		}
+		if len(betas) > 0 {
+			httpReq.Header.Set("anthropic-beta", strings.Join(betas, ","))
 		}
 		return httpReq, nil
 	}

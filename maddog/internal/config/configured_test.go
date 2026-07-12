@@ -17,6 +17,9 @@ func TestDefaultIncludesResolvablePxpipeClaudeProvider(t *testing.T) {
 	if claude.Model != "claude-fable-5" || claude.APIKeyEnv != "ICE_API_KEY" {
 		t.Fatalf("pxpipe-claude model/key = %q/%q, want claude-fable-5/ICE_API_KEY", claude.Model, claude.APIKeyEnv)
 	}
+	if claude.ClientProfile != "claude_code" || claude.ClientVersion == "" {
+		t.Fatalf("pxpipe-claude client profile/version = %q/%q, want claude_code with version", claude.ClientProfile, claude.ClientVersion)
+	}
 	resolved, ok := cfg.ResolveModel("pxpipe-claude")
 	if !ok {
 		t.Fatal("ResolveModel(pxpipe-claude) failed")

@@ -1176,6 +1176,8 @@ type ProviderEntry struct {
 	AuthTokenEnv       string                       `toml:"auth_token_env"`       // bearer/access-token env var; API key auth falls back to api_key_env
 	AuthHeader         string                       `toml:"auth_header"`          // optional override; defaults to provider-specific header
 	AuthScheme         string                       `toml:"auth_scheme"`          // optional override; bearer modes default to Bearer
+	ClientProfile      string                       `toml:"client_profile"`       // optional provider wire-compat profile, e.g. claude_code
+	ClientVersion      string                       `toml:"client_version"`       // optional version used by client_profile user-agent shims
 	IdentityEnv        string                       `toml:"identity_env"`         // WIF OIDC/JWT assertion env var
 	IdentityFile       string                       `toml:"identity_file"`        // WIF OIDC/JWT assertion file
 	IdentityProviderID string                       `toml:"identity_provider_id"` // OpenAI WIF provider ID
@@ -1634,7 +1636,7 @@ func Default() *Config {
 		Providers: []ProviderEntry{
 			{Name: "deepseek-flash", Kind: "openai", BaseURL: "https://api.deepseek.com", Model: "deepseek-v4-flash", APIKeyEnv: "DEEPSEEK_API_KEY", BalanceURL: "https://api.deepseek.com/user/balance", ContextWindow: 1_000_000, Price: deepSeekV4FlashPrice()},
 			{Name: "deepseek-pro", Kind: "openai", BaseURL: "https://api.deepseek.com", Model: "deepseek-v4-pro", APIKeyEnv: "DEEPSEEK_API_KEY", BalanceURL: "https://api.deepseek.com/user/balance", ContextWindow: 1_000_000, Price: deepSeekV4ProPrice()},
-			{Name: "pxpipe-claude", Kind: "anthropic", BaseURL: "http://127.0.0.1:47821", Model: "claude-fable-5", APIKeyEnv: "ICE_API_KEY", ContextWindow: 1_000_000, Thinking: "adaptive", Effort: "high", NoProxy: true},
+			{Name: "pxpipe-claude", Kind: "anthropic", BaseURL: "http://127.0.0.1:47821", Model: "claude-fable-5", APIKeyEnv: "ICE_API_KEY", ClientProfile: "claude_code", ClientVersion: "2.1.202", ContextWindow: 1_000_000, Thinking: "adaptive", Effort: "high", NoProxy: true},
 			{Name: "pxpipe-gpt", Kind: "openai", BaseURL: "http://127.0.0.1:47821/v1", APIKeyEnv: "ICE_API_KEY", ContextWindow: 1_000_000, WireAPI: "responses", ReasoningProtocol: "openai", SupportedEfforts: []string{"low", "medium", "high"}, DefaultEffort: "high", NoProxy: true},
 		},
 	}
