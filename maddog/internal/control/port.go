@@ -93,6 +93,7 @@ type Goals interface {
 	GoalStatus() string
 	SetGoal(goal string)
 	SetGoalWithResearchMode(goal string, researchMode GoalResearchMode)
+	SetGoalWithOptions(goal string, options GoalOptions)
 	GoalStrict(strict bool)
 	ClearGoal()
 	AutoStartResearchGoal(input string) (string, bool)
@@ -100,6 +101,14 @@ type Goals interface {
 	PlanMode() bool
 	SetPlanMode(v bool)
 	SetAutoPlan(mode string)
+}
+
+// GoalSnapshotter is an optional capability for surfaces that can expose the
+// durable goal identity, lifecycle counters, and budgets. Goals intentionally
+// retains the legacy Goal/GoalStatus contract so lightweight SessionAPI
+// implementations are not forced to provide durable snapshots.
+type GoalSnapshotter interface {
+	GoalSnapshot() GoalSnapshot
 }
 
 // SessionHistory covers checkpoint/rewind, branch/fork, and the log-restructuring
@@ -223,6 +232,7 @@ var (
 	_ TurnControl        = (*Controller)(nil)
 	_ Approvals          = (*Controller)(nil)
 	_ Goals              = (*Controller)(nil)
+	_ GoalSnapshotter    = (*Controller)(nil)
 	_ SessionHistory     = (*Controller)(nil)
 	_ MemoryControl      = (*Controller)(nil)
 	_ Capabilities       = (*Controller)(nil)

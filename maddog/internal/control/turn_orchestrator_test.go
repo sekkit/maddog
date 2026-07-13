@@ -159,6 +159,183 @@ func (r *recordingSessionRunner) Run(ctx context.Context, input string) error {
 	return nil
 }
 
+func TestControllerRunUsesGoalContinuationLoop(t *testing.T) {
+	prov := &scriptedTurns{turns: [][]provider.Chunk{
+		textTurn("Started.\n\n[goal:continue]"),
+		textTurn("Finished.\n\n[goal:complete]"),
+	}}
+	ag := agent.New(prov, tool.NewRegistry(), agent.NewSession(""), agent.Options{}, event.Discard)
+	c := New(Options{Runner: ag, Executor: ag})
+	c.SetGoal("finish the headless task")
+
+	if err := c.Run(context.Background(), "start now"); err != nil {
+		t.Fatal(err)
+	}
+	if prov.call != 2 {
+		t.Fatalf("provider calls = %d, want initial + continuation", prov.call)
+	}
+	if got := c.GoalStatus(); got != GoalStatusComplete {
+		t.Fatalf("GoalStatus() = %q, want complete", got)
+	}
+}
+
+func TestControllerRunContinuesGoalCreatedDuringOrdinaryTurn(t *testing.T) {
+	prov := &scriptedTurns{turns: [][]provider.Chunk{
+		toolCallTurn("goal-1", "goal_control", `{"action":"create","objective":"finish the created goal"}`),
+		textTurn("Goal created."),
+		textTurn("Finished.\n\n[goal:complete]"),
+	}}
+	registry := tool.NewRegistry()
+	ag := agent.New(prov, registry, agent.NewSession(""), agent.Options{}, event.Discard)
+	c := New(Options{Runner: ag, Executor: ag, Registry: registry, Sink: event.Discard})
+
+	if err := c.Run(context.Background(), "create a goal and carry it through"); err != nil {
+		t.Fatal(err)
+	}
+	if prov.call != 3 {
+		t.Fatalf("provider calls = %d, want create tool round + response + goal continuation", prov.call)
+	}
+	snapshot := c.GoalSnapshot()
+	if snapshot.Status != GoalStatusComplete || snapshot.Objective != "finish the created goal" {
+		t.Fatalf("created goal snapshot = %+v", snapshot)
+	}
+}
+
+func TestControllerRunDoesNotContinuePreexistingGoalWhenPromptHookBlocks(t *testing.T) {
+	prov := &scriptedTurns{turns: [][]provider.Chunk{
+		textTurn("Should not run.\n\n[goal:complete]"),
+	}}
+	ag := agent.New(prov, tool.NewRegistry(), agent.NewSession(""), agent.Options{}, event.Discard)
+	submissions := 0
+	hooks := hook.NewRunner([]hook.ResolvedHook{{
+		HookConfig: hook.HookConfig{Command: "gate"},
+		Event:      hook.UserPromptSubmit,
+		Scope:      hook.ScopeProject,
+	}}, "", func(context.Context, hook.SpawnInput) hook.SpawnResult {
+		submissions++
+		if submissions == 1 {
+			return hook.SpawnResult{ExitCode: 2, Stderr: "blocked by test policy"}
+		}
+		return hook.SpawnResult{ExitCode: 0}
+	}, nil)
+	c := New(Options{Runner: ag, Executor: ag, Hooks: hooks, Sink: event.Discard})
+	c.SetGoal("preserve the preexisting goal")
+
+	if err := c.Run(context.Background(), "blocked input"); err != nil {
+		t.Fatal(err)
+	}
+	if prov.call != 0 || submissions != 1 {
+		t.Fatalf("provider calls = %d, prompt submissions = %d; want 0, 1", prov.call, submissions)
+	}
+	if snapshot := c.GoalSnapshot(); snapshot.Status != GoalStatusRunning || snapshot.Turns != 0 {
+		t.Fatalf("blocked turn mutated goal = %+v", snapshot)
+	}
+}
+
+func TestTurnOrchestratorDoesNotReplayMarkerWithoutCurrentAssistant(t *testing.T) {
+	sess := agent.NewSession("")
+	sess.Add(provider.Message{Role: provider.RoleAssistant, Content: "Old reply.\n\n[goal:continue]"})
+	runner := &recordingSessionRunner{session: sess}
+	exec := agent.New(nil, nil, sess, agent.Options{}, event.Discard)
+	c := New(Options{Runner: runner, Executor: exec})
+	c.SetGoal("new work")
+
+	if err := newTurnOrchestrator(c).runGoalLoopWithRawDisplay(context.Background(), "start", "start", ""); err != nil {
+		t.Fatal(err)
+	}
+	if len(runner.inputs) != 1 {
+		t.Fatalf("runner inputs = %d, want one no-op unit without stale continuation", len(runner.inputs))
+	}
+	snapshot := c.GoalSnapshot()
+	if snapshot.Status != GoalStatusRunning || snapshot.Turns != 0 {
+		t.Fatalf("stale marker advanced goal: %+v", snapshot)
+	}
+}
+
+type goalActivityTurn struct {
+	text     string
+	withTool bool
+}
+
+type goalActivityRunner struct {
+	session *agent.Session
+	turns   []goalActivityTurn
+	inputs  []string
+}
+
+func (r *goalActivityRunner) Run(_ context.Context, input string) error {
+	r.inputs = append(r.inputs, input)
+	r.session.Add(provider.Message{Role: provider.RoleUser, Content: input})
+	turn := r.turns[len(r.inputs)-1]
+	if turn.withTool {
+		id := "tool-activity"
+		r.session.Add(provider.Message{Role: provider.RoleAssistant, ToolCalls: []provider.ToolCall{{ID: id, Name: "inspect", Arguments: `{}`}}})
+		r.session.Add(provider.Message{Role: provider.RoleTool, ToolCallID: id, Name: "inspect", Content: "ok"})
+	}
+	r.session.Add(provider.Message{Role: provider.RoleAssistant, Content: turn.text})
+	return nil
+}
+
+func TestTurnOrchestratorCountsToolsAcrossWholeRunUnit(t *testing.T) {
+	sess := agent.NewSession("")
+	runner := &goalActivityRunner{session: sess, turns: []goalActivityTurn{
+		{text: "Worked with a tool.\n\n[goal:continue]", withTool: true},
+		{text: "Reasoned briefly.\n\n[goal:continue]"},
+		{text: "Finished.\n\n[goal:complete]"},
+	}}
+	exec := agent.New(nil, nil, sess, agent.Options{}, event.Discard)
+	c := New(Options{Runner: runner, Executor: exec})
+	c.SetGoal("finish with observable progress")
+
+	if err := newTurnOrchestrator(c).runGoalLoopWithRawDisplay(context.Background(), "start", "start", ""); err != nil {
+		t.Fatal(err)
+	}
+	if len(runner.inputs) != 3 {
+		t.Fatalf("runner inputs = %d, want three goal units", len(runner.inputs))
+	}
+	if strings.Contains(runner.inputs[2], "No tool calls in recent turns") {
+		t.Fatalf("tool call before the final assistant was miscounted as idle: %q", runner.inputs[2])
+	}
+}
+
+type replacingGoalRunner struct {
+	c       *Controller
+	session *agent.Session
+	calls   int
+}
+
+func (r *replacingGoalRunner) Run(_ context.Context, input string) error {
+	r.calls++
+	r.session.Add(provider.Message{Role: provider.RoleUser, Content: input})
+	r.c.SetGoal("replacement goal")
+	r.session.Add(provider.Message{Role: provider.RoleAssistant, Content: "Old goal finished.\n\n[goal:complete]"})
+	return nil
+}
+
+func TestTurnOrchestratorIgnoresMarkerFromReplacedGoalGeneration(t *testing.T) {
+	sess := agent.NewSession("")
+	exec := agent.New(nil, nil, sess, agent.Options{}, event.Discard)
+	c := New(Options{Executor: exec})
+	runner := &replacingGoalRunner{c: c, session: sess}
+	c.runner = runner
+	c.SetGoal("original goal")
+	originalGeneration := c.GoalSnapshot().Generation
+
+	if err := newTurnOrchestrator(c).runGoalLoopWithRawDisplay(context.Background(), "start", "start", ""); err != nil {
+		t.Fatal(err)
+	}
+	snapshot := c.GoalSnapshot()
+	if runner.calls != 1 {
+		t.Fatalf("runner calls = %d, want stale unit to stop without continuation", runner.calls)
+	}
+	if snapshot.Generation <= originalGeneration || snapshot.Objective != "replacement goal" {
+		t.Fatalf("replacement goal was not installed: %+v", snapshot)
+	}
+	if snapshot.Status != GoalStatusRunning || snapshot.Turns != 0 {
+		t.Fatalf("old-generation marker advanced replacement goal: %+v", snapshot)
+	}
+}
+
 func TestTurnOrchestratorGoalContinuationRunsStopPerUnit(t *testing.T) {
 	prov := &scriptedTurns{turns: [][]provider.Chunk{
 		textTurn("Started.\n\n[goal:continue]"),

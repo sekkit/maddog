@@ -18,6 +18,7 @@ import (
 	"maddog/internal/config"
 	"maddog/internal/control"
 	"maddog/internal/event"
+	"maddog/internal/evidence"
 	"maddog/internal/i18n"
 	"maddog/internal/provider"
 )
@@ -27,6 +28,69 @@ type blockingTurnRunner struct{ started chan struct{} }
 type stubbornTurnRunner struct {
 	started chan struct{}
 	release chan struct{}
+}
+
+func TestFormatGoalSnapshotNoticeIncludesLifecycleDetails(t *testing.T) {
+	now := time.Date(2026, time.July, 14, 9, 8, 7, 0, time.UTC)
+	notice := formatGoalSnapshotNotice(control.GoalSnapshot{
+		ID:                "goal-123",
+		Objective:         "finish the migration",
+		Status:            control.GoalStatusBudgetLimited,
+		Mode:              control.GoalModeAutonomous,
+		ResearchMode:      control.GoalResearchOn,
+		Block:             "token budget reached",
+		InterceptMsg:      "verify the remaining work",
+		Turns:             7,
+		Blocks:            2,
+		Intercepts:        1,
+		SelfCheckDone:     true,
+		IdleTurns:         1,
+		Strict:            true,
+		TurnBudget:        10,
+		TokenBudget:       5000,
+		TokensUsed:        5001,
+		TimeBudgetSeconds: 600,
+		TimeUsedSeconds:   123,
+		LastError:         "provider interrupted",
+		Generation:        4,
+		Revision:          9,
+		CreatedAt:         now,
+		StartedAt:         now.Add(time.Second),
+		UpdatedAt:         now.Add(2 * time.Second),
+		InterruptedAt:     now.Add(3 * time.Second),
+		TerminalAt:        now.Add(4 * time.Second),
+		Todos: []evidence.TodoItem{
+			{Content: "implement", Status: "completed"},
+			{Content: "verify", Status: "in_progress"},
+		},
+	})
+	for _, want := range []string{
+		"finish the migration",
+		"status=budget_limited",
+		"id=goal-123",
+		"generation=4",
+		"revision=9",
+		"turns=7/10",
+		"tokens=5001/5000",
+		"time=123s/600s",
+		"blocks=2",
+		"intercepts=1",
+		"todos=1/2",
+		"reason=token budget reached",
+		"error=provider interrupted",
+		"strict",
+		`"mode":"goal"`,
+		`"researchMode":1`,
+		`"interceptMsg":"verify the remaining work"`,
+		`"selfCheckDone":true`,
+		`"idleTurns":1`,
+		`"createdAt":"2026-07-14T09:08:07Z"`,
+		`"todos":[{"content":"implement","status":"completed"}`,
+	} {
+		if !strings.Contains(notice, want) {
+			t.Fatalf("goal status notice %q missing %q", notice, want)
+		}
+	}
 }
 
 const tinyPNGBase64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
@@ -1136,6 +1200,9 @@ func isolateUserConfig(t *testing.T) {
 	t.Helper()
 	root := t.TempDir()
 	t.Setenv("HOME", root)
+	t.Setenv("MADDOG_HOME", filepath.Join(root, ".maddog"))
+	t.Setenv("MADDOG_STATE_HOME", filepath.Join(root, ".maddog-state"))
+	t.Setenv("MADDOG_CACHE_HOME", filepath.Join(root, ".maddog-cache"))
 	t.Setenv("MADDOG_CREDENTIALS_STORE", "file")
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(root, "config"))
 	t.Setenv("AppData", filepath.Join(root, "AppData")) // os.UserConfigDir reads AppData on Windows

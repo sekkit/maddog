@@ -1208,7 +1208,6 @@ func (a *App) clearActiveSessionRuntime(tab *WorkspaceTab, oldCtrl control.Sessi
 	newCtrl.EnableInteractiveApproval()
 	applyTabModeToController(newCtrl, tab.mode)
 	applyTabToolApprovalModeToController(newCtrl, tab.toolApprovalMode)
-	newCtrl.SetGoal(tab.goal)
 	path := agent.NewSessionPath(newCtrl.SessionDir(), newCtrl.Label())
 	newCtrl.SetSessionPath(path)
 
@@ -3739,23 +3738,32 @@ func (a *App) jobsForCtrl(ctrl control.SessionAPI, out []JobView) []JobView {
 
 // Meta describes the session for the frontend's header and status line.
 type Meta struct {
-	Label             string `json:"label"`
-	Ready             bool   `json:"ready"`
-	StartupErr        string `json:"startupErr,omitempty"`
-	EventChannel      string `json:"eventChannel"`
-	Cwd               string `json:"cwd"`
-	WorkspaceRoot     string `json:"workspaceRoot,omitempty"`
-	WorkspaceName     string `json:"workspaceName,omitempty"`
-	WorkspacePath     string `json:"workspacePath,omitempty"`
-	GitBranch         string `json:"gitBranch,omitempty"`
-	ImageInputEnabled bool   `json:"imageInputEnabled"`
-	AutoApproveTools  bool   `json:"autoApproveTools"`
-	Bypass            bool   `json:"bypass"` // legacy JSON key for YOLO/full-access tool auto-approval
-	CollaborationMode string `json:"collaborationMode"`
-	ToolApprovalMode  string `json:"toolApprovalMode"`
-	TokenMode         string `json:"tokenMode"`
-	Goal              string `json:"goal,omitempty"`
-	GoalStatus        string `json:"goalStatus,omitempty"`
+	Label             string               `json:"label"`
+	Ready             bool                 `json:"ready"`
+	StartupErr        string               `json:"startupErr,omitempty"`
+	EventChannel      string               `json:"eventChannel"`
+	Cwd               string               `json:"cwd"`
+	WorkspaceRoot     string               `json:"workspaceRoot,omitempty"`
+	WorkspaceName     string               `json:"workspaceName,omitempty"`
+	WorkspacePath     string               `json:"workspacePath,omitempty"`
+	GitBranch         string               `json:"gitBranch,omitempty"`
+	ImageInputEnabled bool                 `json:"imageInputEnabled"`
+	AutoApproveTools  bool                 `json:"autoApproveTools"`
+	Bypass            bool                 `json:"bypass"` // legacy JSON key for YOLO/full-access tool auto-approval
+	CollaborationMode string               `json:"collaborationMode"`
+	ToolApprovalMode  string               `json:"toolApprovalMode"`
+	TokenMode         string               `json:"tokenMode"`
+	Goal              string               `json:"goal,omitempty"`
+	GoalObjective     string               `json:"goalObjective,omitempty"`
+	GoalStatus        string               `json:"goalStatus,omitempty"`
+	GoalReason        string               `json:"goalReason,omitempty"`
+	GoalTurns         int                  `json:"goalTurns,omitempty"`
+	GoalBlocks        int                  `json:"goalBlocks,omitempty"`
+	GoalIntercepts    int                  `json:"goalIntercepts,omitempty"`
+	GoalIdleTurns     int                  `json:"goalIdleTurns,omitempty"`
+	GoalStrict        bool                 `json:"goalStrict,omitempty"`
+	GoalRevision      uint64               `json:"goalRevision,omitempty"`
+	GoalSnapshot      control.GoalSnapshot `json:"goalSnapshot"`
 }
 
 // Meta reports the model label, readiness, any startup error, the working
@@ -3788,7 +3796,13 @@ func (a *App) imageInputEnabledForTab(tabID string) bool {
 func (a *App) MetaForTab(tabID string) Meta {
 	tab := a.tabByID(tabID)
 	if tab == nil {
-		return Meta{EventChannel: eventChannel}
+		return Meta{
+			EventChannel: eventChannel,
+			GoalSnapshot: control.GoalSnapshot{
+				SchemaVersion: control.GoalSnapshotSchemaVersion,
+				Status:        control.GoalStatusStopped,
+			},
+		}
 	}
 	cwd := tab.WorkspaceRoot
 	if cwd == "" {
@@ -3798,8 +3812,7 @@ func (a *App) MetaForTab(tabID string) Meta {
 	collaborationMode := currentTabCollaborationMode(tab)
 	toolApprovalMode := currentTabToolApprovalMode(tab)
 	tokenMode := currentTabTokenMode(tab)
-	goal := currentTabGoal(tab)
-	goalStatus := currentTabGoalStatus(tab)
+	goalSnapshot := currentTabGoalSnapshot(tab)
 	return Meta{
 		Label:             tab.Label,
 		Ready:             tab.Ready,
@@ -3816,8 +3829,17 @@ func (a *App) MetaForTab(tabID string) Meta {
 		CollaborationMode: collaborationMode,
 		ToolApprovalMode:  toolApprovalMode,
 		TokenMode:         tokenMode,
-		Goal:              goal,
-		GoalStatus:        goalStatus,
+		Goal:              goalSnapshot.Goal,
+		GoalObjective:     goalSnapshot.Objective,
+		GoalStatus:        goalSnapshot.Status,
+		GoalReason:        goalSnapshot.Block,
+		GoalTurns:         goalSnapshot.Turns,
+		GoalBlocks:        goalSnapshot.Blocks,
+		GoalIntercepts:    goalSnapshot.Intercepts,
+		GoalIdleTurns:     goalSnapshot.IdleTurns,
+		GoalStrict:        goalSnapshot.Strict,
+		GoalRevision:      goalSnapshot.Revision,
+		GoalSnapshot:      goalSnapshot,
 	}
 }
 
@@ -6370,7 +6392,6 @@ func (a *App) SetModelForTab(tabID, name string) error {
 	newCtrl.EnableInteractiveApproval()
 	applyTabModeToController(newCtrl, tab.mode)
 	applyTabToolApprovalModeToController(newCtrl, tab.toolApprovalMode)
-	newCtrl.SetGoal(tab.goal)
 
 	path := agent.ContinueSessionPath(prevPath, newCtrl.SessionDir(), newCtrl.Label())
 	if len(carried) > 0 {
@@ -6378,6 +6399,7 @@ func (a *App) SetModelForTab(tabID, name string) error {
 	} else if path != "" {
 		newCtrl.SetSessionPath(path)
 	}
+	applyPersistedTabGoalFallback(newCtrl, tab.goal)
 	a.persistTabSessionPath(tab, path)
 	return nil
 }
@@ -6467,13 +6489,13 @@ func (a *App) SetEffortForTab(tabID, level string) error {
 	newCtrl.EnableInteractiveApproval()
 	applyTabModeToController(newCtrl, tab.mode)
 	applyTabToolApprovalModeToController(newCtrl, tab.toolApprovalMode)
-	newCtrl.SetGoal(tab.goal)
 	path := agent.ContinueSessionPath(prevPath, newCtrl.SessionDir(), newCtrl.Label())
 	if len(carried) > 0 {
 		newCtrl.Resume(&agent.Session{Messages: carried}, path)
 	} else if path != "" {
 		newCtrl.SetSessionPath(path)
 	}
+	applyPersistedTabGoalFallback(newCtrl, tab.goal)
 	a.persistTabSessionPath(tab, path)
 	return nil
 }
@@ -6545,13 +6567,13 @@ func (a *App) SetTokenModeForTab(tabID, mode string) error {
 	newCtrl.EnableInteractiveApproval()
 	applyTabModeToController(newCtrl, tab.mode)
 	applyTabToolApprovalModeToController(newCtrl, tab.toolApprovalMode)
-	newCtrl.SetGoal(tab.goal)
 	path := agent.ContinueSessionPath(prevPath, newCtrl.SessionDir(), newCtrl.Label())
 	if len(carried) > 0 {
 		newCtrl.Resume(&agent.Session{Messages: carried}, path)
 	} else if path != "" {
 		newCtrl.SetSessionPath(path)
 	}
+	applyPersistedTabGoalFallback(newCtrl, tab.goal)
 	a.persistTabSessionPath(tab, path)
 	return nil
 }

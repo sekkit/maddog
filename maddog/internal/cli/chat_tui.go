@@ -3519,14 +3519,88 @@ func (m *chatTUI) runGoalSubcommand(input string) tea.Cmd {
 		m.notice(i18n.M.GoalCleared)
 	default:
 		m.echoLocalCommand(input)
-		goal := m.ctrl.Goal()
-		if strings.TrimSpace(goal) == "" {
+		goal := control.GoalSnapshot{}
+		if snapshotter, ok := m.ctrl.(control.GoalSnapshotter); ok {
+			goal = snapshotter.GoalSnapshot()
+		} else {
+			legacyGoal := strings.TrimSpace(m.ctrl.Goal())
+			goal.Objective = legacyGoal
+			goal.Goal = legacyGoal
+		}
+		if goal.Status == "" {
+			goal.Status = m.ctrl.GoalStatus()
+		}
+		if goal.Status == "" {
+			goal.Status = control.GoalStatusStopped
+		}
+		if strings.TrimSpace(goal.Objective) == "" && strings.TrimSpace(goal.Goal) == "" && goal.Status == control.GoalStatusStopped {
 			m.notice(i18n.M.GoalEmpty)
 		} else {
-			m.notice(fmt.Sprintf(i18n.M.GoalCurrentFmt, goal))
+			m.notice(formatGoalSnapshotNotice(goal))
 		}
 	}
 	return nil
+}
+
+func formatGoalSnapshotNotice(goal control.GoalSnapshot) string {
+	objective := strings.TrimSpace(goal.Objective)
+	if objective == "" {
+		objective = strings.TrimSpace(goal.Goal)
+	}
+	status := goal.Status
+	if status == "" {
+		status = control.GoalStatusStopped
+	}
+	parts := []string{
+		fmt.Sprintf("status=%s", status),
+	}
+	if goal.ID != "" {
+		parts = append(parts, "id="+goal.ID)
+	}
+	if goal.Generation > 0 {
+		parts = append(parts, fmt.Sprintf("generation=%d", goal.Generation))
+	}
+	if goal.Revision > 0 {
+		parts = append(parts, fmt.Sprintf("revision=%d", goal.Revision))
+	}
+	if goal.TurnBudget > 0 {
+		parts = append(parts, fmt.Sprintf("turns=%d/%d", goal.Turns, goal.TurnBudget))
+	} else {
+		parts = append(parts, fmt.Sprintf("turns=%d", goal.Turns))
+	}
+	if goal.TokenBudget > 0 || goal.TokensUsed > 0 {
+		parts = append(parts, fmt.Sprintf("tokens=%d/%d", goal.TokensUsed, goal.TokenBudget))
+	}
+	if goal.TimeBudgetSeconds > 0 || goal.TimeUsedSeconds > 0 {
+		parts = append(parts, fmt.Sprintf("time=%ds/%ds", goal.TimeUsedSeconds, goal.TimeBudgetSeconds))
+	}
+	parts = append(parts,
+		fmt.Sprintf("blocks=%d", goal.Blocks),
+		fmt.Sprintf("intercepts=%d", goal.Intercepts),
+	)
+	if len(goal.Todos) > 0 {
+		completed := 0
+		for _, todo := range goal.Todos {
+			if strings.EqualFold(strings.TrimSpace(todo.Status), "completed") {
+				completed++
+			}
+		}
+		parts = append(parts, fmt.Sprintf("todos=%d/%d", completed, len(goal.Todos)))
+	}
+	if reason := strings.TrimSpace(goal.Block); reason != "" {
+		parts = append(parts, "reason="+reason)
+	}
+	if lastError := strings.TrimSpace(goal.LastError); lastError != "" {
+		parts = append(parts, "error="+lastError)
+	}
+	if goal.Strict {
+		parts = append(parts, "strict")
+	}
+	summary := fmt.Sprintf("goal: %s · %s", objective, strings.Join(parts, " · "))
+	if snapshot, err := json.Marshal(goal); err == nil {
+		return summary + "\n" + string(snapshot)
+	}
+	return summary
 }
 
 // runCopyCommand copies the Nth-latest assistant message from the current turn

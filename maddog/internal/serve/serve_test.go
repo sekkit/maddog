@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -15,9 +16,11 @@ import (
 	"maddog/internal/agent"
 	"maddog/internal/config"
 	"maddog/internal/control"
+	"maddog/internal/event"
 	"maddog/internal/eventwire"
 	"maddog/internal/jobs"
 	"maddog/internal/provider"
+	"maddog/internal/store"
 )
 
 // fakeRunner stands in for an agent.Runner: it records the composed input and
@@ -113,6 +116,94 @@ func TestServeEndpoints(t *testing.T) {
 
 	if resp, _ := http.Post(srv.URL+"/submit", "application/json", strings.NewReader(`{}`)); resp.StatusCode != http.StatusBadRequest {
 		t.Errorf("empty submit should be 400, got %d", resp.StatusCode)
+	}
+}
+
+func TestServeStatusIncludesGoalSnapshotDetails(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "session.jsonl")
+	state := map[string]any{
+		"schemaVersion":     1,
+		"id":                "goal-1",
+		"objective":         "finish the migration",
+		"goal":              "finish the migration",
+		"status":            control.GoalStatusBlocked,
+		"mode":              control.GoalModeAutonomous,
+		"researchMode":      control.GoalResearchOn,
+		"strict":            true,
+		"turns":             7,
+		"blocks":            3,
+		"block":             "missing credentials",
+		"interceptMsg":      "complete the credential setup",
+		"intercepts":        2,
+		"selfCheckDone":     true,
+		"idleTurns":         1,
+		"turnBudget":        12,
+		"tokenBudget":       5000,
+		"tokensUsed":        1234,
+		"timeBudgetSeconds": 600,
+		"timeUsedSeconds":   45,
+		"lastError":         "provider interrupted",
+		"interruptedAt":     "2026-07-14T00:00:01Z",
+		"generation":        4,
+		"revision":          9,
+		"createdAt":         "2026-07-14T00:00:00Z",
+		"startedAt":         "2026-07-14T00:00:00Z",
+		"updatedAt":         "2026-07-14T00:01:00Z",
+		"terminalAt":        "2026-07-14T00:02:00Z",
+		"todos": []map[string]any{{
+			"content": "persist the migration", "status": "completed", "activeForm": "Persisting the migration", "level": 1,
+		}},
+	}
+	data, err := json.Marshal(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(store.SessionGoalState(path), data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ctrl := control.New(control.Options{SessionDir: dir, Sink: event.Discard})
+	ctrl.Resume(agent.NewSession("sys"), path)
+	defer ctrl.Close()
+	bc := NewBroadcaster()
+	srv := httptest.NewServer(New(ctrl, bc, config.ServeConfig{}).Handler())
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/status")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var got map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatal(err)
+	}
+	for key, want := range map[string]any{
+		"goal":           "finish the migration",
+		"goalObjective":  "finish the migration",
+		"goalStatus":     "blocked",
+		"goalReason":     "missing credentials",
+		"goalTurns":      float64(7),
+		"goalBlocks":     float64(3),
+		"goalIntercepts": float64(2),
+		"goalIdleTurns":  float64(1),
+		"goalStrict":     true,
+		"goalRevision":   float64(9),
+	} {
+		if got[key] != want {
+			t.Errorf("status[%q] = %#v, want %#v", key, got[key], want)
+		}
+	}
+	wantSnapshotData, err := json.Marshal(ctrl.GoalSnapshot())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wantSnapshot map[string]any
+	if err := json.Unmarshal(wantSnapshotData, &wantSnapshot); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got["goalSnapshot"], wantSnapshot) {
+		t.Errorf("status goalSnapshot = %#v, want %#v", got["goalSnapshot"], wantSnapshot)
 	}
 }
 

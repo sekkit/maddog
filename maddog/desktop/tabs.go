@@ -1094,33 +1094,42 @@ type wireEventTab struct {
 
 // TabMeta is the frontend-facing shape of one tab.
 type TabMeta struct {
-	ID                string `json:"id"`
-	Scope             string `json:"scope"`
-	WorkspaceRoot     string `json:"workspaceRoot"`
-	WorkspaceName     string `json:"workspaceName"`
-	WorkspacePath     string `json:"workspacePath,omitempty"`
-	GitBranch         string `json:"gitBranch,omitempty"`
-	TopicID           string `json:"topicId"`
-	TopicTitle        string `json:"topicTitle"`
-	SessionPath       string `json:"sessionPath,omitempty"`
-	ReadOnly          bool   `json:"readOnly,omitempty"`
-	ProjectColor      string `json:"projectColor,omitempty"`
-	Label             string `json:"label"`
-	Ready             bool   `json:"ready"`
-	Running           bool   `json:"running"`
-	PendingPrompt     bool   `json:"pendingPrompt,omitempty"`
-	BackgroundJobs    int    `json:"backgroundJobs,omitempty"`
-	CancelRequested   bool   `json:"cancelRequested,omitempty"`
-	Cancellable       bool   `json:"cancellable"`
-	Mode              string `json:"mode"`
-	CollaborationMode string `json:"collaborationMode"`
-	ToolApprovalMode  string `json:"toolApprovalMode"`
-	TokenMode         string `json:"tokenMode"`
-	Goal              string `json:"goal,omitempty"`
-	GoalStatus        string `json:"goalStatus,omitempty"`
-	StartupErr        string `json:"startupErr,omitempty"`
-	Active            bool   `json:"active"`
-	Cwd               string `json:"cwd"`
+	ID                string               `json:"id"`
+	Scope             string               `json:"scope"`
+	WorkspaceRoot     string               `json:"workspaceRoot"`
+	WorkspaceName     string               `json:"workspaceName"`
+	WorkspacePath     string               `json:"workspacePath,omitempty"`
+	GitBranch         string               `json:"gitBranch,omitempty"`
+	TopicID           string               `json:"topicId"`
+	TopicTitle        string               `json:"topicTitle"`
+	SessionPath       string               `json:"sessionPath,omitempty"`
+	ReadOnly          bool                 `json:"readOnly,omitempty"`
+	ProjectColor      string               `json:"projectColor,omitempty"`
+	Label             string               `json:"label"`
+	Ready             bool                 `json:"ready"`
+	Running           bool                 `json:"running"`
+	PendingPrompt     bool                 `json:"pendingPrompt,omitempty"`
+	BackgroundJobs    int                  `json:"backgroundJobs,omitempty"`
+	CancelRequested   bool                 `json:"cancelRequested,omitempty"`
+	Cancellable       bool                 `json:"cancellable"`
+	Mode              string               `json:"mode"`
+	CollaborationMode string               `json:"collaborationMode"`
+	ToolApprovalMode  string               `json:"toolApprovalMode"`
+	TokenMode         string               `json:"tokenMode"`
+	Goal              string               `json:"goal,omitempty"`
+	GoalObjective     string               `json:"goalObjective,omitempty"`
+	GoalStatus        string               `json:"goalStatus,omitempty"`
+	GoalReason        string               `json:"goalReason,omitempty"`
+	GoalTurns         int                  `json:"goalTurns,omitempty"`
+	GoalBlocks        int                  `json:"goalBlocks,omitempty"`
+	GoalIntercepts    int                  `json:"goalIntercepts,omitempty"`
+	GoalIdleTurns     int                  `json:"goalIdleTurns,omitempty"`
+	GoalStrict        bool                 `json:"goalStrict,omitempty"`
+	GoalRevision      uint64               `json:"goalRevision,omitempty"`
+	GoalSnapshot      control.GoalSnapshot `json:"goalSnapshot"`
+	StartupErr        string               `json:"startupErr,omitempty"`
+	Active            bool                 `json:"active"`
+	Cwd               string               `json:"cwd"`
 }
 
 func enrichTabMeta(meta TabMeta) TabMeta {
@@ -1140,6 +1149,7 @@ func enrichTabMetas(metas []TabMeta) []TabMeta {
 }
 
 func (a *App) tabMeta(tab *WorkspaceTab, active bool) TabMeta {
+	goal := currentTabGoalSnapshot(tab)
 	m := TabMeta{
 		ID:                tab.ID,
 		Scope:             tab.Scope,
@@ -1156,8 +1166,17 @@ func (a *App) tabMeta(tab *WorkspaceTab, active bool) TabMeta {
 		CollaborationMode: currentTabCollaborationMode(tab),
 		ToolApprovalMode:  currentTabToolApprovalMode(tab),
 		TokenMode:         currentTabTokenMode(tab),
-		Goal:              currentTabGoal(tab),
-		GoalStatus:        currentTabGoalStatus(tab),
+		Goal:              goal.Goal,
+		GoalObjective:     goal.Objective,
+		GoalStatus:        goal.Status,
+		GoalReason:        goal.Block,
+		GoalTurns:         goal.Turns,
+		GoalBlocks:        goal.Blocks,
+		GoalIntercepts:    goal.Intercepts,
+		GoalIdleTurns:     goal.IdleTurns,
+		GoalStrict:        goal.Strict,
+		GoalRevision:      goal.Revision,
+		GoalSnapshot:      goal,
 		StartupErr:        tab.StartupErr,
 		Active:            active,
 		Cwd:               tab.WorkspaceRoot,
@@ -2205,7 +2224,6 @@ func (a *App) buildTabControllerWithContext(tab *WorkspaceTab, loadedSession loa
 	ctrl.EnableInteractiveApproval()
 	applyTabModeToController(ctrl, tab.mode)
 	applyTabToolApprovalModeToController(ctrl, tab.toolApprovalMode)
-	ctrl.SetGoal(tab.goal)
 
 	if dir := ctrl.SessionDir(); dir != "" {
 		migratedTopics := migrateLegacySessionsIntoGlobalTopics(dir)
@@ -2270,6 +2288,10 @@ func (a *App) buildTabControllerWithContext(tab *WorkspaceTab, loadedSession loa
 			}
 		}
 	}
+	// A session sidecar is authoritative once it has been loaded. The persisted
+	// tab goal is only a compatibility fallback for old tab files that predate
+	// goal-state sidecars (or for a brand-new session).
+	applyPersistedTabGoalFallback(ctrl, tab.goal)
 
 	a.mu.Lock()
 	if tab.removed || a.tabs[tab.ID] != tab {
@@ -5105,26 +5127,65 @@ func currentTabMode(tab *WorkspaceTab) string {
 }
 
 func currentTabGoal(tab *WorkspaceTab) string {
+	return currentTabGoalSnapshot(tab).Goal
+}
+
+func currentTabGoalSnapshot(tab *WorkspaceTab) control.GoalSnapshot {
 	if tab == nil {
-		return ""
+		return control.GoalSnapshot{SchemaVersion: control.GoalSnapshotSchemaVersion, Status: control.GoalStatusStopped}
 	}
 	if tab.Ctrl != nil {
-		return tab.Ctrl.Goal()
+		if snapshotter, ok := tab.Ctrl.(control.GoalSnapshotter); ok {
+			snapshot := snapshotter.GoalSnapshot()
+			if snapshot.SchemaVersion == 0 {
+				snapshot.SchemaVersion = control.GoalSnapshotSchemaVersion
+			}
+			if snapshot.Status == "" {
+				snapshot.Status = tab.Ctrl.GoalStatus()
+			}
+			return snapshot
+		}
+		goal := strings.TrimSpace(tab.Ctrl.Goal())
+		status := tab.Ctrl.GoalStatus()
+		if status == "" {
+			status = control.GoalStatusStopped
+		}
+		return control.GoalSnapshot{SchemaVersion: control.GoalSnapshotSchemaVersion, Objective: goal, Goal: goal, Status: status}
 	}
-	return strings.TrimSpace(tab.goal)
+	if goal := strings.TrimSpace(tab.goal); goal != "" {
+		return control.GoalSnapshot{
+			SchemaVersion: control.GoalSnapshotSchemaVersion,
+			Objective:     goal,
+			Goal:          goal,
+			Status:        control.GoalStatusRunning,
+			Mode:          control.GoalModeAutonomous,
+		}
+	}
+	return control.GoalSnapshot{SchemaVersion: control.GoalSnapshotSchemaVersion, Status: control.GoalStatusStopped}
+}
+
+// applyPersistedTabGoalFallback restores the legacy tab-level goal only when
+// the controller has no goal state for the loaded session. A loaded sidecar,
+// including a terminal state, must win over desktop-tabs.json; otherwise a
+// stale tab entry can reactivate a completed or cancelled goal on cold start.
+func applyPersistedTabGoalFallback(ctrl control.SessionAPI, persisted string) {
+	if ctrl == nil || strings.TrimSpace(persisted) == "" {
+		return
+	}
+	if snapshotter, ok := ctrl.(control.GoalSnapshotter); ok {
+		snapshot := snapshotter.GoalSnapshot()
+		if snapshot.ID != "" || snapshot.Objective != "" || snapshot.Generation != 0 || snapshot.Revision != 0 {
+			return
+		}
+	}
+	if strings.TrimSpace(ctrl.Goal()) != "" || ctrl.GoalStatus() != control.GoalStatusStopped {
+		return
+	}
+	ctrl.SetGoal(persisted)
 }
 
 func currentTabGoalStatus(tab *WorkspaceTab) string {
-	if tab == nil {
-		return control.GoalStatusStopped
-	}
-	if tab.Ctrl != nil {
-		return tab.Ctrl.GoalStatus()
-	}
-	if strings.TrimSpace(tab.goal) != "" {
-		return control.GoalStatusRunning
-	}
-	return control.GoalStatusStopped
+	return currentTabGoalSnapshot(tab).Status
 }
 
 func currentTabCollaborationMode(tab *WorkspaceTab) string {
@@ -5134,7 +5195,8 @@ func currentTabCollaborationMode(tab *WorkspaceTab) string {
 	if tabModeHasPlan(currentTabMode(tab)) {
 		return "plan"
 	}
-	if strings.TrimSpace(currentTabGoal(tab)) != "" && currentTabGoalStatus(tab) == control.GoalStatusRunning {
+	goal := currentTabGoalSnapshot(tab)
+	if strings.TrimSpace(goal.Goal) != "" && goal.Status == control.GoalStatusRunning {
 		return "goal"
 	}
 	return "normal"

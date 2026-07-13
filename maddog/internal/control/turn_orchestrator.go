@@ -2,19 +2,19 @@ package control
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
+	"strings"
 
 	"maddog/internal/agent"
-	"maddog/internal/event"
-	"maddog/internal/evidence"
 	"maddog/internal/jobs"
+	"maddog/internal/provider"
 )
 
 // turnOrchestrator owns foreground turn execution while Controller keeps the
 // public ports, run-state guard, and session-scoped dependencies.
 type turnOrchestrator struct {
-	c *Controller
+	c        *Controller
+	goalTurn goalTurnObservation
 }
 
 type orchestratedTurn struct {
@@ -23,6 +23,27 @@ type orchestratedTurn struct {
 	display        string
 	editedOriginal string
 	synthetic      bool
+	headless       bool
+}
+
+// goalTurnObservation is scoped to one Runner.Run unit. Keeping this separate
+// from the whole transcript prevents a hook-blocked/no-op run from replaying an
+// older assistant marker, and lets idle detection see tools called before the
+// final assistant response.
+type goalTurnObservation struct {
+	assistantText string
+	hasAssistant  bool
+	toolCalled    bool
+	generation    uint64
+	wasRunning    bool
+	unitRan       bool
+}
+
+type goalTurnCursor struct {
+	messages   int
+	rewrite    int
+	generation uint64
+	wasRunning bool
 }
 
 func newTurnOrchestrator(c *Controller) *turnOrchestrator {
@@ -41,15 +62,26 @@ func (o *turnOrchestrator) runSyntheticTurnWithRawDisplay(ctx context.Context, i
 	return o.runOrchestratedTurn(ctx, orchestratedTurn{input: input, raw: raw, display: display, synthetic: true})
 }
 
+func (o *turnOrchestrator) runHeadlessTurn(ctx context.Context, input, raw string, synthetic bool) error {
+	return o.runOrchestratedTurn(ctx, orchestratedTurn{input: input, raw: raw, synthetic: synthetic, headless: true})
+}
+
 func (o *turnOrchestrator) runComposedSyntheticTurn(ctx context.Context, text string) error {
 	c := o.c
+	if !c.checkGoalBudget() {
+		return nil
+	}
+	c.beginGoalUsageRound()
+	defer c.endGoalUsageRound()
 	return c.runner.Run(agent.WithMemoryCompilerSkip(ctx), c.ComposeSynthetic(text))
 }
 
 func (o *turnOrchestrator) runOrchestratedTurn(ctx context.Context, turn orchestratedTurn) error {
 	c := o.c
+	o.goalTurn = goalTurnObservation{}
+	c.resetStructuredGoalSignal()
 	c.maybeSessionStart(ctx)
-	if !turn.synthetic {
+	if !turn.synthetic && !turn.headless {
 		c.maybeAutoPlan(ctx, turn.raw)
 	}
 	parentSession := c.parentSessionID()
@@ -65,14 +97,24 @@ func (o *turnOrchestrator) runOrchestratedTurn(ctx context.Context, turn orchest
 	// forever (#5342, #5329). Only genuine user turns supply a compiler source.
 	if turn.synthetic || IsSyntheticUserMessage(turn.raw) {
 		ctx = agent.WithMemoryCompilerSkip(ctx)
-	} else {
+	} else if !turn.headless {
 		ctx = agent.WithMemoryCompilerSourceInput(ctx, turn.raw)
 	}
 	input := c.Compose(turn.input)
 	if !turn.synthetic {
 		input = c.orchestrateSkills(ctx, input)
 	}
+	if !c.checkGoalBudget() {
+		return nil
+	}
 	startMessages := c.messageCount()
+	cursor := o.goalTurnCursor(startMessages)
+	ran := false
+	defer func() {
+		if ran {
+			o.goalTurn = o.observeGoalTurn(cursor)
+		}
+	}()
 	defer c.snapshotActivityIfChanged(startMessages)
 	defer c.recordDisplayForNewUser(startMessages, turn.display)
 	if turn.editedOriginal != "" {
@@ -83,7 +125,7 @@ func (o *turnOrchestrator) runOrchestratedTurn(ctx context.Context, turn orchest
 	// snapshots land here. Synthetic continuations stay attached to the visible
 	// turn that spawned them; otherwise hidden user-role messages would advance
 	// backend checkpoint turns without a matching frontend turn.
-	if !turn.synthetic {
+	if !turn.synthetic && !turn.headless {
 		c.beginCheckpoint(input)
 	}
 	if c.guardianSess != nil {
@@ -103,6 +145,9 @@ func (o *turnOrchestrator) runOrchestratedTurn(ctx context.Context, turn orchest
 		defer func() { c.hooks.Stop(context.Background(), lastAssistantText(c.History()), turn) }()
 	}
 	c.markInFlightTurn(startMessages, !turn.synthetic && !IsSyntheticUserMessage(turn.raw))
+	ran = true
+	c.beginGoalUsageRound()
+	defer c.endGoalUsageRound()
 	err := c.runner.Run(ctx, input)
 	if err == nil {
 		c.clearInFlightTurn()
@@ -122,6 +167,9 @@ func (o *turnOrchestrator) runOrchestratedTurn(ctx context.Context, turn orchest
 		}
 		c.clearInFlightTurn()
 		return err
+	}
+	if turn.headless {
+		return nil
 	}
 	c.mu.Lock()
 	plan := c.planMode
@@ -167,19 +215,86 @@ func (o *turnOrchestrator) runOrchestratedTurn(ctx context.Context, turn orchest
 	return nil
 }
 
+func (o *turnOrchestrator) goalTurnCursor(messages int) goalTurnCursor {
+	snapshot := o.c.GoalSnapshot()
+	cursor := goalTurnCursor{
+		messages:   messages,
+		generation: snapshot.Generation,
+		wasRunning: snapshot.Status == GoalStatusRunning,
+	}
+	if o.c.executor != nil && o.c.executor.Session() != nil {
+		cursor.rewrite = o.c.executor.Session().RewriteVersion()
+	}
+	return cursor
+}
+
+func (o *turnOrchestrator) observeGoalTurn(cursor goalTurnCursor) goalTurnObservation {
+	c := o.c
+	msgs := c.History()
+	start := cursor.messages
+	rewritten := false
+	if c.executor != nil && c.executor.Session() != nil {
+		rewritten = c.executor.Session().RewriteVersion() != cursor.rewrite
+	}
+	if start < 0 {
+		start = 0
+	}
+	if rewritten || start > len(msgs) {
+		// Agent compaction rewrites the prefix but retains the just-finished
+		// assistant in its recent tail. The per-run evidence ledger remains a
+		// precise source for tool activity across that rewrite.
+		start = 0
+	}
+
+	obs := goalTurnObservation{generation: cursor.generation, wasRunning: cursor.wasRunning, unitRan: true}
+	for _, msg := range msgs[start:] {
+		if msg.Role != provider.RoleAssistant {
+			continue
+		}
+		if !rewritten && len(msg.ToolCalls) > 0 {
+			obs.toolCalled = true
+		}
+		if strings.TrimSpace(msg.Content) != "" {
+			obs.assistantText = msg.Content
+			obs.hasAssistant = true
+		}
+	}
+	if rewritten && c.executor != nil {
+		for _, receipt := range c.executor.EvidenceReceipts() {
+			if receipt.ToolName != "" && receipt.ToolName != "goal_control" {
+				obs.toolCalled = true
+				break
+			}
+		}
+	}
+	return obs
+}
+
 func (o *turnOrchestrator) runGoalLoopWithRawDisplay(ctx context.Context, input, raw, display string) error {
 	defer o.c.cleanupGeneratedRuntimeSkills()
 	startMessages := o.c.messageCount()
 	if err := o.runTurnWithRawDisplay(ctx, input, raw, display); err != nil {
-		if ctx.Err() != nil {
-			o.c.stopGoal(GoalStatusStopped)
-		}
+		o.handleGoalTurnError(err)
 		return err
 	}
-	if err := o.continueGoal(ctx); err != nil {
+	if err := o.continueGoal(ctx, false); err != nil {
 		return err
 	}
 	o.c.captureReplayBundle(raw, startMessages)
+	return nil
+}
+
+func (o *turnOrchestrator) runHeadlessGoalLoop(ctx context.Context, input string) error {
+	defer o.c.cleanupGeneratedRuntimeSkills()
+	startMessages := o.c.messageCount()
+	if err := o.runHeadlessTurn(ctx, input, input, false); err != nil {
+		o.handleGoalTurnError(err)
+		return err
+	}
+	if err := o.continueGoal(ctx, true); err != nil {
+		return err
+	}
+	o.c.captureReplayBundle(input, startMessages)
 	return nil
 }
 
@@ -187,57 +302,91 @@ func (o *turnOrchestrator) runEditedGoalLoopWithRawDisplay(ctx context.Context, 
 	defer o.c.cleanupGeneratedRuntimeSkills()
 	startMessages := o.c.messageCount()
 	if err := o.runEditedTurnWithRawDisplay(ctx, input, raw, display, original); err != nil {
-		if ctx.Err() != nil {
-			o.c.stopGoal(GoalStatusStopped)
-		}
+		o.handleGoalTurnError(err)
 		return err
 	}
-	if err := o.continueGoal(ctx); err != nil {
+	if err := o.continueGoal(ctx, false); err != nil {
 		return err
 	}
 	o.c.captureReplayBundle(raw, startMessages)
 	return nil
 }
 
-func (o *turnOrchestrator) continueGoal(ctx context.Context) error {
+func (o *turnOrchestrator) continueGoal(ctx context.Context, headless bool) error {
 	c := o.c
 	for {
 		cont := o.advanceGoalAfterTurn()
 		if !cont {
+			// Usage is reported before the final assistant marker. A normal
+			// advance settles the budget itself; no-assistant and stale-marker
+			// units still need the post-unit gate.
+			c.checkGoalBudget()
 			return nil
 		}
 		if err := ctx.Err(); err != nil {
-			c.stopGoal(GoalStatusStopped)
+			o.handleGoalTurnError(err)
 			return err
 		}
 		turn := goalContinueTurn
 		if msg, ok := c.goals.takeIntercept(); ok {
 			turn = msg
-			c.notice("goal intercept: incomplete todos remain (override with a second [goal:complete])")
+			c.notice("goal intercept: incomplete todos or readiness checks remain")
 		}
-		if err := o.runSyntheticTurnWithRawDisplay(ctx, turn, turn, ""); err != nil {
-			if ctx.Err() != nil {
-				c.stopGoal(GoalStatusStopped)
-			}
+		var err error
+		if headless {
+			err = o.runHeadlessTurn(ctx, turn, turn, true)
+		} else {
+			err = o.runSyntheticTurnWithRawDisplay(ctx, turn, turn, "")
+		}
+		if err != nil {
+			o.handleGoalTurnError(err)
 			return err
 		}
 	}
 }
 
+func (o *turnOrchestrator) handleGoalTurnError(err error) {
+	if err == nil {
+		return
+	}
+	if o.c.CancelRequested() {
+		o.c.stopGoal(GoalStatusStopped)
+		return
+	}
+	o.c.interruptGoal(err)
+}
+
 func (o *turnOrchestrator) advanceGoalAfterTurn() bool {
 	c := o.c
+	snapshot := c.GoalSnapshot()
+	if c.consumeStructuredGoalSignal(snapshot.Generation) {
+		return snapshot.Status == GoalStatusRunning
+	}
+	generation := o.goalTurn.generation
+	createdDuringUnit := o.goalTurn.unitRan && !o.goalTurn.wasRunning &&
+		snapshot.Status == GoalStatusRunning && snapshot.Generation != generation
+	if createdDuringUnit {
+		if !o.goalTurn.hasAssistant {
+			return true
+		}
+		generation = snapshot.Generation
+	}
+	if !o.goalTurn.hasAssistant {
+		return false
+	}
 	// Gather every input the FSM needs off the goal lock: parse the marker,
 	// snapshot the executor's todos + readiness, and check tool activity. None
 	// of these touch goal state, so the machine's critical section stays pure.
-	status, reason, _ := parseGoalStatusMarker(lastAssistantText(c.History()))
+	status, reason, _ := parseGoalStatusMarker(o.goalTurn.assistantText)
 	var readiness string
 	if c.executor != nil {
 		readiness = c.executor.GoalReadinessFailure()
 	}
 	res := c.goals.advance(goalAdvanceInput{
+		generation: generation,
 		status:     status,
 		reason:     reason,
-		toolCalled: c.toolWasCalledLastTurn(),
+		toolCalled: o.goalTurn.toolCalled,
 		todos:      c.goalTodos(),
 		readiness:  readiness,
 	})
@@ -245,40 +394,8 @@ func (o *turnOrchestrator) advanceGoalAfterTurn() bool {
 	if res.notice != "" {
 		c.notice(res.notice)
 	}
-	if res.notice == goalCompleteNotice && c.executor != nil {
-		c.completeRemainingGoalTodos()
-	}
-	if res.cont && c.executor != nil {
+	if (res.cont || res.override) && c.executor != nil {
 		c.executor.RecordControlSignal(res.controlSignal)
 	}
 	return res.cont
-}
-
-// completeRemainingGoalTodos force-completes any remaining incomplete canonical
-// todos when the goal FSM transitions to completed and emits a synthetic
-// todo_write event so the frontend panel reflects the final state. Handles the
-// second [goal:complete] override (non-strict) where the model does not mark
-// each todo individually.
-func (c *Controller) completeRemainingGoalTodos() {
-	todos := c.executor.CanonicalTodoState()
-	if len(evidence.IncompleteTodos(todos)) == 0 {
-		return
-	}
-	for i := range todos {
-		todos[i].Status = "completed"
-	}
-	args, err := json.Marshal(map[string]any{"todos": todos})
-	if err != nil {
-		return
-	}
-	t := event.Tool{ID: "goal-final", Name: "todo_write", Args: string(args), ReadOnly: true}
-	c.sink.Emit(event.Event{Kind: event.ToolDispatch, Tool: t})
-	t.Output = "goal completed"
-	c.sink.Emit(event.Event{Kind: event.ToolResult, Tool: t})
-	c.executor.ReplaceTodoState(todos)
-	// Persist the completed todo state so a session reload does not revert
-	// to the old incomplete list — the synthetic todo_write events are not
-	// part of the session transcript and rebuildTodoState would otherwise
-	// reconstruct the stale pre-completion state.
-	c.goals.persistWithTodos(todos)
 }

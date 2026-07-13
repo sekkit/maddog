@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"encoding/json"
 	"io"
 	"os"
@@ -45,13 +46,22 @@ func captureStdout(t *testing.T, fn func()) string {
 	os.Stdout = w
 	defer func() { os.Stdout = old }()
 
+	var buf bytes.Buffer
+	readDone := make(chan error, 1)
+	go func() {
+		_, copyErr := io.Copy(&buf, r)
+		readDone <- copyErr
+	}()
+
 	fn()
 	if err := w.Close(); err != nil {
 		t.Fatal(err)
 	}
-	data, err := io.ReadAll(r)
-	if err != nil {
+	if err := <-readDone; err != nil {
 		t.Fatal(err)
 	}
-	return string(data)
+	if err := r.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return buf.String()
 }

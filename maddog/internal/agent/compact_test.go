@@ -3,12 +3,13 @@ package agent
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
-	"maddog/internal/event"
 	"strings"
 	"testing"
 
+	"maddog/internal/event"
 	"maddog/internal/provider"
 	"maddog/internal/tool"
 )
@@ -184,6 +185,73 @@ func TestCompactKeepsMidSessionUserTurns(t *testing.T) {
 	}
 	if strings.Contains(strings.Join(snapshotContents(sess), " "), big) {
 		t.Errorf("assistant/tool work was not folded")
+	}
+}
+
+func TestCompactDeduplicatesLongGoalContinuationHistory(t *testing.T) {
+	goalBlock := func(objective string) string {
+		return "<active-goal>\n" + objective + "\n\n" +
+			"Goal mode: pursue this goal autonomously. Keep working across turns until the goal is complete.\n" +
+			"</active-goal>"
+	}
+
+	const (
+		factOne = "ordinary user fact: keep this"
+		factTwo = "always use pnpm not npm"
+	)
+	work := strings.Repeat("assistant work detail ", 80)
+	msgs := []provider.Message{
+		{Role: provider.RoleSystem, Content: "sys"},
+		{Role: provider.RoleUser, Content: "initial task"},
+	}
+	for i := 1; i <= 20; i++ {
+		objective := fmt.Sprintf("goal objective %02d", i)
+		msgs = append(msgs,
+			provider.Message{
+				Role: provider.RoleUser,
+				Content: goalBlock(objective) + "\n\n" +
+					"Continue pursuing the active goal.",
+			},
+			provider.Message{Role: provider.RoleAssistant, Content: work},
+		)
+		if i == 6 {
+			msgs = append(msgs, provider.Message{Role: provider.RoleUser, Content: factOne})
+		}
+		if i == 14 {
+			msgs = append(msgs, provider.Message{Role: provider.RoleUser, Content: factTwo})
+		}
+	}
+	// Keep a normal final turn after the latest goal continuation so that the
+	// latest canonical block is in the folded region rather than the verbatim tail.
+	msgs = append(msgs,
+		provider.Message{Role: provider.RoleUser, Content: "latest user instruction: verify the migration"},
+		provider.Message{Role: provider.RoleAssistant, Content: "final answer"},
+	)
+	sess := &Session{Messages: msgs}
+	prov := &fakeProvider{reply: "condensed work"}
+	a := New(prov, tool.NewRegistry(), sess, Options{RecentKeep: 2, ArchiveDir: t.TempDir()}, event.Discard)
+
+	if err := a.compact(context.Background(), "manual", "", true); err != nil {
+		t.Fatalf("compact: %v", err)
+	}
+	if got := sess.RewriteVersion(); got != 1 {
+		t.Fatalf("rewrite version = %d, want 1", got)
+	}
+
+	allContents := strings.Join(snapshotContents(sess), "\n")
+	if got := strings.Count(allContents, activeGoalOpenTag); got != 1 {
+		t.Fatalf("active-goal blocks after compaction = %d, want exactly one latest block:\n%s", got, allContents)
+	}
+	if got := strings.Count(allContents, "Continue pursuing the active goal."); got > 1 {
+		t.Fatalf("synthetic goal continuations after compaction = %d, want at most one:\n%s", got, allContents)
+	}
+	if !strings.Contains(allContents, "goal objective 20") {
+		t.Fatalf("latest goal objective was lost after compaction:\n%s", allContents)
+	}
+	for _, fact := range []string{factOne, factTwo} {
+		if !strings.Contains(allContents, fact) {
+			t.Errorf("ordinary user fact %q was lost after compaction:\n%s", fact, allContents)
+		}
 	}
 }
 

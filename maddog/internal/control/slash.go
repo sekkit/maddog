@@ -93,6 +93,7 @@ func goalArgItems(prior []string) []SlashItem {
 		return nil
 	}
 	return []SlashItem{
+		{Label: "--strict", Insert: "--strict ", Hint: "require completed todos and final self-check"},
 		{Label: "--research", Insert: "--research ", Hint: "force durable AutoResearch state"},
 		{Label: "--simple", Insert: "--simple ", Hint: "force lightweight Goal"},
 		{Label: "status", Insert: "status", Hint: "show active goal"},

@@ -19,6 +19,7 @@ import type {
   CollaborationMode,
   ContextInfo,
   EffortInfo,
+  GoalSnapshot,
   HistoryMessage,
   HistoryPage,
   JobView,
@@ -190,6 +191,12 @@ function updatesContextGauge(usage?: WireUsage): boolean {
   return !source || source === "executor";
 }
 
+function sameGoalSnapshot(a?: GoalSnapshot, b?: GoalSnapshot): boolean {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+
 export function metaFromTab(tab: TabMeta, existing?: Meta): Meta {
   const cwd = tab.cwd || tab.workspaceRoot || existing?.cwd || "";
   const toolApprovalMode = normalizeToolApprovalMode(
@@ -216,7 +223,16 @@ export function metaFromTab(tab: TabMeta, existing?: Meta): Meta {
     toolApprovalMode,
     tokenMode: tab.tokenMode ?? existing?.tokenMode ?? "full",
     goal: tab.goal ?? existing?.goal,
+    goalObjective: tab.goalObjective ?? existing?.goalObjective,
     goalStatus: tab.goalStatus ?? existing?.goalStatus,
+    goalReason: tab.goalReason ?? existing?.goalReason,
+    goalTurns: tab.goalTurns ?? existing?.goalTurns,
+    goalBlocks: tab.goalBlocks ?? existing?.goalBlocks,
+    goalIntercepts: tab.goalIntercepts ?? existing?.goalIntercepts,
+    goalIdleTurns: tab.goalIdleTurns ?? existing?.goalIdleTurns,
+    goalStrict: tab.goalStrict ?? existing?.goalStrict,
+    goalRevision: tab.goalRevision ?? existing?.goalRevision,
+    goalSnapshot: tab.goalSnapshot ?? existing?.goalSnapshot,
   };
 }
 
@@ -241,7 +257,16 @@ export function sameMeta(a?: Meta, b?: Meta): boolean {
     a.toolApprovalMode === b.toolApprovalMode &&
     a.tokenMode === b.tokenMode &&
     a.goal === b.goal &&
-    a.goalStatus === b.goalStatus
+    a.goalObjective === b.goalObjective &&
+    a.goalStatus === b.goalStatus &&
+    a.goalReason === b.goalReason &&
+    a.goalTurns === b.goalTurns &&
+    a.goalBlocks === b.goalBlocks &&
+    a.goalIntercepts === b.goalIntercepts &&
+    a.goalIdleTurns === b.goalIdleTurns &&
+    a.goalStrict === b.goalStrict &&
+    a.goalRevision === b.goalRevision &&
+    sameGoalSnapshot(a.goalSnapshot, b.goalSnapshot)
   );
 }
 

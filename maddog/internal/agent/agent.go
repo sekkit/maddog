@@ -229,6 +229,13 @@ type Agent struct {
 	// run loop writes it while a frontend's status line reads it, so it is atomic.
 	lastUsage atomic.Pointer[provider.Usage]
 
+	// usageObserver receives one copy of each valid provider-round usage record
+	// after the corresponding Usage event is ready to be emitted. The mutex
+	// keeps setter calls safe while a run is in progress; callbacks run outside
+	// the lock so an observer may replace itself or call back into the agent.
+	usageObserverMu sync.RWMutex
+	usageObserver   func(provider.Usage)
+
 	// sessCacheHit/sessCacheMiss accumulate cache tokens across every API call
 	// this session, so frontends can show the aggregate hit-rate (Σhit/Σ(hit+miss))
 	// — a steadier, cost-oriented number than the single-turn rate. They are NOT
@@ -639,6 +646,48 @@ func (a *Agent) rawToolResultPath(toolID string) string {
 // gauge alongside the prompt; the actual cache decisions still live inside
 // maybeCompact.
 func (a *Agent) LastUsage() *provider.Usage { return a.lastUsage.Load() }
+
+// SetUsageObserver installs a callback for billable provider-round usage.
+// Passing nil clears the callback. The callback receives a deep copy of the
+// provider record and is isolated from the agent if it panics.
+func (a *Agent) SetUsageObserver(observer func(provider.Usage)) {
+	if a == nil {
+		return
+	}
+	a.usageObserverMu.Lock()
+	a.usageObserver = observer
+	a.usageObserverMu.Unlock()
+}
+
+func validProviderUsage(usage *provider.Usage) bool {
+	return usage != nil && (usage.TotalTokens > 0 || usage.PromptTokens > 0 || usage.CompletionTokens > 0)
+}
+
+func cloneProviderUsage(usage *provider.Usage) provider.Usage {
+	if usage == nil {
+		return provider.Usage{}
+	}
+	return *usage
+}
+
+func (a *Agent) notifyUsageObserver(usage *provider.Usage) {
+	if a == nil || !validProviderUsage(usage) {
+		return
+	}
+	a.usageObserverMu.RLock()
+	observer := a.usageObserver
+	a.usageObserverMu.RUnlock()
+	if observer == nil {
+		return
+	}
+	copy := cloneProviderUsage(usage)
+	func() {
+		defer func() {
+			_ = recover()
+		}()
+		observer(copy)
+	}()
+}
 
 // SessionCache returns the cumulative cache hit/miss prompt tokens across every
 // API call this session — the basis for the status line's aggregate hit-rate.
@@ -1066,7 +1115,8 @@ func (a *Agent) Run(ctx context.Context, input string) (runErr error) {
 		cacheDiagnostics := CompareShape(prevPrefixShape, prefixShape, usage)
 		a.lastPrefixShape = prefixShape
 		a.haveLastPrefixShape = true
-		if usage != nil && usage.TotalTokens > 0 {
+		if validProviderUsage(usage) {
+			a.notifyUsageObserver(usage)
 			pricing := a.pricing
 			profile := a.currentUsageProfile()
 			if a.onFrontier {

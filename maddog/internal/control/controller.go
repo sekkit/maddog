@@ -171,6 +171,12 @@ type Controller struct {
 
 	runtimeSkillMu    sync.Mutex
 	runtimeSkillNames []string
+	goalUsageMu          sync.Mutex
+	goalUsageRoundOpen   bool
+	goalUsageActive      bool
+	goalUsageGeneration  uint64
+	goalSignalMu         sync.Mutex
+	structuredGoalSignal uint64
 }
 
 type approvalReply struct {
@@ -377,6 +383,9 @@ func New(opts Options) *Controller {
 	}
 	cmds := append([]command.Command(nil), opts.Commands...)
 	c.commands.Store(&cmds)
+	// Durable session state is replaced as a unit; a target without a sidecar
+	// starts from a zero goal rather than inheriting another session's FSM.
+	c.goals.bindStatePath(goalStatePath(opts.SessionPath), true, false)
 	// Checkpoints: bind a store to the session and route writer pre-edits into it.
 	c.rebindCheckpoints(opts.SessionPath)
 	c.setActiveJobSession(opts.SessionPath)
@@ -388,6 +397,12 @@ func New(opts Options) *Controller {
 			c.checkpoints.snapshot(ch)
 		})
 		c.executor.SetMemoryQueue(c)
+		c.executor.SetUsageObserver(c.recordGoalUsage)
+	}
+	if registry := c.ToolRegistry(); registry != nil {
+		// Register the host-authoritative goal API in the same per-session registry
+		// used by the executor. Marker parsing remains the compatibility fallback.
+		registry.Add(newGoalControlTool(c))
 	}
 	return c
 }
@@ -475,8 +490,11 @@ func ckptDir(sessionPath string) string {
 // checkpoints already on disk, and resets the turn boundaries. Called on
 // construction and whenever the session path changes (NewSession/Resume/SetSessionPath).
 func (c *Controller) rebindCheckpoints(sessionPath string) {
-	c.goals.setStatePath(goalStatePath(sessionPath))
 	c.checkpoints.rebind(ckptDir(sessionPath), c.workspaceRoot)
+}
+
+func (c *Controller) bindGoalState(sessionPath string, load, adopt bool) bool {
+	return c.goals.bindStatePath(goalStatePath(sessionPath), load, adopt)
 }
 
 // beginCheckpoint opens a checkpoint for the turn about to run, recording the
@@ -1373,35 +1391,7 @@ func (c *Controller) cleanupGeneratedRuntimeSkills() {
 // headless `maddog run` path, where the Sink renders to stdout and the caller
 // just needs the exit status — no TurnDone event, no cancel bookkeeping.
 func (c *Controller) Run(ctx context.Context, input string) error {
-	rawInput := input
-	c.maybeSessionStart(ctx)
-	parentSession := c.parentSessionID()
-	ctx = agent.WithParentSession(ctx, parentSession)
-	ctx = jobs.WithSession(ctx, parentSession)
-	ctx = agent.WithUserImages(ctx, c.inputImages(input))
-	input = c.withImageFallback(ctx, input)
-	input = c.Compose(input)
-	input = c.orchestrateSkills(ctx, input)
-	defer c.cleanupGeneratedRuntimeSkills()
-	startMessages := c.messageCount()
-	defer c.snapshotActivityIfChanged(startMessages)
-	if c.guardianSess != nil {
-		c.guardianSess.ResetTurn()
-	}
-	if c.hooks.Enabled() {
-		c.turn++
-		if block, _ := c.hooks.PromptSubmit(ctx, input, c.turn); block {
-			return nil
-		}
-		defer func() { c.hooks.Stop(context.Background(), lastAssistantText(c.History()), c.turn) }()
-	}
-	c.markInFlightTurn(startMessages, true)
-	defer c.clearInFlightTurn()
-	if err := c.runner.Run(ctx, input); err != nil {
-		return err
-	}
-	c.captureReplayBundle(rawInput, startMessages)
-	return nil
+	return newTurnOrchestrator(c).runHeadlessGoalLoop(ctx, input)
 }
 
 func (c *Controller) captureReplayBundle(task string, startMessages int) {
@@ -1846,11 +1836,20 @@ func (c *Controller) GoalStrict(strict bool) {
 // user turns, not the system prompt or tool schema, so it does not disturb the
 // cache-stable prefix.
 func (c *Controller) SetGoal(goal string) {
-	c.SetGoalWithResearchMode(goal, GoalResearchAuto)
+	path, data, ok := c.goals.set(goal, GoalResearchAuto, c.goalTodos())
+	c.persistGoalState(path, data, ok)
 }
 
 func (c *Controller) SetGoalWithResearchMode(goal string, researchMode GoalResearchMode) {
 	path, data, ok := c.goals.set(goal, researchMode, c.goalTodos())
+	c.persistGoalState(path, data, ok)
+}
+
+// SetGoalWithOptions installs a goal with durable turn, token, and elapsed-time
+// budgets. Non-positive turn budgets use the legacy 50-turn limit; zero token
+// and time budgets are unlimited.
+func (c *Controller) SetGoalWithOptions(goal string, options GoalOptions) {
+	path, data, ok := c.goals.setWithOptions(goal, options, c.goalTodos())
 	c.persistGoalState(path, data, ok)
 }
 
@@ -1864,6 +1863,124 @@ func (c *Controller) Goal() string {
 
 func (c *Controller) GoalStatus() string {
 	return c.goals.statusForDisplay()
+}
+
+// GoalSnapshot returns a deep copy of the current session's durable goal state.
+// It includes terminal identity and counters that the legacy Goal/GoalStatus
+// accessors intentionally omit.
+func (c *Controller) GoalSnapshot() GoalSnapshot {
+	return c.goals.durableSnapshot()
+}
+
+func (c *Controller) recordGoalUsage(usage provider.Usage) {
+	var tokens int64
+	if usage.TotalTokens > 0 {
+		tokens = int64(usage.TotalTokens)
+	} else {
+		if usage.PromptTokens > 0 {
+			tokens += int64(usage.PromptTokens)
+		}
+		if usage.CompletionTokens > 0 {
+			tokens += int64(usage.CompletionTokens)
+		}
+	}
+	c.goalUsageMu.Lock()
+	roundOpen := c.goalUsageRoundOpen
+	active := c.goalUsageActive
+	generation := c.goalUsageGeneration
+	c.goalUsageMu.Unlock()
+	if roundOpen && !active {
+		return
+	}
+	result := c.goals.recordUsageForGeneration(tokens, time.Now().UTC(), generation, roundOpen && active)
+	c.persistGoalState(result.path, result.data, result.ok)
+	if result.notice != "" {
+		c.notice(result.notice)
+	}
+}
+
+func (c *Controller) beginGoalUsageRound() {
+	snapshot := c.GoalSnapshot()
+	c.goalUsageMu.Lock()
+	c.goalUsageRoundOpen = true
+	c.goalUsageActive = snapshot.Status == GoalStatusRunning && snapshot.Generation != 0
+	c.goalUsageGeneration = snapshot.Generation
+	c.goalUsageMu.Unlock()
+}
+
+func (c *Controller) activateGoalUsageRound(generation uint64) {
+	if generation == 0 {
+		return
+	}
+	c.goalUsageMu.Lock()
+	if c.goalUsageRoundOpen {
+		c.goalUsageActive = true
+		c.goalUsageGeneration = generation
+	}
+	c.goalUsageMu.Unlock()
+}
+
+func (c *Controller) endGoalUsageRound() {
+	c.goalUsageMu.Lock()
+	c.goalUsageRoundOpen = false
+	c.goalUsageActive = false
+	c.goalUsageGeneration = 0
+	c.goalUsageMu.Unlock()
+}
+
+func (c *Controller) resetStructuredGoalSignal() {
+	c.goalSignalMu.Lock()
+	c.structuredGoalSignal = 0
+	c.goalSignalMu.Unlock()
+}
+
+func (c *Controller) claimStructuredGoalSignal(generation uint64) bool {
+	c.goalUsageMu.Lock()
+	roundOpen := c.goalUsageRoundOpen
+	c.goalUsageMu.Unlock()
+	if !roundOpen {
+		return true
+	}
+	c.goalSignalMu.Lock()
+	defer c.goalSignalMu.Unlock()
+	if c.structuredGoalSignal != 0 {
+		return false
+	}
+	c.structuredGoalSignal = generation
+	return true
+}
+
+func (c *Controller) releaseStructuredGoalSignal(generation uint64) {
+	c.goalSignalMu.Lock()
+	if c.structuredGoalSignal == generation {
+		c.structuredGoalSignal = 0
+	}
+	c.goalSignalMu.Unlock()
+}
+
+func (c *Controller) consumeStructuredGoalSignal(generation uint64) bool {
+	c.goalSignalMu.Lock()
+	recorded := c.structuredGoalSignal
+	c.structuredGoalSignal = 0
+	c.goalSignalMu.Unlock()
+	return recorded != 0 && recorded == generation
+}
+
+func (c *Controller) checkGoalBudget() bool {
+	result := c.goals.checkBudget(time.Now().UTC())
+	c.persistGoalState(result.path, result.data, result.ok)
+	if result.notice != "" {
+		c.notice(result.notice)
+	}
+	return result.allowed
+}
+
+func (c *Controller) interruptGoal(err error) {
+	if err == nil {
+		return
+	}
+	path, data, ok := c.goals.interrupt(err.Error(), time.Now().UTC(), c.goalTodos())
+	c.persistGoalState(path, data, ok)
 }
 
 // Compact runs one compaction pass on the executor's session on demand.
@@ -1896,6 +2013,12 @@ func (c *Controller) NewSession() error {
 	if c.executor == nil {
 		return nil
 	}
+	c.mu.Lock()
+	running := c.running
+	c.mu.Unlock()
+	if running {
+		return fmt.Errorf("cannot start a new session while a turn is running")
+	}
 	if err := c.Snapshot(); err != nil {
 		return err
 	}
@@ -1913,6 +2036,7 @@ func (c *Controller) NewSession() error {
 		c.guardianSess.Reset()
 	}
 	c.ResetPlannerSession()
+	c.bindGoalState(c.SessionPath(), false, false)
 	c.rebindCheckpoints(c.SessionPath())
 	c.mu.Lock()
 	c.startedOnce = true // NewSession fires SessionStart itself; don't re-fire on the next turn
@@ -1962,6 +2086,7 @@ func (c *Controller) ClearSession() error {
 		c.guardianSess.Reset()
 	}
 	c.ResetPlannerSession()
+	c.bindGoalState(c.SessionPath(), false, false)
 	c.rebindCheckpoints(c.SessionPath())
 	c.mu.Lock()
 	c.startedOnce = true
@@ -1999,7 +2124,7 @@ func removeSessionArtifacts(path string) error {
 	if err := jobs.RemoveArtifacts(path); err != nil {
 		return err
 	}
-	for _, p := range []string{path, agent.BranchMetaPath(path), guardian.PathFor(path), guardian.CursorPathFor(path)} {
+	for _, p := range []string{path, agent.BranchMetaPath(path), guardian.PathFor(path), guardian.CursorPathFor(path), store.SessionGoalState(path)} {
 		if p == "" {
 			continue
 		}
@@ -2181,6 +2306,7 @@ func (c *Controller) forkNamed(turn int, name string, switchToFork bool) (string
 		c.guardianPath = guardian.PathFor(newPath)
 		c.mu.Unlock()
 		c.setActiveJobSession(newPath)
+		c.bindGoalState(newPath, false, false)
 		c.rebindCheckpoints(newPath)
 		if c.guardianSess != nil {
 			c.guardianSess.Reset()
@@ -2253,6 +2379,7 @@ func (c *Controller) Branch(name string) (string, error) {
 	c.guardianPath = guardian.PathFor(newPath)
 	c.mu.Unlock()
 	c.setActiveJobSession(newPath)
+	c.bindGoalState(newPath, false, false)
 	c.rebindCheckpoints(newPath)
 	if c.guardianSess != nil {
 		c.guardianSess.Reset()
@@ -2308,6 +2435,7 @@ func (c *Controller) SwitchBranch(ref string) (agent.BranchInfo, error) {
 	c.guardianPath = guardian.PathFor(match.Path)
 	c.mu.Unlock()
 	c.setActiveJobSession(match.Path)
+	c.bindGoalState(match.Path, true, false)
 	c.rebindCheckpoints(match.Path)
 	c.restoreTerminalGoalTodos(match.Path)
 	c.loadGuardianSession()
@@ -2407,6 +2535,7 @@ func (c *Controller) Resume(s *agent.Session, path string) {
 	c.mu.Unlock()
 	c.setActiveJobSession(path)
 	c.bindRawToolResultDir(path)
+	c.bindGoalState(path, true, false)
 	c.rebindCheckpoints(path)
 	c.restoreTerminalGoalTodos(path)
 	c.loadGuardianSession()
@@ -2700,6 +2829,7 @@ func (c *Controller) SetSessionPath(p string) {
 	c.mu.Unlock()
 	c.setActiveJobSession(p)
 	c.bindRawToolResultDir(p)
+	c.bindGoalState(p, true, true)
 	c.rebindCheckpoints(p)
 }
 

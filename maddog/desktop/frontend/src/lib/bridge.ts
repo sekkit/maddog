@@ -10,6 +10,7 @@
 import type * as GeneratedApp from "../../wailsjs/go/main/App";
 
 import { addBreadcrumb } from "./breadcrumbs";
+import { goalCommandDisplay } from "./goalCommand";
 import { t } from "./i18n";
 import { normalizeStatusBarItems } from "./statusBarItems";
 import { modeHasAutoApproveTools, modeWithAutoApproveTools, modeWithPlan, normalizeCollaborationMode, normalizeMode, normalizeTokenMode, normalizeToolApprovalMode } from "./types";
@@ -34,6 +35,7 @@ import type {
   DroppedItem,
   EffortInfo,
   FilePreview,
+  GoalSnapshot,
   HistoryMessage,
   HistoryPage,
   HookConfigView,
@@ -77,16 +79,6 @@ import type {
 } from "./types";
 
 const GLOBAL_PROJECT_ORDER_KEY = "__global__";
-
-function stripGoalResearchFlags(arg: string): string {
-  const parts = arg.trim().split(/\s+/).filter(Boolean);
-  while (parts.length > 0) {
-    const flag = parts[0].toLowerCase();
-    if (flag !== "--research" && flag !== "--auto-research" && flag !== "--deep" && flag !== "--simple" && flag !== "--no-research") break;
-    parts.shift();
-  }
-  return parts.join(" ");
-}
 
 // AppBindings is derived from the Wails-generated Go → TS method signatures, so
 // the compiler catches drift between the Go binding surface and the frontend mock.
@@ -1536,6 +1528,24 @@ function makeMockApp(): AppBindings {
       cwd: "~/projects/joyquant-db",
     },
   ];
+  const goalSnapshotForMockTab = (tab?: TabMeta): GoalSnapshot => {
+    const snapshot = tab?.goalSnapshot;
+    return {
+      schemaVersion: snapshot?.schemaVersion ?? 1,
+      ...snapshot,
+      objective: tab?.goalObjective ?? snapshot?.objective ?? tab?.goal ?? "",
+      goal: tab?.goal ?? snapshot?.goal ?? "",
+      status: tab?.goalStatus ?? snapshot?.status ?? (tab?.goal ? "running" : "stopped"),
+      block: tab?.goalReason ?? snapshot?.block ?? "",
+      turns: tab?.goalTurns ?? snapshot?.turns ?? 0,
+      blocks: tab?.goalBlocks ?? snapshot?.blocks ?? 0,
+      intercepts: tab?.goalIntercepts ?? snapshot?.intercepts ?? 0,
+      idleTurns: tab?.goalIdleTurns ?? snapshot?.idleTurns ?? 0,
+      strict: tab?.goalStrict ?? snapshot?.strict ?? false,
+      revision: tab?.goalRevision ?? snapshot?.revision ?? 0,
+    };
+  };
+  const mockTabMeta = (tab: TabMeta): TabMeta => ({ ...tab, goalSnapshot: goalSnapshotForMockTab(tab) });
   const mockModelCatalog = [
     { ref: "deepseek/deepseek-v4-flash", provider: "deepseek", model: "deepseek-v4-flash" },
     { ref: "deepseek/deepseek-v4-pro", provider: "deepseek", model: "deepseek-v4-pro" },
@@ -1581,7 +1591,7 @@ function makeMockApp(): AppBindings {
       const trimmedInput = input.trim().toLowerCase();
       const goalMatch = /^\/goal(?:\s+([\s\S]*))?$/.exec(input.trim());
       if (goalMatch) {
-        const arg = stripGoalResearchFlags((goalMatch[1] ?? "").trim());
+        const arg = goalCommandDisplay((goalMatch[1] ?? "").trim()).objective;
         const lowered = arg.toLowerCase();
         const active = mockTabs.find((tab) => tab.active);
         if (!arg || lowered === "status") {
@@ -1590,18 +1600,45 @@ function makeMockApp(): AppBindings {
           return;
         }
         if (["clear", "off", "stop", "done"].includes(lowered)) {
-          mockTabs = mockTabs.map((tab) => (tab.active ? { ...tab, goal: "", goalStatus: "stopped", collaborationMode: "normal" } : tab));
+          mockTabs = mockTabs.map((tab) => (tab.active ? {
+            ...tab,
+            goal: "",
+            goalObjective: tab.goalObjective || tab.goal || "",
+            goalStatus: "stopped",
+            goalReason: "",
+            goalTurns: 0,
+            goalBlocks: 0,
+            goalIntercepts: 0,
+            goalIdleTurns: 0,
+            collaborationMode: "normal",
+          } : tab));
           emit({ kind: "notice", level: "info", text: "goal cleared" });
           emitMockTurnDone();
           return;
         }
-        mockTabs = mockTabs.map((tab) => (tab.active ? { ...tab, goal: arg, goalStatus: "running", collaborationMode: "goal" } : tab));
+        mockTabs = mockTabs.map((tab) => (tab.active ? {
+          ...tab,
+          goal: arg,
+          goalObjective: arg,
+          goalStatus: "running",
+          goalReason: "",
+          goalTurns: 0,
+          goalBlocks: 0,
+          goalIntercepts: 0,
+          goalIdleTurns: 0,
+          collaborationMode: "goal",
+        } : tab));
         emit({ kind: "notice", level: "info", text: `goal set: ${arg}` });
         await delay(350);
         if (cancelled) return;
         const reply = `Autonomous goal run started for: **${arg}**\n\nMock run completed.\n\n[goal:complete]`;
         emit({ kind: "message", text: reply });
-        mockTabs = mockTabs.map((tab) => (tab.active ? { ...tab, goal: "", goalStatus: "complete", collaborationMode: "normal" } : tab));
+        mockTabs = mockTabs.map((tab) => (tab.active ? {
+          ...tab,
+          goal: "",
+          goalStatus: "complete",
+          collaborationMode: "normal",
+        } : tab));
         emit({ kind: "notice", level: "info", text: "goal complete" });
         emitMockTurnDone();
         return;
@@ -1919,7 +1956,13 @@ function makeMockApp(): AppBindings {
               ? {
                   ...tab,
                   goal: nextGoal,
+                  goalObjective: nextGoal || tab.goalObjective || "",
                   goalStatus: nextGoal ? "running" : "stopped",
+                  goalReason: "",
+                  goalTurns: 0,
+                  goalBlocks: 0,
+                  goalIntercepts: 0,
+                  goalIdleTurns: 0,
                   collaborationMode: nextGoal ? "goal" : "normal",
                   mode: modeWithPlan(normalizeMode(tab.mode), false),
                 }
@@ -2139,8 +2182,17 @@ function makeMockApp(): AppBindings {
             collaborationMode,
             toolApprovalMode,
             tokenMode: normalizeTokenMode(active?.tokenMode),
-            goal: active?.goal ?? "",
-            goalStatus: active?.goalStatus ?? (active?.goal ? "running" : "stopped"),
+             goal: active?.goal ?? "",
+             goalObjective: active?.goalObjective ?? active?.goal ?? "",
+             goalStatus: active?.goalStatus ?? (active?.goal ? "running" : "stopped"),
+             goalReason: active?.goalReason ?? "",
+             goalTurns: active?.goalTurns ?? 0,
+             goalBlocks: active?.goalBlocks ?? 0,
+             goalIntercepts: active?.goalIntercepts ?? 0,
+             goalIdleTurns: active?.goalIdleTurns ?? 0,
+             goalStrict: active?.goalStrict ?? false,
+             goalRevision: active?.goalRevision ?? 0,
+             goalSnapshot: goalSnapshotForMockTab(active),
           };
         },
         async MetaForTab(tabID) {
@@ -2165,7 +2217,16 @@ function makeMockApp(): AppBindings {
             toolApprovalMode,
             tokenMode: normalizeTokenMode(tab?.tokenMode),
             goal: tab?.goal ?? "",
+            goalObjective: tab?.goalObjective ?? tab?.goal ?? "",
             goalStatus: tab?.goalStatus ?? (tab?.goal ? "running" : "stopped"),
+            goalReason: tab?.goalReason ?? "",
+            goalTurns: tab?.goalTurns ?? 0,
+            goalBlocks: tab?.goalBlocks ?? 0,
+            goalIntercepts: tab?.goalIntercepts ?? 0,
+            goalIdleTurns: tab?.goalIdleTurns ?? 0,
+            goalStrict: tab?.goalStrict ?? false,
+            goalRevision: tab?.goalRevision ?? 0,
+            goalSnapshot: goalSnapshotForMockTab(tab),
           };
         },
     async Commands() {
@@ -3133,14 +3194,14 @@ function makeMockApp(): AppBindings {
     },
     // Tab management mocks.
     async ListTabs() {
-      return mockTabs.map((tab) => ({ ...tab }));
+      return mockTabs.map(mockTabMeta);
     },
     async OpenProjectTab(workspaceRoot: string, _topicID: string) {
       const existing = mockTabs.find((tab) => tab.scope === "project" && tab.workspaceRoot === workspaceRoot && tab.topicId === _topicID);
       if (existing) {
         const active = { ...existing, active: true, running: mockTopicRunsInScenario(_topicID) };
         mockTabs = mockTabs.map((tab) => (tab.id === existing.id ? active : { ...tab, active: false }));
-        return { ...active };
+        return mockTabMeta(active);
       }
       const defaultToolApprovalMode = normalizeToolApprovalMode(settings.defaultToolApprovalMode);
       const tab: TabMeta = {
@@ -3165,13 +3226,13 @@ function makeMockApp(): AppBindings {
         cwd: workspaceRoot,
       };
       mockTabs = [...mockTabs.map((item) => ({ ...item, active: false })), tab];
-      return { ...tab };
+      return mockTabMeta(tab);
     },
     async OpenGlobalTab(_topicID: string) {
       const existing = mockTabs.find((tab) => tab.scope === "global" && tab.topicId === _topicID);
       if (existing) {
         setMockActiveTab(existing.id);
-        return { ...existing, active: true };
+        return mockTabMeta({ ...existing, active: true });
       }
       const defaultToolApprovalMode = normalizeToolApprovalMode(settings.defaultToolApprovalMode);
       const tab: TabMeta = {
@@ -3194,7 +3255,7 @@ function makeMockApp(): AppBindings {
         cwd: "",
       };
       mockTabs = [...mockTabs.map((item) => ({ ...item, active: false })), tab];
-      return { ...tab };
+      return mockTabMeta(tab);
     },
     async OpenTopicSession(scope: string, workspaceRoot: string, topicID: string, sessionPath: string) {
       const tab = scope === "project"
@@ -3202,7 +3263,7 @@ function makeMockApp(): AppBindings {
         : await this.OpenGlobalTab(topicID);
       const active = { ...tab, sessionPath };
       mockTabs = mockTabs.map((item) => (item.id === tab.id ? active : item));
-      return { ...active };
+      return mockTabMeta(active);
     },
     async EnsureBlankTab(scope: string, workspaceRoot: string) {
       const targetScope = scope === "project" && workspaceRoot ? "project" : "global";
@@ -3215,7 +3276,7 @@ function makeMockApp(): AppBindings {
       );
       if (existing) {
         setMockActiveTab(existing.id);
-        return { ...existing, active: true };
+        return mockTabMeta({ ...existing, active: true });
       }
       const topic = await this.CreateTopic(targetScope, targetRoot, "");
       return targetScope === "global" ? this.OpenGlobalTab(topic.id) : this.OpenProjectTab(targetRoot, topic.id);
@@ -3227,12 +3288,12 @@ function makeMockApp(): AppBindings {
           ? await this.OpenProjectTab(workspaceRoot, topicID)
           : await this.OpenGlobalTab(topicID);
       mockTabs = mockTabs.filter((item) => item.id === tab.id).map((item) => ({ ...item, active: true }));
-      return { ...mockTabs[0] };
+      return mockTabMeta(mockTabs[0]);
     },
     async EnsureBlankSurface(scope: string, workspaceRoot: string) {
       const tab = await this.EnsureBlankTab(scope, workspaceRoot);
       mockTabs = mockTabs.filter((item) => item.id === tab.id).map((item) => ({ ...item, active: true }));
-      return { ...mockTabs[0] };
+      return mockTabMeta(mockTabs[0]);
     },
     async SetActiveTab(_tabID: string) {
       setMockActiveTab(_tabID);

@@ -14,6 +14,7 @@
 | `delete_symbol` | false | 用 Go AST 删除 Go 源文件中的命名符号。 |
 | `edit_file` | false | 将文件中的唯一精确字符串替换为另一个字符串。 |
 | `glob` | true | 查找匹配 glob pattern 的文件。 |
+| `goal_control` | false | 检查并显式管理当前 autonomous goal；用 `get` 读取 durable 状态；仅在用户明确要求且当前无运行目标时用 `create`；`update complete` 必须先通过 host readiness 检查；同一 blocker 连续三个 goal turn 都存在时才能用 `update blocked` 进入终态；仅在用户明确要求停止时用 `clear`。 |
 | `grep` | true | 在文件或目录下按正则搜索文本。 |
 | `kill_shell` | false | 终止后台 `bash` 或 `task` job。 |
 | `ls` | true | 列出目录条目，可递归。 |

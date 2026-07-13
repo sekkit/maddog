@@ -2,13 +2,17 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
+	"maddog/internal/agent"
 	"maddog/internal/boot"
 	"maddog/internal/control"
+	"maddog/internal/store"
 )
 
 func testTab(id, root string) *WorkspaceTab {
@@ -313,6 +317,53 @@ func TestSaveTabsPersistsGoalAndToolApprovalMode(t *testing.T) {
 	}
 }
 
+func TestApplyPersistedTabGoalFallbackRestoresLegacyGoal(t *testing.T) {
+	ctrl := control.New(control.Options{Label: "test"})
+	defer ctrl.Close()
+
+	applyPersistedTabGoalFallback(ctrl, "finish the migration")
+
+	if got := ctrl.Goal(); got != "finish the migration" {
+		t.Fatalf("goal = %q, want legacy persisted goal", got)
+	}
+	if got := ctrl.GoalStatus(); got != control.GoalStatusRunning {
+		t.Fatalf("goal status = %q, want running", got)
+	}
+}
+
+func TestApplyPersistedTabGoalFallbackPreservesTerminalSessionState(t *testing.T) {
+	ctrl := control.New(control.Options{Label: "test"})
+	defer ctrl.Close()
+	ctrl.SetGoal("canonical session goal")
+	ctrl.Cancel()
+
+	applyPersistedTabGoalFallback(ctrl, "stale tab goal")
+
+	if got := ctrl.Goal(); got != "canonical session goal" {
+		t.Fatalf("goal = %q, want terminal session goal", got)
+	}
+	if got := ctrl.GoalStatus(); got != control.GoalStatusStopped {
+		t.Fatalf("goal status = %q, want stopped", got)
+	}
+}
+
+func TestApplyPersistedTabGoalFallbackPreservesExplicitlyClearedSessionState(t *testing.T) {
+	ctrl := control.New(control.Options{Label: "test"})
+	defer ctrl.Close()
+	ctrl.SetGoal("canonical session goal")
+	ctrl.ClearGoal()
+
+	applyPersistedTabGoalFallback(ctrl, "stale tab goal")
+
+	if got := ctrl.Goal(); got != "" {
+		t.Fatalf("goal = %q, want explicitly cleared goal to remain empty", got)
+	}
+	snapshot := ctrl.GoalSnapshot()
+	if snapshot.Status != control.GoalStatusStopped || snapshot.Objective != "canonical session goal" {
+		t.Fatalf("cleared durable state was replaced: %+v", snapshot)
+	}
+}
+
 func TestCollaborationModesPreserveToolApprovalMode(t *testing.T) {
 	isolateDesktopUserDirs(t)
 
@@ -429,6 +480,78 @@ func TestMetaReportsGoalStatus(t *testing.T) {
 	meta = app.MetaForTab(tab.ID)
 	if meta.CollaborationMode != "plan" || meta.TokenMode != boot.TokenModeEconomy {
 		t.Fatalf("profile meta = %+v, want plan + economy", meta)
+	}
+}
+
+func TestMetaReportsDurableGoalSnapshotDetails(t *testing.T) {
+	isolateDesktopUserDirs(t)
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "session.jsonl")
+	state := map[string]any{
+		"schemaVersion":     1,
+		"id":                "goal-1",
+		"objective":         "finish the migration",
+		"goal":              "finish the migration",
+		"status":            control.GoalStatusBlocked,
+		"mode":              control.GoalModeAutonomous,
+		"researchMode":      control.GoalResearchOn,
+		"strict":            true,
+		"turns":             7,
+		"blocks":            3,
+		"block":             "missing credentials",
+		"interceptMsg":      "complete the credential setup",
+		"intercepts":        2,
+		"selfCheckDone":     true,
+		"idleTurns":         1,
+		"turnBudget":        12,
+		"tokenBudget":       5000,
+		"tokensUsed":        1234,
+		"timeBudgetSeconds": 600,
+		"timeUsedSeconds":   45,
+		"lastError":         "provider interrupted",
+		"interruptedAt":     "2026-07-14T00:00:01Z",
+		"generation":        4,
+		"revision":          9,
+		"createdAt":         "2026-07-14T00:00:00Z",
+		"startedAt":         "2026-07-14T00:00:00Z",
+		"updatedAt":         "2026-07-14T00:01:00Z",
+		"terminalAt":        "2026-07-14T00:02:00Z",
+		"todos": []map[string]any{{
+			"content": "persist the migration", "status": "completed", "activeForm": "Persisting the migration", "level": 1,
+		}},
+	}
+	data, err := json.Marshal(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(store.SessionGoalState(path), data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	ctrl := control.New(control.Options{Label: "a", SessionDir: dir})
+	ctrl.Resume(agent.NewSession("sys"), path)
+	defer ctrl.Close()
+	tab := &WorkspaceTab{ID: "a", Scope: "project", WorkspaceRoot: dir, Ready: true, Ctrl: ctrl}
+	app := NewApp()
+	app.tabs = map[string]*WorkspaceTab{tab.ID: tab}
+	app.tabOrder = []string{tab.ID}
+	app.activeTabID = tab.ID
+
+	meta := app.MetaForTab(tab.ID)
+	if meta.Goal != "finish the migration" || meta.GoalObjective != "finish the migration" || meta.GoalStatus != control.GoalStatusBlocked {
+		t.Fatalf("goal identity/status = %+v", meta)
+	}
+	if meta.GoalReason != "missing credentials" || meta.GoalTurns != 7 || meta.GoalBlocks != 3 || meta.GoalIntercepts != 2 || meta.GoalIdleTurns != 1 || !meta.GoalStrict || meta.GoalRevision != 9 {
+		t.Fatalf("goal details = %+v", meta)
+	}
+	wantSnapshot := ctrl.GoalSnapshot()
+	if !reflect.DeepEqual(meta.GoalSnapshot, wantSnapshot) {
+		t.Fatalf("meta goal snapshot = %#v, want %#v", meta.GoalSnapshot, wantSnapshot)
+	}
+	tabMeta := app.tabMeta(tab, true)
+	if !reflect.DeepEqual(tabMeta.GoalSnapshot, wantSnapshot) {
+		t.Fatalf("tab goal snapshot = %#v, want %#v", tabMeta.GoalSnapshot, wantSnapshot)
 	}
 }
 

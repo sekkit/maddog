@@ -102,6 +102,10 @@ func (s *heartbeatExecuteTaskCtrlStub) Goal() string {
 	return ""
 }
 
+func (s *heartbeatExecuteTaskCtrlStub) GoalStatus() string {
+	return control.GoalStatusStopped
+}
+
 func (s *heartbeatExecuteTaskCtrlStub) ToolApprovalMode() string {
 	return s.approvalMode
 }

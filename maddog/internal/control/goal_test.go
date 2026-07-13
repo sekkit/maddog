@@ -54,8 +54,9 @@ func TestGoalCommandAutoContinuesUntilComplete(t *testing.T) {
 func TestGoalAdvanceHealthyContinuationDoesNotEmitAcceptanceSignal(t *testing.T) {
 	var g goalMachine
 	g.set("ship it", GoalResearchAuto, nil)
+	generation := g.durableSnapshot().Generation
 
-	res := g.advance(goalAdvanceInput{status: GoalStatusRunning, toolCalled: true})
+	res := g.advance(goalAdvanceInput{generation: generation, status: GoalStatusRunning, toolCalled: true})
 
 	if !res.cont {
 		t.Fatal("healthy continuation should keep goal loop running")
@@ -68,13 +69,15 @@ func TestGoalAdvanceHealthyContinuationDoesNotEmitAcceptanceSignal(t *testing.T)
 func TestGoalAdvanceInterceptSignalCountsInterceptsNotTotalTurns(t *testing.T) {
 	var g goalMachine
 	g.set("ship it", GoalResearchAuto, nil)
-	if res := g.advance(goalAdvanceInput{status: GoalStatusRunning, toolCalled: true}); !res.cont {
+	generation := g.durableSnapshot().Generation
+	if res := g.advance(goalAdvanceInput{generation: generation, status: GoalStatusRunning, toolCalled: true}); !res.cont {
 		t.Fatal("setup continuation should keep goal loop running")
 	}
 
 	res := g.advance(goalAdvanceInput{
-		status: GoalStatusComplete,
-		todos:  []evidence.TodoItem{{Content: "Verify", Status: "pending"}},
+		generation: generation,
+		status:     GoalStatusComplete,
+		todos:      []evidence.TodoItem{{Content: "Verify", Status: "pending"}},
 	})
 
 	if res.controlSignal.GoalAcceptanceLoop != 1 {
@@ -88,11 +91,12 @@ func TestGoalAdvanceInterceptSignalCountsInterceptsNotTotalTurns(t *testing.T) {
 func TestGoalAdvanceBlockedSignalCountsRepeatedBlockedReasons(t *testing.T) {
 	var g goalMachine
 	g.set("ship it", GoalResearchAuto, nil)
-	if res := g.advance(goalAdvanceInput{status: GoalStatusRunning, toolCalled: true}); !res.cont {
+	generation := g.durableSnapshot().Generation
+	if res := g.advance(goalAdvanceInput{generation: generation, status: GoalStatusRunning, toolCalled: true}); !res.cont {
 		t.Fatal("setup continuation should keep goal loop running")
 	}
 
-	res := g.advance(goalAdvanceInput{status: GoalStatusBlocked, reason: "needs credentials"})
+	res := g.advance(goalAdvanceInput{generation: generation, status: GoalStatusBlocked, reason: "needs credentials"})
 
 	if res.controlSignal.GoalAcceptanceLoop != 1 {
 		t.Fatalf("blocked signal loops = %d, want first repeated-block audit count 1", res.controlSignal.GoalAcceptanceLoop)
@@ -100,6 +104,37 @@ func TestGoalAdvanceBlockedSignalCountsRepeatedBlockedReasons(t *testing.T) {
 	if !res.controlSignal.DifficultDecision || !strings.Contains(res.controlSignal.DecisionSummary, "needs credentials") {
 		t.Fatalf("blocked signal = %+v, want difficult decision with blocker reason", res.controlSignal)
 	}
+}
+
+func TestGoalAdvanceResetsCompletionAndBlockedCountersAcrossStatuses(t *testing.T) {
+	incomplete := []evidence.TodoItem{{Content: "Verify", Status: "pending"}}
+
+	t.Run("blocked resets completion override audit", func(t *testing.T) {
+		var g goalMachine
+		g.set("ship it", GoalResearchAuto, nil)
+		generation := g.durableSnapshot().Generation
+		first := g.advance(goalAdvanceInput{generation: generation, status: GoalStatusComplete, todos: incomplete})
+		if first.override || first.controlSignal.GoalAcceptanceLoop != 1 {
+			t.Fatalf("first completion = %+v, want one intercept", first)
+		}
+		g.advance(goalAdvanceInput{generation: generation, status: GoalStatusBlocked, reason: "needs access"})
+		afterBlocked := g.advance(goalAdvanceInput{generation: generation, status: GoalStatusComplete, todos: incomplete})
+		if afterBlocked.override || afterBlocked.controlSignal.GoalAcceptanceLoop != 1 {
+			t.Fatalf("completion after blocked = %+v, want a fresh first intercept", afterBlocked)
+		}
+	})
+
+	t.Run("completion resets repeated blocker audit", func(t *testing.T) {
+		var g goalMachine
+		g.set("ship it", GoalResearchAuto, nil)
+		generation := g.durableSnapshot().Generation
+		g.advance(goalAdvanceInput{generation: generation, status: GoalStatusBlocked, reason: "needs access"})
+		g.advance(goalAdvanceInput{generation: generation, status: GoalStatusComplete, todos: incomplete})
+		afterComplete := g.advance(goalAdvanceInput{generation: generation, status: GoalStatusBlocked, reason: "needs access"})
+		if afterComplete.controlSignal.GoalAcceptanceLoop != 1 {
+			t.Fatalf("blocked after completion loops = %d, want fresh count 1", afterComplete.controlSignal.GoalAcceptanceLoop)
+		}
+	})
 }
 
 func TestGoalModeSkipsAutoPlanApproval(t *testing.T) {
@@ -445,14 +480,14 @@ func TestGoalInterceptsCompleteWithIncompleteTodos(t *testing.T) {
 	}
 }
 
-// TestGoalOverrideCompletesRemainingTodos verifies that when the goal
-// completes via the second [goal:complete] override (non-strict mode), any
-// remaining incomplete canonical todos are force-completed and a synthetic
-// todo_write event is emitted so the frontend panel reflects the final state.
-func TestGoalOverrideCompletesRemainingTodos(t *testing.T) {
+// TestGoalOverrideKeepsTodosAndRecordsControlSignal verifies the backwards-
+// compatible second [goal:complete] override. The override is explicit and
+// auditable, but it must not fabricate todo completion evidence.
+func TestGoalOverrideKeepsTodosAndRecordsControlSignal(t *testing.T) {
 	prov := &scriptedTurns{turns: [][]provider.Chunk{
 		textTurn("All done.\n\n[goal:complete]"),
 		textTurn("All done.\n\n[goal:complete]"),
+		textTurn("Follow-up recorded."),
 	}}
 	ag := agent.New(prov, tool.NewRegistry(), agent.NewSession(""), agent.Options{}, event.Discard)
 	ag.SeedTodoState([]evidence.TodoItem{
@@ -460,16 +495,12 @@ func TestGoalOverrideCompletesRemainingTodos(t *testing.T) {
 		{Content: "Step 2", Status: "pending"},
 	})
 
-	var tools []event.Event
 	done := make(chan event.Event, 1)
 	c := New(Options{
 		Runner:   ag,
 		Executor: ag,
 		Sink: event.FuncSink(func(e event.Event) {
-			switch e.Kind {
-			case event.ToolDispatch, event.ToolResult:
-				tools = append(tools, e)
-			case event.TurnDone:
+			if e.Kind == event.TurnDone {
 				done <- e
 			}
 		}),
@@ -482,107 +513,25 @@ func TestGoalOverrideCompletesRemainingTodos(t *testing.T) {
 		t.Fatalf("GoalStatus() = %q, want complete", c.GoalStatus())
 	}
 
-	// All todos in the executor must be force-completed.
-	for _, td := range c.executor.CanonicalTodoState() {
-		if td.Status != "completed" {
-			t.Fatalf("canonical todo %q = %s, want completed after goal override", td.Content, td.Status)
-		}
+	gotTodos := c.executor.CanonicalTodoState()
+	if len(gotTodos) != 2 || gotTodos[0].Status != "in_progress" || gotTodos[1].Status != "pending" {
+		t.Fatalf("override must not fabricate todo completion: %+v", gotTodos)
 	}
 
-	// Must have emitted a synthetic todo_write (ToolDispatch + ToolResult)
-	// from completeRemainingGoalTodos.
-	hasSynthetic := false
-	for _, e := range tools {
-		if e.Tool.ID == "goal-final" && e.Tool.Name == "todo_write" {
-			hasSynthetic = true
+	// The signal is queued for the next run so it enters the normal evidence
+	// ledger instead of being silently lost at the terminal transition.
+	c.Submit("follow up")
+	waitForTurnDone(t, done)
+	var audited bool
+	for _, receipt := range ag.EvidenceReceipts() {
+		if receipt.ToolName == "goal_control" && strings.Contains(receipt.DecisionSummary, "override") {
+			audited = true
 			break
 		}
 	}
-	if !hasSynthetic {
-		t.Fatal("expected synthetic todo_write event (ID=goal-final) after goal override completion")
+	if !audited {
+		t.Fatalf("goal override was not recorded in the next-run evidence ledger: %+v", ag.EvidenceReceipts())
 	}
-}
-
-// TestCompleteRemainingGoalTodosEdgeCases verifies that the helper is a no-op
-// when there are no incomplete todos or no todos at all.
-func TestCompleteRemainingGoalTodosEdgeCases(t *testing.T) {
-	t.Run("empty todo list does nothing", func(t *testing.T) {
-		ag := agent.New(nil, nil, agent.NewSession(""), agent.Options{}, event.Discard)
-		c := New(Options{Executor: ag, Sink: event.Discard})
-		c.completeRemainingGoalTodos()
-		if len(ag.CanonicalTodoState()) != 0 {
-			t.Fatal("expected no changes to empty todo list")
-		}
-	})
-
-	t.Run("all completed does nothing", func(t *testing.T) {
-		ag := agent.New(nil, nil, agent.NewSession(""), agent.Options{}, event.Discard)
-		ag.SeedTodoState([]evidence.TodoItem{
-			{Content: "A", Status: "completed"},
-			{Content: "B", Status: "completed"},
-		})
-		var events []event.Event
-		c := New(Options{
-			Executor: ag,
-			Sink: event.FuncSink(func(e event.Event) {
-				events = append(events, e)
-			}),
-		})
-		c.completeRemainingGoalTodos()
-		if len(events) > 0 {
-			t.Fatalf("expected no events when all todos already completed, got %d", len(events))
-		}
-	})
-
-	t.Run("force-completes mixed todos", func(t *testing.T) {
-		ag := agent.New(nil, nil, agent.NewSession(""), agent.Options{}, event.Discard)
-		ag.SeedTodoState([]evidence.TodoItem{
-			{Content: "A", Status: "completed"},
-			{Content: "B", Status: "in_progress"},
-			{Content: "C", Status: "pending"},
-		})
-		var captured []event.Event
-		c := New(Options{
-			Executor: ag,
-			Sink: event.FuncSink(func(e event.Event) {
-				if e.Kind == event.ToolDispatch || e.Kind == event.ToolResult {
-					captured = append(captured, e)
-				}
-			}),
-		})
-		c.completeRemainingGoalTodos()
-		// All must be completed.
-		for _, td := range ag.CanonicalTodoState() {
-			if td.Status != "completed" {
-				t.Fatalf("todo %q = %s, want completed", td.Content, td.Status)
-			}
-		}
-		// Must include a ToolDispatch+ToolResult for the synthetic todo_write.
-		if len(captured) != 2 {
-			t.Fatalf("expected 2 synthetic events (dispatch+result), got %d", len(captured))
-		}
-		if captured[0].Kind != event.ToolDispatch || captured[0].Tool.Name != "todo_write" {
-			t.Fatalf("first event should be ToolDispatch for todo_write, got %+v", captured[0].Kind)
-		}
-		if captured[1].Kind != event.ToolResult || captured[1].Tool.Name != "todo_write" {
-			t.Fatalf("second event should be ToolResult for todo_write, got %+v", captured[1].Kind)
-		}
-	})
-
-	t.Run("empty-string status treated as incomplete", func(t *testing.T) {
-		ag := agent.New(nil, nil, agent.NewSession(""), agent.Options{}, event.Discard)
-		ag.SeedTodoState([]evidence.TodoItem{
-			{Content: "A", Status: ""},
-			{Content: "B", Status: "completed"},
-		})
-		c := New(Options{Executor: ag, Sink: event.Discard})
-		c.completeRemainingGoalTodos()
-		for _, td := range ag.CanonicalTodoState() {
-			if td.Status != "completed" {
-				t.Fatalf("empty-string todo %q should be force-completed, got %q", td.Content, td.Status)
-			}
-		}
-	})
 }
 
 // TestStrictGoalBlocksRepeatedComplete verifies that in strict mode, every

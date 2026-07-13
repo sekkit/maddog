@@ -850,6 +850,26 @@ func (s *Server) branches(w http.ResponseWriter, _ *http.Request) {
 func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 	used, window := s.ctl().ContextSnapshot()
 	hit, miss := s.ctl().SessionCache()
+	ctrl := s.ctl()
+	goal := control.GoalSnapshot{SchemaVersion: control.GoalSnapshotSchemaVersion}
+	if snapshotter, ok := ctrl.(control.GoalSnapshotter); ok {
+		goal = snapshotter.GoalSnapshot()
+	} else {
+		legacyGoal := strings.TrimSpace(ctrl.Goal())
+		goal.Objective = legacyGoal
+		goal.Goal = legacyGoal
+	}
+	goalStatus := goal.Status
+	if goalStatus == "" {
+		goalStatus = ctrl.GoalStatus()
+	}
+	if goalStatus == "" {
+		goalStatus = control.GoalStatusStopped
+	}
+	if goal.SchemaVersion == 0 {
+		goal.SchemaVersion = control.GoalSnapshotSchemaVersion
+	}
+	goal.Status = goalStatus
 	sess := map[string]any{
 		"label":            s.ctl().Label(),
 		"running":          s.ctl().Running(),
@@ -857,8 +877,17 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 		"autoApproveTools": s.ctl().AutoApproveTools(),
 		"bypass":           s.ctl().AutoApproveTools(),
 		"toolApprovalMode": s.ctl().ToolApprovalMode(),
-		"goal":             s.ctl().Goal(),
-		"goalStatus":       s.ctl().GoalStatus(),
+		"goal":             goal.Goal,
+		"goalObjective":    goal.Objective,
+		"goalStatus":       goalStatus,
+		"goalReason":       goal.Block,
+		"goalTurns":        goal.Turns,
+		"goalBlocks":       goal.Blocks,
+		"goalIntercepts":   goal.Intercepts,
+		"goalIdleTurns":    goal.IdleTurns,
+		"goalStrict":       goal.Strict,
+		"goalRevision":     goal.Revision,
+		"goalSnapshot":     goal,
 		"cwd":              s.ctl().SessionDir(),
 		"used":             used,
 		"window":           window,

@@ -210,11 +210,12 @@ func (a *Agent) compact(ctx context.Context, trigger, instructions string, force
 		return nil // recent tail already covers everything worth keeping
 	}
 	region := msgs[head:start]
+	latestGoalMessage := latestCanonicalActiveGoalMessage(msgs)
 
 	// Base layer: every small user turn in the region is kept verbatim (the
 	// deterministic floor — a fact the user stated is never summarized away,
 	// wherever in the session they said it); only the rest folds into the digest.
-	kept, fold := a.partitionFold(region)
+	kept, fold := a.partitionFoldAt(region, head, latestGoalMessage)
 	if len(fold) == 0 {
 		return nil // nothing but kept user turns — a fold would save nothing
 	}
@@ -261,6 +262,10 @@ func (a *Agent) compact(ctx context.Context, trigger, instructions string, force
 		a.sink.Emit(event.Event{Kind: event.Notice, Level: event.LevelWarn, Text: "compaction summary unavailable (" + err.Error() + "); folded mechanically"})
 		summary = mechanicalFoldDigest(len(fold), archived)
 	}
+	// The active-goal block is a controller protocol, not user-authored history.
+	// Do not let the summarizer reproduce twenty copies of it into the next
+	// prompt; the one canonical block retained below carries the live contract.
+	summary = stripCanonicalActiveGoalBlocks(summary)
 
 	compacted := make([]provider.Message, 0, head+len(kept)+1+len(msgs)-start)
 	compacted = append(compacted, msgs[:head]...)
@@ -273,6 +278,7 @@ func (a *Agent) compact(ctx context.Context, trigger, instructions string, force
 			summaryTagClose,
 	})
 	compacted = append(compacted, msgs[start:]...)
+	compacted = normalizeGoalProtocolMessages(compacted)
 	a.session.Replace(compacted)
 	a.session.IncrementRewrite()
 
@@ -399,15 +405,155 @@ func (a *Agent) pinnableUserTurn(m provider.Message) bool {
 // later fold never re-summarizes an earlier digest and drops the facts it already
 // captured) — and the rest, which folds. Order within each group is preserved.
 func (a *Agent) partitionFold(region []provider.Message) (kept, fold []provider.Message) {
+	return a.partitionFoldAt(region, 0, -1)
+}
+
+// partitionFoldAt is the compaction partition with the global message index of
+// the newest active-goal block. Synthetic goal turns are foldable even when they
+// are short; the newest canonical block is the one exception so the live goal
+// contract remains available after the rewrite.
+func (a *Agent) partitionFoldAt(region []provider.Message, globalOffset, latestGoalMessage int) (kept, fold []provider.Message) {
 	policyKeep := keepIndexes(region, a.keepPolicy)
 	for i, m := range region {
-		if policyKeep[i] || isCompactionSummary(m) || (m.Role == provider.RoleUser && a.pinnableUserTurn(m)) {
+		globalIndex := globalOffset + i
+		keepGoal := latestGoalMessage >= 0 && globalIndex == latestGoalMessage
+		syntheticGoal := isSyntheticGoalContinuation(m.Content)
+		if keepGoal || policyKeep[i] || isCompactionSummary(m) ||
+			(m.Role == provider.RoleUser && a.pinnableUserTurn(m) && !syntheticGoal) {
 			kept = append(kept, m)
 		} else {
 			fold = append(fold, m)
 		}
 	}
 	return kept, fold
+}
+
+const (
+	activeGoalOpenTag  = "<active-goal>"
+	activeGoalCloseTag = "</active-goal>"
+)
+
+type activeGoalRange struct {
+	start int
+	end   int
+}
+
+// canonicalActiveGoalRanges finds controller-generated goal blocks. Requiring
+// the invariant instruction line avoids rewriting a user merely quoting an XML
+// example that happens to use the same tag.
+func canonicalActiveGoalRanges(content string) []activeGoalRange {
+	var ranges []activeGoalRange
+	for search := 0; search < len(content); {
+		start := strings.Index(content[search:], activeGoalOpenTag)
+		if start < 0 {
+			break
+		}
+		start += search
+		closeRel := strings.Index(content[start+len(activeGoalOpenTag):], activeGoalCloseTag)
+		if closeRel < 0 {
+			break
+		}
+		end := start + len(activeGoalOpenTag) + closeRel + len(activeGoalCloseTag)
+		block := content[start:end]
+		if strings.Contains(block, "Goal mode: pursue this goal autonomously.") {
+			ranges = append(ranges, activeGoalRange{start: start, end: end})
+		}
+		search = end
+	}
+	return ranges
+}
+
+func latestCanonicalActiveGoalMessage(msgs []provider.Message) int {
+	latest := -1
+	for i, msg := range msgs {
+		if msg.Role == provider.RoleUser && len(canonicalActiveGoalRanges(msg.Content)) > 0 {
+			latest = i
+		}
+	}
+	return latest
+}
+
+func removeActiveGoalRanges(content string, keep *activeGoalRange) string {
+	ranges := canonicalActiveGoalRanges(content)
+	if len(ranges) == 0 {
+		return content
+	}
+	var b strings.Builder
+	cursor := 0
+	for _, r := range ranges {
+		b.WriteString(content[cursor:r.start])
+		if keep != nil && r == *keep {
+			b.WriteString(content[r.start:r.end])
+		}
+		cursor = r.end
+	}
+	b.WriteString(content[cursor:])
+	return strings.TrimSpace(b.String())
+}
+
+func stripCanonicalActiveGoalBlocks(content string) string {
+	return removeActiveGoalRanges(content, nil)
+}
+
+// isSyntheticGoalContinuation identifies host-generated user turns that carry
+// no independent user intent. It deliberately uses stable prefixes instead of
+// importing control (which would create a package cycle).
+func isSyntheticGoalContinuation(content string) bool {
+	s := stripCanonicalActiveGoalBlocks(content)
+	s = StripTransientUserBlocks(s)
+	s = strings.TrimSpace(s)
+	for _, prefix := range []string{
+		"Start pursuing the active goal now.",
+		"Continue pursuing the active goal.",
+		"The agent signaled goal completion and all tasks are marked done.",
+		"Goal signaled complete but issues remain:",
+		"No tool calls in recent turns.",
+	} {
+		if strings.HasPrefix(s, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+// normalizeGoalProtocolMessages strips stale goal protocol from retained tail
+// messages and removes old synthetic continuation turns. Real user messages are
+// kept verbatim apart from the transient controller block itself.
+func normalizeGoalProtocolMessages(msgs []provider.Message) []provider.Message {
+	latest := latestCanonicalActiveGoalMessage(msgs)
+	hasSynthetic := false
+	for _, msg := range msgs {
+		if msg.Role == provider.RoleUser && isSyntheticGoalContinuation(msg.Content) {
+			hasSynthetic = true
+			break
+		}
+	}
+	if latest < 0 && !hasSynthetic {
+		return msgs
+	}
+
+	out := make([]provider.Message, 0, len(msgs))
+	for i, msg := range msgs {
+		if msg.Role != provider.RoleUser {
+			out = append(out, msg)
+			continue
+		}
+		ranges := canonicalActiveGoalRanges(msg.Content)
+		if i == latest && len(ranges) > 0 {
+			keep := ranges[len(ranges)-1]
+			msg.Content = removeActiveGoalRanges(msg.Content, &keep)
+			out = append(out, msg)
+			continue
+		}
+		if len(ranges) > 0 {
+			msg.Content = stripCanonicalActiveGoalBlocks(msg.Content)
+		}
+		if isSyntheticGoalContinuation(msg.Content) {
+			continue
+		}
+		out = append(out, msg)
+	}
+	return out
 }
 
 func keepIndexes(region []provider.Message, policy KeepPolicy) []bool {

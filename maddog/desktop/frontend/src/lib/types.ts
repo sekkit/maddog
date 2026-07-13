@@ -257,7 +257,16 @@ export interface TabMeta {
   toolApprovalMode?: ToolApprovalMode;
   tokenMode?: TokenMode;
   goal?: string;
+  goalObjective?: string;
   goalStatus?: GoalStatus;
+  goalReason?: string;
+  goalTurns?: number;
+  goalBlocks?: number;
+  goalIntercepts?: number;
+  goalIdleTurns?: number;
+  goalStrict?: boolean;
+  goalRevision?: number;
+  goalSnapshot?: GoalSnapshot;
   startupErr?: string;
   active: boolean;
   cwd: string;
@@ -490,13 +499,64 @@ export interface Meta {
   toolApprovalMode?: ToolApprovalMode;
   tokenMode?: TokenMode;
   goal?: string;
+  goalObjective?: string;
   goalStatus?: GoalStatus;
+  goalReason?: string;
+  goalTurns?: number;
+  goalBlocks?: number;
+  goalIntercepts?: number;
+  goalIdleTurns?: number;
+  goalStrict?: boolean;
+  goalRevision?: number;
+  goalSnapshot?: GoalSnapshot;
 }
 
 export type CollaborationMode = "normal" | "plan" | "goal";
 export type ToolApprovalMode = "ask" | "auto" | "yolo";
 export type TokenMode = "full" | "economy";
-export type GoalStatus = "running" | "complete" | "blocked" | "stopped";
+export type GoalStatus = "running" | "complete" | "blocked" | "stopped" | "budget_limited";
+export type GoalResearchMode = 0 | 1 | 2;
+
+export interface GoalTodoItem {
+  content: string;
+  status: string;
+  activeForm?: string;
+  level?: number;
+}
+
+// Mirrors control.GoalSnapshot's JSON contract. Go's time.Time fields are
+// RFC3339 strings and GoalResearchMode is serialized as its numeric enum.
+export interface GoalSnapshot {
+  schemaVersion: number;
+  id?: string;
+  objective?: string;
+  goal?: string;
+  status?: GoalStatus;
+  mode?: string;
+  researchMode?: GoalResearchMode;
+  strict?: boolean;
+  turns?: number;
+  blocks?: number;
+  block?: string;
+  interceptMsg?: string;
+  intercepts?: number;
+  selfCheckDone?: boolean;
+  idleTurns?: number;
+  turnBudget?: number;
+  tokenBudget?: number;
+  tokensUsed?: number;
+  timeBudgetSeconds?: number;
+  timeUsedSeconds?: number;
+  lastError?: string;
+  interruptedAt?: string;
+  generation?: number;
+  revision?: number;
+  createdAt?: string;
+  startedAt?: string;
+  updatedAt?: string;
+  terminalAt?: string;
+  todos?: GoalTodoItem[];
+}
 
 export function normalizeCollaborationMode(mode?: string, goal?: string, legacyMode?: Mode): CollaborationMode {
   if (mode === "plan" || mode === "goal" || mode === "normal") return mode;
