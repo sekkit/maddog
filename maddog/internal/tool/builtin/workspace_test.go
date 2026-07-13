@@ -75,6 +75,39 @@ func TestWorkspaceWriteConfinement(t *testing.T) {
 	}
 }
 
+func TestWorkspaceReadRootConfinement(t *testing.T) {
+	workspace := t.TempDir()
+	outside := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workspace, "inside.txt"), []byte("inside\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	outsideFile := filepath.Join(outside, "outside.txt")
+	if err := os.WriteFile(outsideFile, []byte("outside\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tools := byName(Workspace{Dir: workspace, ReadRoots: []string{workspace}}.Tools("read_file", "ls", "glob", "grep", "code_index"))
+
+	inside, err := tools["read_file"].Execute(context.Background(), argsJSON(t, map[string]any{"path": "inside.txt"}))
+	if err != nil || !strings.Contains(inside, "inside") {
+		t.Fatalf("in-workspace read = %q, %v", inside, err)
+	}
+	if _, err := tools["read_file"].Execute(context.Background(), argsJSON(t, map[string]any{"path": outsideFile})); err == nil {
+		t.Fatal("read_file allowed an absolute path outside ReadRoots")
+	}
+	if out, err := tools["ls"].Execute(context.Background(), argsJSON(t, map[string]any{"path": outside})); err != nil || out != "(empty directory)" {
+		t.Fatalf("outside ls = %q, %v", out, err)
+	}
+	if out, err := tools["glob"].Execute(context.Background(), argsJSON(t, map[string]any{"pattern": filepath.Join(outside, "*.txt")})); err != nil || out != "(no matches)" {
+		t.Fatalf("outside glob = %q, %v", out, err)
+	}
+	if _, err := tools["grep"].Execute(context.Background(), argsJSON(t, map[string]any{"pattern": "outside", "path": outsideFile})); err == nil {
+		t.Fatal("grep allowed an absolute path outside ReadRoots")
+	}
+	if out, err := tools["code_index"].Execute(context.Background(), argsJSON(t, map[string]any{"action": "outline", "path": outside})); err != nil || strings.Contains(out, "outside") {
+		t.Fatalf("outside code_index = %q, %v", out, err)
+	}
+}
+
 func TestWorkspaceMoveFileBindsAndConfines(t *testing.T) {
 	dir := t.TempDir()
 	outside := filepath.Join(t.TempDir(), "evil.txt")

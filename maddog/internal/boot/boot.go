@@ -15,6 +15,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -85,7 +86,12 @@ type Options struct {
 	Model      string
 	MaxSteps   int
 	RequireKey bool
-	Sink       event.Sink
+	// OfflineEvaluation builds an isolated, deterministic evaluation session.
+	// It still permits the configured model provider request, but disables
+	// project hooks, MCP/plugins, network-capable tools, advisor/upgrade
+	// orchestration, memory mutation/compiler, and session persistence.
+	OfflineEvaluation bool
+	Sink              event.Sink
 	// EffortOverride is a session-local reasoning effort override. Nil means use
 	// the resolved provider config; a non-nil empty string means provider default.
 	EffortOverride *string
@@ -132,6 +138,7 @@ type Options struct {
 // returned controller owns plugin subprocesses; call Close (via Controller.Close)
 // to release them.
 func Build(ctx context.Context, opts Options) (*control.Controller, error) {
+	offline := opts.OfflineEvaluation
 	stderr := opts.Stderr
 	if stderr == nil {
 		stderr = os.Stderr
@@ -140,10 +147,18 @@ func Build(ctx context.Context, opts Options) (*control.Controller, error) {
 	sessionDir := firstNonEmpty(opts.SessionDir, config.SessionDir())
 	archiveDir := firstNonEmpty(opts.ArchiveDir, config.ArchiveDir())
 	memoryUserDir := firstNonEmpty(opts.MemoryUserDir, config.MemoryUserDir())
+	if offline {
+		// Evaluation state is ephemeral. The project root remains available for
+		// candidate skills and workspace tools, but host state is not persisted.
+		sessionDir = ""
+		archiveDir = ""
+		memoryUserDir = ""
+	}
 	cfg, err := config.LoadForRoot(root)
 	if err != nil {
 		return nil, err
 	}
+	optimizationConfig := cfg.EffectiveSkillOptimizationConfig()
 	modelName := opts.Model
 	if modelName == "" {
 		modelName = cfg.DefaultModel
@@ -174,10 +189,10 @@ func Build(ctx context.Context, opts Options) (*control.Controller, error) {
 	// shares this synchronized sink. The job manager is session-scoped — its jobs
 	// outlive a turn and are cancelled by Controller.Close.
 	sink := event.Sync(opts.Sink)
-	if strings.TrimSpace(opts.SessionDir) == "" {
+	if !offline && strings.TrimSpace(opts.SessionDir) == "" {
 		migrateLegacySessionSources(sink, sessionDir)
 	}
-	if opts.CleanupPendingReconciler != nil {
+	if !offline && opts.CleanupPendingReconciler != nil {
 		if err := opts.CleanupPendingReconciler(sessionDir); err != nil {
 			sink.Emit(event.Event{Kind: event.Notice, Level: event.LevelWarn, Text: "session cleanup retry skipped: " + err.Error()})
 		}
@@ -195,9 +210,12 @@ func Build(ctx context.Context, opts Options) (*control.Controller, error) {
 	if err := netclient.Validate(proxySpec); err != nil {
 		return nil, err
 	}
-	balanceClient, err := netclient.NewHTTPClient(proxySpec, netclient.TransportOptions{})
-	if err != nil {
-		return nil, err
+	var balanceClient *http.Client
+	if !offline {
+		balanceClient, err = netclient.NewHTTPClient(proxySpec, netclient.TransportOptions{})
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	execProv, err := NewProviderWithProxy(entry, proxySpec)
@@ -211,7 +229,7 @@ func Build(ctx context.Context, opts Options) (*control.Controller, error) {
 	var frontierEntryForAdvisor *config.ProviderEntry
 	var upgradePolicy agent.UpgradePolicy
 	var frontierTokens atomic.Int64
-	if cfg.Agent.UpgradeEnabled && strings.TrimSpace(cfg.Agent.FrontierModel) != "" && cfg.Agent.UpgradeThreshold > 0 {
+	if !offline && cfg.Agent.UpgradeEnabled && strings.TrimSpace(cfg.Agent.FrontierModel) != "" && cfg.Agent.UpgradeThreshold > 0 {
 		frontierEntry, ok := cfg.ResolveModel(cfg.Agent.FrontierModel)
 		if !ok {
 			sink.Emit(event.Event{Kind: event.Notice, Level: event.LevelWarn,
@@ -255,7 +273,7 @@ func Build(ctx context.Context, opts Options) (*control.Controller, error) {
 	if tokenEconomy {
 		sysPrompt += "\n\n" + tokenEconomyPrompt
 	}
-	if cfg.EnvironmentEnabled() {
+	if !offline && cfg.EnvironmentEnabled() {
 		shellLabel := shell.Kind.String()
 		if strings.TrimSpace(cfg.Tools.Shell.Path) != "" {
 			shellLabel = shell.Path
@@ -288,42 +306,77 @@ func Build(ctx context.Context, opts Options) (*control.Controller, error) {
 	// only; bodies load on demand via run_skill or "/<name>". Bodies never enter
 	// the prefix, so the index costs a fixed, small amount per turn.
 	skillStore := skill.New(skill.Options{
-		ProjectRoot:   root,
-		CustomPaths:   cfg.SkillCustomPaths(),
-		ExcludedPaths: cfg.SkillExcludedPaths(),
-		DisabledNames: cfg.DisabledSkillNames(),
-		MaxDepth:      cfg.SkillMaxDepth(),
-		Stderr:        opts.Stderr,
+		ProjectRoot: root,
+		ProjectOnly: offline,
+		CustomPaths: func() []string {
+			if offline {
+				return nil
+			}
+			return cfg.SkillCustomPaths()
+		}(),
+		ExcludedPaths:   cfg.SkillExcludedPaths(),
+		DisabledNames:   cfg.DisabledSkillNames(),
+		MaxDepth:        cfg.SkillMaxDepth(),
+		DisableBuiltins: offline,
+		Stderr:          opts.Stderr,
 	})
 	skills := skillStore.List()
-	allSkillStore := skill.New(skill.Options{ProjectRoot: root, CustomPaths: cfg.SkillCustomPaths(), ExcludedPaths: cfg.SkillExcludedPaths(), MaxDepth: cfg.SkillMaxDepth(), Stderr: io.Discard})
+	allSkillStore := skill.New(skill.Options{ProjectRoot: root, ProjectOnly: offline, CustomPaths: func() []string {
+		if offline {
+			return nil
+		}
+		return cfg.SkillCustomPaths()
+	}(), ExcludedPaths: cfg.SkillExcludedPaths(), MaxDepth: cfg.SkillMaxDepth(), DisableBuiltins: offline, Stderr: io.Discard})
 	allSkills := allSkillStore.List()
 	if !tokenEconomy {
 		sysPrompt = skill.ApplyIndex(sysPrompt, skills)
 	}
 	var skillOrchestrator *skill.Orchestrator
-	if cfg.Skills.RuntimeOrchestration {
+	if !offline && cfg.Skills.RuntimeOrchestration {
 		skillOrchestrator = skill.NewOrchestrator(skillStore, skill.NewGenerator(execProv))
 		skillOrchestrator.DynamicSkills = cfg.Skills.DynamicSkills
 	}
 
 	reg := tool.NewRegistry()
-	bashSpec := sandbox.Spec{Mode: cfg.BashMode(), WriteRoots: cfg.WriteRootsForRoot(root), ForbidReadRoots: cfg.ForbidReadRootsForRoot(root), Network: cfg.Sandbox.Network}
+	bashNetwork := cfg.Sandbox.Network
+	if offline {
+		bashNetwork = false
+	}
+	writeRoots := cfg.WriteRootsForRoot(root)
+	bashMode := cfg.BashMode()
+	if offline {
+		writeRoots = []string{root}
+		bashMode = "enforce"
+	}
+	bashSpec := sandbox.Spec{Mode: bashMode, WriteRoots: writeRoots, ForbidReadRoots: cfg.ForbidReadRootsForRoot(root), Network: bashNetwork}
+	bashSpec.ScrubEnvironment = offline
 	bashSpec.Shell = shell
-	if bashSpec.Mode == "enforce" && !sandbox.Available() {
+	if !offline && bashSpec.Mode == "enforce" && !sandbox.Available() {
 		fmt.Fprintln(stderr, "warning: bash sandbox requested but unavailable on this platform; running bash unconfined")
 	}
-	if autoShellPrefer(cfg.Tools.Shell.Prefer) && shell.Kind == sandbox.ShellPowerShell {
+	if !offline && autoShellPrefer(cfg.Tools.Shell.Prefer) && shell.Kind == sandbox.ShellPowerShell {
 		fmt.Fprintln(stderr, "warning: bash not found on PATH; the shell tool will run commands under Windows PowerShell. Install Git for Windows or WSL to use bash, or set [tools.shell] prefer=\"powershell\" to silence this.")
 	}
 	searchSpec := builtin.ResolveSearch(cfg.Tools.Search.Engine, cfg.Tools.Search.RgPath, stderr)
 	bashTimeout := time.Duration(cfg.BashTimeoutSeconds()) * time.Second
 	enabledBuiltins := cfg.Tools.Enabled
+	if offline {
+		enabledBuiltins = withoutBuiltin(enabledBuiltins, "web_fetch")
+		if !optimizationConfig.Enabled || !optimizationConfig.AllowShell || !sandbox.Available() {
+			// Shell is opt-in and requires an OS sandbox capable of enforcing the
+			// workspace write boundary and network denial.
+			enabledBuiltins = withoutBuiltin(enabledBuiltins, "bash")
+		}
+	}
 	if tokenEconomy {
 		enabledBuiltins = tokenEconomyBuiltins(enabledBuiltins)
 	}
 	readPathResolver := builtin.NewPathResolver()
-	addBuiltins(reg, enabledBuiltins, cfg.WriteRootsForRoot(root), bashSpec, bashTimeout, searchSpec, stderr, root, proxySpec, cfg.ForbidReadRootsForRoot(root), readPathResolver)
+	var readRoots []string
+	if offline {
+		readRoots = []string{root}
+	}
+	addBuiltins(reg, enabledBuiltins, writeRoots, readRoots, bashSpec, bashTimeout, searchSpec, stderr, root, proxySpec, cfg.ForbidReadRootsForRoot(root), readPathResolver)
 	// Use the caller-supplied shared host when set, so controllers for the same
 	// workspace root reuse running MCP processes (e.g. one CodeGraph daemon
 	// instead of one per tab). Otherwise construct a private host per controller.
@@ -339,6 +392,10 @@ func Build(ctx context.Context, opts Options) (*control.Controller, error) {
 		PlanModeAllowedTools: cfg.Agent.PlanModeAllowedTools,
 	}
 	autoStartEntries := cfg.AutoStartPlugins()
+	if offline {
+		autoStartEntries = nil
+		opts.ExtraPlugins = nil
+	}
 	eagerEntries, bgEntries := partitionByTier(autoStartEntries)
 	extraSpecs := applyDefaultMCPCallTimeout(
 		applyPlanModeAllowedMCPToolTrust(applyKnownPluginOverrides(opts.ExtraPlugins, root), cfg.Agent.PlanModeAllowedTools),
@@ -396,7 +453,7 @@ func Build(ctx context.Context, opts Options) (*control.Controller, error) {
 	//
 	// CodeGraph is fixed to background startup. Legacy tier values are ignored so
 	// enabling it never blocks chat startup.
-	if cfg.Codegraph.Enabled {
+	if !offline && cfg.Codegraph.Enabled {
 		bin, ok := codegraph.Resolve(cfg.Codegraph.Path)
 		switch {
 		case ok && !codegraph.IndexableRoot(root):
@@ -574,7 +631,7 @@ func Build(ctx context.Context, opts Options) (*control.Controller, error) {
 		lspToolsAdded = true
 		return addTools(reg, lsp.Tools(lspMgr))
 	}
-	if cfg.LSP.Enabled {
+	if !offline && cfg.LSP.Enabled {
 		lspMgr = lsp.NewManager(root, LSPSpecs(cfg.LSP))
 		if !tokenEconomy {
 			addLSPTools()
@@ -614,15 +671,18 @@ func Build(ctx context.Context, opts Options) (*control.Controller, error) {
 	// a Notice through the shared sink. The runner fires PreToolUse/PostToolUse in
 	// the agent loop and PermissionRequest/UserPromptSubmit/Stop at the controller
 	// boundary.
-	hooksTrusted := hook.IsTrusted(root, "")
-	hookRunner := hook.NewRunner(
-		hook.Load(hook.LoadOptions{ProjectRoot: root, Trusted: hooksTrusted}),
-		root, nil,
-		func(msg string) { sink.Emit(event.Event{Kind: event.Notice, Level: event.LevelWarn, Text: msg}) },
-	)
-	if hook.ProjectDefinesHooks(root) && !hooksTrusted {
-		sink.Emit(event.Event{Kind: event.Notice, Level: event.LevelInfo,
-			Text: "this project defines hooks but they are not trusted — run /hooks trust to enable them"})
+	var hookRunner *hook.Runner
+	if !offline {
+		hooksTrusted := hook.IsTrusted(root, "")
+		hookRunner = hook.NewRunner(
+			hook.Load(hook.LoadOptions{ProjectRoot: root, Trusted: hooksTrusted}),
+			root, nil,
+			func(msg string) { sink.Emit(event.Event{Kind: event.Notice, Level: event.LevelWarn, Text: msg}) },
+		)
+		if hook.ProjectDefinesHooks(root) && !hooksTrusted {
+			sink.Emit(event.Event{Kind: event.Notice, Level: event.LevelInfo,
+				Text: "this project defines hooks but they are not trusted — run /hooks trust to enable them"})
+		}
 	}
 
 	// The `task` tool spawns sub-agents that reuse the parent's provider and
@@ -692,7 +752,7 @@ func Build(ctx context.Context, opts Options) (*control.Controller, error) {
 		reg.Add(agent.NewReadOnlyTaskTool(taskTool))
 		return "enabled read_only_task."
 	}
-	if !tokenEconomy {
+	if !tokenEconomy && !offline {
 		addTaskTool()
 		addReadOnlyTaskTool()
 	}
@@ -700,23 +760,31 @@ func Build(ctx context.Context, opts Options) (*control.Controller, error) {
 	// The `memory` tool searches/reads saved facts on demand; `remember` persists
 	// durable facts to the project's auto-memory store; `forget` prunes ones that
 	// turn out wrong. The saved index loads into the prefix on the next session.
-	reg.Add(history.NewTool(history.Options{SessionDir: sessionDir, GlobalSessionDir: config.SessionDir(), ArchiveDir: config.ArchiveDir()}))
+	if !offline {
+		reg.Add(history.NewTool(history.Options{SessionDir: sessionDir, GlobalSessionDir: config.SessionDir(), ArchiveDir: config.ArchiveDir()}))
+	}
 
 	// Session history tools let the AI discover and read past conversations.
 	// `list_sessions` returns all saved session files; `read_session` loads one
 	// and renders the full conversation as readable text.
-	reg.Add(sessiontool.NewListSessionsTool(sessionDir))
-	reg.Add(sessiontool.NewReadSessionTool(sessionDir))
+	if !offline {
+		reg.Add(sessiontool.NewListSessionsTool(sessionDir))
+		reg.Add(sessiontool.NewReadSessionTool(sessionDir))
+	}
 
-	reg.Add(memory.NewRecallTool(mem.Store))
-	reg.Add(memory.NewRememberTool(mem.Store))
-	reg.Add(memory.NewForgetTool(mem.Store))
+	if !offline {
+		reg.Add(memory.NewRecallTool(mem.Store))
+		reg.Add(memory.NewRememberTool(mem.Store))
+		reg.Add(memory.NewForgetTool(mem.Store))
+	}
 
 	// The `ask` tool puts structured multiple-choice questions to the user. It
 	// reaches them through the Asker on the call context, which interactive
 	// frontends wire to the controller (EnableInteractiveApproval); a headless run
 	// has none, so ask resolves to "decide for yourself".
-	reg.Add(agent.NewAskTool())
+	if !offline {
+		reg.Add(agent.NewAskTool())
+	}
 
 	// Skill tools: read_only_skill is a narrow plan-mode-safe entry point; the
 	// full skills source adds run_skill / install_skill plus the dedicated
@@ -864,7 +932,7 @@ func Build(ctx context.Context, opts Options) (*control.Controller, error) {
 		return &event.Profile{Role: subagentUsageRole(sk), Model: model, Effort: effort}
 	}
 	var advisorRunner agent.AdvisorRunner
-	if cfg.Agent.AdvisorMaxUsesPerTurn > 0 {
+	if !offline && cfg.Agent.AdvisorMaxUsesPerTurn > 0 {
 		advisorRunner = func(sctx context.Context, req agent.AdvisorRequest) (string, error) {
 			sk, ok := skillStore.Read("advisor")
 			if !ok {
@@ -874,7 +942,7 @@ func Build(ctx context.Context, opts Options) (*control.Controller, error) {
 		}
 	}
 	var nativeAdvisor *provider.NativeAdvisorConfig
-	if cfg.Agent.AdvisorNativeEnabled && entry.Kind == "anthropic" && frontierEntryForAdvisor != nil && frontierEntryForAdvisor.Kind == "anthropic" {
+	if !offline && cfg.Agent.AdvisorNativeEnabled && entry.Kind == "anthropic" && frontierEntryForAdvisor != nil && frontierEntryForAdvisor.Kind == "anthropic" {
 		nativeAdvisor = &provider.NativeAdvisorConfig{
 			Model:     frontierEntryForAdvisor.Model,
 			MaxUses:   cfg.Agent.AdvisorMaxUsesPerTurn,
@@ -884,7 +952,10 @@ func Build(ctx context.Context, opts Options) (*control.Controller, error) {
 
 	// Custom slash commands (.maddog/commands + shared/user dirs). Best-effort:
 	// a malformed file is skipped, and a load error never blocks the session.
-	cmds, _ := command.Load(config.CommandDirsForRoot(root)...)
+	var cmds []command.Command
+	if !offline {
+		cmds, _ = command.Load(config.CommandDirsForRoot(root)...)
+	}
 	addSlashCommandTool := func(includeSkills bool) {
 		var slashEntries []command.SlashEntry
 		if includeSkills {
@@ -971,20 +1042,29 @@ func Build(ctx context.Context, opts Options) (*control.Controller, error) {
 		addReadOnlySkillTools()
 		reg.Add(skill.NewRunSkillTool(skillStore, skillRunner, skillProfile))
 		reg.Add(skill.NewReadSkillTool(skillStore))
-		reg.Add(skill.NewInstallSkillTool(skillStore, nil))
+		if !offline {
+			reg.Add(skill.NewInstallSkillTool(skillStore, nil))
+		}
 		for _, t := range skill.BuiltinSubagentTools(skillStore, skillRunner, skillProfile) {
 			reg.Add(t)
 		}
 		addSlashCommandTool(true)
 		return "enabled skills. Use run_skill/read_skill/read_only_skill or the dedicated skill tools on the next model request.\n\n" + skill.IndexBlock(skills)
 	}
-	if tokenEconomy {
+	if offline {
+		// Evaluation may read/run the selected project skill, but cannot install
+		// or mutate skills, connect MCP, or enable optional sources.
+		addReadOnlySkillTools()
+		reg.Add(skill.NewRunSkillTool(skillStore, skillRunner, skillProfile))
+		reg.Add(skill.NewReadSkillTool(skillStore))
+		addSlashCommandTool(true)
+	} else if tokenEconomy {
 		addSlashCommandTool(false)
 	} else {
 		addInstallSourceTool()
 		addSkillTools()
 	}
-	if tokenEconomy {
+	if tokenEconomy && !offline {
 		trustedMCPServers = planModeTrustedMCPServers(onDemandMCPSpecs)
 		reg.Add(&toolSourceConnector{
 			skills: func(context.Context) (string, error) {
@@ -1008,7 +1088,7 @@ func Build(ctx context.Context, opts Options) (*control.Controller, error) {
 				}
 				names := addTools(reg, builtin.Workspace{
 					Dir:         root,
-					WriteRoots:  cfg.WriteRootsForRoot(root),
+					WriteRoots:  writeRoots,
 					Bash:        bashSpec,
 					BashTimeout: bashTimeout,
 					Search:      searchSpec,
@@ -1072,7 +1152,7 @@ func Build(ctx context.Context, opts Options) (*control.Controller, error) {
 	executorUsageModel, executorUsageEffort := providerProfileIdentity(entry, modelName)
 	execSess := agent.NewSession(sysPrompt)
 	var memCompiler *memorycompiler.Runtime
-	if cfg.MemoryCompilerEnabled() {
+	if !offline && cfg.MemoryCompilerEnabled() {
 		memCompiler = memorycompiler.New(config.MemoryCompilerDir(root))
 	}
 	executor := agent.New(execProv, reg, execSess, agent.Options{
@@ -1119,7 +1199,7 @@ func Build(ctx context.Context, opts Options) (*control.Controller, error) {
 	label := entry.Model
 	var classifier *control.ProviderAutoPlanClassifier
 
-	if !tokenEconomy && !strings.EqualFold(strings.TrimSpace(cfg.Agent.AutoPlan), "off") && cfg.Agent.AutoPlanClassifier != "" {
+	if !offline && !tokenEconomy && !strings.EqualFold(strings.TrimSpace(cfg.Agent.AutoPlan), "off") && cfg.Agent.AutoPlanClassifier != "" {
 		cm := cfg.Agent.AutoPlanClassifier
 		ce, ok := cfg.ResolveModel(cm)
 		if !ok {
@@ -1136,7 +1216,7 @@ func Build(ctx context.Context, opts Options) (*control.Controller, error) {
 	// Coordinator with its own session, kept separate for cache stability. The
 	// planner gets the same standing memory context and a filtered read-only
 	// research tool set, so it can inspect rules/code without side effects.
-	if pm := cfg.Agent.PlannerModel; pm != "" && !tokenEconomy {
+	if pm := cfg.Agent.PlannerModel; pm != "" && !tokenEconomy && !offline {
 		pe, ok := cfg.ResolveModel(pm)
 		if !ok {
 			return nil, fmt.Errorf("planner_model %q is not a configured provider", pm)
@@ -1168,34 +1248,40 @@ func Build(ctx context.Context, opts Options) (*control.Controller, error) {
 	}
 
 	ctrlOpts := control.Options{
-		Runner:            runner,
-		Executor:          executor,
-		Sink:              sink,
-		Policy:            policy,
-		Label:             label,
-		SystemPrompt:      sysPrompt,
-		SessionDir:        sessionDir,
-		Host:              pluginHost,
-		Commands:          cmds,
-		Skills:            skills,
-		AllSkills:         allSkills,
-		SkillStore:        skillStore,
-		AllSkillStore:     allSkillStore,
-		SkillOrchestrator: skillOrchestrator,
-		Hooks:             hookRunner,
-		Memory:            mem,
-		Cleanup:           cleanup,
-		BalanceURL:        entry.BalanceURL,
-		BalanceKey:        entry.APIKey(),
-		BalanceClient:     balanceClient,
-		Jobs:              jm,
-		Registry:          reg,
-		PluginCtx:         ctx,
-		WorkspaceRoot:     root,
-		ModelRef:          modelRef,
-		AutoPlan:          cfg.Agent.AutoPlan,
-		Shell:             shell,
-		ApprovalTimeout:   opts.ApprovalTimeout,
+		Runner:                    runner,
+		Executor:                  executor,
+		Sink:                      sink,
+		Policy:                    policy,
+		Label:                     label,
+		SystemPrompt:              sysPrompt,
+		SessionDir:                sessionDir,
+		Host:                      pluginHost,
+		Commands:                  cmds,
+		Skills:                    skills,
+		AllSkills:                 allSkills,
+		SkillStore:                skillStore,
+		AllSkillStore:             allSkillStore,
+		SkillOrchestrator:         skillOrchestrator,
+		Hooks:                     hookRunner,
+		Memory:                    mem,
+		Cleanup:                   cleanup,
+		BalanceURL:                entry.BalanceURL,
+		BalanceKey:                entry.APIKey(),
+		BalanceClient:             balanceClient,
+		Jobs:                      jm,
+		Registry:                  reg,
+		PluginCtx:                 ctx,
+		WorkspaceRoot:             root,
+		ModelRef:                  modelRef,
+		AutoPlan:                  cfg.Agent.AutoPlan,
+		Shell:                     shell,
+		ApprovalTimeout:           opts.ApprovalTimeout,
+		DisableReplayCapture:      offline,
+		DisableSessionPersistence: offline,
+		EnableReplayCapture:       !offline && optimizationConfig.Enabled && optimizationConfig.CaptureReplay,
+		ReplayRetentionDays:       optimizationConfig.RetentionDays,
+		ReplayMaxBundles:          optimizationConfig.MaxReplayBundles,
+		ReplayRedact:              optimizationConfig.RedactArtifacts != nil && *optimizationConfig.RedactArtifacts,
 		OnRemember: func(rule string) control.RememberResult {
 			return rememberPermissionRule(root, rule)
 		},
@@ -1203,7 +1289,7 @@ func Build(ctx context.Context, opts Options) (*control.Controller, error) {
 			return rememberMCPReadOnlyTrust(root, serverName, rawToolName)
 		},
 	}
-	if imageFallbackModel := strings.TrimSpace(cfg.Agent.ImageFallbackModel); imageFallbackModel != "" {
+	if imageFallbackModel := strings.TrimSpace(cfg.Agent.ImageFallbackModel); imageFallbackModel != "" && !offline {
 		ie, ok := cfg.ResolveModel(imageFallbackModel)
 		if !ok {
 			sink.Emit(event.Event{Kind: event.Notice, Level: event.LevelWarn,
@@ -1227,7 +1313,7 @@ func Build(ctx context.Context, opts Options) (*control.Controller, error) {
 	// Guardian: when guardian_model is configured, spawn an LLM safety reviewer
 	// that can auto-allow safe Ask decisions and annotate risky ones before
 	// escalating to the human approval prompt.
-	if guardianModel := cfg.Agent.GuardianModel; guardianModel != "" {
+	if guardianModel := cfg.Agent.GuardianModel; guardianModel != "" && !offline {
 		ge, ok := cfg.ResolveModel(guardianModel)
 		if !ok {
 			slog.Warn("guardian model is not a configured provider — guardian disabled", "model", guardianModel)
@@ -1638,12 +1724,12 @@ func NewProviderWithProxy(e *config.ProviderEntry, proxy netclient.ProxySpec) (p
 // the listed directories.
 // When workDir is non-empty, tools resolve relative paths against it instead of
 // the process cwd, enabling concurrent multi-project sessions.
-func addBuiltins(reg *tool.Registry, enabled, writeRoots []string, bashSpec sandbox.Spec, bashTimeout time.Duration, searchSpec builtin.SearchSpec, stderr io.Writer, workDir string, proxySpec netclient.ProxySpec, forbidReadRoots []string, readPathResolver *builtin.PathResolver) {
+func addBuiltins(reg *tool.Registry, enabled, writeRoots, readRoots []string, bashSpec sandbox.Spec, bashTimeout time.Duration, searchSpec builtin.SearchSpec, stderr io.Writer, workDir string, proxySpec netclient.ProxySpec, forbidReadRoots []string, readPathResolver *builtin.PathResolver) {
 	// If a workspace directory is set, use workspace-bound tools that resolve
 	// paths relative to that directory. Otherwise fall back to the process-cwd
 	// compile-time builtins.
 	if workDir != "" {
-		ws := builtin.Workspace{Dir: workDir, WriteRoots: writeRoots, ForbidReadRoots: forbidReadRoots, Bash: bashSpec, BashTimeout: bashTimeout, Search: searchSpec, ProxySpec: proxySpec, ReadPaths: readPathResolver}
+		ws := builtin.Workspace{Dir: workDir, WriteRoots: writeRoots, ReadRoots: readRoots, ForbidReadRoots: forbidReadRoots, Bash: bashSpec, BashTimeout: bashTimeout, Search: searchSpec, ProxySpec: proxySpec, ReadPaths: readPathResolver}
 		for _, t := range ws.Tools(enabled...) {
 			reg.Add(t)
 		}
@@ -1690,6 +1776,28 @@ func builtinToolEnabled(enabled []string, name string) bool {
 		}
 	}
 	return false
+}
+
+func withoutBuiltin(enabled []string, name string) []string {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return enabled
+	}
+	if len(enabled) == 0 {
+		for _, builtinTool := range tool.Builtins() {
+			if builtinTool.Name() != name {
+				enabled = append(enabled, builtinTool.Name())
+			}
+		}
+		return enabled
+	}
+	out := make([]string, 0, len(enabled))
+	for _, item := range enabled {
+		if strings.TrimSpace(item) != name {
+			out = append(out, item)
+		}
+	}
+	return out
 }
 
 // partitionByTier splits configured plugin entries into eager (block boot until

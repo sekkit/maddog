@@ -13,7 +13,7 @@ import (
 	"maddog/internal/tool"
 )
 
-func TestEvaluateCandidateProviderReplayIsPromotionGrade(t *testing.T) {
+func TestEvaluateCandidateProviderReplayIsDiagnosticOnly(t *testing.T) {
 	dir := t.TempDir()
 	sourcePath := writeEvaluationBundle(t, dir, "source", "source answer")
 	candidate := Candidate{
@@ -42,8 +42,8 @@ func TestEvaluateCandidateProviderReplayIsPromotionGrade(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EvaluateCandidate: %v", err)
 	}
-	if !result.Guardrail.Pass || !result.PromotionGrade || result.Mode != EvaluationModeProviderReplay {
-		t.Fatalf("evaluation result = %+v, want promotion-grade provider replay", result)
+	if result.Guardrail.Pass || result.PromotionGrade || result.Mode != EvaluationModeProviderReplay || !strings.Contains(result.Guardrail.Reason, "paired") {
+		t.Fatalf("evaluation result = %+v, want diagnostic-only provider replay", result)
 	}
 	if result.Provider != "evaluation-script" || len(result.BundleIDs) != 5 || result.Score.Score < 0.9 {
 		t.Fatalf("evaluation summary = %+v", result)

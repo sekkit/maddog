@@ -357,6 +357,9 @@ func RenderTOMLForScope(c *Config, scope RenderScope) string {
 			b.WriteString("# disabled_skills = [\"review\"]   # hide noisy or unwanted skills\n\n")
 		}
 	}
+	if shouldRenderSkillOptimization(c, defaults, scope) {
+		renderSkillOptimizationConfig(&b, c.EffectiveSkillOptimizationConfig())
+	}
 
 	if shouldRenderPermissions(c, defaults, scope) {
 		b.WriteString("[permissions]\n")
@@ -956,6 +959,44 @@ func shouldRenderSkills(c, defaults *Config, scope RenderScope) bool {
 		return true
 	}
 	return !reflect.DeepEqual(c.Skills, defaults.Skills)
+}
+
+func shouldRenderSkillOptimization(c, defaults *Config, scope RenderScope) bool {
+	if scope != RenderScopeProject {
+		return true
+	}
+	return !reflect.DeepEqual(c.Skills.Optimization, defaults.Skills.Optimization)
+}
+
+func renderSkillOptimizationConfig(b *strings.Builder, cfg SkillOptimizationConfig) {
+	b.WriteString("[skills.optimization]\n")
+	fmt.Fprintf(b, "enabled = %v   # explicit opt-in; normal turns never optimize skills\n", cfg.Enabled)
+	fmt.Fprintf(b, "capture_replay = %v   # optional normal-turn replay capture\n", cfg.CaptureReplay)
+	fmt.Fprintf(b, "allow_shell = %v   # evaluation opt-in; no network, but sandboxed shell retains broad host reads\n", cfg.AllowShell)
+	if cfg.Model != "" {
+		fmt.Fprintf(b, "model = %q\n", cfg.Model)
+	}
+	if cfg.ProposerModel != "" {
+		fmt.Fprintf(b, "proposer_model = %q\n", cfg.ProposerModel)
+	}
+	fmt.Fprintf(b, "rounds = %d\n", cfg.Rounds)
+	fmt.Fprintf(b, "batch_size = %d\n", cfg.BatchSize)
+	fmt.Fprintf(b, "max_concurrency = %d\n", cfg.MaxConcurrency)
+	fmt.Fprintf(b, "min_delta = %s\n", strconv.FormatFloat(cfg.MinDelta, 'f', -1, 64))
+	fmt.Fprintf(b, "deadband = %s\n", strconv.FormatFloat(cfg.Deadband, 'f', -1, 64))
+	fmt.Fprintf(b, "max_calls = %d\n", cfg.MaxCalls)
+	fmt.Fprintf(b, "max_input_tokens = %d\n", cfg.MaxInputTokens)
+	fmt.Fprintf(b, "max_output_tokens = %d\n", cfg.MaxOutputTokens)
+	fmt.Fprintf(b, "max_cost = %s\n", strconv.FormatFloat(cfg.MaxCost, 'f', -1, 64))
+	fmt.Fprintf(b, "retention_days = %d\n", cfg.RetentionDays)
+	fmt.Fprintf(b, "max_replay_bundles = %d\n", cfg.MaxReplayBundles)
+	if cfg.RedactArtifacts != nil {
+		fmt.Fprintf(b, "redact_artifacts = %v\n", *cfg.RedactArtifacts)
+	}
+	if cfg.RequireApproval != nil {
+		fmt.Fprintf(b, "require_approval = %v\n", *cfg.RequireApproval)
+	}
+	b.WriteString("\n")
 }
 
 func shouldRenderPermissions(c, defaults *Config, scope RenderScope) bool {

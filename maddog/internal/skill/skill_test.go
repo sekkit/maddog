@@ -70,6 +70,37 @@ func TestListPrecedenceProjectOverGlobal(t *testing.T) {
 	}
 }
 
+func TestProjectOnlyExcludesCustomGlobalAndBuiltins(t *testing.T) {
+	home := t.TempDir()
+	proj := t.TempDir()
+	custom := t.TempDir()
+	writeSkill(t, proj, ".maddog/skills/project.md", "---\ndescription: project\n---\nproject body")
+	writeSkill(t, home, ".maddog/skills/global.md", "---\ndescription: global\n---\nglobal body")
+	writeSkill(t, custom, "custom.md", "---\ndescription: custom\n---\ncustom body")
+
+	st := New(Options{
+		HomeDir:     home,
+		ProjectRoot: proj,
+		CustomPaths: []string{custom},
+		ProjectOnly: true,
+	})
+
+	list := st.List()
+	if len(list) != 1 || list[0].Name != "project" || list[0].Scope != ScopeProject {
+		t.Fatalf("ProjectOnly List() = %+v, want only project skill", list)
+	}
+	for _, hidden := range []string{"global", "custom", "explore"} {
+		if _, ok := st.Read(hidden); ok {
+			t.Fatalf("ProjectOnly unexpectedly resolved %q", hidden)
+		}
+	}
+	for _, root := range st.Roots() {
+		if root.Scope != ScopeProject {
+			t.Fatalf("ProjectOnly Roots() contains non-project root: %+v", root)
+		}
+	}
+}
+
 func TestFlatAndDirLayout(t *testing.T) {
 	home := t.TempDir()
 	writeSkill(t, home, ".maddog/skills/flat.md", "---\ndescription: flat\n---\nflat body")

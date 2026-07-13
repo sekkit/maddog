@@ -24,8 +24,12 @@ import (
 // the read/list/search built-ins so they cannot peek at the listed directories.
 // Bash is the OS-sandbox spec for the bash tool (as ConfineBash).
 type Workspace struct {
-	Dir             string
-	WriteRoots      []string
+	Dir        string
+	WriteRoots []string
+	// ReadRoots, when non-empty, restricts every built-in reader/searcher to
+	// these roots. Normal sessions leave it empty; isolated evaluation sets the
+	// disposable workspace as the sole readable root.
+	ReadRoots       []string
 	ForbidReadRoots []string
 	Bash            sandbox.Spec
 	BashTimeout     time.Duration
@@ -45,10 +49,11 @@ func (w Workspace) Tools(enabled ...string) []tool.Tool {
 		writeRoots = []string{w.Dir}
 	}
 	roots := realRoots(writeRoots)
+	readRoots := realRoots(w.ReadRoots)
 	forbidRoots := realRoots(w.ForbidReadRoots)
 
 	overrides := map[string]tool.Tool{
-		"read_file":     readFile{workDir: w.Dir, paths: w.ReadPaths, forbidRoots: forbidRoots},
+		"read_file":     readFile{workDir: w.Dir, paths: w.ReadPaths, readRoots: readRoots, forbidRoots: forbidRoots},
 		"write_file":    writeFile{workDir: w.Dir, roots: roots},
 		"edit_file":     editFile{workDir: w.Dir, roots: roots},
 		"multi_edit":    multiEdit{workDir: w.Dir, roots: roots},
@@ -56,11 +61,11 @@ func (w Workspace) Tools(enabled ...string) []tool.Tool {
 		"notebook_edit": notebookEdit{workDir: w.Dir, roots: roots},
 		"delete_range":  deleteRange{workDir: w.Dir, roots: roots},
 		"delete_symbol": deleteSymbol{workDir: w.Dir, roots: roots},
-		"code_index":    codeIndex{workDir: w.Dir, forbidRoots: forbidRoots},
+		"code_index":    codeIndex{workDir: w.Dir, readRoots: readRoots, forbidRoots: forbidRoots},
 		"bash":          bash{workDir: w.Dir, sb: w.Bash, timeout: w.BashTimeout},
-		"ls":            listDir{workDir: w.Dir, paths: w.ReadPaths, forbidRoots: forbidRoots},
-		"glob":          globTool{workDir: w.Dir, paths: w.ReadPaths, forbidRoots: forbidRoots},
-		"grep":          grepTool{workDir: w.Dir, paths: w.ReadPaths, rg: w.Search.RgPath, forbidRoots: forbidRoots, sb: w.Bash},
+		"ls":            listDir{workDir: w.Dir, paths: w.ReadPaths, readRoots: readRoots, forbidRoots: forbidRoots},
+		"glob":          globTool{workDir: w.Dir, paths: w.ReadPaths, readRoots: readRoots, forbidRoots: forbidRoots},
+		"grep":          grepTool{workDir: w.Dir, paths: w.ReadPaths, rg: w.Search.RgPath, readRoots: readRoots, forbidRoots: forbidRoots, sb: w.Bash},
 		"web_fetch":     webFetch{proxySpec: w.ProxySpec},
 	}
 	all := tool.Builtins()

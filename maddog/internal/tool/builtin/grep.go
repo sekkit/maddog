@@ -71,6 +71,7 @@ type grepTool struct {
 	workDir     string
 	paths       *PathResolver
 	rg          string
+	readRoots   []string
 	forbidRoots []string
 	sb          sandbox.Spec
 }
@@ -118,15 +119,8 @@ func (g grepTool) Execute(ctx context.Context, args json.RawMessage) (string, er
 	ctx, cancel := context.WithTimeout(ctx, to)
 	defer cancel()
 
-	info, err := os.Stat(p.Path)
-	if err != nil {
-		if rp.External {
-			return "", fmt.Errorf("grep %s: %s", rp.DisplayPath, rp.ErrorText(err))
-		}
-		return "", fmt.Errorf("grep %s: %w", rp.DisplayPath, err)
-	}
 	if confineRead(g.forbidRoots, p.Path) {
-		if info.IsDir() {
+		if info, err := os.Stat(p.Path); err == nil && info.IsDir() {
 			return formatGrep(ctx, nil, false, to), nil
 		}
 		err := &os.PathError{Op: "stat", Path: p.Path, Err: os.ErrNotExist}
@@ -135,8 +129,22 @@ func (g grepTool) Execute(ctx context.Context, args json.RawMessage) (string, er
 		}
 		return "", err
 	}
+	if confineReadTo(g.readRoots, nil, p.Path) {
+		err := &os.PathError{Op: "stat", Path: p.Path, Err: os.ErrNotExist}
+		if rp.External {
+			return "", fmt.Errorf("grep %s: %s", rp.DisplayPath, rp.ErrorText(err))
+		}
+		return "", err
+	}
+	info, err := os.Stat(p.Path)
+	if err != nil {
+		if rp.External {
+			return "", fmt.Errorf("grep %s: %s", rp.DisplayPath, rp.ErrorText(err))
+		}
+		return "", fmt.Errorf("grep %s: %w", rp.DisplayPath, err)
+	}
 
-	if g.rg != "" {
+	if g.rg != "" && len(g.readRoots) == 0 {
 		out, wrapped, err := g.runRipgrep(ctx, p.Pattern, p.Path, to, rp)
 		if len(g.forbidRoots) == 0 || wrapped {
 			return out, err
@@ -163,7 +171,7 @@ func (g grepTool) runNative(ctx context.Context, pattern, path string, info os.F
 
 	// searchFile returns io.EOF as a sentinel once the cap is reached.
 	searchFile := func(file string) error {
-		if confineRead(g.forbidRoots, file) {
+		if confineReadTo(g.readRoots, g.forbidRoots, file) {
 			return nil
 		}
 		f, err := os.Open(file)

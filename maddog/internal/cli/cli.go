@@ -109,6 +109,9 @@ func Run(args []string, version string) int {
 	case "skilleval":
 		configureCLIThemeFromConfigNoProbe()
 		return skillevalCommand(rest)
+	case "skillopt":
+		configureCLIThemeFromConfigNoProbe()
+		return skilloptCommand(rest)
 	case "doctor":
 		configureCLIThemeFromConfigNoProbe()
 		return doctorCommand(rest, version)
@@ -171,13 +174,20 @@ func configureCLIThemeFromConfigNoProbe() {
 // the agent's typed event stream — runAgent passes a TextSink that renders to
 // stdout, the TUI passes an event-channel sink so events become tea.Msgs.
 func setup(ctx context.Context, modelName string, maxStepsOverride int, requireKey bool, sink event.Sink) (*control.Controller, error) {
-	migrateMCPConfigForCLIWorkspace()
+	return setupWithOptions(ctx, modelName, maxStepsOverride, requireKey, false, sink)
+}
+
+func setupWithOptions(ctx context.Context, modelName string, maxStepsOverride int, requireKey, offlineEvaluation bool, sink event.Sink) (*control.Controller, error) {
+	if !offlineEvaluation {
+		migrateMCPConfigForCLIWorkspace()
+	}
 	return boot.Build(ctx, boot.Options{
-		Model:      modelName,
-		MaxSteps:   maxStepsOverride,
-		RequireKey: requireKey,
-		Sink:       sink,
-		SessionDir: resolveCLISessionDir(),
+		Model:             modelName,
+		MaxSteps:          maxStepsOverride,
+		RequireKey:        requireKey,
+		OfflineEvaluation: offlineEvaluation,
+		Sink:              sink,
+		SessionDir:        resolveCLISessionDir(),
 	})
 }
 
@@ -266,7 +276,13 @@ func runAgent(args []string) int {
 	cont := fs.Bool("continue", false, "resume the most recent saved session")
 	fs.BoolVar(cont, "c", false, "shorthand for --continue")
 	resume := fs.String("resume", "", "resume a specific session file (non-interactive; takes precedence over --continue)")
+	skillName := fs.String("skill", "", "force a named project skill for this run")
+	evalMode := fs.Bool("eval-mode", false, "run in isolated offline evaluation mode")
 	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if *evalMode && (*cont || strings.TrimSpace(*resume) != "") {
+		fmt.Fprintln(os.Stderr, i18n.M.ErrorPrefix, "--eval-mode cannot be combined with --continue or --resume")
 		return 2
 	}
 	if rc := chdirTo(*dir); rc != 0 {
@@ -316,7 +332,9 @@ func runAgent(args []string) int {
 		metrics = &metricsSink{inner: textSink}
 		sink = metrics
 	}
-	sink = withNotifications(sink, cfg)
+	if !*evalMode {
+		sink = withNotifications(sink, cfg)
+	}
 	if *resume != "" {
 		*model = modelForResumePath(*model, *resume, cfg)
 	} else if *cont {
@@ -324,7 +342,7 @@ func runAgent(args []string) int {
 			*model = modelForResumePath(*model, sessions[0].Path, cfg)
 		}
 	}
-	ctrl, err := setup(ctx, *model, *maxSteps, true, sink)
+	ctrl, err := setupWithOptions(ctx, *model, *maxSteps, true, *evalMode, sink)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, i18n.M.ErrorPrefix, err)
 		return 1
@@ -354,8 +372,13 @@ func runAgent(args []string) int {
 		ctrl.SetSessionPath(agent.NewSessionPath(ctrl.SessionDir(), ctrl.Label()))
 	}
 
-	runErr := ctrl.Run(ctx, prompt)
-	if cfg != nil {
+	runInput, err := forcedSkillInput(ctrl, *skillName, prompt)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, i18n.M.ErrorPrefix, err)
+		return 1
+	}
+	runErr := ctrl.Run(ctx, runInput)
+	if cfg != nil && !*evalMode {
 		notify.SendEvent(newNotificationSender(), cfg.Notifications, event.Event{Kind: event.TurnDone, Err: runErr})
 	}
 	if metrics != nil {
@@ -368,6 +391,18 @@ func runAgent(args []string) int {
 		return 1
 	}
 	return 0
+}
+
+func forcedSkillInput(ctrl *control.Controller, name, prompt string) (string, error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return prompt, nil
+	}
+	rendered, found := ctrl.RunSkill("/" + name + " " + prompt)
+	if !found {
+		return "", fmt.Errorf("skill not found: %s", name)
+	}
+	return rendered, nil
 }
 
 // runServe exposes the controller over HTTP+SSE: events stream to the browser,

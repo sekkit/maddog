@@ -21,6 +21,7 @@ func init() { tool.RegisterBuiltin(globTool{}) }
 type globTool struct {
 	workDir     string
 	paths       *PathResolver
+	readRoots   []string
 	forbidRoots []string
 }
 
@@ -81,7 +82,7 @@ func (g globTool) Execute(ctx context.Context, args json.RawMessage) (string, er
 		}
 		return "", fmt.Errorf("glob %q: %w", displayPattern, err)
 	}
-	matches = filterForbidMatches(matches, g.forbidRoots)
+	matches = filterReadableMatches(matches, g.readRoots, g.forbidRoots)
 	if len(matches) == 0 && !strings.ContainsAny(rawPattern, "/\\") {
 		fallback := filepath.Join(g.workDir, "**", rawPattern)
 		return g.globRecursive(ctx, fallback, fallback, ResolvedPath{})
@@ -97,13 +98,13 @@ func (g globTool) Execute(ctx context.Context, args json.RawMessage) (string, er
 	return strings.Join(matches, "\n"), nil
 }
 
-func filterForbidMatches(matches, forbidRoots []string) []string {
-	if len(forbidRoots) == 0 || len(matches) == 0 {
+func filterReadableMatches(matches, readRoots, forbidRoots []string) []string {
+	if (len(readRoots) == 0 && len(forbidRoots) == 0) || len(matches) == 0 {
 		return matches
 	}
 	out := matches[:0]
 	for _, match := range matches {
-		if !confineRead(forbidRoots, match) {
+		if !confineReadTo(readRoots, forbidRoots, match) {
 			out = append(out, match)
 		}
 	}
@@ -125,6 +126,9 @@ func (g globTool) globRecursive(ctx context.Context, pattern, displayPattern str
 	}
 	// Ensure root is a clean directory path.
 	root = filepath.Clean(root)
+	if confineReadTo(g.readRoots, g.forbidRoots, root) {
+		return "(no matches)", nil
+	}
 
 	// Check root exists.
 	if info, err := os.Stat(root); err != nil {
@@ -152,12 +156,12 @@ func (g globTool) globRecursive(ctx context.Context, pattern, displayPattern str
 			return nil // skip unreadable entries
 		}
 		if d.IsDir() {
-			if skipWalkDir(root, path, d.Name()) || skipForbidDir(path, g.forbidRoots) {
+			if skipWalkDir(root, path, d.Name()) || confineReadTo(g.readRoots, g.forbidRoots, path) {
 				return filepath.SkipDir
 			}
 			return nil
 		}
-		if confineRead(g.forbidRoots, path) {
+		if confineReadTo(g.readRoots, g.forbidRoots, path) {
 			return nil
 		}
 		// If there's no suffix, every file matches.

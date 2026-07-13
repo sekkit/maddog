@@ -150,7 +150,7 @@ func (b bash) Execute(ctx context.Context, args json.RawMessage) (string, error)
 
 	// Wrap in the OS sandbox when configured; otherwise argv is just the shell.
 	argv, _ := sandbox.Command(b.sb, sh, p.Command)
-	cmdEnv := bashCommandEnv(ctx)
+	cmdEnv := bashCommandEnv(ctx, b.sb.ScrubEnvironment)
 
 	if p.RunInBackground {
 		jm, ok := jobs.FromContext(ctx)
@@ -559,8 +559,11 @@ func commandPreview(cmd string) string {
 	return cmd
 }
 
-func bashCommandEnv(ctx context.Context) []string {
+func bashCommandEnv(ctx context.Context, scrubSecrets bool) []string {
 	env := os.Environ()
+	if scrubSecrets {
+		env = scrubSecretEnvironment(env)
+	}
 	if runtime.GOOS == "windows" {
 		return env
 	}
@@ -571,6 +574,28 @@ func bashCommandEnv(ctx context.Context) []string {
 		}
 	}
 	return env
+}
+
+func scrubSecretEnvironment(env []string) []string {
+	out := make([]string, 0, len(env))
+	for _, entry := range env {
+		name, _, ok := strings.Cut(entry, "=")
+		if !ok {
+			continue
+		}
+		upper := strings.ToUpper(strings.TrimSpace(name))
+		secret := strings.Contains(upper, "API_KEY") ||
+			strings.Contains(upper, "APIKEY") ||
+			strings.Contains(upper, "TOKEN") ||
+			strings.Contains(upper, "SECRET") ||
+			strings.Contains(upper, "PASSWORD") ||
+			strings.Contains(upper, "CREDENTIAL") ||
+			strings.Contains(upper, "AUTH")
+		if !secret {
+			out = append(out, entry)
+		}
+	}
+	return out
 }
 
 func defaultBashShellPATH(ctx context.Context) string {

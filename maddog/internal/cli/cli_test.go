@@ -4,7 +4,9 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -12,16 +14,52 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 
 	"maddog/internal/agent"
+	agenttest "maddog/internal/agent/testutil"
 	"maddog/internal/config"
+	"maddog/internal/control"
 	"maddog/internal/event"
 	"maddog/internal/i18n"
 	"maddog/internal/notify"
 	"maddog/internal/provider"
+	"maddog/internal/skill"
 )
+
+const cliOfflineEvalProviderKind = "cli-offline-eval-test"
+
+var (
+	cliOfflineEvalProviderOnce sync.Once
+	cliOfflineEvalProviderMu   sync.Mutex
+	cliOfflineEvalProvider     *agenttest.MockProvider
+)
+
+func setCLIOfflineEvalProvider(t *testing.T, p *agenttest.MockProvider) {
+	t.Helper()
+	cliOfflineEvalProviderOnce.Do(func() {
+		provider.Register(cliOfflineEvalProviderKind, func(provider.Config) (provider.Provider, error) {
+			cliOfflineEvalProviderMu.Lock()
+			defer cliOfflineEvalProviderMu.Unlock()
+			if cliOfflineEvalProvider == nil {
+				return nil, errors.New("CLI offline eval test provider is not installed")
+			}
+			return cliOfflineEvalProvider, nil
+		})
+	})
+	cliOfflineEvalProviderMu.Lock()
+	cliOfflineEvalProvider = p
+	cliOfflineEvalProviderMu.Unlock()
+	t.Cleanup(func() {
+		cliOfflineEvalProviderMu.Lock()
+		if cliOfflineEvalProvider == p {
+			cliOfflineEvalProvider = nil
+		}
+		cliOfflineEvalProviderMu.Unlock()
+	})
+}
 
 func TestChdirTo(t *testing.T) {
 	orig, err := os.Getwd()
@@ -120,6 +158,175 @@ func TestRunResumeRejectsCleanupPending(t *testing.T) {
 	}
 }
 
+func TestRunEvalModeRejectsResumeAndContinue(t *testing.T) {
+	for _, args := range [][]string{
+		{"--eval-mode", "--continue", "task"},
+		{"--eval-mode", "--resume", "session.jsonl", "task"},
+	} {
+		errOut := captureStderr(t, func() {
+			if rc := runAgent(args); rc != 2 {
+				t.Fatalf("runAgent(%v) rc = %d, want 2", args, rc)
+			}
+		})
+		if !strings.Contains(errOut, "--eval-mode cannot be combined") {
+			t.Fatalf("runAgent(%v) stderr = %q", args, errOut)
+		}
+	}
+}
+
+func TestForcedSkillInputUsesControllerRendering(t *testing.T) {
+	project := t.TempDir()
+	store := skill.New(skill.Options{HomeDir: t.TempDir(), ProjectRoot: project, DisableBuiltins: true})
+	if err := store.Inject(skill.Skill{Name: "candidate", Description: "candidate skill", Body: "Follow the candidate checklist."}); err != nil {
+		t.Fatal(err)
+	}
+	ctrl := control.New(control.Options{SkillStore: store, Skills: store.List()})
+
+	got, err := forcedSkillInput(ctrl, "candidate", "fix parser")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(got, "# Skill: candidate") || !strings.Contains(got, "Follow the candidate checklist.") || !strings.Contains(got, "Arguments: fix parser") {
+		t.Fatalf("forcedSkillInput = %q, want Controller.RunSkill rendering", got)
+	}
+	if got, err := forcedSkillInput(ctrl, "", "plain task"); err != nil || got != "plain task" {
+		t.Fatalf("empty skill = (%q, %v), want plain task", got, err)
+	}
+	if _, err := forcedSkillInput(ctrl, "missing", "task"); err == nil || !strings.Contains(err.Error(), "skill not found") {
+		t.Fatalf("missing skill error = %v", err)
+	}
+}
+
+func TestRunEvalModeForcesProjectSkillEndToEnd(t *testing.T) {
+	home := isolateCLIConfigHome(t)
+	project := t.TempDir()
+	custom := t.TempDir()
+	outside := t.TempDir()
+	t.Chdir(project)
+	t.Setenv("MADDOG_OFFLINE_EVAL_TEST_KEY", "test-key")
+	if _, err := config.StoreCredentialLines([]string{"MADDOG_OFFLINE_EVAL_TEST_KEY=test-key"}); err != nil {
+		t.Fatal(err)
+	}
+
+	mock := agenttest.NewMock("offline-eval", agenttest.Turn{
+		Text:  "done",
+		Usage: &provider.Usage{PromptTokens: 12, CompletionTokens: 3, TotalTokens: 15},
+	})
+	setCLIOfflineEvalProvider(t, mock)
+
+	configBody := fmt.Sprintf(`
+default_model = "local"
+
+[agent]
+system_prompt = "BASE"
+
+[environment]
+enabled = true
+
+[sandbox]
+allow_write = [%q]
+network = true
+bash = "off"
+
+[tools]
+enabled = ["read_file", "write_file", "web_fetch", "bash"]
+
+[skills]
+paths = [%q]
+runtime_orchestration = true
+
+[[providers]]
+name = "local"
+kind = %q
+base_url = "https://example.invalid"
+model = "mock"
+api_key_env = "MADDOG_OFFLINE_EVAL_TEST_KEY"
+
+[[plugins]]
+name = "must-not-start"
+command = "missing-offline-eval-plugin"
+tier = "eager"
+`, outside, custom, cliOfflineEvalProviderKind)
+	if err := os.WriteFile(filepath.Join(project, "maddog.toml"), []byte(configBody), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	projectSkill := filepath.Join(project, ".maddog", "skills", "candidate", "SKILL.md")
+	if err := os.MkdirAll(filepath.Dir(projectSkill), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(projectSkill, []byte("---\ndescription: candidate\n---\nFollow the candidate checklist."), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{
+		filepath.Join(home, ".maddog", "skills", "global", "SKILL.md"),
+		filepath.Join(custom, "custom", "SKILL.md"),
+	} {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("---\ndescription: hidden\n---\nHIDDEN HOST SKILL"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	metricsPath := filepath.Join(project, "metrics.json")
+	out := captureStdout(t, func() {
+		if rc := runAgent([]string{"--eval-mode", "--skill", "candidate", "--metrics", metricsPath, "fix", "parser"}); rc != 0 {
+			t.Fatalf("runAgent rc = %d, want 0", rc)
+		}
+	})
+	if !strings.Contains(out, "done") {
+		t.Fatalf("run output = %q, want provider answer", out)
+	}
+	reqs := mock.Requests()
+	if len(reqs) != 1 {
+		t.Fatalf("provider requests = %d, want 1", len(reqs))
+	}
+	req := reqs[0]
+	var system, user string
+	for _, msg := range req.Messages {
+		switch msg.Role {
+		case provider.RoleSystem:
+			system = msg.Content
+		case provider.RoleUser:
+			user = msg.Content
+		}
+	}
+	if !strings.Contains(user, "# Skill: candidate") || !strings.Contains(user, "Follow the candidate checklist.") || !strings.Contains(user, "Arguments: fix parser") {
+		t.Fatalf("provider user message = %q, want forced skill rendering", user)
+	}
+	if strings.Contains(system, "## Environment") || strings.Contains(system, "HIDDEN HOST SKILL") {
+		t.Fatalf("offline system prompt leaked host context:\n%s", system)
+	}
+	for _, schema := range req.Tools {
+		if schema.Name == "web_fetch" || schema.Name == "bash" || schema.Name == "install_skill" || strings.HasPrefix(schema.Name, "mcp__") {
+			t.Fatalf("offline provider tool surface contains %q", schema.Name)
+		}
+	}
+	var metrics RunMetrics
+	b, err := os.ReadFile(metricsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(b, &metrics); err != nil {
+		t.Fatal(err)
+	}
+	if metrics.Steps != 1 || metrics.PromptTokens != 12 || metrics.CompletionTokens != 3 {
+		t.Fatalf("metrics = %+v", metrics)
+	}
+	if _, err := os.Stat(filepath.Join(project, config.ProjectConventionDir, "skilleval")); !os.IsNotExist(err) {
+		t.Fatalf("evaluation recursively captured replay bundle; stat err=%v", err)
+	}
+	if err := filepath.Walk(home, func(path string, info os.FileInfo, err error) error {
+		if err == nil && !info.IsDir() && strings.HasSuffix(strings.ToLower(path), ".jsonl") {
+			t.Errorf("evaluation persisted session file %s", path)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestServeResumeRejectsCleanupPending(t *testing.T) {
 	isolateCLIConfigHome(t)
 
@@ -199,6 +406,9 @@ func isolateCLIConfigHome(t *testing.T) string {
 	t.Helper()
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("MADDOG_HOME", filepath.Join(home, ".maddog"))
+	t.Setenv("MADDOG_STATE_HOME", filepath.Join(home, ".maddog-state"))
+	t.Setenv("MADDOG_CACHE_HOME", filepath.Join(home, ".maddog-cache"))
 	t.Setenv("MADDOG_CREDENTIALS_STORE", "file")
 	t.Setenv("USERPROFILE", home)
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
@@ -269,6 +479,9 @@ func TestMetadataCommandsDoNotProbeTerminalTheme(t *testing.T) {
 	}
 	if !strings.Contains(out, "maddog run  [--model NAME] [--max-steps N] <task>") {
 		t.Fatalf("help output missing run resume flags:\n%s", out)
+	}
+	if !strings.Contains(out, "maddog skillopt <optimize|status|resume|cancel|promote|rollback|cleanup>") {
+		t.Fatalf("help output missing skillopt lifecycle:\n%s", out)
 	}
 }
 

@@ -4,12 +4,14 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"maddog/internal/agent"
 	"maddog/internal/evidence"
 	"maddog/internal/provider"
+	"maddog/internal/skill"
 )
 
 func TestBuildBundleV2FromSessionEvidenceAndHistory(t *testing.T) {
@@ -221,5 +223,122 @@ func TestCaptureBundleDoesNotVerifyGenericSuccessfulTool(t *testing.T) {
 	}
 	if bundle.Outcome.Confidence == OutcomeConfidenceVerified || bundle.Outcome.Success || bundle.Outcome.GoalMet {
 		t.Fatalf("generic successful tool should not verify outcome: %+v", bundle.Outcome)
+	}
+}
+
+func TestSafeCaptureRedactsSecretsAndSensitivePayloads(t *testing.T) {
+	policy := *SafeCaptureSanitizationPolicy()
+	// Turn inclusion on explicitly to prove redaction remains effective even
+	// when a caller chooses to retain optional fields for local debugging.
+	policy.IncludeImages = true
+	policy.IncludeNativeBlocks = true
+	policy.IncludeToolArguments = true
+	policy.IncludeToolResults = true
+	policy.IncludeEvidenceArguments = true
+	policy.IncludeUnrelatedSkills = true
+	policy.IncludeUnrelatedSkillBody = true
+	bundle, _, err := CaptureBundle(CaptureOptions{
+		SessionID: "secret-capture",
+		Task:      "use api_key=super-secret-value",
+		Messages: []provider.Message{
+			{Role: provider.RoleUser, Content: "Authorization: Bearer abcdefghijklmnop", Images: []string{"data:image/png;base64,AAAASECRET"}},
+			{Role: provider.RoleAssistant, Content: "token=assistant-secret", ReasoningContent: "password: hidden", ToolCalls: []provider.ToolCall{{Name: "read_file", Arguments: `{"token":"call-secret","ok":"yes"}`}}},
+			{Role: provider.RoleTool, Content: "secret=tool-secret"},
+		},
+		Evidence: []evidence.Receipt{{ToolName: "bash", Args: json.RawMessage(`{"api_key":"receipt-secret","ok":true}`), Command: "curl token=command-secret"}},
+		Skills: []skill.Skill{
+			{Name: "used", Body: "secret=used-secret"},
+			{Name: "unrelated", Body: "password: unrelated-secret"},
+		},
+		SkillName:    "used",
+		Sanitization: &policy,
+		Dir:          t.TempDir(),
+	})
+	if err != nil {
+		t.Fatalf("CaptureBundle: %v", err)
+	}
+	raw, err := json.Marshal(bundle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(raw)
+	for _, secret := range []string{"super-secret-value", "abcdefghijklmnop", "AAAASECRET", "assistant-secret", "call-secret", "tool-secret", "receipt-secret", "command-secret", "used-secret", "unrelated-secret"} {
+		if strings.Contains(text, secret) {
+			t.Fatalf("safe capture leaked %q: %s", secret, text)
+		}
+	}
+	if !strings.Contains(text, "REDACTED") || !strings.Contains(text, "REDACTED_IMAGE_DATA_URL") {
+		t.Fatalf("safe capture missing redaction markers: %s", text)
+	}
+}
+
+func TestSafeCaptureOmitsOptionalSensitiveFieldsByDefault(t *testing.T) {
+	bundle, _, err := CaptureBundle(CaptureOptions{
+		SessionID: "safe-default",
+		Messages: []provider.Message{
+			{Role: provider.RoleUser, Content: "question"},
+			{Role: provider.RoleAssistant, ReasoningContent: "private reasoning", ToolCalls: []provider.ToolCall{{Name: "bash", Arguments: `{"x":1}`}}},
+			{Role: provider.RoleTool, Content: "private tool result"},
+		},
+		Skills: []skill.Skill{
+			{Name: "used", Body: "used body"},
+			{Name: "unrelated", Body: "unrelated body"},
+		},
+		SkillName:    "used",
+		Sanitization: SafeCaptureSanitizationPolicy(),
+		Dir:          t.TempDir(),
+	})
+	if err != nil {
+		t.Fatalf("CaptureBundle: %v", err)
+	}
+	if len(bundle.Messages) != 2 {
+		t.Fatalf("messages = %d, want user + assistant only", len(bundle.Messages))
+	}
+	if bundle.Messages[1].ReasoningContent != "" || len(bundle.Messages[1].ToolCalls) != 1 || bundle.Messages[1].ToolCalls[0].Arguments != "" {
+		t.Fatalf("optional assistant fields were retained: %+v", bundle.Messages[1])
+	}
+	if len(bundle.Skills) != 1 || bundle.Skills[0].Name != "used" {
+		t.Fatalf("unrelated skill was retained: %+v", bundle.Skills)
+	}
+}
+
+func TestCleanupBundlesEnforcesTTLAndCount(t *testing.T) {
+	dir := t.TempDir()
+	base := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
+	for i, created := range []time.Time{base, base.Add(24 * time.Hour), base.Add(48 * time.Hour)} {
+		_, path, err := CaptureBundle(CaptureOptions{
+			SessionID: "retention-" + string(rune('a'+i)),
+			Outcome:   OutcomeInfo{FinalAnswer: "ok"},
+			Dir:       dir,
+			Now:       created,
+		})
+		if err != nil {
+			t.Fatalf("CaptureBundle %d: %v", i, err)
+		}
+		if path == "" {
+			t.Fatal("CaptureBundle returned empty path")
+		}
+	}
+	// An unrelated JSON artifact must never be removed by bundle cleanup.
+	unrelated := filepath.Join(dir, "unrelated.json")
+	if err := os.WriteFile(unrelated, []byte(`{"hello":"world"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	removed, err := CleanupBundles(dir, BundleRetentionPolicy{MaxAge: 0, MaxCount: 2, Now: base.Add(72 * time.Hour)})
+	if err != nil {
+		t.Fatalf("CleanupBundles count: %v", err)
+	}
+	if removed != 1 {
+		t.Fatalf("removed = %d, want one oldest bundle", removed)
+	}
+	if _, err := os.Stat(unrelated); err != nil {
+		t.Fatalf("unrelated JSON removed: %v", err)
+	}
+	removed, err = CleanupBundles(dir, BundleRetentionPolicy{MaxAge: 36 * time.Hour, Now: base.Add(96 * time.Hour)})
+	if err != nil {
+		t.Fatalf("CleanupBundles TTL: %v", err)
+	}
+	if removed != 2 {
+		t.Fatalf("TTL removed = %d, want two remaining old bundles", removed)
 	}
 }

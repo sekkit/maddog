@@ -172,6 +172,28 @@ mcp_call_timeout_seconds = 300   # default MCP call safety cap; per-plugin/tool 
 # paths = ["~/my-skills", "../shared/skills"]   # extra "custom"-scope skill roots
 # excluded_paths = ["~/.agents/skills"]         # hide convention roots without deleting folders
 # disabled_skills = ["review"]                  # hide from prompt, slash invocation, and skill tools
+#
+# SkillOpt-Lite style optimization is explicit and offline. It is disabled by
+# default; see docs/SKILLOPT.md for the manifest and evalbench suite format.
+# [skills.optimization]
+# enabled = false
+# capture_replay = false
+# allow_shell = false   # opt-in; sandboxed/no-network, but can still read host files
+# model = ""
+# proposer_model = ""
+# rounds = 3
+# batch_size = 4
+# max_concurrency = 1
+# min_delta = 0.01
+# deadband = 0.001
+# max_calls = 0
+# max_input_tokens = 0
+# max_output_tokens = 0
+# max_cost = 0
+# retention_days = 30
+# max_replay_bundles = 200
+# redact_artifacts = true
+# require_approval = true
 
 # Hooks run shell commands around the loop (PreToolUse / PostToolUse /
 # UserPromptSubmit / Stop). They are NOT configured here — put them in

@@ -110,7 +110,13 @@ func scoreReplayPrompt(req ScoreReplayRequest) string {
 }
 
 func outcomeForScorePrompt(out OutcomeInfo) string {
-	return fmt.Sprintf("success=%v goal=%v confidence=%s tool_errors=%d tokens=%d answer=%q\n", out.Success, out.GoalMet, out.Confidence, out.ToolErrors, out.Tokens, trimForScorePrompt(out.FinalAnswer, 2000))
+	// Never put the original or replayed assistant answer in the scorer
+	// context. A scorer that sees the incumbent answer can simply copy or
+	// reward it, leaking held-out solution content into the optimization loop.
+	// Presence and length are sufficient diagnostics while verifier signals stay
+	// available for an independent scorer.
+	answer := strings.TrimSpace(out.FinalAnswer)
+	return fmt.Sprintf("success=%v goal=%v confidence=%s tool_errors=%d tokens=%d answer_present=%v answer_length=%d\n", out.Success, out.GoalMet, out.Confidence, out.ToolErrors, out.Tokens, answer != "", len(answer))
 }
 
 func trimForScorePrompt(s string, max int) string {

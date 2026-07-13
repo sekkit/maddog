@@ -201,42 +201,70 @@ func replayUserPrompt(bundle BundleV2) string {
 	var b strings.Builder
 	b.WriteString("Replay captured bundle ")
 	b.WriteString(strings.TrimSpace(bundle.ID))
-	b.WriteString(". Use transcript, evidence, and metadata as context; produce the best final answer for the task.\n\n")
-	if strings.TrimSpace(bundle.Task) != "" {
-		b.WriteString("Task: ")
-		b.WriteString(strings.TrimSpace(bundle.Task))
-		b.WriteString("\n\n")
+	b.WriteString(". Solve the task from its original input. No prior assistant answer or tool output is available.\n\n")
+	if dataset := strings.TrimSpace(bundle.Dataset); dataset != "" {
+		b.WriteString("Dataset: ")
+		b.WriteString(dataset)
+		b.WriteString("\n")
 	}
-	for _, msg := range bundle.Messages {
-		if msg.Role == provider.RoleSystem {
-			continue
-		}
-		content := strings.TrimSpace(msg.Content)
-		if content == "" {
-			continue
-		}
-		b.WriteString(strings.ToUpper(string(msg.Role)))
-		b.WriteString(": ")
-		b.WriteString(content)
-		b.WriteString("\n\n")
+	if split := strings.TrimSpace(bundle.Split); split != "" {
+		b.WriteString("Split: ")
+		b.WriteString(split)
+		b.WriteString("\n")
+	}
+	if caseID := strings.TrimSpace(bundle.CaseID); caseID != "" {
+		b.WriteString("Case: ")
+		b.WriteString(caseID)
+		b.WriteString("\n")
+	}
+	task := strings.TrimSpace(bundle.Task)
+	caseInput := strings.TrimSpace(bundle.CaseInput)
+	if task == "" && caseInput == "" {
+		task = firstCapturedUserInput(bundle.Messages)
+	}
+	if task != "" {
+		b.WriteString("\nTask:\n")
+		b.WriteString(task)
+		b.WriteString("\n")
+	}
+	if caseInput != "" && caseInput != task {
+		b.WriteString("\nCase input:\n")
+		b.WriteString(caseInput)
+		b.WriteString("\n")
 	}
 	if len(bundle.Evidence) > 0 {
-		b.WriteString("Evidence receipts:\n")
-		for _, r := range bundle.Evidence {
+		b.WriteString("\nPrior verification commands (arguments and outputs omitted):\n")
+		for i, receipt := range bundle.Evidence {
+			if i >= 20 {
+				b.WriteString("- [additional commands omitted]\n")
+				break
+			}
+			command := strings.TrimSpace(receipt.Command)
+			if command == "" {
+				command = strings.TrimSpace(receipt.ToolName)
+			}
+			if command == "" {
+				continue
+			}
 			status := "failed"
-			if r.Success {
+			if receipt.Success {
 				status = "succeeded"
 			}
 			b.WriteString("- ")
-			b.WriteString(r.ToolName)
-			b.WriteString(" ")
+			b.WriteString(command)
+			b.WriteString(" (")
 			b.WriteString(status)
-			if strings.TrimSpace(r.Command) != "" {
-				b.WriteString(": ")
-				b.WriteString(strings.TrimSpace(r.Command))
-			}
-			b.WriteString("\n")
+			b.WriteString(")\n")
 		}
 	}
 	return b.String()
+}
+
+func firstCapturedUserInput(messages []provider.Message) string {
+	for _, msg := range messages {
+		if msg.Role == provider.RoleUser && strings.TrimSpace(msg.Content) != "" {
+			return strings.TrimSpace(msg.Content)
+		}
+	}
+	return ""
 }

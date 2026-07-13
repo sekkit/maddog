@@ -865,12 +865,77 @@ func (c *Config) NetworkProxyMode() string {
 // hides named skills from the agent prompt, slash invocation, and skill tools
 // while keeping them manageable.
 type SkillsConfig struct {
-	Paths                []string `toml:"paths"`
-	ExcludedPaths        []string `toml:"excluded_paths"`
-	DisabledSkills       []string `toml:"disabled_skills"`
-	MaxDepth             int      `toml:"max_depth"`
-	RuntimeOrchestration bool     `toml:"runtime_orchestration"`
-	DynamicSkills        bool     `toml:"dynamic_skills"`
+	Paths                []string                `toml:"paths"`
+	ExcludedPaths        []string                `toml:"excluded_paths"`
+	DisabledSkills       []string                `toml:"disabled_skills"`
+	MaxDepth             int                     `toml:"max_depth"`
+	RuntimeOrchestration bool                    `toml:"runtime_orchestration"`
+	DynamicSkills        bool                    `toml:"dynamic_skills"`
+	Optimization         SkillOptimizationConfig `toml:"optimization"`
+}
+
+// SkillOptimizationConfig controls explicit, offline skill optimization runs.
+// Enabled defaults false: normal turns never collect training data, mutate a
+// skill, or promote a candidate merely because this block is present.
+type SkillOptimizationConfig struct {
+	Enabled          bool    `toml:"enabled"`
+	CaptureReplay    bool    `toml:"capture_replay"`
+	AllowShell       bool    `toml:"allow_shell"`
+	Model            string  `toml:"model"`
+	ProposerModel    string  `toml:"proposer_model"`
+	Rounds           int     `toml:"rounds"`
+	BatchSize        int     `toml:"batch_size"`
+	MaxConcurrency   int     `toml:"max_concurrency"`
+	MinDelta         float64 `toml:"min_delta"`
+	Deadband         float64 `toml:"deadband"`
+	MaxCalls         int     `toml:"max_calls"`
+	MaxInputTokens   int64   `toml:"max_input_tokens"`
+	MaxOutputTokens  int64   `toml:"max_output_tokens"`
+	MaxCost          float64 `toml:"max_cost"`
+	RetentionDays    int     `toml:"retention_days"`
+	MaxReplayBundles int     `toml:"max_replay_bundles"`
+	RedactArtifacts  *bool   `toml:"redact_artifacts"`
+	RequireApproval  *bool   `toml:"require_approval"`
+}
+
+// EffectiveSkillOptimizationConfig returns bounded defaults without enabling
+// optimization. Callers must still check Enabled and require an explicit CLI
+// optimize/resume action before starting a run.
+func (c *Config) EffectiveSkillOptimizationConfig() SkillOptimizationConfig {
+	var out SkillOptimizationConfig
+	if c != nil {
+		out = c.Skills.Optimization
+	}
+	if out.Rounds <= 0 {
+		out.Rounds = 3
+	}
+	if out.BatchSize <= 0 {
+		out.BatchSize = 4
+	}
+	if out.MaxConcurrency <= 0 {
+		out.MaxConcurrency = 1
+	}
+	if out.MinDelta <= 0 {
+		out.MinDelta = 0.01
+	}
+	if out.Deadband <= 0 {
+		out.Deadband = 0.001
+	}
+	if out.RetentionDays <= 0 {
+		out.RetentionDays = 30
+	}
+	if out.MaxReplayBundles <= 0 {
+		out.MaxReplayBundles = 200
+	}
+	if out.RedactArtifacts == nil {
+		value := true
+		out.RedactArtifacts = &value
+	}
+	if out.RequireApproval == nil {
+		value := true
+		out.RequireApproval = &value
+	}
+	return out
 }
 
 // SkillCustomPaths returns the configured custom skill roots with ${VAR}

@@ -86,6 +86,28 @@ func confineRead(forbidRoots []string, target string) bool {
 	return false
 }
 
+// confineReadTo reports whether target is forbidden either by the explicit
+// deny list or because it resolves outside every allowed read root. An empty
+// allow list preserves Maddog's normal unrestricted-read behavior.
+func confineReadTo(readRoots, forbidRoots []string, target string) bool {
+	if confineRead(forbidRoots, target) {
+		return true
+	}
+	if len(readRoots) == 0 {
+		return false
+	}
+	abs, err := realPath(target)
+	if err != nil {
+		return false // let the caller's normal missing/invalid path error win
+	}
+	for _, root := range readRoots {
+		if within(root, abs) {
+			return false
+		}
+	}
+	return true
+}
+
 // realRoots resolves each root to an absolute, symlink-free path, dropping any
 // that cannot be made absolute. Resolving here (once) means the per-call check
 // only has to resolve the target.

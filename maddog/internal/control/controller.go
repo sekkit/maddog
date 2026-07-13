@@ -168,6 +168,13 @@ type Controller struct {
 	turn int
 
 	displayRecorder func(content, display string)
+	// Replay capture is explicit opt-in. Offline optimization runs never
+	// recursively create training artifacts or persistent session state.
+	replayCaptureEnabled      bool
+	replayRetentionDays       int
+	replayMaxBundles          int
+	replayRedact              bool
+	disableSessionPersistence bool
 
 	runtimeSkillMu    sync.Mutex
 	runtimeSkillNames []string
@@ -320,6 +327,15 @@ type Options struct {
 	// terminal. Bot/headless frontends set a positive value so an unanswered
 	// prompt can't wedge the session indefinitely (#4626, #4402).
 	ApprovalTimeout time.Duration
+	// DisableReplayCapture is retained as a compatibility override;
+	// EnableReplayCapture is the explicit opt-in gate.
+	DisableReplayCapture bool
+	EnableReplayCapture  bool
+	ReplayRetentionDays  int
+	ReplayMaxBundles     int
+	ReplayRedact         bool
+	// DisableSessionPersistence keeps an intentional ephemeral session in memory.
+	DisableSessionPersistence bool
 }
 
 // New builds a Controller. A nil Sink is replaced with event.Discard.
@@ -374,6 +390,11 @@ func New(opts Options) *Controller {
 		workspaceRoot:              opts.WorkspaceRoot,
 		externalFolderRefs:         map[string]string{},
 		externalFolderToolRefs:     opts.ExternalFolderToolRefs,
+		replayCaptureEnabled:       opts.EnableReplayCapture && !opts.DisableReplayCapture,
+		replayRetentionDays:        opts.ReplayRetentionDays,
+		replayMaxBundles:           opts.ReplayMaxBundles,
+		replayRedact:               opts.ReplayRedact,
+		disableSessionPersistence:  opts.DisableSessionPersistence,
 	}
 	cmds := append([]command.Command(nil), opts.Commands...)
 	c.commands.Store(&cmds)
@@ -1405,7 +1426,7 @@ func (c *Controller) Run(ctx context.Context, input string) error {
 }
 
 func (c *Controller) captureReplayBundle(task string, startMessages int) {
-	if c == nil || c.executor == nil || strings.TrimSpace(c.workspaceRoot) == "" {
+	if c == nil || !c.replayCaptureEnabled || c.executor == nil || strings.TrimSpace(c.workspaceRoot) == "" {
 		return
 	}
 	task = strings.TrimSpace(task)
@@ -1459,6 +1480,14 @@ func (c *Controller) captureReplayBundle(task string, startMessages int) {
 		},
 		Dir: dir,
 	}
+	policy := skilleval.SafeCaptureSanitizationPolicy()
+	policy.RedactSecrets = c.replayRedact
+	opts.Sanitization = policy
+	retention := skilleval.BundleRetentionPolicy{MaxCount: c.replayMaxBundles}
+	if c.replayRetentionDays > 0 {
+		retention.MaxAge = time.Duration(c.replayRetentionDays) * 24 * time.Hour
+	}
+	opts.Retention = &retention
 	if dynamicSkillUsed {
 		dyn := dynamicSkill
 		opts.Dynamic = &dyn
@@ -2683,6 +2712,9 @@ func (c *Controller) replaceSessionAfterCancel(msgs []provider.Message) {
 }
 
 func (c *Controller) snapshotActivityIfChanged(startMessages int) {
+	if c.disableSessionPersistence {
+		return
+	}
 	if c.messageCount() <= startMessages {
 		return
 	}

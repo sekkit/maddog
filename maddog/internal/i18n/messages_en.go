@@ -387,6 +387,7 @@ Usage:
   maddog config auto-plan [off|on]                    configure automatic plan mode
   maddog mcp <add|remove|list>                        manage MCP servers in maddog.toml
   maddog hypergraphrag [status]                       inspect HyperGraphRAG code-intelligence backends
+  maddog skillopt <optimize|status|resume|cancel|promote|rollback|cleanup>   run the offline skill optimization lifecycle
   maddog env [list|refresh|show]                      inspect project environment/tool paths
   maddog pxpipe [status|start|stop]                    manage local pxpipe request-compression sidecar
   maddog doctor [--json]                              print redacted local diagnostics
