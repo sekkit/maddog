@@ -36,11 +36,13 @@ import (
 // grep, while preventing one accidental "read this 5 MB log" from blowing the
 // window before the next compaction runs.
 const maxToolOutputBytes = 32 * 1024
+const minToolCompressionSavedTokens = 8
 
 const maxFinalReadinessBlocks = 3
 const maxEmptyFinalBlocks = 3
 const maxStreamRecoveries = 3
 const maxExecutorHandoffNudges = 1
+const maxPauseTurnContinuations = 3
 const memoryCompilerInjectionMax = 5
 const memoryCompilerInjectionCooldown = 30 * time.Second
 
@@ -197,26 +199,35 @@ type Agent struct {
 	reasoningLanguage    atomic.Value // string: auto|zh|en
 	responseLanguage     atomic.Value // string: auto|zh|en
 
-	upgradePolicy         UpgradePolicy
-	frontierProv          provider.Provider
-	frontierPricing       *provider.Pricing
-	frontierContextWindow int
-	frontierTarget        string
-	usageRole             string
-	usageModel            string
-	usageEffort           string
-	defaultProv           provider.Provider
-	defaultPricing        *provider.Pricing
-	defaultContextWindow  int
-	upgraded              bool
-	onFrontier            bool
-	frontierReceiptStart  int
-	frontierTokens        atomic.Int64
-	advisor               AdvisorConfig
-	advisorRunner         AdvisorRunner
-	nativeAdvisor         *provider.NativeAdvisorConfig
-	advisorTurnUses       int
-	advisorSessionUses    int
+	upgradePolicy            UpgradePolicy
+	frontierProv             provider.Provider
+	frontierPricing          *provider.Pricing
+	frontierContextWindow    int
+	frontierTarget           string
+	usageRole                string
+	usageModel               string
+	usageEffort              string
+	usageSource              string
+	defaultProv              provider.Provider
+	defaultPricing           *provider.Pricing
+	defaultContextWindow     int
+	upgraded                 bool
+	onFrontier               bool
+	frontierReceiptStart     int
+	frontierTokens           atomic.Int64
+	advisor                  AdvisorConfig
+	advisorRunner            AdvisorRunner
+	nativeAdvisor            *provider.NativeAdvisorConfig
+	nativeAdvisorPricing     *provider.Pricing
+	advisorTurnUses          int
+	advisorSessionUses       int
+	advisorSuppressed        bool
+	advisorTurnInput         string
+	nativeAdvisorNudged      bool
+	nativeAdvisorResultSeen  map[string]struct{}
+	advisorRetryPending      bool
+	advisorRetryReceiptStart int
+	advisorRetryDecision     UpgradeDecision
 
 	// sink receives the turn's typed event stream (reasoning/text deltas, tool
 	// dispatch/results, usage, notices). The agent no longer formats output
@@ -528,7 +539,7 @@ func (a *Agent) resetToolCompressions() {
 }
 
 func (a *Agent) recordToolCompression(toolName string, c *event.Compression) {
-	if a == nil || c == nil {
+	if a == nil || !c.IsCompression() {
 		return
 	}
 	a.toolCompressionsMu.Lock()
@@ -546,6 +557,12 @@ func (a *Agent) SetSession(s *Session) {
 	a.sessMu.Unlock()
 	a.sessCacheHit.Store(0)
 	a.sessCacheMiss.Store(0)
+	a.advisorTurnUses = 0
+	if s != nil {
+		a.restoreNativeAdvisorSession(s.Snapshot())
+	} else {
+		a.restoreNativeAdvisorSession(nil)
+	}
 	a.clearRawToolResults()
 	if s != nil {
 		a.rebuildTodoState(s.Snapshot())
@@ -667,7 +684,9 @@ func cloneProviderUsage(usage *provider.Usage) provider.Usage {
 	if usage == nil {
 		return provider.Usage{}
 	}
-	return *usage
+	copy := *usage
+	copy.Iterations = append([]provider.UsageIteration(nil), usage.Iterations...)
+	return copy
 }
 
 func (a *Agent) notifyUsageObserver(usage *provider.Usage) {
@@ -850,6 +869,7 @@ type Options struct {
 	Advisor               AdvisorConfig
 	AdvisorRunner         AdvisorRunner
 	NativeAdvisor         *provider.NativeAdvisorConfig
+	NativeAdvisorPricing  *provider.Pricing // optional pricing for independent native advisor usage events
 }
 
 // New constructs an Agent. MaxSteps <= 0 means no cap — the run loop continues
@@ -916,9 +936,11 @@ func New(prov provider.Provider, tools *tool.Registry, session *Session, opts Op
 		usageRole:             strings.TrimSpace(opts.UsageRole),
 		usageModel:            strings.TrimSpace(opts.UsageModel),
 		usageEffort:           strings.TrimSpace(opts.UsageEffort),
+		usageSource:           usageSourceOrDefault(opts.UsageSource, event.UsageSourceExecutor),
 		advisor:               opts.Advisor,
 		advisorRunner:         opts.AdvisorRunner,
 		nativeAdvisor:         cloneNativeAdvisor(opts.NativeAdvisor),
+		nativeAdvisorPricing:  opts.NativeAdvisorPricing,
 		sink:                  sink,
 		gate:                  gate,
 		planModeReadOnlyTrust: planModeReadOnlyTrust,
@@ -941,6 +963,9 @@ func New(prov provider.Provider, tools *tool.Registry, session *Session, opts Op
 		keepPolicy:            opts.KeepPolicy,
 		archiveDir:            opts.ArchiveDir,
 	}
+	if session != nil {
+		a.restoreNativeAdvisorSession(session.Snapshot())
+	}
 	if a.tools != nil {
 		a.tools.Add(rawToolResultTool{agent: a})
 		if a.advisorRunner != nil && a.nativeAdvisor == nil && a.advisor.MaxUsesPerTurn > 0 {
@@ -957,6 +982,62 @@ func usageSourceOrDefault(source, fallback string) string {
 		return source
 	}
 	return fallback
+}
+
+func (a *Agent) advisorStrategyEnabled() bool {
+	return a != nil && a.advisor.MaxUsesPerTurn > 0 && (a.nativeAdvisor != nil || a.advisorRunner != nil)
+}
+
+func (a *Agent) toolSchemasForRequest() []provider.ToolSchema {
+	if a == nil || a.tools == nil {
+		return nil
+	}
+	schemas := a.tools.Schemas()
+	if !a.advisorSuppressed {
+		return schemas
+	}
+	filtered := schemas[:0]
+	for _, schema := range schemas {
+		if schema.Name != "advisor" {
+			filtered = append(filtered, schema)
+		}
+	}
+	return filtered
+}
+
+func (a *Agent) messagesForProviderRequest() []provider.Message {
+	if a == nil || a.session == nil || !a.advisorStrategyEnabled() {
+		if a == nil || a.session == nil {
+			return nil
+		}
+		return a.session.Messages
+	}
+	msgs := append([]provider.Message(nil), a.session.Messages...)
+	lastSystem := -1
+	for i := range msgs {
+		if msgs[i].Role != provider.RoleSystem {
+			continue
+		}
+		lastSystem = i
+		if strings.Contains(msgs[i].Content, AdvisorStrategyPrompt) {
+			return msgs
+		}
+	}
+	if lastSystem >= 0 {
+		msgs[lastSystem].Content = appendAdvisorStrategy(msgs[lastSystem].Content)
+		return msgs
+	}
+	return append([]provider.Message{{Role: provider.RoleSystem, Content: AdvisorStrategyPrompt}}, msgs...)
+}
+
+func appendAdvisorStrategy(system string) string {
+	if strings.Contains(system, AdvisorStrategyPrompt) {
+		return system
+	}
+	if system == "" {
+		return AdvisorStrategyPrompt
+	}
+	return system + "\n\n" + AdvisorStrategyPrompt
 }
 
 func clonePxpipeSummary(in *event.PxpipeSummary) *event.PxpipeSummary {
@@ -1013,6 +1094,8 @@ func (a *Agent) Run(ctx context.Context, input string) (runErr error) {
 	a.repeatSuccessCounts = nil
 	a.sink.Emit(event.Event{Kind: event.TurnStarted})
 	rawInput := input
+	a.advisorTurnInput = rawInput
+	a.advisorSuppressed = advisorExplicitlySkipped(rawInput)
 	memoryCompilerInput := rawInput
 	if sourceInput, ok := MemoryCompilerSourceInputFromContext(ctx); ok {
 		memoryCompilerInput = sourceInput
@@ -1060,9 +1143,10 @@ func (a *Agent) Run(ctx context.Context, input string) (runErr error) {
 	handoffNudges := 0
 	usedAnyTool := false
 	streamRecoveries := 0
+	pauseTurnContinuations := 0
 	graceRound := false
 	executorHandoff := a.executorHandoffGuard && strings.Contains(input, executorHandoffMarker)
-	for step := 0; a.maxSteps <= 0 || step < a.maxSteps || graceRound; step++ {
+	for step := 0; a.maxSteps <= 0 || step < a.maxSteps || graceRound || a.advisorRetryPending; step++ {
 		// Consume a queued steer and persist it to the session so it
 		// survives tab switches and history replay. The model sees it as
 		// guidance (with a prefix), not a new task. One cache miss per
@@ -1071,7 +1155,7 @@ func (a *Agent) Run(ctx context.Context, input string) (runErr error) {
 			a.session.Add(provider.Message{Role: provider.RoleUser, Content: a.withTurnPreferences(midTurnSteerMessage(text))})
 			a.sink.Emit(event.Event{Kind: event.Steer, Text: text})
 		}
-		schemas := a.tools.Schemas()
+		schemas := a.toolSchemasForRequest()
 		prefixShape := a.capturePrefixShape(schemas)
 		prevPrefixShape := a.lastPrefixShape
 		if !a.haveLastPrefixShape {
@@ -1079,6 +1163,7 @@ func (a *Agent) Run(ctx context.Context, input string) (runErr error) {
 		}
 
 		text, reasoning, signature, nativeBlocks, calls, usage, interrupted, partialToolStarted, err := a.stream(ctx, step+1)
+		a.recordNativeAdvisorActivity(usage, nativeBlocks)
 		if err != nil {
 			a.emitProviderStatus(err)
 			if a.onFrontier {
@@ -1133,6 +1218,8 @@ func (a *Agent) Run(ctx context.Context, input string) (runErr error) {
 				Profile:          profile,
 				ProviderStatus:   providerStatusForProfile(profile, nil),
 				Pxpipe:           clonePxpipeSummary(a.pxpipeSummary),
+				Source:           a.usageSource,
+				UsageSource:      a.usageSource,
 				CacheDiagnostics: &cacheDiagnostics,
 				SessionHit:       int(a.sessCacheHit.Load()), SessionMiss: int(a.sessCacheMiss.Load())})
 		}
@@ -1154,8 +1241,34 @@ func (a *Agent) Run(ctx context.Context, input string) (runErr error) {
 			ToolCalls:          calls,
 			MemoryCitations:    a.memoryCitations(),
 		})
+		if usage != nil && strings.EqualFold(strings.TrimSpace(usage.FinishReason), "pause_turn") {
+			pauseTurnContinuations++
+			if pauseTurnContinuations > maxPauseTurnContinuations {
+				return fmt.Errorf("native advisor pause_turn repeated %d times without completing", pauseTurnContinuations)
+			}
+			step-- // provider-side continuation is not a local tool-call round
+			continue
+		}
+		pauseTurnContinuations = 0
 
 		if len(calls) == 0 {
+			if a.advisorRetryPending && advisorRetryReportedGoalBlocked(text) {
+				decision := a.advisorRetryDecision
+				a.advisorRetryPending = false
+				a.advisorRetryReceiptStart = 0
+				a.advisorRetryDecision = UpgradeDecision{}
+				if strings.TrimSpace(decision.Reason) == "" {
+					decision.Reason = "advisor-guided default retry remained goal-blocked"
+				} else {
+					decision.Reason += "; advisor-guided default retry remained goal-blocked"
+				}
+				a.upgradeToFrontier(decision)
+				a.session.Add(provider.Message{Role: provider.RoleUser, Content: a.withTurnPreferences(
+					"The advisor-guided default executor retry remained blocked. Continue on the frontier model and resolve the blocker before answering.",
+				)})
+				step-- // switching providers after a final response does not consume a tool-call round
+				continue
+			}
 			readiness := a.finalReadinessCheck()
 			if readiness.reason != "" {
 				finalReadinessBlocks++
@@ -1226,7 +1339,7 @@ func (a *Agent) Run(ctx context.Context, input string) (runErr error) {
 
 		// When the tool-call budget runs out this round, give the model
 		// one grace round to produce a final answer from completed work.
-		if a.maxSteps > 0 && step+1 >= a.maxSteps {
+		if a.maxSteps > 0 && step+1 >= a.maxSteps && !a.advisorRetryPending {
 			graceRound = true
 			nudge := fmt.Sprintf("Do not call any more tools — your tool-call round limit (%s) has been reached. Instead, synthesize a final answer from all the work already completed: summarize what was accomplished, what remains to be done, and any decisions the user should make. The user can increase %s or continue in the next turn if more work is needed.", a.maxStepsKey, a.maxStepsKey)
 			a.session.Add(provider.Message{Role: provider.RoleUser, Content: a.withTurnPreferences(nudge)})
@@ -1253,6 +1366,12 @@ func (a *Agent) resetRoutingForTurn() {
 	a.onFrontier = false
 	a.frontierReceiptStart = 0
 	a.advisorTurnUses = 0
+	a.advisorSuppressed = false
+	a.advisorTurnInput = ""
+	a.nativeAdvisorNudged = false
+	a.advisorRetryPending = false
+	a.advisorRetryReceiptStart = 0
+	a.advisorRetryDecision = UpgradeDecision{}
 	if a.defaultProv != nil {
 		a.prov = a.defaultProv
 		a.pricing = a.defaultPricing
@@ -1294,25 +1413,18 @@ func (a *Agent) evaluateInitialRouting(ctx context.Context) {
 		return
 	}
 	decision := a.upgradePolicy.Evaluate(sig, 0, a.frontierTokens.Load())
+	consulted := false
 	if decision.TriggerAdvisor {
-		a.consultAdvisor(ctx, sig, decision)
+		consulted = a.consultAdvisor(ctx, sig, decision)
 	}
 	if !decision.ShouldUpgrade {
 		return
 	}
-	a.switchToFrontier(decision)
-	target := strings.TrimSpace(decision.TargetModel)
-	if target == "" {
-		target = strings.TrimSpace(a.frontierTarget)
+	if decision.RetryDefaultAfterAdvisor && consulted {
+		a.deferFrontierAfterAdvisor(decision)
+		return
 	}
-	if target == "" && a.frontierProv != nil {
-		target = a.frontierProv.Name()
-	}
-	text := "upgraded to " + target
-	if strings.TrimSpace(decision.Reason) != "" {
-		text += ": " + strings.TrimSpace(decision.Reason)
-	}
-	a.sink.Emit(event.Event{Kind: event.Upgrade, Level: event.LevelInfo, Text: text})
+	a.upgradeToFrontier(decision)
 }
 
 func (a *Agent) evaluateRoutingAfterTools(ctx context.Context, turn int) {
@@ -1326,16 +1438,60 @@ func (a *Agent) evaluateRoutingAfterTools(ctx context.Context, turn int) {
 		}
 		return
 	}
+	if a.advisorRetryPending {
+		retrySignal := a.evidence.FailureSignalSince(a.advisorRetryReceiptStart)
+		decision := a.advisorRetryDecision
+		a.advisorRetryPending = false
+		a.advisorRetryReceiptStart = 0
+		a.advisorRetryDecision = UpgradeDecision{}
+		if retrySignal.ErrorStreak == 0 {
+			return
+		}
+		if strings.TrimSpace(decision.Reason) == "" {
+			decision.Reason = "default retry after advisor still failed"
+		} else {
+			decision.Reason += "; default retry after advisor still failed"
+		}
+		a.upgradeToFrontier(decision)
+		return
+	}
 	if a.upgraded || a.frontierProv == nil {
 		return
 	}
-	decision := a.upgradePolicy.Evaluate(a.evidence.FailureSignal(), turn, a.frontierTokens.Load())
+	sig := a.evidence.FailureSignal()
+	decision := a.upgradePolicy.Evaluate(sig, turn, a.frontierTokens.Load())
+	consulted := false
 	if decision.TriggerAdvisor {
-		a.consultAdvisor(ctx, a.evidence.FailureSignal(), decision)
+		consulted = a.consultAdvisor(ctx, sig, decision)
 	}
 	if !decision.ShouldUpgrade {
 		return
 	}
+	if decision.RetryDefaultAfterAdvisor && consulted {
+		a.deferFrontierAfterAdvisor(decision)
+		return
+	}
+	a.upgradeToFrontier(decision)
+}
+
+func (a *Agent) deferFrontierAfterAdvisor(decision UpgradeDecision) {
+	a.advisorRetryPending = true
+	a.advisorRetryReceiptStart = a.evidence.Count()
+	a.advisorRetryDecision = decision
+	a.sink.Emit(event.Event{Kind: event.Notice, Level: event.LevelInfo, Text: "advisor guidance queued for one default executor retry before frontier"})
+}
+
+func advisorRetryReportedGoalBlocked(text string) bool {
+	for _, line := range strings.Split(strings.ToLower(text), "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "[goal:blocked:") && strings.HasSuffix(line, "]") {
+			return true
+		}
+	}
+	return false
+}
+
+func (a *Agent) upgradeToFrontier(decision UpgradeDecision) {
 	a.switchToFrontier(decision)
 	target := strings.TrimSpace(decision.TargetModel)
 	if target == "" {
@@ -1351,41 +1507,24 @@ func (a *Agent) evaluateRoutingAfterTools(ctx context.Context, turn int) {
 	a.sink.Emit(event.Event{Kind: event.Upgrade, Level: event.LevelInfo, Text: text})
 }
 
-func (a *Agent) consultAdvisor(ctx context.Context, sig evidence.FailureSignal, d UpgradeDecision) {
-	if a.advisorRunner == nil {
-		return
+func (a *Agent) consultAdvisor(ctx context.Context, sig evidence.FailureSignal, d UpgradeDecision) bool {
+	if a.advisorSuppressed {
+		return false
 	}
-	turnRemaining, sessionRemaining := a.advisorRemaining()
-	if turnRemaining <= 0 || sessionRemaining == 0 {
-		return
+	if a.nativeAdvisor != nil {
+		return a.requestNativeAdvisorConsultation(sig, d)
+	}
+	if a.advisorRunner == nil {
+		return false
 	}
 	req := a.buildAdvisorRequest(sig, d)
-	advice, err := a.advisorRunner(ctx, req)
+	advice, err := a.invokeFallbackAdvisor(ctx, req)
 	if err != nil {
-		a.sink.Emit(event.Event{Kind: event.Advisor, Level: event.LevelWarn, Text: "advisor consultation failed: " + err.Error(),
-			Advisor: event.AdvisorConsultation{Reason: req.Reason, Question: req.Question}})
-		return
+		return false
 	}
-	advice = strings.TrimSpace(advice)
-	if advice == "" {
-		return
-	}
-	a.advisorTurnUses++
-	a.advisorSessionUses++
-	turnRemaining, sessionRemaining = a.advisorRemaining()
-	payload := event.AdvisorConsultation{
-		Reason:               req.Reason,
-		Question:             req.Question,
-		Advice:               advice,
-		UsesThisTurn:         a.advisorTurnUses,
-		UsesThisSession:      a.advisorSessionUses,
-		RemainingThisTurn:    turnRemaining,
-		RemainingThisSession: sessionRemaining,
-		MaxUsesPerTurn:       a.advisor.MaxUsesPerTurn,
-		MaxUsesPerSession:    a.advisor.MaxUsesPerSession,
-	}
-	a.sink.Emit(event.Event{Kind: event.Advisor, Level: event.LevelInfo, Text: "advisor consulted: " + req.Reason, Advisor: payload})
+	turnRemaining, sessionRemaining := a.advisorRemaining()
 	a.session.Add(provider.Message{Role: provider.RoleUser, Content: FormatAdvisorGuidance(req, advice, turnRemaining, sessionRemaining)})
+	return true
 }
 
 func (a *Agent) switchToFrontier(d UpgradeDecision) {
@@ -2055,8 +2194,8 @@ func (a *Agent) stream(ctx context.Context, turn int) (string, string, string, [
 		a.sink.Emit(event.Event{Kind: event.Retrying, RetryAttempt: info.Attempt, RetryMax: info.Max})
 	})
 	ch, err := a.prov.Stream(ctx, provider.Request{
-		Messages:      a.session.Messages,
-		Tools:         a.tools.Schemas(),
+		Messages:      a.messagesForProviderRequest(),
+		Tools:         a.toolSchemasForRequest(),
 		Temperature:   a.temperature,
 		NativeAdvisor: a.nativeAdvisorForRequest(),
 	})
@@ -2185,7 +2324,11 @@ func (a *Agent) systemPrompt() string {
 		}
 		b.WriteString(m.Content)
 	}
-	return b.String()
+	system := b.String()
+	if a.advisorStrategyEnabled() {
+		return appendAdvisorStrategy(system)
+	}
+	return system
 }
 
 // executeBatch dispatches one model turn's tool calls. A ToolDispatch event is
@@ -2687,12 +2830,15 @@ func (a *Agent) modelToolOutput(call provider.ToolCall, t tool.Tool, raw string)
 	if compressed, meta, ok := a.compressToolOutput(call, t, raw); ok {
 		body = compressed
 		compression = meta
+	} else if meta != nil {
+		compression = meta
 	} else if a.toolOutputCompressor != nil {
 		a.clearRawToolResult(call.ID)
 	}
 	output, truncMsg := truncateToolOutput(body)
 	if compression != nil {
-		updateToolCompressionVisibleMetrics(compression, output)
+		rawVisible, _ := truncateToolOutput(raw)
+		updateToolCompressionVisibleMetrics(compression, rawVisible, output)
 	}
 	return output, truncMsg, compression
 }
@@ -2728,18 +2874,22 @@ func (a *Agent) compressToolOutput(call provider.ToolCall, t tool.Tool, raw stri
 		return "", nil, false
 	}
 	compressed := formatCompressedToolOutput(result, rawRef)
-	if compressed == "" || len(compressed) >= len(raw) {
+	if compressed == "" {
+		return "", nil, false
+	}
+	compressedVisible, _ := truncateToolOutput(compressed)
+	rawVisible, _ := truncateToolOutput(raw)
+	rawTokens := estimateToolCompressionTokens(rawVisible)
+	compressedTokens := estimateToolCompressionTokens(compressedVisible)
+	if rawTokens-compressedTokens < minToolCompressionSavedTokens {
 		return "", nil, false
 	}
 	if err := a.storeRawToolResult(call.ID, raw); err != nil {
+		a.clearRawToolResult(call.ID)
 		a.sink.Emit(event.Event{Kind: event.Notice, Level: event.LevelWarn, Text: fmt.Sprintf(
-			"raw tool result store failed for %s (%s): %v; full output unavailable",
+			"raw tool result store failed for %s (%s): %v; using raw/truncated output",
 			call.Name, call.ID, err)})
-		compressedOnly := formatCompressedToolOutput(result, "")
-		if compressedOnly == "" {
-			compressedOnly = result.Content
-		}
-		return compressedOnly, toolCompressionEvent(result, ""), true
+		return "", passthroughToolOutputEvent("store_failed"), false
 	}
 	return compressed, toolCompressionEvent(result, rawRef), true
 }
@@ -2747,6 +2897,14 @@ func (a *Agent) compressToolOutput(call provider.ToolCall, t tool.Tool, raw stri
 func toolCompressionEvent(result contextpack.Result, rawRef string) *event.Compression {
 	return &event.Compression{
 		RawRef:           rawRef,
+		Route:            string(result.Route),
+		Profile:          result.Profile,
+		Quality:          string(result.Quality),
+		QualityReason:    result.QualityReason,
+		UnparsedLines:    result.UnparsedLines,
+		UnparsedSamples:  append([]string(nil), result.UnparsedSamples...),
+		Lossy:            result.Lossy,
+		OmittedLines:     result.OmittedLines,
 		Strategy:         result.Strategy,
 		Summary:          result.Summary,
 		RawChars:         result.RawChars,
@@ -2758,7 +2916,17 @@ func toolCompressionEvent(result contextpack.Result, rawRef string) *event.Compr
 	}
 }
 
-func updateToolCompressionVisibleMetrics(c *event.Compression, visible string) {
+func passthroughToolOutputEvent(reason string) *event.Compression {
+	return &event.Compression{
+		Route:         string(contextpack.RoutePassthrough),
+		Quality:       string(contextpack.ParseQualityPassthrough),
+		QualityReason: reason,
+	}
+}
+
+func updateToolCompressionVisibleMetrics(c *event.Compression, rawVisible, visible string) {
+	c.RawChars = utf8.RuneCountInString(rawVisible)
+	c.RawTokens = estimateToolCompressionTokens(rawVisible)
 	c.CompressedChars = utf8.RuneCountInString(visible)
 	if c.RawChars > c.CompressedChars {
 		c.SavedChars = c.RawChars - c.CompressedChars

@@ -500,7 +500,8 @@ func grade(work, taskDir string) (bool, string) {
 	if err := copyFile(verify, dst); err != nil {
 		return false, "copy verify.sh: " + err.Error()
 	}
-	if _, err := exec.LookPath("bash"); err != nil {
+	bash := usableBashPath()
+	if bash == "" {
 		return gradeWithoutBash(work, dst)
 	}
 	env := os.Environ()
@@ -508,7 +509,7 @@ func grade(work, taskDir string) (bool, string) {
 		defer cleanup()
 		env = append(env, "PATH="+shimDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	}
-	cmd := exec.Command("bash", "verify.sh")
+	cmd := exec.Command(bash, "verify.sh")
 	cmd.Dir = work
 	cmd.Env = env
 	cmd.Stdout = os.Stderr
@@ -517,6 +518,33 @@ func grade(work, taskDir string) (bool, string) {
 		return false, err.Error()
 	}
 	return true, ""
+}
+
+func usableBashPath() string {
+	bash, err := exec.LookPath("bash")
+	if err != nil {
+		return ""
+	}
+	if os.PathSeparator == '\\' {
+		windowsDir := strings.TrimSpace(os.Getenv("WINDIR"))
+		if windowsDir != "" {
+			wslLauncher := filepath.Join(windowsDir, "System32", "bash.exe")
+			if sameExecutablePath(bash, wslLauncher) {
+				return ""
+			}
+		}
+	}
+	return bash
+}
+
+func sameExecutablePath(a, b string) bool {
+	if abs, err := filepath.Abs(a); err == nil {
+		a = abs
+	}
+	if abs, err := filepath.Abs(b); err == nil {
+		b = abs
+	}
+	return strings.EqualFold(filepath.Clean(a), filepath.Clean(b))
 }
 
 func gradeWithoutBash(work, verify string) (bool, string) {

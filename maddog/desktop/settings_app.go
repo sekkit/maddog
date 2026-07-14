@@ -169,40 +169,45 @@ type BotSettingsView struct {
 
 // SettingsView is the whole Settings panel payload.
 type SettingsView struct {
-	DefaultModel            string          `json:"defaultModel"`
-	PlannerModel            string          `json:"plannerModel"`
-	SubagentModel           string          `json:"subagentModel"`
-	AdvisorModel            string          `json:"advisorModel"`
-	SubagentEffort          string          `json:"subagentEffort"`
-	FrontierModel           string          `json:"frontierModel"`
-	UpgradeEnabled          bool            `json:"upgradeEnabled"`
-	UpgradeThreshold        int             `json:"upgradeThreshold"`
-	FrontierBudget          int64           `json:"frontierBudget"`
-	AutoPlan                string          `json:"autoPlan"`
-	DefaultToolApprovalMode string          `json:"defaultToolApprovalMode"`
-	MemoryCompiler          bool            `json:"memoryCompilerEnabled"`
-	Providers               []ProviderView  `json:"providers"`
-	OfficialProviders       []ProviderView  `json:"officialProviders"`
-	ProviderWarnings        []string        `json:"providerWarnings"`
-	Permissions             PermissionsView `json:"permissions"`
-	Sandbox                 SandboxView     `json:"sandbox"`
-	Network                 NetworkView     `json:"network"`
-	Agent                   AgentView       `json:"agent"`
-	Bot                     BotSettingsView `json:"bot"`
-	DesktopLanguage         string          `json:"desktopLanguage"`
-	DesktopLayoutStyle      string          `json:"desktopLayoutStyle"`
-	DesktopWindowChrome     string          `json:"desktopWindowChrome"`
-	DesktopTheme            string          `json:"desktopTheme"`
-	DesktopThemeStyle       string          `json:"desktopThemeStyle"`
-	CloseBehavior           string          `json:"closeBehavior"`
-	DisplayMode             string          `json:"displayMode"`
-	StatusBarStyle          string          `json:"statusBarStyle"`
-	StatusBarItems          []string        `json:"statusBarItems"`
-	CheckUpdates            bool            `json:"checkUpdates"`
-	Telemetry               bool            `json:"telemetry"`
-	Metrics                 bool            `json:"metrics"`
-	ExpandThinking          bool            `json:"expandThinking"`
-	ConfigPath              string          `json:"configPath"`
+	DefaultModel             string          `json:"defaultModel"`
+	PlannerModel             string          `json:"plannerModel"`
+	SubagentModel            string          `json:"subagentModel"`
+	AdvisorModel             string          `json:"advisorModel"`
+	AdvisorMaxUsesPerTurn    int             `json:"advisorMaxUsesPerTurn"`
+	AdvisorMaxUsesPerSession int             `json:"advisorMaxUsesPerSession"`
+	AdvisorNativeEnabled     bool            `json:"advisorNativeEnabled"`
+	AdvisorNativeMaxTokens   int             `json:"advisorNativeMaxTokens"`
+	AdvisorNativeCacheTTL    string          `json:"advisorNativeCacheTTL"`
+	SubagentEffort           string          `json:"subagentEffort"`
+	FrontierModel            string          `json:"frontierModel"`
+	UpgradeEnabled           bool            `json:"upgradeEnabled"`
+	UpgradeThreshold         int             `json:"upgradeThreshold"`
+	FrontierBudget           int64           `json:"frontierBudget"`
+	AutoPlan                 string          `json:"autoPlan"`
+	DefaultToolApprovalMode  string          `json:"defaultToolApprovalMode"`
+	MemoryCompiler           bool            `json:"memoryCompilerEnabled"`
+	Providers                []ProviderView  `json:"providers"`
+	OfficialProviders        []ProviderView  `json:"officialProviders"`
+	ProviderWarnings         []string        `json:"providerWarnings"`
+	Permissions              PermissionsView `json:"permissions"`
+	Sandbox                  SandboxView     `json:"sandbox"`
+	Network                  NetworkView     `json:"network"`
+	Agent                    AgentView       `json:"agent"`
+	Bot                      BotSettingsView `json:"bot"`
+	DesktopLanguage          string          `json:"desktopLanguage"`
+	DesktopLayoutStyle       string          `json:"desktopLayoutStyle"`
+	DesktopWindowChrome      string          `json:"desktopWindowChrome"`
+	DesktopTheme             string          `json:"desktopTheme"`
+	DesktopThemeStyle        string          `json:"desktopThemeStyle"`
+	CloseBehavior            string          `json:"closeBehavior"`
+	DisplayMode              string          `json:"displayMode"`
+	StatusBarStyle           string          `json:"statusBarStyle"`
+	StatusBarItems           []string        `json:"statusBarItems"`
+	CheckUpdates             bool            `json:"checkUpdates"`
+	Telemetry                bool            `json:"telemetry"`
+	Metrics                  bool            `json:"metrics"`
+	ExpandThinking           bool            `json:"expandThinking"`
+	ConfigPath               string          `json:"configPath"`
 	// ProviderKinds lists the provider implementations the kernel actually
 	// registered (provider.Kinds()), so the editor's "kind" picker offers only
 	// kinds that resolve — selecting an unregistered one would fail the rebuild.
@@ -664,21 +669,26 @@ func (a *App) Settings() SettingsView {
 		shell = "auto"
 	}
 	v := SettingsView{
-		DefaultModel:            cfg.DefaultModel,
-		PlannerModel:            cfg.Agent.PlannerModel,
-		SubagentModel:           cfg.Agent.SubagentModel,
-		AdvisorModel:            cfg.Agent.AdvisorModel,
-		SubagentEffort:          cfg.Agent.SubagentEffort,
-		FrontierModel:           cfg.Agent.FrontierModel,
-		UpgradeEnabled:          cfg.Agent.UpgradeEnabled,
-		UpgradeThreshold:        cfg.Agent.UpgradeThreshold,
-		FrontierBudget:          cfg.Agent.FrontierBudget,
-		AutoPlan:                desktopAutoPlanMode(cfg.Agent.AutoPlan),
-		DefaultToolApprovalMode: cfg.DesktopDefaultToolApprovalMode(),
-		MemoryCompiler:          cfg.MemoryCompilerEnabled(),
-		Providers:               []ProviderView{},
-		OfficialProviders:       []ProviderView{},
-		ProviderWarnings:        []string{},
+		DefaultModel:             cfg.DefaultModel,
+		PlannerModel:             cfg.Agent.PlannerModel,
+		SubagentModel:            cfg.Agent.SubagentModel,
+		AdvisorModel:             cfg.Agent.AdvisorModel,
+		AdvisorMaxUsesPerTurn:    cfg.Agent.AdvisorMaxUsesPerTurn,
+		AdvisorMaxUsesPerSession: cfg.Agent.AdvisorMaxUsesPerSession,
+		AdvisorNativeEnabled:     cfg.Agent.AdvisorNativeEnabled,
+		AdvisorNativeMaxTokens:   cfg.Agent.AdvisorNativeMaxTokens,
+		AdvisorNativeCacheTTL:    cfg.Agent.AdvisorNativeCacheTTL,
+		SubagentEffort:           cfg.Agent.SubagentEffort,
+		FrontierModel:            cfg.Agent.FrontierModel,
+		UpgradeEnabled:           cfg.Agent.UpgradeEnabled,
+		UpgradeThreshold:         cfg.Agent.UpgradeThreshold,
+		FrontierBudget:           cfg.Agent.FrontierBudget,
+		AutoPlan:                 desktopAutoPlanMode(cfg.Agent.AutoPlan),
+		DefaultToolApprovalMode:  cfg.DesktopDefaultToolApprovalMode(),
+		MemoryCompiler:           cfg.MemoryCompilerEnabled(),
+		Providers:                []ProviderView{},
+		OfficialProviders:        []ProviderView{},
+		ProviderWarnings:         []string{},
 		Permissions: PermissionsView{
 			Mode:  orDefault(cfg.Permissions.Mode, "ask"),
 			Allow: nonNil(cfg.Permissions.Allow),
@@ -1262,6 +1272,40 @@ func (a *App) SetAdvisorModel(ref string) error {
 			ref = resolved
 		}
 		c.Agent.AdvisorModel = ref
+		return nil
+	})
+}
+
+// SetAdvisorPolicy updates advisor budgets and Anthropic-native execution as one policy.
+func (a *App) SetAdvisorPolicy(maxPerTurn, maxPerSession int, nativeEnabled bool, maxTokens int, cacheTTL string) error {
+	if maxPerTurn < 0 {
+		return fmt.Errorf("advisor max uses per turn must be non-negative")
+	}
+	if maxPerSession < 0 {
+		return fmt.Errorf("advisor max uses per session must be non-negative")
+	}
+	if maxTokens < 0 {
+		return fmt.Errorf("advisor native max tokens must be non-negative")
+	}
+	if maxTokens == 0 {
+		maxTokens = 2048
+	}
+	if maxTokens < 1024 {
+		return fmt.Errorf("advisor native max tokens must be at least 1024")
+	}
+	cacheTTL = strings.TrimSpace(cacheTTL)
+	switch cacheTTL {
+	case "", "5m", "1h":
+	default:
+		return fmt.Errorf("advisor native cache TTL must be empty, 5m, or 1h")
+	}
+
+	return a.applyConfigChange(func(c *config.Config) error {
+		c.Agent.AdvisorMaxUsesPerTurn = maxPerTurn
+		c.Agent.AdvisorMaxUsesPerSession = maxPerSession
+		c.Agent.AdvisorNativeEnabled = nativeEnabled
+		c.Agent.AdvisorNativeMaxTokens = maxTokens
+		c.Agent.AdvisorNativeCacheTTL = cacheTTL
 		return nil
 	})
 }

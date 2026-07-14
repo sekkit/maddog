@@ -146,6 +146,7 @@ type AdvisorConsultation struct {
 	Reason               string
 	Question             string
 	Advice               string
+	Domain               string
 	UsesThisTurn         int
 	UsesThisSession      int
 	RemainingThisTurn    int
@@ -176,15 +177,24 @@ type Tool struct {
 	ParentID string
 	FileDiff
 	Profile *Profile // ToolDispatch: subagent model/effort (set for task/skill calls)
-	// Compression describes a ToolResult whose model-visible output was reduced
-	// while full raw output remains addressable by RawRef.
+	// Compression describes the output-routing decision. Successful compression
+	// has an addressable RawRef; a passthrough decision has neither savings nor a
+	// raw reference but remains observable through Route and QualityReason.
 	Compression *Compression
 }
 
-// Compression carries deterministic tool-output compression metadata for rich
+// Compression carries deterministic tool-output routing metadata for rich
 // frontends and diagnostics. Counts are character/token estimates, not raw bytes.
 type Compression struct {
 	RawRef           string
+	Route            string
+	Profile          string
+	Quality          string
+	QualityReason    string
+	UnparsedLines    int
+	UnparsedSamples  []string
+	Lossy            bool
+	OmittedLines     int
 	Strategy         string
 	Summary          string
 	RawChars         int
@@ -193,6 +203,12 @@ type Compression struct {
 	RawTokens        int
 	CompressedTokens int
 	SavedTokens      int
+}
+
+// IsCompression reports whether the decision reduced model-visible output.
+// Empty legacy routes remain compression events for backward compatibility.
+func (c *Compression) IsCompression() bool {
+	return c != nil && c.Route != "passthrough"
 }
 
 // FileDiff is a previewed change carried on a writer tool's full ToolDispatch
@@ -335,6 +351,7 @@ const (
 	UsageSourceCompaction = "compaction"
 	UsageSourceClassifier = "classifier"
 	UsageSourceTitle      = "title"
+	UsageSourceAdvisor    = "advisor"
 )
 
 // Event is one increment in a turn's event stream. Read the field(s) documented

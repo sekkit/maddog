@@ -6,8 +6,14 @@ import (
 )
 
 type shellCompression struct {
-	content  string
-	strategy string
+	content         string
+	route           Route
+	profile         string
+	quality         ParseQuality
+	qualityReason   string
+	unparsedLines   int
+	unparsedSamples []string
+	strategy        string
 }
 
 func compressShellOutput(output ToolOutput, raw string, maxBytes int) (shellCompression, bool) {
@@ -15,35 +21,51 @@ func compressShellOutput(output ToolOutput, raw string, maxBytes int) (shellComp
 		return shellCompression{}, false
 	}
 	cmd := commandText(output.Args)
-	switch {
-	case isRipgrepCommand(cmd):
-		if content := compressRipgrepOutput(raw, maxBytes); content != "" {
-			return shellCompression{content: content, strategy: "rg-file-sampling"}, true
-		}
-	case isGitStatusCommand(cmd):
-		if content := compressGitStatusOutput(raw, maxBytes); content != "" {
-			return shellCompression{content: content, strategy: "git-status-summary"}, true
-		}
-	case isGitDiffCommand(cmd):
-		if content := compressGitDiffOutput(raw, maxBytes); content != "" {
-			return shellCompression{content: content, strategy: "git-diff-summary"}, true
-		}
-	case isGoTestCommand(cmd):
-		if content := compressGoTestOutput(raw, maxBytes); content != "" {
-			return shellCompression{content: content, strategy: "go-test-failure"}, true
-		}
-	case isNPMTestCommand(cmd):
-		if content := compressNPMTestOutput(raw, maxBytes); content != "" {
-			return shellCompression{content: content, strategy: "npm-test-failure"}, true
-		}
-	case isNPMBuildCommand(cmd):
-		if content := compressNPMBuildOutput(raw, maxBytes); content != "" {
-			return shellCompression{content: content, strategy: "npm-build-error"}, true
+	desc := describeCommand(output.ToolName, cmd)
+	if desc.Executable != "" {
+		for _, profile := range builtinShellProfiles {
+			if !profile.match(desc) {
+				continue
+			}
+			parsed := profile.parse(raw, maxBytes)
+			if parsed.quality == ParseQualityPassthrough || parsed.content == "" {
+				content := compressText(output, raw, maxBytes)
+				lines, samples := omittedRawLineDetails(raw, content)
+				return shellCompression{
+					content:         content,
+					route:           RouteGeneric,
+					profile:         "generic",
+					quality:         ParseQualityDegraded,
+					qualityReason:   profile.id + " profile passthrough: " + parsed.qualityReason,
+					unparsedLines:   lines,
+					unparsedSamples: samples,
+				}, true
+			}
+			return shellCompression{
+				content:         parsed.content,
+				route:           RouteProfile,
+				profile:         profile.id,
+				quality:         parsed.quality,
+				qualityReason:   parsed.qualityReason,
+				unparsedLines:   parsed.unparsedLines,
+				unparsedSamples: parsed.unparsedSamples,
+				strategy:        profile.strategy,
+			}, true
 		}
 	}
 	if hasRepeatedNonAdjacentLines(raw) {
 		if content := compressRepeatedLogOutput(raw, maxBytes); content != "" {
-			return shellCompression{content: content, strategy: "server-log-dedupe"}, true
+			lines, samples := omittedRawLineDetails(raw, content)
+			return shellCompression{
+				content:         content,
+				route:           RouteGeneric,
+				profile:         "generic",
+				quality:         ParseQualityDegraded,
+				qualityReason:   "heuristic repeated-log extraction and sampling",
+				unparsedLines:   lines,
+				unparsedSamples: samples,
+				strategy:        "server-log-dedupe",
+			}, true
 		}
 	}
 	return shellCompression{}, false
@@ -63,43 +85,144 @@ func commandText(args string) string {
 	if err := json.Unmarshal([]byte(args), &parsed); err == nil {
 		for _, key := range []string{"command", "cmd", "script"} {
 			if value, ok := parsed[key].(string); ok && strings.TrimSpace(value) != "" {
-				return strings.ToLower(strings.TrimSpace(value))
+				return strings.TrimSpace(value)
 			}
 		}
 	}
-	return strings.ToLower(args)
+	return strings.TrimSpace(args)
 }
 
-func isGoTestCommand(cmd string) bool {
-	return strings.Contains(cmd, "go test")
+type profileAssessment struct {
+	recognized int
+	unparsed   int
+	samples    []string
+	signals    []string
 }
 
-func isNPMBuildCommand(cmd string) bool {
-	return strings.Contains(cmd, "npm run build") ||
-		strings.Contains(cmd, "npm build") ||
-		strings.Contains(cmd, "pnpm build") ||
-		strings.Contains(cmd, "yarn build")
+func parseRipgrepProfileOutput(raw string, maxBytes int) profileOutput {
+	return parseHeuristicProfile(raw, maxBytes, compressRipgrepOutput, func(line string) bool {
+		_, ok := parseRipgrepLine(line)
+		return ok
+	})
 }
 
-func isNPMTestCommand(cmd string) bool {
-	return strings.Contains(cmd, "npm test") ||
-		strings.Contains(cmd, "npm run test") ||
-		strings.Contains(cmd, "pnpm test") ||
-		strings.Contains(cmd, "pnpm run test") ||
-		strings.Contains(cmd, "yarn test")
+func parseGitStatusProfileOutput(raw string, maxBytes int) profileOutput {
+	return parseHeuristicProfile(raw, maxBytes, compressGitStatusOutput, isGitStatusShortLine)
 }
 
-func isRipgrepCommand(cmd string) bool {
-	cmd = strings.TrimSpace(cmd)
-	return cmd == "rg" || strings.HasPrefix(cmd, "rg ") || strings.Contains(cmd, " rg ")
+func parseGitDiffProfileOutput(raw string, maxBytes int) profileOutput {
+	return parseHeuristicProfile(raw, maxBytes, compressGitDiffOutput, isGitDiffPatchLine)
 }
 
-func isGitStatusCommand(cmd string) bool {
-	return strings.Contains(cmd, "git status")
+func parseGoTestProfileOutput(raw string, maxBytes int) profileOutput {
+	return parseHeuristicProfile(raw, maxBytes, compressGoTestOutput, isGoTestFailureLine)
 }
 
-func isGitDiffCommand(cmd string) bool {
-	return strings.Contains(cmd, "git diff")
+func parseNPMBuildProfileOutput(raw string, maxBytes int) profileOutput {
+	return parseHeuristicProfile(raw, maxBytes, compressNPMBuildOutput, isNPMBuildFailureLine)
+}
+
+func parseNPMTestProfileOutput(raw string, maxBytes int) profileOutput {
+	return parseHeuristicProfile(raw, maxBytes, compressNPMTestOutput, isNPMTestFailureLine)
+}
+
+func parseHeuristicProfile(raw string, maxBytes int, compress func(string, int) string, recognizes func(string) bool) profileOutput {
+	assessment := assessProfileOutput(raw, recognizes)
+	if assessment.recognized == 0 {
+		return profileOutput{quality: ParseQualityPassthrough, qualityReason: "output shape not recognized"}
+	}
+	content := compress(raw, maxBytes)
+	if content == "" {
+		return profileOutput{quality: ParseQualityPassthrough, qualityReason: "profile produced no useful output"}
+	}
+	if len(assessment.signals) > 0 {
+		lines := append([]string(nil), assessment.signals...)
+		for _, line := range strings.Split(content, "\n") {
+			lines = appendUnique(lines, line)
+		}
+		content = joinPriorityLines(lines, maxBytes)
+	}
+	reason := "heuristic text profile"
+	if assessment.unparsed > 0 {
+		reason += " with unparsed lines"
+	}
+	return profileOutput{
+		content:         content,
+		quality:         ParseQualityDegraded,
+		qualityReason:   reason,
+		unparsedLines:   assessment.unparsed,
+		unparsedSamples: assessment.samples,
+	}
+}
+
+func assessProfileOutput(raw string, recognizes func(string) bool) profileAssessment {
+	var out profileAssessment
+	for _, line := range outputLines(raw) {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		if recognizes(line) {
+			out.recognized++
+			continue
+		}
+		out.unparsed++
+		if len(out.samples) < 3 {
+			out.samples = appendUnique(out.samples, line)
+		}
+		if isSignalLine(line) && len(out.signals) < 3 {
+			out.signals = appendUnique(out.signals, line)
+		}
+	}
+	return out
+}
+
+func isGitStatusShortLine(line string) bool {
+	trimmed := strings.TrimSpace(line)
+	if strings.HasPrefix(trimmed, "##") || strings.HasPrefix(trimmed, "??") || strings.HasPrefix(trimmed, "!!") {
+		return true
+	}
+	if len(line) < 3 || line[2] != ' ' {
+		return false
+	}
+	return isGitStatusCode(line[0]) && isGitStatusCode(line[1])
+}
+
+func isGitStatusCode(ch byte) bool {
+	return ch == ' ' || strings.ContainsRune("MADRCU?!", rune(ch))
+}
+
+func isGitDiffPatchLine(line string) bool {
+	return strings.HasPrefix(line, "diff --git ") || strings.HasPrefix(line, "index ") ||
+		strings.HasPrefix(line, "--- ") || strings.HasPrefix(line, "+++ ") ||
+		strings.HasPrefix(line, "@@") || strings.HasPrefix(line, "+") ||
+		strings.HasPrefix(line, "-") || strings.HasPrefix(line, " ") ||
+		strings.HasPrefix(line, "\\ No newline at end of file")
+}
+
+func isGoTestFailureLine(line string) bool {
+	trimmed := strings.TrimSpace(line)
+	lower := strings.ToLower(trimmed)
+	return strings.HasPrefix(trimmed, "--- FAIL:") || strings.HasPrefix(trimmed, "panic:") ||
+		strings.HasPrefix(trimmed, "FAIL") || strings.HasPrefix(trimmed, "exit status") ||
+		strings.Contains(lower, "expected") || strings.Contains(lower, "actual") ||
+		(pathLinePattern.MatchString(trimmed) && isSignalLine(trimmed))
+}
+
+func isNPMBuildFailureLine(line string) bool {
+	lower := strings.ToLower(strings.TrimSpace(line))
+	return strings.Contains(lower, " error ") || strings.Contains(lower, " - error ") ||
+		strings.Contains(lower, "npm err!") || strings.Contains(lower, "elifecycle") ||
+		strings.Contains(lower, "exit code") || strings.Contains(lower, "command failed")
+}
+
+func isNPMTestFailureLine(line string) bool {
+	trimmed := strings.TrimSpace(line)
+	lower := strings.ToLower(trimmed)
+	return strings.HasPrefix(trimmed, "FAIL") || strings.Contains(lower, " failed") ||
+		strings.Contains(lower, "expected") || strings.Contains(lower, "received") ||
+		strings.Contains(lower, "actual") || strings.Contains(lower, " at ") ||
+		strings.Contains(lower, "test suites:") || strings.Contains(lower, "tests:") ||
+		pathLinePattern.MatchString(trimmed)
 }
 
 func compressGoTestOutput(raw string, maxBytes int) string {

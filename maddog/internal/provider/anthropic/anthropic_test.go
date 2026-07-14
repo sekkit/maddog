@@ -126,6 +126,59 @@ func TestBuildRequestNativeAdvisorTool(t *testing.T) {
 	}
 }
 
+func TestBuildRequestNativeAdvisorCachingJSON(t *testing.T) {
+	tests := []struct {
+		name    string
+		ttl     string
+		wantTTL string
+	}{
+		{name: "disabled", ttl: ""},
+		{name: "five minutes", ttl: "5m", wantTTL: "5m"},
+		{name: "one hour", ttl: "1h", wantTTL: "1h"},
+		{name: "unsupported", ttl: "30m"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			c := &client{name: "anthropic", model: "claude-sonnet-4-6"}
+			body, err := json.Marshal(c.buildRequest(provider.Request{
+				Messages: []provider.Message{{Role: provider.RoleUser, Content: "fix this"}},
+				NativeAdvisor: &provider.NativeAdvisorConfig{
+					Model:      "claude-opus-4-8",
+					MaxUses:    1,
+					CachingTTL: tc.ttl,
+				},
+			}))
+			if err != nil {
+				t.Fatalf("marshal request: %v", err)
+			}
+			var decoded struct {
+				Tools []struct {
+					Caching *struct {
+						Type string `json:"type"`
+						TTL  string `json:"ttl"`
+					} `json:"caching"`
+				} `json:"tools"`
+			}
+			if err := json.Unmarshal(body, &decoded); err != nil {
+				t.Fatalf("decode request: %v", err)
+			}
+			if len(decoded.Tools) != 1 {
+				t.Fatalf("tools JSON = %s", body)
+			}
+			got := decoded.Tools[0].Caching
+			if tc.wantTTL == "" {
+				if got != nil {
+					t.Fatalf("unsupported/empty TTL must omit caching, got %+v in %s", got, body)
+				}
+				return
+			}
+			if got == nil || got.Type != "ephemeral" || got.TTL != tc.wantTTL {
+				t.Fatalf("caching = %+v, want ephemeral TTL %q in %s", got, tc.wantTTL, body)
+			}
+		})
+	}
+}
+
 func TestStreamSetsAdvisorBetaHeader(t *testing.T) {
 	var sawBeta bool
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -378,6 +431,196 @@ func TestReadStream(t *testing.T) {
 	if !done {
 		t.Fatal("expected a done chunk")
 	}
+}
+
+const sseAdvisorIterations = `event: message_start
+data: {"type":"message_start","message":{"usage":{"input_tokens":412,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":1,"iterations":[{"type":"message","input_tokens":412,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":1}]}}}
+
+event: message_delta
+data: {"type":"message_delta","usage":{"output_tokens":90,"iterations":[{"type":"message","input_tokens":412,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":89},{"type":"advisor_message","model":"claude-opus-4-8","input_tokens":823,"cache_creation_input_tokens":200,"cache_read_input_tokens":600,"output_tokens":1612},{"type":"message","input_tokens":1348,"cache_creation_input_tokens":17,"cache_read_input_tokens":412,"output_tokens":442}]}}
+
+event: message_delta
+data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":531}}
+
+event: message_stop
+data: {"type":"message_stop"}
+`
+
+func TestReadStreamAdvisorIterationsKeepsLatestCompleteArray(t *testing.T) {
+	c := &client{name: "anthropic"}
+	resp := &http.Response{Body: io.NopCloser(strings.NewReader(sseAdvisorIterations))}
+	ch := make(chan provider.Chunk)
+	go c.readStream(context.Background(), resp, ch)
+
+	var usage *provider.Usage
+	for ck := range ch {
+		switch ck.Type {
+		case provider.ChunkUsage:
+			usage = ck.Usage
+		case provider.ChunkError:
+			t.Fatalf("unexpected error chunk: %v", ck.Err)
+		}
+	}
+	if usage == nil {
+		t.Fatal("expected usage")
+	}
+	if usage.CompletionTokens != 531 || usage.FinishReason != "stop" {
+		t.Fatalf("top-level usage = %+v", usage)
+	}
+	if len(usage.Iterations) != 3 {
+		t.Fatalf("iterations = %+v, want latest complete three-entry array", usage.Iterations)
+	}
+	advisor := usage.Iterations[1]
+	if advisor.Type != "advisor_message" || advisor.Model != "claude-opus-4-8" ||
+		advisor.InputTokens != 823 || advisor.OutputTokens != 1612 ||
+		advisor.CacheCreationInputTokens != 200 || advisor.CacheReadInputTokens != 600 {
+		t.Fatalf("advisor iteration = %+v", advisor)
+	}
+	last := usage.Iterations[2]
+	if last.Type != "message" || last.InputTokens != 1348 || last.OutputTokens != 442 ||
+		last.CacheCreationInputTokens != 17 || last.CacheReadInputTokens != 412 {
+		t.Fatalf("last executor iteration = %+v", last)
+	}
+}
+
+const ssePauseTurn = `event: message_start
+data: {"type":"message_start","message":{"usage":{"input_tokens":50,"output_tokens":1}}}
+
+event: content_block_start
+data: {"type":"content_block_start","index":0,"content_block":{"type":"server_tool_use","id":"srvtoolu_pending","name":"advisor","input":{}}}
+
+event: content_block_stop
+data: {"type":"content_block_stop","index":0}
+
+event: message_delta
+data: {"type":"message_delta","delta":{"stop_reason":"pause_turn"},"usage":{"output_tokens":7}}
+
+event: message_stop
+data: {"type":"message_stop"}
+`
+
+func TestReadStreamPreservesPauseTurn(t *testing.T) {
+	c := &client{name: "anthropic"}
+	resp := &http.Response{Body: io.NopCloser(strings.NewReader(ssePauseTurn))}
+	ch := make(chan provider.Chunk)
+	go c.readStream(context.Background(), resp, ch)
+
+	var usage *provider.Usage
+	var native []json.RawMessage
+	for ck := range ch {
+		switch ck.Type {
+		case provider.ChunkUsage:
+			usage = ck.Usage
+		case provider.ChunkNativeBlock:
+			native = append(native, ck.NativeBlock)
+		case provider.ChunkError:
+			t.Fatalf("unexpected error chunk: %v", ck.Err)
+		}
+	}
+	if usage == nil || usage.FinishReason != "pause_turn" {
+		t.Fatalf("usage = %+v, want pause_turn finish reason", usage)
+	}
+	if len(native) != 1 || canonicalJSON(t, native[0]) != `{"id":"srvtoolu_pending","input":{},"name":"advisor","type":"server_tool_use"}` {
+		t.Fatalf("pending native advisor call = %q", native)
+	}
+}
+
+const sseNativeAdvisorBlocks = `event: message_start
+data: {"type":"message_start","message":{"usage":{"input_tokens":50,"output_tokens":1}}}
+
+event: content_block_start
+data: {"type":"content_block_start","index":0,"content_block":{"type":"text"}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Checking the design."}}
+
+event: content_block_stop
+data: {"type":"content_block_stop","index":0}
+
+event: content_block_start
+data: {"type":"content_block_start","index":1,"content_block":{"type":"server_tool_use","id":"srvtoolu_abc123","name":"advisor","input":{}}}
+
+event: content_block_stop
+data: {"type":"content_block_stop","index":1}
+
+event: content_block_start
+data: {"type":"content_block_start","index":2,"content_block":{"type":"advisor_tool_result","tool_use_id":"srvtoolu_abc123","content":{"type":"advisor_result","text":"Use a bounded worker queue.","stop_reason":"end_turn"}}}
+
+event: content_block_stop
+data: {"type":"content_block_stop","index":2}
+
+event: content_block_start
+data: {"type":"content_block_start","index":3,"content_block":{"type":"text"}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":3,"delta":{"type":"text_delta","text":"Implementing that now."}}
+
+event: content_block_stop
+data: {"type":"content_block_stop","index":3}
+
+event: message_delta
+data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":25}}
+
+event: message_stop
+data: {"type":"message_stop"}
+`
+
+func TestReadStreamNativeAdvisorBlocksReplay(t *testing.T) {
+	c := &client{name: "anthropic", model: "claude-sonnet-4-6"}
+	resp := &http.Response{Body: io.NopCloser(strings.NewReader(sseNativeAdvisorBlocks))}
+	ch := make(chan provider.Chunk)
+	go c.readStream(context.Background(), resp, ch)
+
+	var native []json.RawMessage
+	for ck := range ch {
+		switch ck.Type {
+		case provider.ChunkNativeBlock:
+			native = append(native, append(json.RawMessage(nil), ck.NativeBlock...))
+		case provider.ChunkError:
+			t.Fatalf("unexpected error chunk: %v", ck.Err)
+		}
+	}
+	if len(native) != 4 {
+		t.Fatalf("native blocks = %d, want full four-block assistant content: %q", len(native), native)
+	}
+
+	r := c.buildRequest(provider.Request{
+		Messages: []provider.Message{
+			{Role: provider.RoleUser, Content: "design a worker pool"},
+			{Role: provider.RoleAssistant, NativeBlocks: native},
+		},
+		NativeAdvisor: &provider.NativeAdvisorConfig{Model: "claude-opus-4-8", MaxUses: 1},
+	})
+	if len(r.Messages) != 2 || len(r.Messages[1].Content) != 4 {
+		t.Fatalf("replayed messages = %+v", r.Messages)
+	}
+	serverJSON, err := json.Marshal(r.Messages[1].Content[1])
+	if err != nil {
+		t.Fatalf("marshal replayed server block: %v", err)
+	}
+	resultJSON, err := json.Marshal(r.Messages[1].Content[2])
+	if err != nil {
+		t.Fatalf("marshal replayed result block: %v", err)
+	}
+	if canonicalJSON(t, serverJSON) != canonicalJSON(t, native[1]) {
+		t.Fatalf("server_tool_use changed on replay: got %s want %s", serverJSON, native[1])
+	}
+	if canonicalJSON(t, resultJSON) != canonicalJSON(t, native[2]) {
+		t.Fatalf("advisor_tool_result changed on replay: got %s want %s", resultJSON, native[2])
+	}
+}
+
+func canonicalJSON(t *testing.T, raw []byte) string {
+	t.Helper()
+	var value any
+	if err := json.Unmarshal(raw, &value); err != nil {
+		t.Fatalf("decode JSON %q: %v", raw, err)
+	}
+	b, err := json.Marshal(value)
+	if err != nil {
+		t.Fatalf("canonicalize JSON: %v", err)
+	}
+	return string(b)
 }
 
 // TestReadStreamError surfaces a mid-stream error event as a ChunkError.

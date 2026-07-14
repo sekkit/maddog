@@ -896,6 +896,11 @@ function normalizeSettingsView(view: SettingsView | null | undefined): SettingsV
     },
     agent,
     advisorModel: view.advisorModel ?? "",
+    advisorMaxUsesPerTurn: sanitizeInteger(view.advisorMaxUsesPerTurn ?? 0, 0),
+    advisorMaxUsesPerSession: sanitizeInteger(view.advisorMaxUsesPerSession ?? 0, 0),
+    advisorNativeEnabled: Boolean(view.advisorNativeEnabled),
+    advisorNativeMaxTokens: Math.max(1024, sanitizeInteger(view.advisorNativeMaxTokens ?? 2048, 0) || 2048),
+    advisorNativeCacheTTL: view.advisorNativeCacheTTL === "5m" || view.advisorNativeCacheTTL === "1h" ? view.advisorNativeCacheTTL : "",
     frontierModel: view.frontierModel ?? "",
     upgradeEnabled: Boolean(view.upgradeEnabled),
     upgradeThreshold: sanitizeInteger(view.upgradeThreshold ?? 0, 0),
@@ -3157,6 +3162,14 @@ function ModelsSection({ s, busy, apply, backgroundApply }: ModelsSectionProps) 
     const maxBytes = sanitizeInteger(next.maxBytes ?? agent.contextCompressionMaxBytes ?? 0, 0);
     return setContextCompressionBridge(policy, thresholdBytes, maxBytes);
   };
+  const setAdvisorPolicy = (next: Partial<Pick<SettingsView, "advisorMaxUsesPerTurn" | "advisorMaxUsesPerSession" | "advisorNativeEnabled" | "advisorNativeMaxTokens" | "advisorNativeCacheTTL">>) => {
+    const maxPerTurn = sanitizeInteger(next.advisorMaxUsesPerTurn ?? s.advisorMaxUsesPerTurn, 0);
+    const maxPerSession = sanitizeInteger(next.advisorMaxUsesPerSession ?? s.advisorMaxUsesPerSession, 0);
+    const nativeEnabled = next.advisorNativeEnabled ?? s.advisorNativeEnabled;
+    const maxTokens = sanitizeInteger(next.advisorNativeMaxTokens ?? s.advisorNativeMaxTokens, 0);
+    const cacheTTL = next.advisorNativeCacheTTL ?? s.advisorNativeCacheTTL;
+    return app.SetAdvisorPolicy(maxPerTurn, maxPerSession, nativeEnabled, maxTokens, cacheTTL);
+  };
   const setFrontierRoute = (next: Partial<Pick<SettingsView, "frontierModel" | "upgradeEnabled" | "upgradeThreshold" | "frontierBudget">>) => {
     const model = next.frontierModel !== undefined ? next.frontierModel : s.frontierModel;
     const enabled = next.upgradeEnabled !== undefined ? next.upgradeEnabled : s.upgradeEnabled;
@@ -3173,6 +3186,10 @@ function ModelsSection({ s, busy, apply, backgroundApply }: ModelsSectionProps) 
       await app.SetAdvisorModel(rec.advisorModel);
       if (rec.frontierModel) {
         await app.SetFrontierRoute(rec.frontierModel, true, s.upgradeThreshold > 0 ? s.upgradeThreshold : 2, s.frontierBudget ?? 0);
+      } else {
+        // Do not leave a previously saved (and possibly unsafe) frontier route
+        // enabled when the recommendation policy finds no safe upgrade model.
+        await app.SetFrontierRoute("", false, s.upgradeThreshold, s.frontierBudget ?? 0);
       }
     });
   };
@@ -3292,6 +3309,92 @@ function ModelsSection({ s, busy, apply, backgroundApply }: ModelsSectionProps) 
               onPick={(ref) => void apply(() => app.SetAdvisorModel(ref))}
             />
           </SettingsField>
+
+          <SettingsField label={t("settings.advisorBudgets")} hint={t("settings.advisorBudgetsHint")}>
+            <div className="settings-inline-controls">
+              <label className="set-label" htmlFor="advisor-max-per-turn">{t("settings.advisorMaxPerTurn")}</label>
+              <input
+                id="advisor-max-per-turn"
+                key={`advisor-max-per-turn-${s.advisorMaxUsesPerTurn}`}
+                className="mem-input set-narrow"
+                type="number"
+                min={0}
+                step={1}
+                defaultValue={String(s.advisorMaxUsesPerTurn)}
+                disabled={busy}
+                onBlur={(e) => {
+                  const next = sanitizeInteger(Number(e.currentTarget.value), 0);
+                  if (next !== s.advisorMaxUsesPerTurn) void apply(() => setAdvisorPolicy({ advisorMaxUsesPerTurn: next }));
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") e.currentTarget.blur();
+                }}
+              />
+              <label className="set-label" htmlFor="advisor-max-per-session">{t("settings.advisorMaxPerSession")}</label>
+              <input
+                id="advisor-max-per-session"
+                key={`advisor-max-per-session-${s.advisorMaxUsesPerSession}`}
+                className="mem-input set-narrow"
+                type="number"
+                min={0}
+                step={1}
+                defaultValue={String(s.advisorMaxUsesPerSession)}
+                disabled={busy}
+                onBlur={(e) => {
+                  const next = sanitizeInteger(Number(e.currentTarget.value), 0);
+                  if (next !== s.advisorMaxUsesPerSession) void apply(() => setAdvisorPolicy({ advisorMaxUsesPerSession: next }));
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") e.currentTarget.blur();
+                }}
+              />
+            </div>
+          </SettingsField>
+
+          <SettingsField label={t("settings.advisorNative")} hint={t("settings.advisorNativeHint")}>
+            <ToggleSegment
+              value={s.advisorNativeEnabled}
+              disabled={busy}
+              onChange={(enabled) => void apply(() => setAdvisorPolicy({ advisorNativeEnabled: enabled }))}
+            />
+          </SettingsField>
+
+          {s.advisorNativeEnabled && (
+            <SettingsField label={t("settings.advisorNativeOptions")} hint={t("settings.advisorNativeOptionsHint")}>
+              <div className="settings-inline-controls">
+                <label className="set-label" htmlFor="advisor-native-max-tokens">{t("settings.advisorNativeMaxTokens")}</label>
+                <input
+                  id="advisor-native-max-tokens"
+                  key={`advisor-native-max-tokens-${s.advisorNativeMaxTokens}`}
+                  className="mem-input set-numeric"
+                  type="number"
+                  min={1024}
+                  step={256}
+                  defaultValue={String(s.advisorNativeMaxTokens)}
+                  disabled={busy}
+                  onBlur={(e) => {
+                    const next = Math.max(1024, sanitizeInteger(Number(e.currentTarget.value), 0));
+                    if (next !== s.advisorNativeMaxTokens) void apply(() => setAdvisorPolicy({ advisorNativeMaxTokens: next }));
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") e.currentTarget.blur();
+                  }}
+                />
+                <label className="set-label" htmlFor="advisor-native-cache-ttl">{t("settings.advisorNativeCacheTTL")}</label>
+                <select
+                  id="advisor-native-cache-ttl"
+                  className="mem-select set-narrow"
+                  value={s.advisorNativeCacheTTL}
+                  disabled={busy}
+                  onChange={(e) => void apply(() => setAdvisorPolicy({ advisorNativeCacheTTL: e.target.value }))}
+                >
+                  <option value="">{t("settings.advisorNativeCacheOff")}</option>
+                  <option value="5m">{t("settings.advisorNativeCache5m")}</option>
+                  <option value="1h">{t("settings.advisorNativeCache1h")}</option>
+                </select>
+              </div>
+            </SettingsField>
+          )}
 
             <SettingsField label={t("settings.subagentEffort")} hint={t("settings.subagentHint")}>
               <select

@@ -45,6 +45,7 @@ api_key_env = "MADDOG_TEST_KEY_UNSET"
 }
 
 func TestBuildMigratesLegacyBareMimoModelOverride(t *testing.T) {
+	isolateConfigHome(t)
 	dir := robustTempDir(t)
 	t.Chdir(dir)
 	writeFile(t, dir, "maddog.toml", `

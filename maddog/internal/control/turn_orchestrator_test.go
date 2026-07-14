@@ -502,8 +502,8 @@ func TestTurnOrchestratorRepeatedBlockedTurnsProduceUpgradeSignal(t *testing.T) 
 		t.Fatal(err)
 	}
 
-	if defaultProv.call != 2 {
-		t.Fatalf("default provider calls = %d, want two blocked turns before upgrade", defaultProv.call)
+	if defaultProv.call != 3 {
+		t.Fatalf("default provider calls = %d, want two blocked turns plus one advisor-guided retry", defaultProv.call)
 	}
 	if frontierProv.call != 1 {
 		t.Fatalf("frontier provider calls = %d, want upgrade on repeated blocked signal", frontierProv.call)
@@ -522,7 +522,7 @@ func TestTurnOrchestratorRepeatedBlockedTurnsProduceUpgradeSignal(t *testing.T) 
 	}
 	// Two consultations under per-turn advisor budgets: the first blocked turn
 	// is a difficult-decision consult, and the upgrade turn runs the
-	// advisor-before-frontier consult.
+	// advisor-before-frontier consult before one default retry.
 	if len(advisorReqs) != 2 {
 		t.Fatalf("advisor requests = %d, want blocked-decision consult plus advisor-before-frontier consult", len(advisorReqs))
 	}

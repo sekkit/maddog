@@ -45,6 +45,14 @@ func TestToWireToolResult(t *testing.T) {
 		ID: "1", Output: "ok", Truncated: true, DurationMs: 522,
 		Compression: &event.Compression{
 			RawRef:           "raw://tool/1",
+			Route:            "profile",
+			Profile:          "go-test",
+			Quality:          "degraded",
+			QualityReason:    "heuristic text profile",
+			UnparsedLines:    2,
+			UnparsedSamples:  []string{"unknown one", "unknown two"},
+			Lossy:            true,
+			OmittedLines:     42,
 			Strategy:         "shell-error-first",
 			Summary:          "bash output compressed",
 			RawChars:         1000,
@@ -59,7 +67,10 @@ func TestToWireToolResult(t *testing.T) {
 	if w.Tool == nil || w.Tool.Output != "ok" || !w.Tool.Truncated || w.Tool.DurationMs != 522 {
 		t.Errorf("tool result = %+v", w.Tool)
 	}
-	if w.Tool.Compression == nil || w.Tool.Compression.RawRef != "raw://tool/1" || w.Tool.Compression.SavedTokens != 220 {
+	if w.Tool.Compression == nil || w.Tool.Compression.RawRef != "raw://tool/1" || w.Tool.Compression.SavedTokens != 220 ||
+		w.Tool.Compression.Route != "profile" || w.Tool.Compression.Profile != "go-test" ||
+		w.Tool.Compression.Quality != "degraded" || w.Tool.Compression.UnparsedLines != 2 || len(w.Tool.Compression.UnparsedSamples) != 2 ||
+		!w.Tool.Compression.Lossy || w.Tool.Compression.OmittedLines != 42 {
 		t.Errorf("tool compression = %+v", w.Tool.Compression)
 	}
 }

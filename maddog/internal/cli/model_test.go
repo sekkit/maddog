@@ -12,6 +12,7 @@ import (
 // provider/model refs (built-in defaults when no maddog.toml is present), and
 // only those whose provider API key is set.
 func TestModelRefsFromConfig(t *testing.T) {
+	isolateUserConfig(t)
 	t.Chdir(t.TempDir()) // no maddog.toml → built-in default providers
 	// Only DeepSeek keyed → MiMo refs must be filtered out.
 	if _, err := config.SetCredential("DEEPSEEK_API_KEY", "test-key"); err != nil {
@@ -38,6 +39,7 @@ func TestModelRefsSkipsUnconfigured(t *testing.T) {
 	isolateUserConfig(t)
 	t.Setenv("DEEPSEEK_API_KEY", "")
 	t.Setenv("MIMO_API_KEY", "")
+	t.Setenv("ICE_API_KEY", "")
 	if refs := modelRefs(); len(refs) != 0 {
 		t.Errorf("no keys set → no refs, got %v", refs)
 	}

@@ -100,3 +100,23 @@ func TestMergePathLists(t *testing.T) {
 		})
 	}
 }
+
+func TestScrubSecretEnvironmentKeepsRuntimePaths(t *testing.T) {
+	input := []string{
+		"PATH=/usr/bin", "HOME=/home/test", "TEMP=/tmp",
+		"OPENAI_API_KEY=secret", "GITHUB_TOKEN=secret", "DB_PASSWORD=secret",
+		"AUTH_HEADER=secret", "NORMAL_SETTING=kept",
+	}
+	got := scrubSecretEnvironment(input)
+	joined := strings.Join(got, "\n")
+	for _, keep := range []string{"PATH=/usr/bin", "HOME=/home/test", "TEMP=/tmp", "NORMAL_SETTING=kept"} {
+		if !strings.Contains(joined, keep) {
+			t.Fatalf("scrubbed environment dropped %q: %v", keep, got)
+		}
+	}
+	for _, secret := range []string{"OPENAI_API_KEY", "GITHUB_TOKEN", "DB_PASSWORD", "AUTH_HEADER"} {
+		if strings.Contains(joined, secret) {
+			t.Fatalf("scrubbed environment retained %q: %v", secret, got)
+		}
+	}
+}

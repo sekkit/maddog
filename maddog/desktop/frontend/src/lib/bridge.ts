@@ -274,6 +274,7 @@ export interface AppBindings {
   SetPlannerModel(ref: string): Promise<void>;
   SetSubagentModel(ref: string): Promise<void>;
   SetAdvisorModel(ref: string): Promise<void>;
+  SetAdvisorPolicy(maxPerTurn: number, maxPerSession: number, nativeEnabled: boolean, maxTokens: number, cacheTTL: string): Promise<void>;
   SetSubagentEffort(level: string): Promise<void>;
   SetFrontierRoute(ref: string, enabled: boolean, threshold: number, budget: number): Promise<void>;
   SetAutoPlan(mode: string): Promise<void>;
@@ -578,7 +579,7 @@ function bridgeBreadcrumb(method: string): string {
   if (method === "ReportCrash") return "";
   if (/^(Submit|SubmitDisplay|RunShell|Steer|Cancel|Approve|AnswerQuestion|ReplayPendingPrompts)/.test(method))
     return `turn ${method}`;
-  if (/^(SetModel|SetEffort|SetTokenMode|SetDefaultModel|SetPlannerModel|SetSubagentModel|SetAdvisorModel|SetSubagentEffort)/.test(method))
+  if (/^(SetModel|SetEffort|SetTokenMode|SetDefaultModel|SetPlannerModel|SetSubagentModel|SetAdvisorModel|SetAdvisorPolicy|SetSubagentEffort)/.test(method))
     return `model ${method}`;
   if (/^(SetDesktop|SetCloseBehavior|SetDisplayMode|SetStatusBar|SetExpandThinking|SetAutoPlan|SetDefaultToolApprovalMode|SetMemoryCompilerEnabled|SetReasoningLanguage)/.test(method))
     return `settings ${method}`;
@@ -1019,6 +1020,11 @@ function makeMockApp(): AppBindings {
     plannerModel: "",
     subagentModel: "",
     advisorModel: "",
+    advisorMaxUsesPerTurn: 1,
+    advisorMaxUsesPerSession: 10,
+    advisorNativeEnabled: false,
+    advisorNativeMaxTokens: 2048,
+    advisorNativeCacheTTL: "",
     subagentEffort: "",
     frontierModel: "",
     upgradeEnabled: true,
@@ -2873,6 +2879,20 @@ function makeMockApp(): AppBindings {
     },
     async SetAdvisorModel(ref: string) {
       settings.advisorModel = ref;
+    },
+    async SetAdvisorPolicy(maxPerTurn: number, maxPerSession: number, nativeEnabled: boolean, maxTokens: number, cacheTTL: string) {
+      if (maxPerTurn < 0) throw new Error("advisor max uses per turn must be non-negative");
+      if (maxPerSession < 0) throw new Error("advisor max uses per session must be non-negative");
+      if (maxTokens < 0) throw new Error("advisor native max tokens must be non-negative");
+      const normalizedMaxTokens = maxTokens === 0 ? 2048 : maxTokens;
+      if (normalizedMaxTokens < 1024) throw new Error("advisor native max tokens must be at least 1024");
+      const normalizedCacheTTL = cacheTTL.trim();
+      if (!["", "5m", "1h"].includes(normalizedCacheTTL)) throw new Error("advisor native cache TTL must be empty, 5m, or 1h");
+      settings.advisorMaxUsesPerTurn = maxPerTurn;
+      settings.advisorMaxUsesPerSession = maxPerSession;
+      settings.advisorNativeEnabled = nativeEnabled;
+      settings.advisorNativeMaxTokens = normalizedMaxTokens;
+      settings.advisorNativeCacheTTL = normalizedCacheTTL;
     },
     async SetSubagentEffort(level: string) {
       settings.subagentEffort = level;

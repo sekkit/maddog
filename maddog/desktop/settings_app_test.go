@@ -256,8 +256,7 @@ func TestSettingsSurfacesContextCompressionDefaults(t *testing.T) {
 }
 
 func TestSetContextCompressionSavesUserConfig(t *testing.T) {
-	cfgDir := t.TempDir()
-	t.Setenv("MADDOG_CONFIG_DIR", cfgDir)
+	isolateDesktopUserDirs(t)
 
 	app := NewApp()
 	if err := app.SetContextCompression("off", 2048, 1024); err != nil {
@@ -582,6 +581,61 @@ func TestSetAdvisorModelPersistsDedicatedAdvisorModel(t *testing.T) {
 	cfg := config.LoadForEdit(config.UserConfigPath())
 	if cfg.Agent.AdvisorModel != "advisor/claude-opus" {
 		t.Fatalf("config advisor model = %q, want advisor/claude-opus", cfg.Agent.AdvisorModel)
+	}
+}
+
+func TestSetAdvisorPolicyPersistsAndNormalizesNativeTokenDefault(t *testing.T) {
+	isolateDesktopUserDirs(t)
+
+	app := NewApp()
+	if err := app.SetAdvisorPolicy(2, 9, true, 0, "5m"); err != nil {
+		t.Fatalf("SetAdvisorPolicy: %v", err)
+	}
+
+	view := app.Settings()
+	if view.AdvisorMaxUsesPerTurn != 2 || view.AdvisorMaxUsesPerSession != 9 || !view.AdvisorNativeEnabled || view.AdvisorNativeMaxTokens != 2048 || view.AdvisorNativeCacheTTL != "5m" {
+		t.Fatalf("Settings() advisor policy = turn:%d session:%d native:%t tokens:%d ttl:%q", view.AdvisorMaxUsesPerTurn, view.AdvisorMaxUsesPerSession, view.AdvisorNativeEnabled, view.AdvisorNativeMaxTokens, view.AdvisorNativeCacheTTL)
+	}
+
+	cfg := config.LoadForEdit(config.UserConfigPath())
+	if cfg.Agent.AdvisorMaxUsesPerTurn != 2 || cfg.Agent.AdvisorMaxUsesPerSession != 9 || !cfg.Agent.AdvisorNativeEnabled || cfg.Agent.AdvisorNativeMaxTokens != 2048 || cfg.Agent.AdvisorNativeCacheTTL != "5m" {
+		t.Fatalf("saved advisor policy = %+v", cfg.Agent)
+	}
+}
+
+func TestSetAdvisorPolicyRejectsInvalidValuesWithoutMutation(t *testing.T) {
+	isolateDesktopUserDirs(t)
+
+	app := NewApp()
+	if err := app.SetAdvisorPolicy(3, 11, true, 4096, "1h"); err != nil {
+		t.Fatalf("seed SetAdvisorPolicy: %v", err)
+	}
+
+	tests := []struct {
+		name          string
+		maxPerTurn    int
+		maxPerSession int
+		maxTokens     int
+		cacheTTL      string
+	}{
+		{name: "negative turn budget", maxPerTurn: -1, maxPerSession: 11, maxTokens: 4096, cacheTTL: "1h"},
+		{name: "negative session budget", maxPerTurn: 3, maxPerSession: -1, maxTokens: 4096, cacheTTL: "1h"},
+		{name: "negative native tokens", maxPerTurn: 3, maxPerSession: 11, maxTokens: -1, cacheTTL: "1h"},
+		{name: "native tokens below minimum", maxPerTurn: 3, maxPerSession: 11, maxTokens: 1023, cacheTTL: "1h"},
+		{name: "unsupported cache TTL", maxPerTurn: 3, maxPerSession: 11, maxTokens: 4096, cacheTTL: "30m"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := app.SetAdvisorPolicy(tt.maxPerTurn, tt.maxPerSession, false, tt.maxTokens, tt.cacheTTL); err == nil {
+				t.Fatal("SetAdvisorPolicy returned nil error")
+			}
+
+			cfg := config.LoadForEdit(config.UserConfigPath())
+			if cfg.Agent.AdvisorMaxUsesPerTurn != 3 || cfg.Agent.AdvisorMaxUsesPerSession != 11 || !cfg.Agent.AdvisorNativeEnabled || cfg.Agent.AdvisorNativeMaxTokens != 4096 || cfg.Agent.AdvisorNativeCacheTTL != "1h" {
+				t.Fatalf("invalid update mutated saved advisor policy: %+v", cfg.Agent)
+			}
+		})
 	}
 }
 

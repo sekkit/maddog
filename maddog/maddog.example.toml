@@ -37,6 +37,14 @@ compact_force_ratio = 0.9   # force compacting at this high-water mark
 # planner_model = "deepseek-pro"   # optional: enable two-model collaboration
 # image_fallback_model = "lmstudio-vision"   # optional: summarize @image refs for text-only models
 # subagent_model = "deepseek-pro"   # optional default for runAs=subagent skills
+# advisor_model = "deepseek-pro"   # stronger consultation model; ICE/GPT executors use fallback mode
+advisor_max_uses_per_turn = 1       # 0 disables advisor; applies to native and fallback
+advisor_max_uses_per_session = 10   # 0 = unlimited
+advisor_max_context_messages = 12   # fallback mode only; native shares the server-side transcript
+advisor_max_context_chars = 12000   # fallback mode only; 0 = unlimited
+advisor_native_enabled = false      # beta; requires Anthropic kind on both executor and advisor
+advisor_native_max_tokens = 2048    # per native consultation; Anthropic minimum is 1024
+advisor_native_cache_ttl = ""       # empty|5m|1h; use only when repeated native calls justify cache writes
 # subagent_models = { review = "deepseek-pro", security_review = "deepseek-pro" }   # per-skill overrides
 # output_style = "explanatory"   # persona/tone folded into the prompt: explanatory | learning | concise,
 #                                  or a custom .maddog/output-styles/<name>.md ; empty = default
@@ -90,6 +98,33 @@ effort      = "high"
 # model     = "your-local-vision-model"
 # vision    = true
 
+# pxpipe local request-compression proxy. When enabled, Maddog automatically
+# provisions the pinned npm package through npx on first use and starts it before
+# a pxpipe-* provider sends a request. Keep upstreams explicit for gateways.
+#
+# [pxpipe]
+# enabled = true
+# auto_install = true
+# auto_start = true
+# host = "127.0.0.1"
+# port = 47821
+# models = ["gpt-5.6"]
+# openai_upstream = "https://your-openai-compatible-gateway.example"
+#
+# A second upstream needs a dedicated process because OPENAI_UPSTREAM is
+# process-wide. The provider name selects this instance automatically.
+# [[pxpipe.instances]]
+# name = "secondary"
+# providers = ["pxpipe-secondary-gpt"]
+# host = "127.0.0.1"
+# port = 47822
+# models = ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]
+# openai_upstream = "https://secondary-gateway.example"
+#
+# Diagnostics/manual lifecycle remain available:
+#   maddog pxpipe status
+#   maddog pxpipe stop
+#
 # pxpipe local request-compression proxy. Start it with Maddog:
 #   maddog pxpipe start --anthropic-upstream https://api.anthropic.com --openai-upstream https://api.openai.com/v1
 # Or run it manually:
@@ -172,6 +207,28 @@ mcp_call_timeout_seconds = 300   # default MCP call safety cap; per-plugin/tool 
 # paths = ["~/my-skills", "../shared/skills"]   # extra "custom"-scope skill roots
 # excluded_paths = ["~/.agents/skills"]         # hide convention roots without deleting folders
 # disabled_skills = ["review"]                  # hide from prompt, slash invocation, and skill tools
+#
+# SkillOpt-Lite style optimization is explicit and offline. It is disabled by
+# default; see docs/SKILLOPT.md for the manifest and evalbench suite format.
+# [skills.optimization]
+# enabled = false
+# capture_replay = false
+# allow_shell = false   # opt-in; sandboxed/no-network, but can still read host files
+# model = ""
+# proposer_model = ""
+# rounds = 3
+# batch_size = 4
+# max_concurrency = 1
+# min_delta = 0.01
+# deadband = 0.001
+# max_calls = 0
+# max_input_tokens = 0
+# max_output_tokens = 0
+# max_cost = 0
+# retention_days = 30
+# max_replay_bundles = 200
+# redact_artifacts = true
+# require_approval = true
 
 # Hooks run shell commands around the loop (PreToolUse / PostToolUse /
 # UserPromptSubmit / Stop). They are NOT configured here — put them in

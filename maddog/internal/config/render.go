@@ -167,6 +167,10 @@ func RenderTOMLForScope(c *Config, scope RenderScope) string {
 		}
 		b.WriteString("\n")
 	}
+	if scope != RenderScopeProject {
+		renderPxpipeConfig(&b, c.Pxpipe)
+	}
+
 	if shouldRenderEnvironment(c, defaults, scope) {
 		renderEnvironmentConfig(&b, c.Environment)
 	}
@@ -350,6 +354,9 @@ func RenderTOMLForScope(c *Config, scope RenderScope) string {
 		} else {
 			b.WriteString("# disabled_skills = [\"review\"]   # hide noisy or unwanted skills\n\n")
 		}
+	}
+	if shouldRenderSkillOptimization(c, defaults, scope) {
+		renderSkillOptimizationConfig(&b, c.EffectiveSkillOptimizationConfig())
 	}
 
 	if shouldRenderPermissions(c, defaults, scope) {
@@ -632,6 +639,64 @@ func shouldRenderEnvironment(c, defaults *Config, scope RenderScope) bool {
 	return !reflect.DeepEqual(c.Environment, defaults.Environment)
 }
 
+func renderPxpipeConfig(b *strings.Builder, cfg PxpipeConfig) {
+	b.WriteString("[pxpipe]\n")
+	fmt.Fprintf(b, "enabled = %v   # start only when a pxpipe-* provider is selected\n", cfg.Enabled)
+	fmt.Fprintf(b, "auto_install = %v   # use pinned npx package provisioning when pxpipe is missing\n", cfg.AutoInstall)
+	fmt.Fprintf(b, "auto_start = %v   # prepare the local sidecar automatically before a pxpipe request\n", cfg.AutoStart)
+	host := cfg.Host
+	if host == "" {
+		host = "127.0.0.1"
+	}
+	port := cfg.Port
+	if port == 0 {
+		port = 47821
+	}
+	fmt.Fprintf(b, "host = %q   # keep loopback; dashboard is intentionally unauthenticated\n", host)
+	fmt.Fprintf(b, "port = %d\n", port)
+	if len(cfg.Models) > 0 {
+		fmt.Fprintf(b, "models = %s   # PXPIPE_MODELS allowlist\n", renderStringArray(cfg.Models))
+	} else {
+		b.WriteString("# models = [\"claude-fable-5\", \"gpt-5.6\"]   # PXPIPE_MODELS allowlist\n")
+	}
+	if cfg.AnthropicUpstream != "" {
+		fmt.Fprintf(b, "anthropic_upstream = %q\n", cfg.AnthropicUpstream)
+	} else {
+		b.WriteString("# anthropic_upstream = \"https://api.anthropic.com\"   # explicit upstream prevents accidental fallback\n")
+	}
+	if cfg.OpenAIUpstream != "" {
+		fmt.Fprintf(b, "openai_upstream = %q\n", cfg.OpenAIUpstream)
+	} else {
+		b.WriteString("# openai_upstream = \"https://api.openai.com/v1\"   # explicit upstream prevents accidental fallback\n")
+	}
+	b.WriteString("\n")
+	for _, instance := range cfg.Instances {
+		b.WriteString("[[pxpipe.instances]]\n")
+		if instance.Name != "" {
+			fmt.Fprintf(b, "name = %q\n", instance.Name)
+		}
+		fmt.Fprintf(b, "providers = %s   # providers routed to this dedicated process\n", renderStringArray(instance.Providers))
+		host := instance.Host
+		if host == "" {
+			host = "127.0.0.1"
+		}
+		fmt.Fprintf(b, "host = %q\n", host)
+		if instance.Port > 0 {
+			fmt.Fprintf(b, "port = %d\n", instance.Port)
+		}
+		if len(instance.Models) > 0 {
+			fmt.Fprintf(b, "models = %s\n", renderStringArray(instance.Models))
+		}
+		if instance.AnthropicUpstream != "" {
+			fmt.Fprintf(b, "anthropic_upstream = %q\n", instance.AnthropicUpstream)
+		}
+		if instance.OpenAIUpstream != "" {
+			fmt.Fprintf(b, "openai_upstream = %q\n", instance.OpenAIUpstream)
+		}
+		b.WriteString("\n")
+	}
+}
+
 func renderEnvironmentConfig(b *strings.Builder, cfg EnvironmentConfig) {
 	b.WriteString("[environment]\n")
 	enabled := true
@@ -776,6 +841,27 @@ func renderAgentBehaviorFields(b *strings.Builder, c, defaults *Config, projectD
 		fmt.Fprintf(b, "advisor_model = %q   # dedicated model for automatic and /advisor consultations\n", c.Agent.AdvisorModel)
 	} else if !projectDelta {
 		b.WriteString("# advisor_model = \"deepseek-pro\"   # optional dedicated advisor model; falls back to subagent_models.advisor or subagent_model\n")
+	}
+	if !projectDelta || c.Agent.AdvisorMaxUsesPerTurn != defaults.Agent.AdvisorMaxUsesPerTurn {
+		fmt.Fprintf(b, "advisor_max_uses_per_turn = %d   # advisor consultations allowed per executor turn; 0 disables\n", c.Agent.AdvisorMaxUsesPerTurn)
+	}
+	if !projectDelta || c.Agent.AdvisorMaxUsesPerSession != defaults.Agent.AdvisorMaxUsesPerSession {
+		fmt.Fprintf(b, "advisor_max_uses_per_session = %d   # session-wide advisor consultation cap; 0 = unlimited\n", c.Agent.AdvisorMaxUsesPerSession)
+	}
+	if !projectDelta || c.Agent.AdvisorMaxContextMessages != defaults.Agent.AdvisorMaxContextMessages {
+		fmt.Fprintf(b, "advisor_max_context_messages = %d   # recent messages shared with fallback advisor; 0 = unlimited\n", c.Agent.AdvisorMaxContextMessages)
+	}
+	if !projectDelta || c.Agent.AdvisorMaxContextChars != defaults.Agent.AdvisorMaxContextChars {
+		fmt.Fprintf(b, "advisor_max_context_chars = %d   # character cap for fallback advisor context; 0 = unlimited\n", c.Agent.AdvisorMaxContextChars)
+	}
+	if !projectDelta || c.Agent.AdvisorNativeEnabled != defaults.Agent.AdvisorNativeEnabled {
+		fmt.Fprintf(b, "advisor_native_enabled = %t   # use Anthropic's server-side advisor tool for compatible model pairs\n", c.Agent.AdvisorNativeEnabled)
+	}
+	if !projectDelta || c.Agent.AdvisorNativeMaxTokens != defaults.Agent.AdvisorNativeMaxTokens {
+		fmt.Fprintf(b, "advisor_native_max_tokens = %d   # advisor output ceiling per native consultation; minimum 1024\n", c.Agent.AdvisorNativeMaxTokens)
+	}
+	if !projectDelta || c.Agent.AdvisorNativeCacheTTL != defaults.Agent.AdvisorNativeCacheTTL {
+		fmt.Fprintf(b, "advisor_native_cache_ttl = %q   # advisor transcript cache: empty|5m|1h\n", c.Agent.AdvisorNativeCacheTTL)
 	}
 	if len(c.Agent.SubagentModels) > 0 {
 		fmt.Fprintf(b, "subagent_models = %s   # per-skill overrides\n", renderStringMap(c.Agent.SubagentModels))
@@ -950,6 +1036,44 @@ func shouldRenderSkills(c, defaults *Config, scope RenderScope) bool {
 		return true
 	}
 	return !reflect.DeepEqual(c.Skills, defaults.Skills)
+}
+
+func shouldRenderSkillOptimization(c, defaults *Config, scope RenderScope) bool {
+	if scope != RenderScopeProject {
+		return true
+	}
+	return !reflect.DeepEqual(c.Skills.Optimization, defaults.Skills.Optimization)
+}
+
+func renderSkillOptimizationConfig(b *strings.Builder, cfg SkillOptimizationConfig) {
+	b.WriteString("[skills.optimization]\n")
+	fmt.Fprintf(b, "enabled = %v   # explicit opt-in; normal turns never optimize skills\n", cfg.Enabled)
+	fmt.Fprintf(b, "capture_replay = %v   # optional normal-turn replay capture\n", cfg.CaptureReplay)
+	fmt.Fprintf(b, "allow_shell = %v   # evaluation opt-in; no network, but sandboxed shell retains broad host reads\n", cfg.AllowShell)
+	if cfg.Model != "" {
+		fmt.Fprintf(b, "model = %q\n", cfg.Model)
+	}
+	if cfg.ProposerModel != "" {
+		fmt.Fprintf(b, "proposer_model = %q\n", cfg.ProposerModel)
+	}
+	fmt.Fprintf(b, "rounds = %d\n", cfg.Rounds)
+	fmt.Fprintf(b, "batch_size = %d\n", cfg.BatchSize)
+	fmt.Fprintf(b, "max_concurrency = %d\n", cfg.MaxConcurrency)
+	fmt.Fprintf(b, "min_delta = %s\n", strconv.FormatFloat(cfg.MinDelta, 'f', -1, 64))
+	fmt.Fprintf(b, "deadband = %s\n", strconv.FormatFloat(cfg.Deadband, 'f', -1, 64))
+	fmt.Fprintf(b, "max_calls = %d\n", cfg.MaxCalls)
+	fmt.Fprintf(b, "max_input_tokens = %d\n", cfg.MaxInputTokens)
+	fmt.Fprintf(b, "max_output_tokens = %d\n", cfg.MaxOutputTokens)
+	fmt.Fprintf(b, "max_cost = %s\n", strconv.FormatFloat(cfg.MaxCost, 'f', -1, 64))
+	fmt.Fprintf(b, "retention_days = %d\n", cfg.RetentionDays)
+	fmt.Fprintf(b, "max_replay_bundles = %d\n", cfg.MaxReplayBundles)
+	if cfg.RedactArtifacts != nil {
+		fmt.Fprintf(b, "redact_artifacts = %v\n", *cfg.RedactArtifacts)
+	}
+	if cfg.RequireApproval != nil {
+		fmt.Fprintf(b, "require_approval = %v\n", *cfg.RequireApproval)
+	}
+	b.WriteString("\n")
 }
 
 func shouldRenderPermissions(c, defaults *Config, scope RenderScope) bool {

@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import { app } from "../lib/bridge";
 
 let passed = 0;
 let failed = 0;
@@ -25,7 +26,10 @@ function includesAll(body: string, needles: string[]): boolean {
 const settingsPanel = source("../components/SettingsPanel.tsx");
 const transcript = source("../components/Transcript.tsx");
 const types = source("../lib/types.ts");
+const bridge = source("../lib/bridge.ts");
 const en = source("../locales/en.ts");
+const zh = source("../locales/zh.ts");
+const zhTW = source("../locales/zh-TW.ts");
 
 console.log("\nMaddog mechanism GUI contract");
 
@@ -53,6 +57,66 @@ check(
     "settings.frontierBudgetUnlimited",
     "settings-model-current--route",
   ]),
+);
+
+check(
+  "settings GUI exposes one atomic advisor policy mutation and Anthropic-only native controls",
+  includesAll(settingsPanel, [
+    "return app.SetAdvisorPolicy(maxPerTurn, maxPerSession, nativeEnabled, maxTokens, cacheTTL)",
+    "settings.advisorBudgets",
+    "settings.advisorMaxPerTurn",
+    "settings.advisorMaxPerSession",
+    "settings.advisorNative",
+    "s.advisorNativeEnabled &&",
+    "settings.advisorNativeMaxTokens",
+    "settings.advisorNativeCacheTTL",
+    '<option value="5m">',
+    '<option value="1h">',
+  ]) && includesAll(bridge, [
+    "SetAdvisorPolicy(maxPerTurn: number, maxPerSession: number, nativeEnabled: boolean, maxTokens: number, cacheTTL: string): Promise<void>",
+    "const normalizedMaxTokens = maxTokens === 0 ? 2048 : maxTokens",
+    "settings.advisorMaxUsesPerTurn = maxPerTurn",
+    "settings.advisorNativeCacheTTL = normalizedCacheTTL",
+  ]),
+);
+
+check(
+  "advisor policy copy is localized and explicitly limited to Anthropic Native",
+  [en, zh, zhTW].every((locale) => includesAll(locale, [
+    '"settings.advisorBudgets"',
+    '"settings.advisorNative"',
+    '"settings.advisorNativeHint"',
+    '"settings.advisorNativeOptionsHint"',
+    '"settings.advisorNativeCacheTTL"',
+  ])) && en.includes("only for Anthropic providers"),
+);
+
+await app.SetAdvisorPolicy(2, 8, true, 0, "5m");
+const advisorPolicy = await app.Settings();
+check(
+  "bridge mock applies and normalizes the atomic advisor policy",
+  advisorPolicy.advisorMaxUsesPerTurn === 2
+    && advisorPolicy.advisorMaxUsesPerSession === 8
+    && advisorPolicy.advisorNativeEnabled
+    && advisorPolicy.advisorNativeMaxTokens === 2048
+    && advisorPolicy.advisorNativeCacheTTL === "5m",
+);
+
+let invalidAdvisorPolicyRejected = false;
+try {
+  await app.SetAdvisorPolicy(9, 9, false, 1023, "1h");
+} catch {
+  invalidAdvisorPolicyRejected = true;
+}
+const advisorPolicyAfterRejection = await app.Settings();
+check(
+  "bridge mock rejects invalid advisor policy without a partial mutation",
+  invalidAdvisorPolicyRejected
+    && advisorPolicyAfterRejection.advisorMaxUsesPerTurn === 2
+    && advisorPolicyAfterRejection.advisorMaxUsesPerSession === 8
+    && advisorPolicyAfterRejection.advisorNativeEnabled
+    && advisorPolicyAfterRejection.advisorNativeMaxTokens === 2048
+    && advisorPolicyAfterRejection.advisorNativeCacheTTL === "5m",
 );
 
 check(
@@ -125,6 +189,11 @@ check(
     "export interface SettingsView",
     "subagentModel: string;",
     "advisorModel: string;",
+    "advisorMaxUsesPerTurn: number;",
+    "advisorMaxUsesPerSession: number;",
+    "advisorNativeEnabled: boolean;",
+    "advisorNativeMaxTokens: number;",
+    "advisorNativeCacheTTL: string;",
     "frontierModel: string;",
     "officialProviders: ProviderView[];",
   ]),

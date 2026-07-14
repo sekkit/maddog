@@ -38,7 +38,7 @@ func pxpipeCommand(args []string) int {
 }
 
 func pxpipeStatus(args []string) int {
-	opt, jsonOut, rc := parsePxpipeFlags("pxpipe status", args, false)
+	opt, jsonOut, rc := parsePxpipeFlags("pxpipe status", args, true)
 	if rc != 0 {
 		return rc
 	}
@@ -72,7 +72,7 @@ func pxpipeStart(args []string) int {
 }
 
 func pxpipeStop(args []string) int {
-	opt, jsonOut, rc := parsePxpipeFlags("pxpipe stop", args, false)
+	opt, jsonOut, rc := parsePxpipeFlags("pxpipe stop", args, true)
 	if rc != 0 {
 		return rc
 	}
@@ -96,9 +96,9 @@ func parsePxpipeFlags(name string, args []string, loadConfig bool) (pxpipemgr.St
 	fs := flag.NewFlagSet(name, flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
 	jsonOut := fs.Bool("json", false, "print JSON")
-	host := fs.String("host", pxpipemgr.DefaultHost, "bind/check host")
-	port := fs.Int("port", pxpipemgr.DefaultPort, "bind/check port")
-	models := fs.String("models", pxpipemgr.DefaultModels, "PXPIPE_MODELS value")
+	host := fs.String("host", "", "bind/check host (default: [pxpipe].host or loopback)")
+	port := fs.Int("port", 0, "bind/check port (default: [pxpipe].port or 47821)")
+	models := fs.String("models", "", "PXPIPE_MODELS value (default: [pxpipe].models)")
 	logPath := fs.String("log", "", "PXPIPE_LOG path")
 	anthropicUpstream := fs.String("anthropic-upstream", "", "ANTHROPIC_UPSTREAM")
 	openAIUpstream := fs.String("openai-upstream", "", "OPENAI_UPSTREAM")
@@ -163,6 +163,8 @@ Usage:
   maddog pxpipe start  [--json] [--host HOST] [--port PORT] [--models LIST] [--anthropic-upstream URL] [--openai-upstream URL] [--log PATH]
   maddog pxpipe stop   [--json] [--host HOST] [--port PORT]
 
+When [pxpipe].enabled and auto_start are true, selecting a pxpipe provider
+provisions the pinned package through npx (when needed) and starts this sidecar automatically.
 Defaults bind to 127.0.0.1 and keep pxpipe optional.
 `)
 }

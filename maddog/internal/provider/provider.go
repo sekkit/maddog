@@ -112,9 +112,10 @@ type Request struct {
 // NativeAdvisorConfig describes the server-side advisor tool exposed by
 // providers that support Anthropic's advisor beta.
 type NativeAdvisorConfig struct {
-	Model     string
-	MaxUses   int
-	MaxTokens int
+	Model      string
+	MaxUses    int
+	MaxTokens  int
+	CachingTTL string // "" disables advisor-side caching; supported TTLs are "5m" and "1h"
 }
 
 // interruptedToolResult stands in for a tool result that never landed — an
@@ -475,6 +476,18 @@ const (
 	ChunkError                          // an error occurred
 )
 
+// UsageIteration reports token accounting for one provider-side inference.
+// Model is optional for the primary completion, but identifies separately
+// billed sub-inferences such as Anthropic advisor calls.
+type UsageIteration struct {
+	Type                     string
+	Model                    string
+	InputTokens              int
+	OutputTokens             int
+	CacheCreationInputTokens int
+	CacheReadInputTokens     int
+}
+
 // Usage reports token accounting for a completion. Cache hit/miss come from
 // either DeepSeek's top-level prompt_cache_{hit,miss}_tokens or the OpenAI/MiMo
 // standard prompt_tokens_details.cached_tokens — the openai provider normalises
@@ -490,6 +503,7 @@ type Usage struct {
 	CacheMissTokens  int    // prompt tokens not cached
 	ReasoningTokens  int    // subset of CompletionTokens spent on chain-of-thought
 	FinishReason     string // "stop", "tool_calls", "length", "content_filter", "repetition_truncation", …
+	Iterations       []UsageIteration
 }
 
 // Pricing is a provider's per-1M-token rates, used to estimate spend. Currency

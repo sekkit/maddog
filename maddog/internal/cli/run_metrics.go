@@ -122,7 +122,7 @@ func (s *metricsSink) Emit(e event.Event) {
 		if e.Tool.Truncated {
 			s.m.ToolTruncations++
 		}
-		if c := e.Tool.Compression; c != nil {
+		if c := e.Tool.Compression; c.IsCompression() {
 			s.m.ToolCompressionEvents++
 			s.m.ToolCompressionRawChars += c.RawChars
 			s.m.ToolCompressionCompressedChars += c.CompressedChars

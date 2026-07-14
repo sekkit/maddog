@@ -16,6 +16,7 @@ func TestUsageObserverReceivesOneCopyPerCompletedProviderRound(t *testing.T) {
 		PromptTokens:     11,
 		CompletionTokens: 3,
 		TotalTokens:      14,
+		Iterations:       []provider.UsageIteration{{Model: "tool-model", InputTokens: 11, OutputTokens: 3}},
 	}
 	finalUsage := &provider.Usage{PromptTokens: 17, CompletionTokens: 5, TotalTokens: 22}
 	mp := testutil.NewMock("m",
@@ -55,9 +56,10 @@ func TestUsageObserverReceivesOneCopyPerCompletedProviderRound(t *testing.T) {
 		t.Fatalf("observed totals = [%d %d], want [14 22]", got[0].TotalTokens, got[1].TotalTokens)
 	}
 
-	// The observer receives an independent value.
+	// The observer receives an independent value, including nested iteration data.
 	toolUsage.TotalTokens = 99
-	if got[0].TotalTokens != 14 {
+	toolUsage.Iterations[0].OutputTokens = 99
+	if got[0].TotalTokens != 14 || got[0].Iterations[0].OutputTokens != 3 {
 		t.Fatalf("observer value was aliased to provider usage: %+v", got[0])
 	}
 }

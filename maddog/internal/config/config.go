@@ -59,6 +59,7 @@ type Config struct {
 	Permissions       PermissionsConfig       `toml:"permissions"`
 	Sandbox           SandboxConfig           `toml:"sandbox"`
 	Network           NetworkConfig           `toml:"network"`
+	Pxpipe            PxpipeConfig            `toml:"pxpipe"`
 	Serve             ServeConfig             `toml:"serve"`
 	Plugins           []PluginEntry           `toml:"plugins"`
 	Skills            SkillsConfig            `toml:"skills"`
@@ -806,6 +807,34 @@ type NetworkProxyConfig struct {
 	Password string `toml:"password"`
 }
 
+// PxpipeConfig controls the optional local pxpipe sidecar. It remains dormant
+// unless a pxpipe provider is selected and enabled is true.
+type PxpipeConfig struct {
+	Enabled           bool                   `toml:"enabled"`
+	AutoInstall       bool                   `toml:"auto_install"`
+	AutoStart         bool                   `toml:"auto_start"`
+	Host              string                 `toml:"host"`
+	Port              int                    `toml:"port"`
+	Models            []string               `toml:"models"`
+	AnthropicUpstream string                 `toml:"anthropic_upstream"`
+	OpenAIUpstream    string                 `toml:"openai_upstream"`
+	Instances         []PxpipeInstanceConfig `toml:"instances"`
+}
+
+// PxpipeInstanceConfig binds one or more provider names to a dedicated pxpipe
+// process. The legacy fields on PxpipeConfig remain the default instance.
+// Dedicated instances prevent providers with different upstreams from sharing
+// pxpipe's process-wide OPENAI_UPSTREAM or ANTHROPIC_UPSTREAM value.
+type PxpipeInstanceConfig struct {
+	Name              string   `toml:"name"`
+	Providers         []string `toml:"providers"`
+	Host              string   `toml:"host"`
+	Port              int      `toml:"port"`
+	Models            []string `toml:"models"`
+	AnthropicUpstream string   `toml:"anthropic_upstream"`
+	OpenAIUpstream    string   `toml:"openai_upstream"`
+}
+
 // NetworkProxySpec returns the expanded proxy settings used by netclient.
 func (c *Config) NetworkProxySpec() netclient.ProxySpec {
 	return netclient.ProxySpec{
@@ -865,12 +894,77 @@ func (c *Config) NetworkProxyMode() string {
 // hides named skills from the agent prompt, slash invocation, and skill tools
 // while keeping them manageable.
 type SkillsConfig struct {
-	Paths                []string `toml:"paths"`
-	ExcludedPaths        []string `toml:"excluded_paths"`
-	DisabledSkills       []string `toml:"disabled_skills"`
-	MaxDepth             int      `toml:"max_depth"`
-	RuntimeOrchestration bool     `toml:"runtime_orchestration"`
-	DynamicSkills        bool     `toml:"dynamic_skills"`
+	Paths                []string                `toml:"paths"`
+	ExcludedPaths        []string                `toml:"excluded_paths"`
+	DisabledSkills       []string                `toml:"disabled_skills"`
+	MaxDepth             int                     `toml:"max_depth"`
+	RuntimeOrchestration bool                    `toml:"runtime_orchestration"`
+	DynamicSkills        bool                    `toml:"dynamic_skills"`
+	Optimization         SkillOptimizationConfig `toml:"optimization"`
+}
+
+// SkillOptimizationConfig controls explicit, offline skill optimization runs.
+// Enabled defaults false: normal turns never collect training data, mutate a
+// skill, or promote a candidate merely because this block is present.
+type SkillOptimizationConfig struct {
+	Enabled          bool    `toml:"enabled"`
+	CaptureReplay    bool    `toml:"capture_replay"`
+	AllowShell       bool    `toml:"allow_shell"`
+	Model            string  `toml:"model"`
+	ProposerModel    string  `toml:"proposer_model"`
+	Rounds           int     `toml:"rounds"`
+	BatchSize        int     `toml:"batch_size"`
+	MaxConcurrency   int     `toml:"max_concurrency"`
+	MinDelta         float64 `toml:"min_delta"`
+	Deadband         float64 `toml:"deadband"`
+	MaxCalls         int     `toml:"max_calls"`
+	MaxInputTokens   int64   `toml:"max_input_tokens"`
+	MaxOutputTokens  int64   `toml:"max_output_tokens"`
+	MaxCost          float64 `toml:"max_cost"`
+	RetentionDays    int     `toml:"retention_days"`
+	MaxReplayBundles int     `toml:"max_replay_bundles"`
+	RedactArtifacts  *bool   `toml:"redact_artifacts"`
+	RequireApproval  *bool   `toml:"require_approval"`
+}
+
+// EffectiveSkillOptimizationConfig returns bounded defaults without enabling
+// optimization. Callers must still check Enabled and require an explicit CLI
+// optimize/resume action before starting a run.
+func (c *Config) EffectiveSkillOptimizationConfig() SkillOptimizationConfig {
+	var out SkillOptimizationConfig
+	if c != nil {
+		out = c.Skills.Optimization
+	}
+	if out.Rounds <= 0 {
+		out.Rounds = 3
+	}
+	if out.BatchSize <= 0 {
+		out.BatchSize = 4
+	}
+	if out.MaxConcurrency <= 0 {
+		out.MaxConcurrency = 1
+	}
+	if out.MinDelta <= 0 {
+		out.MinDelta = 0.01
+	}
+	if out.Deadband <= 0 {
+		out.Deadband = 0.001
+	}
+	if out.RetentionDays <= 0 {
+		out.RetentionDays = 30
+	}
+	if out.MaxReplayBundles <= 0 {
+		out.MaxReplayBundles = 200
+	}
+	if out.RedactArtifacts == nil {
+		value := true
+		out.RedactArtifacts = &value
+	}
+	if out.RequireApproval == nil {
+		value := true
+		out.RequireApproval = &value
+	}
+	return out
 }
 
 // SkillCustomPaths returns the configured custom skill roots with ${VAR}
@@ -1075,6 +1169,7 @@ type AgentConfig struct {
 	AdvisorMaxContextChars    int               `toml:"advisor_max_context_chars"`
 	AdvisorNativeEnabled      bool              `toml:"advisor_native_enabled"`
 	AdvisorNativeMaxTokens    int               `toml:"advisor_native_max_tokens"`
+	AdvisorNativeCacheTTL     string            `toml:"advisor_native_cache_ttl"`
 	GuardianModel             string            `toml:"guardian_model"`
 	GuardianTemperature       float64           `toml:"guardian_temperature"`
 	// OutputStyle selects a persona/tone block folded into the system prompt at
@@ -1110,6 +1205,19 @@ type AgentConfig struct {
 	// ContextCompression controls deterministic compression of high-volume tool
 	// outputs before they enter model context.
 	ContextCompression ContextCompressionConfig `toml:"context_compression"`
+}
+
+// NormalizeAdvisorNativeCacheTTL validates the advisor transcript cache TTL
+// accepted by Anthropic's native advisor tool. Empty disables advisor-side
+// caching.
+func NormalizeAdvisorNativeCacheTTL(value string) (string, bool) {
+	value = strings.ToLower(strings.TrimSpace(value))
+	switch value {
+	case "", "5m", "1h":
+		return value, true
+	default:
+		return "", false
+	}
 }
 
 type MemoryCompilerConfig struct {
@@ -1585,7 +1693,7 @@ func Default() *Config {
 			AdvisorMaxContextMessages: 12,
 			AdvisorMaxContextChars:    12000,
 			AdvisorNativeEnabled:      false,
-			AdvisorNativeMaxTokens:    1024,
+			AdvisorNativeMaxTokens:    2048,
 			SoftCompactRatio:          0.5,
 			CompactRatio:              0.8,
 			CompactForceRatio:         0.9,
@@ -1622,6 +1730,12 @@ func Default() *Config {
 		// a missing server yields an install hint rather than an error.
 		LSP:     LSPConfig{Enabled: true},
 		Network: NetworkConfig{ProxyMode: netclient.ModeAuto},
+		Pxpipe: PxpipeConfig{
+			AutoInstall: true,
+			Host:        "127.0.0.1",
+			Port:        47821,
+			Models:      []string{"claude-fable-5", "gpt-5.6"},
+		},
 		Bot: BotConfig{
 			ToolApprovalMode: "ask",
 			MaxSteps:         25,

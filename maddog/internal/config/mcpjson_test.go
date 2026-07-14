@@ -327,6 +327,7 @@ func TestLoadMergesMCPJSON(t *testing.T) {
 	// no global config, then chdir into a project dir holding both files.
 	empty := t.TempDir()
 	t.Setenv("HOME", empty)
+	t.Setenv("MADDOG_HOME", filepath.Join(empty, ".maddog"))
 	t.Setenv("XDG_CONFIG_HOME", empty)
 	t.Chdir(t.TempDir())
 
@@ -454,6 +455,7 @@ func TestMergeMCPJSONPrecedence(t *testing.T) {
 func TestClearPluginAuthenticationInSourceUsesMCPJSON(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("HOME", root)
+	t.Setenv("MADDOG_HOME", filepath.Join(root, ".maddog"))
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(root, "xdg"))
 	t.Setenv("AppData", filepath.Join(root, "AppData"))
 	t.Chdir(t.TempDir())
@@ -528,6 +530,7 @@ func TestClearPluginAuthenticationInSourceUsesMCPJSON(t *testing.T) {
 func TestClearPluginAuthenticationInSourcePrefersTOML(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("HOME", root)
+	t.Setenv("MADDOG_HOME", filepath.Join(root, ".maddog"))
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(root, "xdg"))
 	t.Setenv("AppData", filepath.Join(root, "AppData"))
 	t.Chdir(t.TempDir())

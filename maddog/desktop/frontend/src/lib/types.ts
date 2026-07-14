@@ -58,6 +58,14 @@ export interface WireProviderStatus {
 
 export interface WireCompression {
   rawRef?: string;
+  route?: "passthrough" | "generic" | "profile";
+  profile?: string;
+  quality?: "exact" | "degraded" | "passthrough";
+  qualityReason?: string;
+  unparsedLines?: number;
+  unparsedSamples?: string[];
+  lossy?: boolean;
+  omittedLines?: number;
   strategy?: string;
   summary?: string;
   rawChars?: number;
@@ -1221,6 +1229,11 @@ export interface SettingsView {
   plannerModel: string;
   subagentModel: string;
   advisorModel: string;
+  advisorMaxUsesPerTurn: number;
+  advisorMaxUsesPerSession: number;
+  advisorNativeEnabled: boolean;
+  advisorNativeMaxTokens: number;
+  advisorNativeCacheTTL: string; // "" | "5m" | "1h"
   subagentEffort: string;
   frontierModel: string;
   upgradeEnabled: boolean;

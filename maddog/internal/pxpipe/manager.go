@@ -16,6 +16,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -28,6 +29,12 @@ const (
 	DefaultPort   = 47821
 	DefaultModels = "claude-fable-5,gpt-5.6"
 
+	// NpxPackage is pinned so first-use installation is reproducible rather than
+	// silently following whichever pxpipe release happens to be latest.
+	NpxPackage            = "pxpipe-proxy@0.8.0"
+	DefaultStartupTimeout = 30 * time.Second
+	DefaultStartupPoll    = 100 * time.Millisecond
+
 	StateNotInstalled    = "not-installed"
 	StateNotRunning      = "not-running"
 	StateRunningManaged  = "running-managed"
@@ -36,11 +43,17 @@ const (
 )
 
 // Manager owns discovery, health, and lifecycle for the local pxpipe process.
+// lifecycleMu prevents concurrent UI/session builders from racing to spawn two
+// sidecars for the same default loopback endpoint.
+var lifecycleMu sync.Mutex
+
 type Manager struct {
-	HTTPClient     *http.Client
-	LookPath       func(string) (string, error)
-	CommandContext func(context.Context, string, ...string) *exec.Cmd
-	StatePath      string
+	HTTPClient          *http.Client
+	LookPath            func(string) (string, error)
+	CommandContext      func(context.Context, string, ...string) *exec.Cmd
+	StatePath           string
+	StartupTimeout      time.Duration
+	StartupPollInterval time.Duration
 }
 
 // StartOptions describes a managed pxpipe launch.
@@ -51,7 +64,9 @@ type StartOptions struct {
 	Models            string
 	AnthropicUpstream string
 	OpenAIUpstream    string
+	Provider          string
 	Config            *config.Config
+	instanceMatched   bool
 }
 
 // Status is safe to print as JSON; it intentionally omits secrets and request
@@ -96,19 +111,20 @@ func NewManager() *Manager {
 // Status checks installation and loopback health without starting anything.
 func (m *Manager) Status(ctx context.Context, opt StartOptions) Status {
 	opt = normalizeOptions(opt)
+	statePath := m.statePathFor(opt)
 	st := Status{
 		Host:         opt.Host,
 		Port:         opt.Port,
 		DashboardURL: dashboardURL(opt.Host, opt.Port),
 		LogPath:      opt.LogPath,
-		StatePath:    m.statePath(),
+		StatePath:    statePath,
 	}
-	if binary, command, err := m.resolveCommand(); err == nil {
+	if binary, command, err := m.resolveCommand(autoInstallEnabled(opt)); err == nil {
 		st.Installed = true
 		st.Binary = binary
 		st.Command = command
 	}
-	sf, _ := m.readState()
+	sf, _ := m.readStateAt(statePath)
 	healthy, err := m.health(ctx, opt.Host, opt.Port)
 	st.Healthy = healthy
 	if healthy {
@@ -151,22 +167,28 @@ func (m *Manager) Status(ctx context.Context, opt StartOptions) Status {
 // Start launches pxpipe unless a server is already responding on the configured
 // loopback address.
 func (m *Manager) Start(ctx context.Context, opt StartOptions) (Status, error) {
+	lifecycleMu.Lock()
+	defer lifecycleMu.Unlock()
 	opt = normalizeOptions(opt)
 	if st := m.Status(ctx, opt); st.Healthy {
 		return st, nil
 	}
-	binary, command, err := m.resolveCommand()
+	binary, command, err := m.resolveCommand(autoInstallEnabled(opt))
 	if err != nil {
 		st := m.Status(ctx, opt)
 		st.State = StateNotInstalled
-		st.Error = "pxpipe not found on PATH; install pxpipe-proxy or Node/npx"
+		st.Error = "pxpipe runtime is unavailable; install Node once or enable pxpipe.auto_install"
 		return st, errors.New(st.Error)
 	}
 	env := BuildEnv(opt)
 	if err := os.MkdirAll(filepath.Dir(opt.LogPath), 0o755); err != nil {
 		return Status{}, err
 	}
-	logFile, err := os.OpenFile(opt.LogPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+	// pxpipe owns PXPIPE_LOG as JSONL event storage. Keep launcher stdout/stderr
+	// separate so npm progress and upstream error diagnostics cannot corrupt the
+	// event stream or be surfaced as gateway telemetry.
+	runnerLogPath := filepath.Join(filepath.Dir(opt.LogPath), "runner.log")
+	logFile, err := os.OpenFile(runnerLogPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
 	if err != nil {
 		return Status{}, err
 	}
@@ -189,11 +211,11 @@ func (m *Manager) Start(ctx context.Context, opt StartOptions) (Status, error) {
 		OpenAIUpstream:    env["OPENAI_UPSTREAM"],
 		StartedAt:         time.Now().UTC(),
 	}
-	if err := m.writeState(sf); err != nil {
-		_ = cmd.Process.Kill()
+	if err := m.writeStateAt(m.statePathFor(opt), sf); err != nil {
+		_ = terminateProcessTree(ctx, cmd.Process.Pid)
 		return Status{}, err
 	}
-	deadline := time.Now().Add(2 * time.Second)
+	deadline := time.Now().Add(m.startupTimeout())
 	for time.Now().Before(deadline) {
 		if healthy, _ := m.health(ctx, opt.Host, opt.Port); healthy {
 			st := m.Status(ctx, opt)
@@ -202,7 +224,7 @@ func (m *Manager) Start(ctx context.Context, opt StartOptions) (Status, error) {
 			st.Env = env
 			return st, nil
 		}
-		time.Sleep(100 * time.Millisecond)
+		time.Sleep(m.startupPollInterval())
 	}
 	st := m.Status(ctx, opt)
 	st.State = StateUnhealthy
@@ -210,22 +232,25 @@ func (m *Manager) Start(ctx context.Context, opt StartOptions) (Status, error) {
 	st.Binary = binary
 	st.Command = command
 	st.Env = env
-	st.Error = "pxpipe process started but dashboard did not become healthy"
-	return st, nil
+	st.Error = "pxpipe process started but dashboard did not become healthy before startup timeout"
+	return st, errors.New(st.Error)
 }
 
 // Stop terminates a managed pxpipe process recorded in the state file.
 func (m *Manager) Stop(ctx context.Context, opt StartOptions) (Status, error) {
 	opt = normalizeOptions(opt)
-	sf, err := m.readState()
+	statePath := m.statePathFor(opt)
+	sf, err := m.readStateAt(statePath)
 	if err != nil || sf.PID == 0 {
 		return m.Status(ctx, opt), nil
 	}
-	proc, err := os.FindProcess(sf.PID)
-	if err == nil {
-		_ = proc.Kill()
+	if err := terminateProcessTree(ctx, sf.PID); err != nil {
+		st := m.Status(ctx, opt)
+		st.PID = sf.PID
+		st.Error = err.Error()
+		return st, err
 	}
-	_ = os.Remove(m.statePath())
+	_ = os.Remove(statePath)
 	st := m.Status(ctx, opt)
 	st.PID = sf.PID
 	return st, nil
@@ -236,7 +261,7 @@ func (m *Manager) Stop(ctx context.Context, opt StartOptions) (Status, error) {
 func BuildEnv(opt StartOptions) map[string]string {
 	opt = normalizeOptions(opt)
 	anthropic, openai := opt.AnthropicUpstream, opt.OpenAIUpstream
-	if opt.Config != nil {
+	if opt.Config != nil && !opt.instanceMatched {
 		derivedAnthropic, derivedOpenAI := deriveUpstreams(opt.Config)
 		if strings.TrimSpace(anthropic) == "" {
 			anthropic = derivedAnthropic
@@ -261,6 +286,42 @@ func BuildEnv(opt StartOptions) map[string]string {
 }
 
 func normalizeOptions(opt StartOptions) StartOptions {
+	if cfg := opt.Config; cfg != nil {
+		if instance, ok := providerInstance(cfg.Pxpipe.Instances, opt.Provider); ok {
+			opt.instanceMatched = true
+			if strings.TrimSpace(opt.Host) == "" {
+				opt.Host = instance.Host
+			}
+			if opt.Port == 0 {
+				opt.Port = instance.Port
+			}
+			if strings.TrimSpace(opt.Models) == "" && len(instance.Models) > 0 {
+				opt.Models = strings.Join(instance.Models, ",")
+			}
+			if strings.TrimSpace(opt.AnthropicUpstream) == "" {
+				opt.AnthropicUpstream = instance.AnthropicUpstream
+			}
+			if strings.TrimSpace(opt.OpenAIUpstream) == "" {
+				opt.OpenAIUpstream = instance.OpenAIUpstream
+			}
+		} else {
+			if strings.TrimSpace(opt.Host) == "" {
+				opt.Host = cfg.Pxpipe.Host
+			}
+			if opt.Port == 0 {
+				opt.Port = cfg.Pxpipe.Port
+			}
+			if strings.TrimSpace(opt.Models) == "" && len(cfg.Pxpipe.Models) > 0 {
+				opt.Models = strings.Join(cfg.Pxpipe.Models, ",")
+			}
+			if strings.TrimSpace(opt.AnthropicUpstream) == "" {
+				opt.AnthropicUpstream = cfg.Pxpipe.AnthropicUpstream
+			}
+			if strings.TrimSpace(opt.OpenAIUpstream) == "" {
+				opt.OpenAIUpstream = cfg.Pxpipe.OpenAIUpstream
+			}
+		}
+	}
 	if strings.TrimSpace(opt.Host) == "" {
 		opt.Host = DefaultHost
 	}
@@ -271,9 +332,42 @@ func normalizeOptions(opt StartOptions) StartOptions {
 		opt.Models = DefaultModels
 	}
 	if strings.TrimSpace(opt.LogPath) == "" {
-		opt.LogPath = filepath.Join(defaultDataDir(), "pxpipe", "events.jsonl")
+		opt.LogPath = filepath.Join(defaultInstanceDir(opt.Port), "events.jsonl")
 	}
 	return opt
+}
+
+func providerInstance(instances []config.PxpipeInstanceConfig, providerName string) (config.PxpipeInstanceConfig, bool) {
+	providerName = strings.TrimSpace(providerName)
+	if providerName == "" {
+		return config.PxpipeInstanceConfig{}, false
+	}
+	for _, instance := range instances {
+		for _, candidate := range instance.Providers {
+			if strings.EqualFold(strings.TrimSpace(candidate), providerName) {
+				return instance, true
+			}
+		}
+	}
+	return config.PxpipeInstanceConfig{}, false
+}
+
+func autoInstallEnabled(opt StartOptions) bool {
+	return opt.Config == nil || opt.Config.Pxpipe.AutoInstall
+}
+
+func (m *Manager) startupTimeout() time.Duration {
+	if m.StartupTimeout > 0 {
+		return m.StartupTimeout
+	}
+	return DefaultStartupTimeout
+}
+
+func (m *Manager) startupPollInterval() time.Duration {
+	if m.StartupPollInterval > 0 {
+		return m.StartupPollInterval
+	}
+	return DefaultStartupPoll
 }
 
 func attachEventSummary(st *Status) {
@@ -349,7 +443,7 @@ func portOpen(ctx context.Context, host string, port int) bool {
 	return true
 }
 
-func (m *Manager) resolveCommand() (binary string, command []string, err error) {
+func (m *Manager) resolveCommand(autoInstall bool) (binary string, command []string, err error) {
 	lookPath := m.LookPath
 	if lookPath == nil {
 		lookPath = exec.LookPath
@@ -357,15 +451,23 @@ func (m *Manager) resolveCommand() (binary string, command []string, err error) 
 	if p, err := lookPath("pxpipe"); err == nil {
 		return p, []string{p}, nil
 	}
-	if p, err := lookPath("npx"); err == nil {
-		return p, []string{p, "pxpipe-proxy"}, nil
+	if autoInstall {
+		if p, err := lookPath("npx"); err == nil {
+			// `--yes` makes first-use package provisioning non-interactive; the
+			// versioned package makes the sidecar reproducible and testable.
+			return p, []string{p, "--yes", NpxPackage}, nil
+		}
 	}
 	return "", nil, exec.ErrNotFound
 }
 
 func (m *Manager) readState() (stateFile, error) {
+	return m.readStateAt(m.statePath())
+}
+
+func (m *Manager) readStateAt(path string) (stateFile, error) {
 	var sf stateFile
-	b, err := os.ReadFile(m.statePath())
+	b, err := os.ReadFile(path)
 	if err != nil {
 		return sf, err
 	}
@@ -379,7 +481,10 @@ func (m *Manager) readState() (stateFile, error) {
 }
 
 func (m *Manager) writeState(sf stateFile) error {
-	path := m.statePath()
+	return m.writeStateAt(m.statePath(), sf)
+}
+
+func (m *Manager) writeStateAt(path string, sf stateFile) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
@@ -394,7 +499,14 @@ func (m *Manager) statePath() string {
 	if strings.TrimSpace(m.StatePath) != "" {
 		return m.StatePath
 	}
-	return filepath.Join(defaultDataDir(), "pxpipe", "state.json")
+	return filepath.Join(defaultInstanceDir(DefaultPort), "state.json")
+}
+
+func (m *Manager) statePathFor(opt StartOptions) string {
+	if strings.TrimSpace(m.StatePath) != "" {
+		return m.StatePath
+	}
+	return filepath.Join(defaultInstanceDir(opt.Port), "state.json")
 }
 
 func (m *Manager) httpClient() *http.Client {
@@ -409,6 +521,33 @@ func (m *Manager) commandContext(ctx context.Context, name string, args ...strin
 		return m.CommandContext(ctx, name, args...)
 	}
 	return exec.CommandContext(ctx, name, args...)
+}
+
+func terminateProcessTree(ctx context.Context, pid int) error {
+	if pid <= 0 {
+		return nil
+	}
+	if runtime.GOOS == "windows" {
+		// npx.cmd launches node.exe through cmd.exe. Killing only cmd.exe leaves
+		// the proxy listening, so taskkill's /T is required for managed shutdown.
+		cmd := exec.CommandContext(ctx, "taskkill", "/PID", strconv.Itoa(pid), "/T", "/F")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			message := strings.TrimSpace(string(out))
+			if message == "" {
+				message = err.Error()
+			}
+			return fmt.Errorf("stop managed pxpipe process tree: %s", message)
+		}
+		return nil
+	}
+	proc, err := os.FindProcess(pid)
+	if err != nil {
+		return nil
+	}
+	if err := proc.Kill(); err != nil {
+		return fmt.Errorf("stop managed pxpipe process: %w", err)
+	}
+	return nil
 }
 
 func processAlive(pid int) bool {
@@ -430,6 +569,14 @@ func defaultDataDir() string {
 		return dir
 	}
 	return filepath.Join(os.TempDir(), "maddog")
+}
+
+func defaultInstanceDir(port int) string {
+	base := filepath.Join(defaultDataDir(), "pxpipe")
+	if port == 0 || port == DefaultPort {
+		return base
+	}
+	return filepath.Join(base, strconv.Itoa(port))
 }
 
 func dashboardURL(host string, port int) string {

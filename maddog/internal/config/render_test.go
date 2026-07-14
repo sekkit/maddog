@@ -15,6 +15,9 @@ func isolateUserConfigHome(t *testing.T) string {
 	t.Helper()
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("MADDOG_HOME", filepath.Join(home, ".maddog"))
+	t.Setenv("MADDOG_STATE_HOME", filepath.Join(home, ".maddog-state"))
+	t.Setenv("MADDOG_CACHE_HOME", filepath.Join(home, ".maddog-cache"))
 	t.Setenv("MADDOG_CREDENTIALS_STORE", "file")
 	t.Setenv("USERPROFILE", home)
 	t.Setenv("AppData", filepath.Join(home, "AppData", "Roaming"))
@@ -179,6 +182,13 @@ func TestRenderTOMLRoundTrips(t *testing.T) {
 	orig.Agent.ToolResultSnipRatio = 0.65
 	orig.Agent.SubagentModel = "mimo-pro"
 	orig.Agent.AdvisorModel = "mimo-pro/advisor"
+	orig.Agent.AdvisorMaxUsesPerTurn = 3
+	orig.Agent.AdvisorMaxUsesPerSession = 21
+	orig.Agent.AdvisorMaxContextMessages = 20
+	orig.Agent.AdvisorMaxContextChars = 30000
+	orig.Agent.AdvisorNativeEnabled = true
+	orig.Agent.AdvisorNativeMaxTokens = 4096
+	orig.Agent.AdvisorNativeCacheTTL = "1h"
 	orig.Agent.SubagentModels = map[string]string{"review": "deepseek-pro"}
 	orig.Agent.Keep = []string{"errors", "user_marked"}
 	orig.Agent.RecentKeep = 4
@@ -427,6 +437,17 @@ func TestRenderTOMLRoundTrips(t *testing.T) {
 	}
 	if got.Agent.AdvisorModel != "mimo-pro/advisor" {
 		t.Errorf("advisor_model = %q, want mimo-pro/advisor", got.Agent.AdvisorModel)
+	}
+	if got.Agent.AdvisorMaxUsesPerTurn != orig.Agent.AdvisorMaxUsesPerTurn ||
+		got.Agent.AdvisorMaxUsesPerSession != orig.Agent.AdvisorMaxUsesPerSession ||
+		got.Agent.AdvisorMaxContextMessages != orig.Agent.AdvisorMaxContextMessages ||
+		got.Agent.AdvisorMaxContextChars != orig.Agent.AdvisorMaxContextChars {
+		t.Errorf("advisor budgets/context not preserved: got %+v, want %+v", got.Agent, orig.Agent)
+	}
+	if got.Agent.AdvisorNativeEnabled != orig.Agent.AdvisorNativeEnabled ||
+		got.Agent.AdvisorNativeMaxTokens != orig.Agent.AdvisorNativeMaxTokens ||
+		got.Agent.AdvisorNativeCacheTTL != orig.Agent.AdvisorNativeCacheTTL {
+		t.Errorf("native advisor config not preserved: got %+v, want %+v", got.Agent, orig.Agent)
 	}
 	if got.Agent.SubagentModels["review"] != "deepseek-pro" {
 		t.Errorf("subagent_models.review = %q, want deepseek-pro", got.Agent.SubagentModels["review"])
@@ -856,6 +877,79 @@ func TestProjectDeltaRendersToolsShellOverrides(t *testing.T) {
 	}
 }
 
+func TestProjectDeltaRendersOnlyAdvisorOverrides(t *testing.T) {
+	defaults := Default()
+	defaultDelta := RenderTOMLProjectDelta(defaults)
+	for _, field := range []string{
+		"advisor_max_uses_per_turn",
+		"advisor_max_uses_per_session",
+		"advisor_max_context_messages",
+		"advisor_max_context_chars",
+		"advisor_native_enabled",
+		"advisor_native_max_tokens",
+		"advisor_native_cache_ttl",
+	} {
+		if strings.Contains(defaultDelta, field+" =") {
+			t.Fatalf("default project delta should omit %s:\n%s", field, defaultDelta)
+		}
+	}
+
+	c := Default()
+	c.Agent.AdvisorMaxUsesPerTurn = 2
+	c.Agent.AdvisorMaxUsesPerSession = 12
+	c.Agent.AdvisorMaxContextMessages = 18
+	c.Agent.AdvisorMaxContextChars = 18000
+	c.Agent.AdvisorNativeEnabled = true
+	c.Agent.AdvisorNativeMaxTokens = 3072
+	c.Agent.AdvisorNativeCacheTTL = "5m"
+	delta := RenderTOMLProjectDelta(c)
+	for _, want := range []string{
+		"advisor_max_uses_per_turn = 2",
+		"advisor_max_uses_per_session = 12",
+		"advisor_max_context_messages = 18",
+		"advisor_max_context_chars = 18000",
+		"advisor_native_enabled = true",
+		"advisor_native_max_tokens = 3072",
+		`advisor_native_cache_ttl = "5m"`,
+	} {
+		if !strings.Contains(delta, want) {
+			t.Fatalf("project delta missing %q:\n%s", want, delta)
+		}
+	}
+}
+
+func TestRenderTOMLRoundTripsDefaultAdvisorSettings(t *testing.T) {
+	defaults := Default()
+	rendered := RenderTOML(defaults)
+	for _, want := range []string{
+		"advisor_max_uses_per_turn = 1",
+		"advisor_max_uses_per_session = 10",
+		"advisor_max_context_messages = 12",
+		"advisor_max_context_chars = 12000",
+		"advisor_native_enabled = false",
+		"advisor_native_max_tokens = 2048",
+		`advisor_native_cache_ttl = ""`,
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("default render missing %q:\n%s", want, rendered)
+		}
+	}
+
+	var got Config
+	if _, err := toml.Decode(rendered, &got); err != nil {
+		t.Fatalf("decode default render: %v\n%s", err, rendered)
+	}
+	if got.Agent.AdvisorMaxUsesPerTurn != defaults.Agent.AdvisorMaxUsesPerTurn ||
+		got.Agent.AdvisorMaxUsesPerSession != defaults.Agent.AdvisorMaxUsesPerSession ||
+		got.Agent.AdvisorMaxContextMessages != defaults.Agent.AdvisorMaxContextMessages ||
+		got.Agent.AdvisorMaxContextChars != defaults.Agent.AdvisorMaxContextChars ||
+		got.Agent.AdvisorNativeEnabled != defaults.Agent.AdvisorNativeEnabled ||
+		got.Agent.AdvisorNativeMaxTokens != defaults.Agent.AdvisorNativeMaxTokens ||
+		got.Agent.AdvisorNativeCacheTTL != defaults.Agent.AdvisorNativeCacheTTL {
+		t.Fatalf("default advisor round trip = %+v, want %+v", got.Agent, defaults.Agent)
+	}
+}
+
 func TestProjectDeltaRendersUICursorShape(t *testing.T) {
 	c := Default()
 	c.UI.CursorShape = "block"
@@ -1102,5 +1196,33 @@ func TestRenderTOMLDefaultStepsDoNotOverrideGlobalConfig(t *testing.T) {
 	}
 	if cfg.Agent.MaxSteps != 100 {
 		t.Errorf("after project: max_steps = %d, want 100 (global should not be overridden by commented-out default)", cfg.Agent.MaxSteps)
+	}
+}
+
+func TestRenderTOMLPxpipeInstancesRoundTrip(t *testing.T) {
+	isolateUserConfigHome(t)
+	cfg := Default()
+	cfg.Pxpipe.Enabled = true
+	cfg.Pxpipe.AutoStart = true
+	cfg.Pxpipe.Instances = []PxpipeInstanceConfig{{
+		Name:           "sevnx",
+		Providers:      []string{"pxpipe-sevnx-gpt"},
+		Host:           "127.0.0.1",
+		Port:           47822,
+		Models:         []string{"gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"},
+		OpenAIUpstream: "https://www.sevnx.one",
+	}}
+
+	out := RenderTOML(cfg)
+	var decoded Config
+	if _, err := toml.Decode(out, &decoded); err != nil {
+		t.Fatalf("Decode rendered TOML: %v", err)
+	}
+	if len(decoded.Pxpipe.Instances) != 1 {
+		t.Fatalf("instances = %+v", decoded.Pxpipe.Instances)
+	}
+	got := decoded.Pxpipe.Instances[0]
+	if got.Name != "sevnx" || got.Port != 47822 || got.OpenAIUpstream != "https://www.sevnx.one" || !reflect.DeepEqual(got.Providers, []string{"pxpipe-sevnx-gpt"}) {
+		t.Fatalf("instance = %+v", got)
 	}
 }

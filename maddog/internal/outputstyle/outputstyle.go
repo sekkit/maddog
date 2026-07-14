@@ -58,6 +58,19 @@ var builtins = []OutputStyle{
 		Body: "Communication style — Concise: keep replies terse. No preamble or postamble, no restating " +
 			"the request. Prefer code and short bullet points over paragraphs; answer in the fewest words that are still clear.",
 	},
+	{
+		Name:        "caveman-full",
+		Description: "Sparse, direct natural-language prose while preserving technical artifacts",
+		KeepCoding:  true,
+		Builtin:     true,
+		Body: "Communication style — Caveman full: apply this only to natural-language prose you author for the user. " +
+			"Use sparse, direct language: short clauses, fragments where clear, fewer articles and fillers, and shorter words. " +
+			"Do not apply it to or alter code, inline or fenced code, shell commands, paths, identifiers, quoted text or errors, " +
+			"JSON, YAML, XML, tables, tool calls, tool arguments, tool results, native blocks, commit messages, PR titles or bodies, " +
+			"user-required formats, security warnings, or approvals. Do not remove the order, required details, or safety constraints of procedures; " +
+			"terse wording inside them is allowed. Keep protected artifacts exact, complete, and normally written. " +
+			"Use full sentences whenever fragments could reduce clarity.",
+	},
 }
 
 // Dirs returns the output-style search directories in load order (later wins),

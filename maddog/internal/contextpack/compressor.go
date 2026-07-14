@@ -40,11 +40,35 @@ type ToolOutputCompressor interface {
 // DefaultCompressor is Maddog's built-in deterministic compressor.
 type DefaultCompressor struct{}
 
+type Route string
+
+const (
+	RoutePassthrough Route = "passthrough"
+	RouteGeneric     Route = "generic"
+	RouteProfile     Route = "profile"
+)
+
+type ParseQuality string
+
+const (
+	ParseQualityExact       ParseQuality = "exact"
+	ParseQualityDegraded    ParseQuality = "degraded"
+	ParseQualityPassthrough ParseQuality = "passthrough"
+)
+
 // Result is the model-visible output plus compression metadata.
 type Result struct {
 	Content          string
 	Compressed       bool
 	RawRef           string
+	Route            Route
+	Profile          string
+	Quality          ParseQuality
+	QualityReason    string
+	UnparsedLines    int
+	UnparsedSamples  []string
+	Lossy            bool
+	OmittedLines     int
 	Strategy         string
 	Summary          string
 	RawChars         int
@@ -83,12 +107,25 @@ func (DefaultCompressor) Compress(output ToolOutput, opts Options) Result {
 
 	maxBytes := effectiveMax(opts.MaxBytes)
 	var strategy string
+	route := RouteGeneric
+	profile := "generic"
+	quality := ParseQualityDegraded
+	qualityReason := "heuristic signal extraction and sampling"
+	var unparsedLines int
+	var unparsedSamples []string
 	content := ""
 	if shellResult, ok := compressShellOutput(output, raw, maxBytes); ok {
 		content = shellResult.content
 		strategy = shellResult.strategy
+		route = shellResult.route
+		profile = shellResult.profile
+		quality = shellResult.quality
+		qualityReason = shellResult.qualityReason
+		unparsedLines = shellResult.unparsedLines
+		unparsedSamples = append([]string(nil), shellResult.unparsedSamples...)
 	} else {
 		content = compressText(output, raw, maxBytes)
+		unparsedLines, unparsedSamples = omittedRawLineDetails(raw, content)
 	}
 	if content == "" {
 		content = headTail(raw, maxBytes)
@@ -101,6 +138,11 @@ func (DefaultCompressor) Compress(output ToolOutput, opts Options) Result {
 	if compressedChars >= rawChars {
 		content = headTail(raw, maxBytes)
 		compressedChars = runeCount(content)
+		route = RouteGeneric
+		profile = "generic"
+		quality = ParseQualityDegraded
+		qualityReason = "bounded raw head/tail fallback"
+		unparsedLines, unparsedSamples = omittedRawLineDetails(raw, content)
 	}
 	if compressedChars >= rawChars {
 		return Result{Content: raw}
@@ -110,6 +152,14 @@ func (DefaultCompressor) Compress(output ToolOutput, opts Options) Result {
 		Content:         content,
 		Compressed:      true,
 		RawRef:          opts.RawRef,
+		Route:           route,
+		Profile:         profile,
+		Quality:         quality,
+		QualityReason:   qualityReason,
+		UnparsedLines:   unparsedLines,
+		UnparsedSamples: append([]string(nil), unparsedSamples...),
+		Lossy:           true,
+		OmittedLines:    omittedLineCount(raw, content),
 		Strategy:        strategy,
 		Summary:         summaryFor(output, raw, content),
 		RawChars:        rawChars,
@@ -129,6 +179,31 @@ func (DefaultCompressor) Compress(output ToolOutput, opts Options) Result {
 		result.SavedTokens = 0
 	}
 	return result
+}
+
+func omittedLineCount(raw, visible string) int {
+	omitted, _ := omittedRawLineDetails(raw, visible)
+	return omitted
+}
+
+func omittedRawLineDetails(raw, visible string) (int, []string) {
+	visibleCounts := make(map[string]int)
+	for _, line := range outputLines(visible) {
+		visibleCounts[line]++
+	}
+	omitted := 0
+	samples := make([]string, 0, 3)
+	for _, line := range outputLines(raw) {
+		if visibleCounts[line] > 0 {
+			visibleCounts[line]--
+			continue
+		}
+		omitted++
+		if strings.TrimSpace(line) != "" && len(samples) < 3 {
+			samples = append(samples, line)
+		}
+	}
+	return omitted, samples
 }
 
 func normalizePolicy(policy string) string {

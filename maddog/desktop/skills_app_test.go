@@ -117,7 +117,7 @@ func TestEvaluateSkillCandidateFromDesktopRecordsDryRunPreview(t *testing.T) {
 	}
 }
 
-func TestEvaluateSkillCandidateFromDesktopRunsProviderReplayPromotionGrade(t *testing.T) {
+func TestEvaluateSkillCandidateFromDesktopKeepsProviderReplayDiagnosticOnly(t *testing.T) {
 	isolateDesktopUserDirs(t)
 	t.Setenv("MADDOG_DESKTOP_SKILLEVAL_KEY", "test-key")
 	if err := os.MkdirAll(filepath.Dir(config.UserConfigPath()), 0o755); err != nil {
@@ -182,14 +182,14 @@ api_key_env = "MADDOG_DESKTOP_SKILLEVAL_KEY"
 	if err != nil {
 		t.Fatalf("EvaluateSkillCandidate provider replay: %v", err)
 	}
-	if got.GuardrailPass == nil || !*got.GuardrailPass || !got.PromotionGrade || got.EvaluationMode != skilleval.EvaluationModeProviderReplay || got.EvaluationProvider != "local" || got.EvaluationModelRef != "local" {
-		t.Fatalf("provider evaluation = %+v, want promotion-grade pass", got)
+	if got.GuardrailPass == nil || *got.GuardrailPass || got.PromotionGrade || got.EvaluationMode != skilleval.EvaluationModeProviderReplay || got.EvaluationProvider != "local" || got.EvaluationModelRef != "local" || !strings.Contains(got.GuardrailReason, "paired") {
+		t.Fatalf("provider evaluation = %+v, want diagnostic-only replay", got)
 	}
 	if got.EvaluationBundleCount != 5 || got.Score == nil || *got.Score < 0.9 {
 		t.Fatalf("provider evaluation summary = %+v", got)
 	}
-	if _, err := app.PromoteSkillCandidate(candidate.Hash); err != nil {
-		t.Fatalf("PromoteSkillCandidate after promotion-grade evaluation: %v", err)
+	if _, err := app.PromoteSkillCandidate(candidate.Hash); err == nil || !strings.Contains(err.Error(), "promotion-grade") {
+		t.Fatalf("PromoteSkillCandidate after diagnostic replay err = %v, want promotion-grade failure", err)
 	}
 }
 

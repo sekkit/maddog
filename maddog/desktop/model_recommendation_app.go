@@ -26,22 +26,35 @@ type modelRecommendationCandidate struct {
 	Model    string `json:"model"`
 }
 
-const modelRecommendationClassifierPrompt = `You classify available coding-agent models into roles.
-Return ONLY JSON with these string keys: default_model, planner_model, subagent_model, advisor_model, frontier_model.
-Each value must be either "" or one exact ref from the provided candidates.
+const modelRecommendationClassifierPrompt = `You are selecting role-specific models for a coding agent's Settings panel.
+Return ONLY one JSON object with exactly these string keys: default_model, planner_model, subagent_model, advisor_model, frontier_model.
+Every non-empty value must be one exact ref from the provided candidates. Do not include explanations, markdown, or invented model names.
+
+The user explicitly prefers the GPT family. GPT-5.6 is the first choice for coding quality and value, but its variants are not interchangeable. Follow these rules exactly:
+1. The verified high-capability GPT-5.6 tier is: gpt-5.6, gpt-5.6-sol, and gpt-5.6-terra. Prefer this tier for default_model, planner_model, advisor_model, and frontier_model over non-GPT families when available.
+2. gpt-5.6-luna is the lowest-priority GPT-5.6 variant. It MUST NEVER be selected for advisor_model or frontier_model.
+3. If any verified high-capability GPT-5.6 candidate exists, gpt-5.6-luna MUST NOT be selected for default_model or planner_model. It may be considered only for subagent_model.
+4. Do not infer a price or capability difference between gpt-5.6-sol and gpt-5.6-terra merely from their suffix. Treat them as the same preferred tier unless the candidate name provides an explicit signal. Treat an unlisted gpt-5.6-* variant as unknown instead of promoting it automatically.
+5. For subagent_model, prefer an explicitly small/fast model (mini, flash, lite, haiku) when that is a good cost/latency fit. If no such choice is clearly appropriate, return "" to use the default model rather than guessing.
+6. Planner should normally return "" when the default model is already suitable. Advisor and frontier should be strong, reliable reasoning/coding models; return "" rather than using a weak or uncertain model.
+7. Keep the recommendation stable and simple: do not spread roles across models without a clear role-specific reason.
+
 Role meanings:
 - default_model: main loop / everyday coding agent model.
 - planner_model: deep planning and architecture reasoning; "" means use default_model.
 - subagent_model: small/background/cheap task model; "" means use default_model.
 - advisor_model: strong consultation model for hard decisions; "" means use fallback.
-- frontier_model: strongest fallback model for repeated failures; "" means no safe recommendation.
-Prefer reliable coding/reasoning models for default/planner/advisor/frontier and cheap/fast models for subagent.`
+- frontier_model: strongest fallback model for repeated failures; "" means no safe recommendation.`
+
+// newModelRecommendationProvider is replaceable in tests so the recommendation
+// policy can be exercised without making a network request.
+var newModelRecommendationProvider = boot.NewProviderWithProxy
 
 // RecommendModels returns role-specific model recommendations for the Settings
-// panel. Known model families are classified locally first; any remaining gaps
-// are filled by asking the configured default model to classify the candidates.
+// panel. It reads the same persistent user configuration that the Settings panel
+// edits, then sends an explicit GPT-5.6 variant policy to a capable classifier.
 func (a *App) RecommendModels() (ModelRecommendationRefs, error) {
-	cfg, err := config.Load()
+	cfg, _, err := a.loadDesktopUserConfigForEdit()
 	if err != nil {
 		return ModelRecommendationRefs{}, err
 	}
@@ -54,11 +67,14 @@ func recommendModelsForConfig(ctx context.Context, cfg *config.Config) (ModelRec
 	if len(candidates) == 0 {
 		return rec, nil
 	}
+	// Ask a capable configured model to make the final role split with the
+	// explicit policy prompt above. The local recommendation is still retained as
+	// a safe fallback and is used to enforce non-negotiable variant constraints.
 	classifierEntry, ok := modelRecommendationClassifierEntry(cfg, candidates)
 	if !ok {
 		return rec, nil
 	}
-	prov, err := boot.NewProviderWithProxy(classifierEntry, cfg.NetworkProxySpec())
+	prov, err := newModelRecommendationProvider(classifierEntry, cfg.NetworkProxySpec())
 	if err != nil {
 		return rec, nil
 	}
@@ -93,6 +109,14 @@ func modelRecommendationClassifierEntry(cfg *config.Config, candidates []modelRe
 	for _, candidate := range candidates {
 		candidateRefs[candidate.Ref] = true
 	}
+	// Do not ask a low-tier luna deployment to decide the role assignments when
+	// a normal GPT candidate is already configured. GPT-5.6 (except luna) wins,
+	// followed by the remaining supported GPT generations.
+	if ref := bestGPTRecommendationClassifierRef(candidates); ref != "" {
+		if entry, ok := cfg.ResolveModel(ref); ok && providerSelectableForDesktop(*entry) {
+			return entry, true
+		}
+	}
 	if entry, ok := cfg.ResolveModel(cfg.DefaultModel); ok && providerSelectableForDesktop(*entry) && candidateRefs[entry.Name+"/"+entry.Model] {
 		return entry, true
 	}
@@ -103,6 +127,18 @@ func modelRecommendationClassifierEntry(cfg *config.Config, candidates []modelRe
 		}
 	}
 	return nil, false
+}
+
+func bestGPTRecommendationClassifierRef(candidates []modelRecommendationCandidate) string {
+	bestRef := ""
+	bestPriority := 0
+	for _, candidate := range candidates {
+		priority := gptFamilyPriority(candidate.Model)
+		if priority > bestPriority {
+			bestRef, bestPriority = candidate.Ref, priority
+		}
+	}
+	return bestRef
 }
 
 func classifyModelRecommendations(ctx context.Context, prov provider.Provider, candidates []modelRecommendationCandidate) (ModelRecommendationRefs, error) {
@@ -204,6 +240,7 @@ func bestLocalModelForRoleKnown(candidates []modelRecommendationCandidate, role 
 
 func localModelRoleScore(c modelRecommendationCandidate, role string) (int, bool) {
 	id := strings.ToLower(c.Provider + "/" + c.Model)
+	modelID := strings.ToLower(strings.TrimSpace(c.Model))
 	known := false
 	scores := map[string]int{"default": 40, "planner": 30, "subagent": 20, "advisor": 0, "frontier": 0}
 	bump := func(delta map[string]int) {
@@ -211,6 +248,26 @@ func localModelRoleScore(c modelRecommendationCandidate, role string) (int, bool
 		for role, value := range delta {
 			scores[role] += value
 		}
+	}
+	if isGPT56Luna(modelID) {
+		// luna is a lower-tier GPT-5.6 variant. It can be considered for isolated
+		// background work, but it must never become a high-stakes recommendation.
+		bump(map[string]int{
+			"default":  -20,
+			"planner":  -30,
+			"subagent": 55,
+			"advisor":  -1000,
+			"frontier": -1000,
+		})
+	} else if priority := gptFamilyPriority(modelID); priority > 0 {
+		// Keep normal GPT-5.6 variants at the top tier for high-capability work.
+		bump(map[string]int{
+			"default":  priority,
+			"planner":  priority,
+			"subagent": priority,
+			"advisor":  priority,
+			"frontier": priority,
+		})
 	}
 	if containsAny(id, "gpt-5-codex", "codex", "sonnet", "deepseek-v4-pro", "kimi-k2") || (strings.Contains(id, "qwen") && strings.Contains(id, "coder")) {
 		bump(map[string]int{"default": 70, "planner": 55, "advisor": 45, "frontier": 35})
@@ -230,6 +287,74 @@ func localModelRoleScore(c modelRecommendationCandidate, role string) (int, bool
 	return scores[role], known
 }
 
+func gptFamilyPriority(id string) int {
+	id = strings.ToLower(strings.TrimSpace(id))
+	switch {
+	case isGPT56Luna(id):
+		return 0
+	case isVerifiedHighCapabilityGPT56(id):
+		return 1000
+	case strings.Contains(id, "gpt-5.6"):
+		// An unknown 5.6 suffix must not silently inherit sol/terra's priority.
+		return 500
+	case strings.Contains(id, "gpt-5.5"):
+		return 850
+	case strings.Contains(id, "gpt-5.4") && !containsAny(id, "mini", "nano"):
+		return 700
+	case strings.Contains(id, "gpt-5.4"):
+		return 550
+	case strings.Contains(id, "gpt-5"):
+		return 500
+	default:
+		return 0
+	}
+}
+
+func isVerifiedHighCapabilityGPT56(id string) bool {
+	switch strings.ToLower(strings.TrimSpace(id)) {
+	case "gpt-5.6", "gpt-5.6-sol", "gpt-5.6-terra":
+		return true
+	default:
+		return false
+	}
+}
+
+func isGPT56Luna(id string) bool {
+	return strings.Contains(strings.ToLower(id), "gpt-5.6-luna")
+}
+
+func hasNonLunaGPTCandidate(candidates []modelRecommendationCandidate) bool {
+	for _, candidate := range candidates {
+		if gptFamilyPriority(candidate.Model) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func modelRecommendationRefAllowedForRole(ref, role string, candidates []modelRecommendationCandidate) bool {
+	if ref == "" {
+		return true
+	}
+	for _, candidate := range candidates {
+		if candidate.Ref != ref {
+			continue
+		}
+		if !isGPT56Luna(candidate.Model) {
+			return true
+		}
+		switch role {
+		case "advisor", "frontier":
+			return false
+		case "default", "planner":
+			return !hasNonLunaGPTCandidate(candidates)
+		default:
+			return true // luna is permitted only as an optional background/subagent choice.
+		}
+	}
+	return false
+}
+
 func containsAny(s string, terms ...string) bool {
 	for _, term := range terms {
 		if strings.Contains(s, term) {
@@ -240,40 +365,21 @@ func containsAny(s string, terms ...string) bool {
 }
 
 func mergeModelRecommendations(primary, fallback ModelRecommendationRefs, candidates []modelRecommendationCandidate) ModelRecommendationRefs {
-	allowed := map[string]bool{"": true}
-	for _, c := range candidates {
-		allowed[c.Ref] = true
+	choose := func(primaryRef, fallbackRef, role string) string {
+		if modelRecommendationRefAllowedForRole(primaryRef, role, candidates) && primaryRef != "" {
+			return primaryRef
+		}
+		if modelRecommendationRefAllowedForRole(fallbackRef, role, candidates) {
+			return fallbackRef
+		}
+		return ""
 	}
-	rec := ModelRecommendationRefs{}
-	if allowed[primary.DefaultModel] {
-		rec.DefaultModel = primary.DefaultModel
-	}
-	if rec.DefaultModel == "" && allowed[fallback.DefaultModel] {
-		rec.DefaultModel = fallback.DefaultModel
-	}
-	if allowed[primary.PlannerModel] {
-		rec.PlannerModel = primary.PlannerModel
-	}
-	if rec.PlannerModel == "" && allowed[fallback.PlannerModel] {
-		rec.PlannerModel = fallback.PlannerModel
-	}
-	if allowed[primary.SubagentModel] {
-		rec.SubagentModel = primary.SubagentModel
-	}
-	if rec.SubagentModel == "" && allowed[fallback.SubagentModel] {
-		rec.SubagentModel = fallback.SubagentModel
-	}
-	if allowed[primary.AdvisorModel] {
-		rec.AdvisorModel = primary.AdvisorModel
-	}
-	if rec.AdvisorModel == "" && allowed[fallback.AdvisorModel] {
-		rec.AdvisorModel = fallback.AdvisorModel
-	}
-	if allowed[primary.FrontierModel] {
-		rec.FrontierModel = primary.FrontierModel
-	}
-	if rec.FrontierModel == "" && allowed[fallback.FrontierModel] {
-		rec.FrontierModel = fallback.FrontierModel
+	rec := ModelRecommendationRefs{
+		DefaultModel:  choose(primary.DefaultModel, fallback.DefaultModel, "default"),
+		PlannerModel:  choose(primary.PlannerModel, fallback.PlannerModel, "planner"),
+		SubagentModel: choose(primary.SubagentModel, fallback.SubagentModel, "subagent"),
+		AdvisorModel:  choose(primary.AdvisorModel, fallback.AdvisorModel, "advisor"),
+		FrontierModel: choose(primary.FrontierModel, fallback.FrontierModel, "frontier"),
 	}
 	return normalizeModelRecommendationRefs(rec)
 }

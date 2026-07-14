@@ -31,6 +31,14 @@ func TestToWire(t *testing.T) {
 			Name: "web_fetch", Output: "ok", DurationMs: 522,
 			Compression: &event.Compression{
 				RawRef:          "raw://tool/web",
+				Route:           "profile",
+				Profile:         "web-fetch",
+				Quality:         "degraded",
+				QualityReason:   "heuristic text profile",
+				UnparsedLines:   2,
+				UnparsedSamples: []string{"unknown one", "unknown two"},
+				Lossy:           true,
+				OmittedLines:    18,
 				Strategy:        "head-tail",
 				Summary:         "web_fetch output compressed",
 				RawChars:        900,
@@ -41,7 +49,10 @@ func TestToWire(t *testing.T) {
 		if w.Tool == nil || w.Tool.Output != "ok" || w.Tool.DurationMs != 522 {
 			t.Errorf("tool result duration = %+v", w.Tool)
 		}
-		if w.Tool.Compression == nil || w.Tool.Compression.RawRef != "raw://tool/web" || w.Tool.Compression.SavedChars != 700 {
+		if w.Tool.Compression == nil || w.Tool.Compression.RawRef != "raw://tool/web" || w.Tool.Compression.SavedChars != 700 ||
+			w.Tool.Compression.Route != "profile" || w.Tool.Compression.Profile != "web-fetch" ||
+			w.Tool.Compression.Quality != "degraded" || w.Tool.Compression.UnparsedLines != 2 || len(w.Tool.Compression.UnparsedSamples) != 2 ||
+			!w.Tool.Compression.Lossy || w.Tool.Compression.OmittedLines != 18 {
 			t.Errorf("tool compression = %+v", w.Tool.Compression)
 		}
 	})

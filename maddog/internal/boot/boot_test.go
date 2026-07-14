@@ -30,6 +30,7 @@ import (
 	"maddog/internal/plugin"
 	"maddog/internal/provider"
 	"maddog/internal/sandbox"
+	"maddog/internal/skill"
 	"maddog/internal/tool"
 	"maddog/internal/tool/builtin"
 
@@ -1233,9 +1234,7 @@ api_key_env = "MADDOG_TEST_KEY_UNSET"
 // into the cache-stable system prompt's "# Skills" index alongside a built-in.
 func TestBuildDiscoversSkills(t *testing.T) {
 	dir := robustTempDir(t)
-	home := robustTempDir(t)
-	t.Setenv("HOME", home)
-	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	isolateConfigHome(t)
 	t.Chdir(dir)
 	writeFile(t, dir, "maddog.toml", `
 default_model = "test-model"
@@ -1277,6 +1276,114 @@ api_key_env = "MADDOG_TEST_KEY_UNSET"
 	}
 	if !strings.Contains(sys, "projskill") || !strings.Contains(sys, "explore") {
 		t.Fatalf("skill names missing from index:\n%s", sys)
+	}
+}
+
+func TestBuildOfflineEvaluationIsIsolated(t *testing.T) {
+	home := isolateConfigHome(t)
+	dir := robustTempDir(t)
+	outside := robustTempDir(t)
+	custom := robustTempDir(t)
+	t.Chdir(dir)
+	registerBootTokenProfileTestProvider()
+	setBootTokenProfileTestProvider(t, testutil.NewMock("offline-eval"))
+
+	writeFile(t, dir, "maddog.toml", fmt.Sprintf(`
+default_model = "test-model"
+
+[agent]
+system_prompt = "BASE"
+
+[environment]
+enabled = true
+
+[sandbox]
+allow_write = [%q]
+network = true
+bash = "off"
+
+[skills]
+paths = [%q]
+runtime_orchestration = true
+dynamic_skills = true
+
+[[providers]]
+name = "test-model"
+kind = "boot-token-profile-test"
+model = "x"
+
+[[plugins]]
+name = "must-not-start"
+command = "missing-offline-eval-plugin"
+tier = "eager"
+`, outside, custom))
+	writeFile(t, dir, ".maddog/skills/project.md", "---\ndescription: project candidate\n---\nproject body")
+	writeFile(t, custom, "custom.md", "---\ndescription: custom skill\n---\ncustom body")
+	writeFile(t, home, ".maddog/skills/global.md", "---\ndescription: global skill\n---\nglobal body")
+	writeFile(t, dir, ".maddog/commands/host-command.md", "---\ndescription: host command\n---\nhost body")
+
+	ctrl, err := Build(context.Background(), Options{OfflineEvaluation: true})
+	if err != nil {
+		t.Fatalf("Build offline: %v", err)
+	}
+	defer ctrl.Close()
+
+	if got := ctrl.SessionDir(); got != "" {
+		t.Fatalf("offline SessionDir() = %q, want in-memory session", got)
+	}
+	if ctrl.HookRunner().Enabled() {
+		t.Fatal("offline evaluation enabled hooks")
+	}
+	if got := ctrl.Commands(); len(got) != 0 {
+		t.Fatalf("offline commands = %+v, want none", got)
+	}
+	if sys := systemMessage(ctrl.History()); strings.Contains(sys, "## Environment") {
+		t.Fatalf("offline system prompt contains environment probe output:\n%s", sys)
+	}
+	if got := ctrl.Skills(); len(got) != 1 || got[0].Name != "project" || got[0].Scope != skill.ScopeProject {
+		t.Fatalf("offline skills = %+v, want only project skill", got)
+	}
+
+	reg := ctrl.ToolRegistry()
+	for _, hidden := range []string{
+		"web_fetch", "install_source", "remember", "forget", "memory", "list_sessions", "read_session",
+		"task", "parallel_tasks", "read_only_task", "connect_tool_source", "ask", "install_skill",
+	} {
+		if _, ok := reg.Get(hidden); ok {
+			t.Fatalf("offline evaluation exposed %q; tools=%v", hidden, reg.Names())
+		}
+	}
+	for _, name := range reg.Names() {
+		if strings.HasPrefix(name, "mcp__") || strings.HasPrefix(name, "codegraph_") {
+			t.Fatalf("offline evaluation exposed external tool %q", name)
+		}
+	}
+	if _, ok := reg.Get("bash"); ok {
+		t.Fatal("offline evaluation exposed opt-in bash by default")
+	}
+	writeTool, ok := reg.Get("write_file")
+	if !ok {
+		t.Fatal("offline evaluation should retain confined write_file")
+	}
+	outsidePath := filepath.Join(outside, "escape.txt")
+	args, _ := json.Marshal(map[string]string{"path": outsidePath, "content": "escape"})
+	if _, err := writeTool.Execute(context.Background(), args); err == nil {
+		t.Fatalf("offline write_file accepted configured allow_write outside workspace: %s", outsidePath)
+	}
+	if _, err := os.Stat(outsidePath); !os.IsNotExist(err) {
+		t.Fatalf("outside file was created; stat err=%v", err)
+	}
+	secretPath := filepath.Join(outside, "host-secret.txt")
+	if err := os.WriteFile(secretPath, []byte("must not be readable"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	readTool, ok := reg.Get("read_file")
+	if !ok {
+		t.Fatal("offline evaluation should retain confined read_file")
+	}
+	readArgs, _ := json.Marshal(map[string]string{"path": secretPath})
+	if _, err := readTool.Execute(context.Background(), readArgs); err == nil {
+		t.Fatalf("offline read_file accepted host path outside workspace: %s", secretPath)
 	}
 }
 
@@ -2419,7 +2526,7 @@ model = "x"
 func TestAddBuiltinsWithWorkspaceRootKeepsSessionTools(t *testing.T) {
 	reg := tool.NewRegistry()
 	var stderr bytes.Buffer
-	addBuiltins(reg, nil, []string{robustTempDir(t)}, sandbox.Spec{}, 120*time.Second, builtin.SearchSpec{}, &stderr, robustTempDir(t), netclient.ProxySpec{}, nil, nil)
+	addBuiltins(reg, nil, []string{robustTempDir(t)}, nil, sandbox.Spec{}, 120*time.Second, builtin.SearchSpec{}, &stderr, robustTempDir(t), netclient.ProxySpec{}, nil, nil)
 	for _, name := range []string{
 		"todo_write",
 		"complete_step",
@@ -2437,9 +2544,7 @@ func TestAddBuiltinsWithWorkspaceRootKeepsSessionTools(t *testing.T) {
 
 func TestBuildOmitsDisabledSkillsFromPromptAndRuntimeList(t *testing.T) {
 	dir := robustTempDir(t)
-	home := robustTempDir(t)
-	t.Setenv("HOME", home)
-	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	isolateConfigHome(t)
 	t.Chdir(dir)
 	writeFile(t, dir, "maddog.toml", `
 default_model = "test-model"
@@ -2487,9 +2592,7 @@ api_key_env = "MADDOG_TEST_KEY_UNSET"
 
 func TestBuildOmitsExcludedSkillRootsFromPromptAndRuntimeList(t *testing.T) {
 	dir := robustTempDir(t)
-	home := robustTempDir(t)
-	t.Setenv("HOME", home)
-	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	home := isolateConfigHome(t)
 	t.Chdir(dir)
 	excluded := filepath.Join(home, ".agents", "skills")
 	writeFile(t, home, ".maddog/skills/keep.md", "---\ndescription: keep\n---\nplaybook")
@@ -2536,10 +2639,7 @@ api_key_env = "MADDOG_TEST_KEY_UNSET"
 // prefix is untouched by the memory feature.
 func TestBuildWithoutMemoryLeavesPromptUnchanged(t *testing.T) {
 	dir := robustTempDir(t)
-	home := robustTempDir(t)
-	t.Setenv("HOME", home)
-	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
-	t.Setenv("AppData", filepath.Join(home, "AppData"))
+	isolateConfigHome(t)
 	t.Chdir(dir)
 	writeFile(t, dir, "maddog.toml", `
 default_model = "test-model"

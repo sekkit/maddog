@@ -371,6 +371,7 @@ func (c *client) buildRequest(req provider.Request) anthRequest {
 			Model:     na.Model,
 			MaxUses:   na.MaxUses,
 			MaxTokens: maxTokens,
+			Caching:   advisorCaching(na.CachingTTL),
 		})
 	}
 
@@ -486,6 +487,7 @@ func (c *client) readStream(ctx context.Context, resp *http.Response, out chan<-
 	var nativeBlocks []json.RawMessage
 	preserveNative := false
 	var inTok, outTok, cacheCreate, cacheRead int
+	var iterations []provider.UsageIteration
 	var stopReason string
 	haveUsage := false
 
@@ -517,9 +519,13 @@ func (c *client) readStream(ctx context.Context, resp *http.Response, out chan<-
 		switch ev.Type {
 		case "message_start":
 			if ev.Message != nil && ev.Message.Usage != nil {
-				inTok = ev.Message.Usage.InputTokens
-				cacheCreate = ev.Message.Usage.CacheCreationInputTokens
-				cacheRead = ev.Message.Usage.CacheReadInputTokens
+				u := ev.Message.Usage
+				inTok = u.InputTokens
+				cacheCreate = u.CacheCreationInputTokens
+				cacheRead = u.CacheReadInputTokens
+				if u.Iterations != nil {
+					iterations = providerUsageIterations(u.Iterations)
+				}
 				haveUsage = true
 			}
 		case "content_block_start":
@@ -603,6 +609,9 @@ func (c *client) readStream(ctx context.Context, resp *http.Response, out chan<-
 			}
 			if ev.Usage != nil {
 				outTok = ev.Usage.OutputTokens
+				if ev.Usage.Iterations != nil {
+					iterations = providerUsageIterations(ev.Usage.Iterations)
+				}
 				haveUsage = true
 			}
 		case "message_stop":
@@ -650,6 +659,7 @@ func (c *client) readStream(ctx context.Context, resp *http.Response, out chan<-
 			CacheHitTokens:   cacheRead,
 			CacheMissTokens:  inTok + cacheCreate, // uncached input + cache writes (billed ≥1×)
 			FinishReason:     mapStopReason(stopReason),
+			Iterations:       iterations,
 		}}) {
 			return
 		}
@@ -690,8 +700,19 @@ func mapStopReason(s string) string {
 
 func ephemeral() *cacheControl { return &cacheControl{Type: "ephemeral"} }
 
+func advisorCaching(ttl string) *cacheControl {
+	ttl = strings.TrimSpace(ttl)
+	switch ttl {
+	case "5m", "1h":
+		return &cacheControl{Type: "ephemeral", TTL: ttl}
+	default:
+		return nil
+	}
+}
+
 type cacheControl struct {
 	Type string `json:"type"`
+	TTL  string `json:"ttl,omitempty"`
 }
 
 type anthRequest struct {
@@ -756,6 +777,7 @@ type anthTool struct {
 	Model        string          `json:"model,omitempty"`
 	MaxUses      int             `json:"max_uses,omitempty"`
 	MaxTokens    int             `json:"max_tokens,omitempty"`
+	Caching      *cacheControl   `json:"caching,omitempty"`
 	CacheControl *cacheControl   `json:"cache_control,omitempty"`
 }
 
@@ -849,8 +871,33 @@ func cloneWireContentBlock(block *wireContentBlock) *wireContentBlock {
 }
 
 type wireUsage struct {
-	InputTokens              int `json:"input_tokens"`
-	OutputTokens             int `json:"output_tokens"`
-	CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
-	CacheReadInputTokens     int `json:"cache_read_input_tokens"`
+	InputTokens              int                  `json:"input_tokens"`
+	OutputTokens             int                  `json:"output_tokens"`
+	CacheCreationInputTokens int                  `json:"cache_creation_input_tokens"`
+	CacheReadInputTokens     int                  `json:"cache_read_input_tokens"`
+	Iterations               []wireUsageIteration `json:"iterations"`
+}
+
+type wireUsageIteration struct {
+	Type                     string `json:"type"`
+	Model                    string `json:"model"`
+	InputTokens              int    `json:"input_tokens"`
+	OutputTokens             int    `json:"output_tokens"`
+	CacheCreationInputTokens int    `json:"cache_creation_input_tokens"`
+	CacheReadInputTokens     int    `json:"cache_read_input_tokens"`
+}
+
+func providerUsageIterations(in []wireUsageIteration) []provider.UsageIteration {
+	out := make([]provider.UsageIteration, len(in))
+	for i, iteration := range in {
+		out[i] = provider.UsageIteration{
+			Type:                     iteration.Type,
+			Model:                    iteration.Model,
+			InputTokens:              iteration.InputTokens,
+			OutputTokens:             iteration.OutputTokens,
+			CacheCreationInputTokens: iteration.CacheCreationInputTokens,
+			CacheReadInputTokens:     iteration.CacheReadInputTokens,
+		}
+	}
+	return out
 }

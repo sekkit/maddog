@@ -186,3 +186,69 @@ type roundTripFunc func(*http.Request) (*http.Response, error)
 func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) {
 	return f(r)
 }
+
+func TestBuildEnvUsesPersistentPxpipeConfig(t *testing.T) {
+	cfg := config.Default()
+	cfg.Pxpipe.Host = "127.0.0.1"
+	cfg.Pxpipe.Port = 49152
+	cfg.Pxpipe.Models = []string{"gpt-5.6"}
+	cfg.Pxpipe.OpenAIUpstream = "https://ice.example"
+
+	env := BuildEnv(StartOptions{Config: cfg, LogPath: "/tmp/pxpipe-events.jsonl"})
+	if env["HOST"] != "127.0.0.1" || env["PORT"] != "49152" {
+		t.Fatalf("host/port env = %q/%q", env["HOST"], env["PORT"])
+	}
+	if env["PXPIPE_MODELS"] != "gpt-5.6" {
+		t.Fatalf("PXPIPE_MODELS = %q", env["PXPIPE_MODELS"])
+	}
+	if env["OPENAI_UPSTREAM"] != "https://ice.example" {
+		t.Fatalf("OPENAI_UPSTREAM = %q", env["OPENAI_UPSTREAM"])
+	}
+}
+
+func TestBuildEnvUsesProviderSpecificInstance(t *testing.T) {
+	cfg := config.Default()
+	cfg.Pxpipe.OpenAIUpstream = "https://ice.example"
+	cfg.Pxpipe.Instances = []config.PxpipeInstanceConfig{{
+		Name:           "sevnx",
+		Providers:      []string{"pxpipe-sevnx-gpt"},
+		Host:           "127.0.0.1",
+		Port:           47822,
+		Models:         []string{"gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"},
+		OpenAIUpstream: "https://www.sevnx.one",
+	}}
+
+	env := BuildEnv(StartOptions{Config: cfg, Provider: "pxpipe-sevnx-gpt"})
+	if env["HOST"] != "127.0.0.1" || env["PORT"] != "47822" {
+		t.Fatalf("host/port env = %q/%q", env["HOST"], env["PORT"])
+	}
+	if env["PXPIPE_MODELS"] != "gpt-5.6-sol,gpt-5.6-terra,gpt-5.6-luna" {
+		t.Fatalf("PXPIPE_MODELS = %q", env["PXPIPE_MODELS"])
+	}
+	if env["OPENAI_UPSTREAM"] != "https://www.sevnx.one" {
+		t.Fatalf("OPENAI_UPSTREAM = %q", env["OPENAI_UPSTREAM"])
+	}
+	if strings.Contains(env["PXPIPE_LOG"], "47822") == false {
+		t.Fatalf("PXPIPE_LOG = %q, want port-isolated path", env["PXPIPE_LOG"])
+	}
+}
+
+func TestStatusDoesNotUseNpxWhenAutoInstallDisabled(t *testing.T) {
+	cfg := config.Default()
+	cfg.Pxpipe.AutoInstall = false
+	m := &Manager{
+		HTTPClient: &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			return nil, errors.New("connection refused")
+		})},
+		LookPath: func(name string) (string, error) {
+			if name == "npx" {
+				return "/bin/npx", nil
+			}
+			return "", exec.ErrNotFound
+		},
+	}
+	st := m.Status(context.Background(), StartOptions{Config: cfg})
+	if st.Installed || st.State != StateNotInstalled {
+		t.Fatalf("status = %+v, want npx ignored while auto_install=false", st)
+	}
+}

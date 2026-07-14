@@ -155,6 +155,15 @@ honours `deny`. See [`docs/SPEC.md`](docs/SPEC.md) for the full schema and contr
 
 ## Documentation
 
+### Token efficiency
+
+Maddog's built-in `contextpack` deterministically compresses routine tool
+output before it reaches the model while retaining recoverable raw output when
+it saves context. External RTK is an alternative, `context-mode` is an opt-in
+MCP for indexed retrieval, and `caveman-full` is an optional prose style. See
+[`docs/TOKEN_EFFICIENCY.md`](docs/TOKEN_EFFICIENCY.md) for the no-double-
+compression rule and configuration examples.
+
 ### pxpipe gateway (optional)
 
 Maddog can route Anthropic Messages and OpenAI Responses traffic through a local

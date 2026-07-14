@@ -192,7 +192,7 @@ func TestShellCompressorGitDiffPreservesFileHeadersAndHunkTail(t *testing.T) {
 
 	got := Compress(ToolOutput{
 		ToolName: "bash",
-		Args:     `{"command":"git diff --stat"}`,
+		Args:     `{"command":"git diff"}`,
 		Output:   raw.String(),
 		ReadOnly: true,
 	}, Options{ThresholdBytes: 128, MaxBytes: 420, RawRef: "raw://tool/git-diff"})

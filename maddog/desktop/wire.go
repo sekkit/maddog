@@ -92,15 +92,23 @@ type wireProviderStatus struct {
 }
 
 type wireCompression struct {
-	RawRef           string `json:"rawRef,omitempty"`
-	Strategy         string `json:"strategy,omitempty"`
-	Summary          string `json:"summary,omitempty"`
-	RawChars         int    `json:"rawChars,omitempty"`
-	CompressedChars  int    `json:"compressedChars,omitempty"`
-	SavedChars       int    `json:"savedChars,omitempty"`
-	RawTokens        int    `json:"rawTokens,omitempty"`
-	CompressedTokens int    `json:"compressedTokens,omitempty"`
-	SavedTokens      int    `json:"savedTokens,omitempty"`
+	RawRef           string   `json:"rawRef,omitempty"`
+	Route            string   `json:"route,omitempty"`
+	Profile          string   `json:"profile,omitempty"`
+	Quality          string   `json:"quality,omitempty"`
+	QualityReason    string   `json:"qualityReason,omitempty"`
+	UnparsedLines    int      `json:"unparsedLines,omitempty"`
+	UnparsedSamples  []string `json:"unparsedSamples,omitempty"`
+	Lossy            bool     `json:"lossy,omitempty"`
+	OmittedLines     int      `json:"omittedLines,omitempty"`
+	Strategy         string   `json:"strategy,omitempty"`
+	Summary          string   `json:"summary,omitempty"`
+	RawChars         int      `json:"rawChars,omitempty"`
+	CompressedChars  int      `json:"compressedChars,omitempty"`
+	SavedChars       int      `json:"savedChars,omitempty"`
+	RawTokens        int      `json:"rawTokens,omitempty"`
+	CompressedTokens int      `json:"compressedTokens,omitempty"`
+	SavedTokens      int      `json:"savedTokens,omitempty"`
 }
 
 type wireUsage struct {
@@ -306,6 +314,14 @@ func toWireCompression(c *event.Compression) *wireCompression {
 	}
 	return &wireCompression{
 		RawRef:           c.RawRef,
+		Route:            c.Route,
+		Profile:          c.Profile,
+		Quality:          c.Quality,
+		QualityReason:    c.QualityReason,
+		UnparsedLines:    c.UnparsedLines,
+		UnparsedSamples:  append([]string(nil), c.UnparsedSamples...),
+		Lossy:            c.Lossy,
+		OmittedLines:     c.OmittedLines,
 		Strategy:         c.Strategy,
 		Summary:          c.Summary,
 		RawChars:         c.RawChars,

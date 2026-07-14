@@ -41,6 +41,31 @@ func TestDefaultAdvisorGuardrails(t *testing.T) {
 	if cfg.Agent.AdvisorNativeEnabled {
 		t.Fatal("advisor_native_enabled should default off because it is a provider beta")
 	}
+	if cfg.Agent.AdvisorNativeMaxTokens != 2048 {
+		t.Fatalf("advisor_native_max_tokens = %d, want 2048", cfg.Agent.AdvisorNativeMaxTokens)
+	}
+	if cfg.Agent.AdvisorNativeCacheTTL != "" {
+		t.Fatalf("advisor_native_cache_ttl = %q, want disabled", cfg.Agent.AdvisorNativeCacheTTL)
+	}
+}
+
+func TestNormalizeAdvisorNativeCacheTTL(t *testing.T) {
+	tests := []struct {
+		in    string
+		want  string
+		valid bool
+	}{
+		{in: "", want: "", valid: true},
+		{in: " 5M ", want: "5m", valid: true},
+		{in: "1h", want: "1h", valid: true},
+		{in: "30m", want: "", valid: false},
+	}
+	for _, tt := range tests {
+		got, valid := NormalizeAdvisorNativeCacheTTL(tt.in)
+		if got != tt.want || valid != tt.valid {
+			t.Errorf("NormalizeAdvisorNativeCacheTTL(%q) = %q, %v; want %q, %v", tt.in, got, valid, tt.want, tt.valid)
+		}
+	}
 }
 
 func TestDefaultContextCompressionPolicy(t *testing.T) {

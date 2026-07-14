@@ -389,8 +389,9 @@ var Chinese = Messages{
   maddog config auto-plan [off|on]                    配置自动计划模式
   maddog mcp <add|remove|list>                        管理 maddog.toml 里的 MCP 服务器
   maddog hypergraphrag [status]                       查看 HyperGraphRAG 代码智能后端
+  maddog skillopt <optimize|status|resume|cancel|promote|rollback|cleanup>   运行离线技能优化生命周期
   maddog env [list|refresh|show]                      查看项目环境/工具路径
-  maddog pxpipe [status|start|stop]                    管理本地 pxpipe 请求压缩 sidecar
+  maddog pxpipe [status|start|stop]                    查看/重启本地 pxpipe sidecar（启用后会自动启动）
   maddog doctor [--json]                              输出脱敏的本地诊断信息
   maddog version
   maddog help

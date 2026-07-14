@@ -83,6 +83,7 @@ func TestRunConsultsAdvisorBeforeFrontierAfterRepeatedFailures(t *testing.T) {
 	defaultProv := testutil.NewMock("default",
 		testutil.Turn{ToolCalls: []provider.ToolCall{{ID: "c1", Name: "write_file", Arguments: `{}`}}},
 		testutil.Turn{ToolCalls: []provider.ToolCall{{ID: "c2", Name: "write_file", Arguments: `{}`}}},
+		testutil.Turn{ToolCalls: []provider.ToolCall{{ID: "c3", Name: "write_file", Arguments: `{}`}}},
 	)
 	frontierProv := testutil.NewMock("frontier", testutil.Turn{Text: "frontier used advice"})
 	sink := &recordSink{}
@@ -122,24 +123,27 @@ func TestRunConsultsAdvisorBeforeFrontierAfterRepeatedFailures(t *testing.T) {
 	if len(advisorEvents) != 1 || !strings.Contains(advisorEvents[0].Advisor.Advice, "Stop repeating") {
 		t.Fatalf("advisor events = %+v, want one advice event", advisorEvents)
 	}
-	reqs := frontierProv.Requests()
-	if len(reqs) != 1 {
-		t.Fatalf("frontier requests = %d, want 1", len(reqs))
+	defaultReqs := defaultProv.Requests()
+	if len(defaultReqs) != 3 {
+		t.Fatalf("default requests = %d, want initial failures plus one advisor-guided retry", len(defaultReqs))
 	}
 	var sawAdvice bool
-	for _, msg := range reqs[0].Messages {
+	for _, msg := range defaultReqs[2].Messages {
 		if msg.Role == provider.RoleUser && strings.Contains(msg.Content, "Advisor guidance") && strings.Contains(msg.Content, "Stop repeating") {
 			sawAdvice = true
 			break
 		}
 	}
 	if !sawAdvice {
-		t.Fatalf("frontier request did not include advisor guidance: %+v", reqs[0].Messages)
+		t.Fatalf("default retry request did not include advisor guidance: %+v", defaultReqs[2].Messages)
+	}
+	if frontierProv.CallCount() != 1 {
+		t.Fatalf("frontier requests = %d, want one only after the advisor-guided retry failed", frontierProv.CallCount())
 	}
 }
 
-func TestRunConsumesPendingGoalControlSignalBeforeModelCall(t *testing.T) {
-	defaultProv := testutil.NewMock("default", testutil.Turn{Text: "default should not run"})
+func TestRunUsesAdvisorGuidanceBeforeFrontierForPendingGoalSignal(t *testing.T) {
+	defaultProv := testutil.NewMock("default", testutil.Turn{Text: "default handles loop with guidance"})
 	frontierProv := testutil.NewMock("frontier", testutil.Turn{Text: "frontier handles loop"})
 	sink := &recordSink{}
 	var advisorReqs []AdvisorRequest
@@ -166,14 +170,74 @@ func TestRunConsumesPendingGoalControlSignalBeforeModelCall(t *testing.T) {
 	if err := a.Run(context.Background(), "Continue pursuing the active goal."); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if defaultProv.CallCount() != 0 {
-		t.Fatalf("default provider calls = %d, want pending control signal to switch before first call", defaultProv.CallCount())
+	if defaultProv.CallCount() != 1 {
+		t.Fatalf("default provider calls = %d, want one advisor-guided attempt", defaultProv.CallCount())
 	}
-	if frontierProv.CallCount() != 1 {
-		t.Fatalf("frontier provider calls = %d, want 1", frontierProv.CallCount())
+	if frontierProv.CallCount() != 0 {
+		t.Fatalf("frontier provider calls = %d, want none after the default executor succeeds", frontierProv.CallCount())
 	}
 	if len(advisorReqs) != 1 || !strings.Contains(advisorReqs[0].Question, "goal_acceptance_loops=2") {
 		t.Fatalf("advisor requests = %+v, want goal loop signal in question", advisorReqs)
+	}
+	defaultReqs := defaultProv.Requests()
+	var sawAdvice bool
+	for _, msg := range defaultReqs[0].Messages {
+		if msg.Role == provider.RoleUser && strings.Contains(msg.Content, "Advisor guidance") && strings.Contains(msg.Content, "Continue on frontier") {
+			sawAdvice = true
+			break
+		}
+	}
+	if !sawAdvice {
+		t.Fatalf("default request did not include advisor guidance: %+v", defaultReqs[0].Messages)
+	}
+}
+
+func TestRunEscalatesWhenAdvisorGuidedRetryReportsGoalBlocked(t *testing.T) {
+	defaultProv := testutil.NewMock("default", testutil.Turn{Text: "Still blocked.\n\n[goal:blocked:needs credentials]"})
+	frontierProv := testutil.NewMock("frontier", testutil.Turn{Text: "frontier resolves blocker"})
+	var advisorReqs []AdvisorRequest
+
+	a := New(defaultProv, echoRegistry(), NewSession(""), Options{
+		UpgradePolicy:    ThresholdUpgradePolicy{Threshold: 2, TargetModel: "frontier-model"},
+		FrontierProvider: frontierProv,
+		FrontierTarget:   "frontier-model",
+		Advisor: AdvisorConfig{
+			MaxUsesPerTurn:    1,
+			MaxUsesPerSession: 1,
+		},
+		AdvisorRunner: func(_ context.Context, req AdvisorRequest) (string, error) {
+			advisorReqs = append(advisorReqs, req)
+			return "1. Retry with the credential fallback.\nRisks: fallback may be unavailable.", nil
+		},
+	}, event.Discard)
+	a.RecordControlSignal(evidence.FailureSignal{
+		GoalAcceptanceLoop: 2,
+		DifficultDecision:  true,
+		DecisionSummary:    "goal blocked: needs credentials",
+	})
+
+	if err := a.Run(context.Background(), "Continue pursuing the active goal."); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if defaultProv.CallCount() != 1 {
+		t.Fatalf("default provider calls = %d, want one advisor-guided retry", defaultProv.CallCount())
+	}
+	if frontierProv.CallCount() != 1 {
+		t.Fatalf("frontier provider calls = %d, want escalation after explicit goal-blocked result", frontierProv.CallCount())
+	}
+	if len(advisorReqs) != 1 {
+		t.Fatalf("advisor requests = %d, want 1", len(advisorReqs))
+	}
+	frontierReqs := frontierProv.Requests()
+	var sawHandoff bool
+	for _, msg := range frontierReqs[0].Messages {
+		if msg.Role == provider.RoleUser && strings.Contains(msg.Content, "advisor-guided default executor retry remained blocked") {
+			sawHandoff = true
+			break
+		}
+	}
+	if !sawHandoff {
+		t.Fatalf("frontier request did not include blocked-retry handoff: %+v", frontierReqs[0].Messages)
 	}
 }
 
@@ -181,6 +245,7 @@ func TestAdvisorSessionBudgetPreventsRepeatedAutomaticConsults(t *testing.T) {
 	defaultProv := testutil.NewMock("default",
 		testutil.Turn{ToolCalls: []provider.ToolCall{{ID: "c1", Name: "write_file", Arguments: `{}`}}},
 		testutil.Turn{ToolCalls: []provider.ToolCall{{ID: "c2", Name: "write_file", Arguments: `{}`}}},
+		testutil.Turn{ToolCalls: []provider.ToolCall{{ID: "c3", Name: "write_file", Arguments: `{}`}}},
 	)
 	frontierProv := testutil.NewMock("frontier",
 		testutil.Turn{Text: "frontier answer one"},
@@ -223,6 +288,8 @@ func TestRunResetsAdvisorTurnBudgetAcrossTurns(t *testing.T) {
 	defaultProv := testutil.NewMock("default",
 		testutil.Turn{ToolCalls: []provider.ToolCall{{ID: "c1", Name: "write_file", Arguments: `{}`}}},
 		testutil.Turn{ToolCalls: []provider.ToolCall{{ID: "c2", Name: "write_file", Arguments: `{}`}}},
+		testutil.Turn{ToolCalls: []provider.ToolCall{{ID: "c3", Name: "write_file", Arguments: `{}`}}},
+		testutil.Turn{ToolCalls: []provider.ToolCall{{ID: "c4", Name: "write_file", Arguments: `{}`}}},
 	)
 	frontierProv := testutil.NewMock("frontier",
 		testutil.Turn{Text: "frontier answer one"},

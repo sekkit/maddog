@@ -21,6 +21,43 @@ func TestResolveBuiltin(t *testing.T) {
 	}
 }
 
+func TestResolveCavemanFull(t *testing.T) {
+	st, ok := Resolve("caveman-full", nil)
+	if !ok {
+		t.Fatal("caveman-full built-in should resolve")
+	}
+	if !st.Builtin || !st.KeepCoding {
+		t.Errorf("caveman-full should be a keep-coding built-in: %+v", st)
+	}
+	for _, want := range []string{
+		"natural-language prose",
+		"inline or fenced code",
+		"shell commands",
+		"paths",
+		"identifiers",
+		"quoted text or errors",
+		"JSON, YAML, XML",
+		"tables",
+		"tool calls",
+		"tool arguments",
+		"tool results",
+		"native blocks",
+		"commit messages",
+		"PR titles or bodies",
+		"user-required formats",
+		"security warnings",
+		"approvals",
+		"required details",
+	} {
+		if !strings.Contains(st.Body, want) {
+			t.Errorf("caveman-full body missing protection for %q: %q", want, st.Body)
+		}
+	}
+	if got := Apply("BASE", st); !strings.HasPrefix(got, "BASE\n\n") {
+		t.Errorf("caveman-full must append to the base prompt, got %q", got)
+	}
+}
+
 func TestResolveDefaultIsNone(t *testing.T) {
 	for _, name := range []string{"", "  ", "default"} {
 		if _, ok := Resolve(name, nil); ok {

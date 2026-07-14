@@ -8,10 +8,11 @@ import (
 
 // UpgradeDecision is the result of a routing policy evaluation.
 type UpgradeDecision struct {
-	ShouldUpgrade  bool
-	Reason         string
-	TargetModel    string
-	TriggerAdvisor bool
+	ShouldUpgrade            bool
+	Reason                   string
+	TargetModel              string
+	TriggerAdvisor           bool
+	RetryDefaultAfterAdvisor bool
 }
 
 // UpgradePolicy decides whether a turn should continue on a frontier provider.
@@ -42,26 +43,29 @@ func (p ThresholdUpgradePolicy) Evaluate(sig evidence.FailureSignal, turn int, f
 	}
 	if sig.ConsecutiveErrors >= p.Threshold {
 		return UpgradeDecision{
-			ShouldUpgrade:  true,
-			Reason:         fmt.Sprintf("%d consecutive tool failures", sig.ConsecutiveErrors),
-			TargetModel:    target,
-			TriggerAdvisor: true,
+			ShouldUpgrade:            true,
+			Reason:                   fmt.Sprintf("%d consecutive tool failures", sig.ConsecutiveErrors),
+			TargetModel:              target,
+			TriggerAdvisor:           true,
+			RetryDefaultAfterAdvisor: true,
 		}
 	}
 	if sig.ErrorStreak >= p.Threshold*2 {
 		return UpgradeDecision{
-			ShouldUpgrade:  true,
-			Reason:         fmt.Sprintf("%d tool failures in this turn", sig.ErrorStreak),
-			TargetModel:    target,
-			TriggerAdvisor: true,
+			ShouldUpgrade:            true,
+			Reason:                   fmt.Sprintf("%d tool failures in this turn", sig.ErrorStreak),
+			TargetModel:              target,
+			TriggerAdvisor:           true,
+			RetryDefaultAfterAdvisor: true,
 		}
 	}
 	if sig.GoalAcceptanceLoop >= p.Threshold {
 		return UpgradeDecision{
-			ShouldUpgrade:  true,
-			Reason:         fmt.Sprintf("%d goal/acceptance control loops", sig.GoalAcceptanceLoop),
-			TargetModel:    target,
-			TriggerAdvisor: true,
+			ShouldUpgrade:            true,
+			Reason:                   fmt.Sprintf("%d goal/acceptance control loops", sig.GoalAcceptanceLoop),
+			TargetModel:              target,
+			TriggerAdvisor:           true,
+			RetryDefaultAfterAdvisor: true,
 		}
 	}
 	if sig.DifficultDecision {
@@ -76,10 +80,11 @@ func (p ThresholdUpgradePolicy) Evaluate(sig evidence.FailureSignal, turn int, f
 	}
 	if sig.ErrorStreak > 0 && sig.HealthScore > 0 && sig.HealthScore < 0.3 {
 		return UpgradeDecision{
-			ShouldUpgrade:  true,
-			Reason:         fmt.Sprintf("tool health %.0f%%", sig.HealthScore*100),
-			TargetModel:    target,
-			TriggerAdvisor: true,
+			ShouldUpgrade:            true,
+			Reason:                   fmt.Sprintf("tool health %.0f%%", sig.HealthScore*100),
+			TargetModel:              target,
+			TriggerAdvisor:           true,
+			RetryDefaultAfterAdvisor: true,
 		}
 	}
 	return UpgradeDecision{}

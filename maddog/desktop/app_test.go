@@ -99,6 +99,7 @@ func isolateDesktopUserDirs(t *testing.T) string {
 		}
 	}
 	t.Setenv("HOME", home)
+	t.Setenv("MADDOG_HOME", filepath.Join(home, ".maddog"))
 	t.Setenv("MADDOG_CREDENTIALS_STORE", "file")
 	t.Setenv("USERPROFILE", home)
 	t.Setenv("XDG_CONFIG_HOME", xdg)

@@ -38,6 +38,86 @@ func (panicToolOutputCompressor) Compress(contextpack.ToolOutput, contextpack.Op
 	panic("compress boom")
 }
 
+type fixedToolOutputCompressor struct {
+	result contextpack.Result
+}
+
+func (c fixedToolOutputCompressor) Compress(contextpack.ToolOutput, contextpack.Options) contextpack.Result {
+	return c.result
+}
+
+func TestToolOutputCompressionRejectsModelTokenExpansion(t *testing.T) {
+	rawOutput := strings.Repeat("abcd", 250)
+	candidate := strings.Repeat("界", 260)
+
+	reg := tool.NewRegistry()
+	reg.Add(contextpackStaticTool{name: "bash", output: rawOutput, readOnly: true})
+	prov := testutil.NewMock("mock",
+		testutil.Turn{ToolCalls: []provider.ToolCall{{ID: "tool-token-guard", Name: "bash", Arguments: `{"command":"custom"}`}}},
+		testutil.Turn{Text: "done"},
+	)
+	a := New(prov, reg, NewSession(""), Options{
+		ToolOutputCompressor: fixedToolOutputCompressor{result: contextpack.Result{
+			Content:    candidate,
+			Compressed: true,
+			Lossy:      true,
+		}},
+	}, event.Discard)
+
+	if err := a.Run(context.Background(), "run command"); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	reqs := prov.Requests()
+	var toolMsg provider.Message
+	for _, msg := range reqs[1].Messages {
+		if msg.Role == provider.RoleTool && msg.ToolCallID == "tool-token-guard" {
+			toolMsg = msg
+			break
+		}
+	}
+	if toolMsg.Content != rawOutput {
+		t.Fatalf("model-visible output used token-expanding candidate: got %d bytes, want original %d", len(toolMsg.Content), len(rawOutput))
+	}
+	if _, ok := a.RawToolResult("tool-token-guard"); ok {
+		t.Fatal("token-expanding candidate should not retain a raw artifact")
+	}
+}
+
+func TestToolOutputCompressionRequiresMinimumTokenSaving(t *testing.T) {
+	rawOutput := strings.Repeat("a", 400)
+	candidate := strings.Repeat("b", 320)
+
+	reg := tool.NewRegistry()
+	reg.Add(contextpackStaticTool{name: "bash", output: rawOutput, readOnly: true})
+	prov := testutil.NewMock("mock",
+		testutil.Turn{ToolCalls: []provider.ToolCall{{ID: "tool-small-saving", Name: "bash", Arguments: `{"command":"custom"}`}}},
+		testutil.Turn{Text: "done"},
+	)
+	a := New(prov, reg, NewSession(""), Options{
+		ToolOutputCompressor: fixedToolOutputCompressor{result: contextpack.Result{
+			Content:    candidate,
+			Compressed: true,
+			Lossy:      true,
+		}},
+	}, event.Discard)
+
+	if err := a.Run(context.Background(), "run command"); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	var toolMsg provider.Message
+	for _, msg := range prov.Requests()[1].Messages {
+		if msg.Role == provider.RoleTool && msg.ToolCallID == "tool-small-saving" {
+			toolMsg = msg
+			break
+		}
+	}
+	if toolMsg.Content != rawOutput {
+		t.Fatalf("model-visible output accepted negligible saving: got %d bytes, want raw %d", len(toolMsg.Content), len(rawOutput))
+	}
+}
+
 func TestToolOutputCompressionFeedsModelCompressedAndKeepsRaw(t *testing.T) {
 	var raw strings.Builder
 	for i := 0; i < 90; i++ {
@@ -197,7 +277,7 @@ func TestRawToolResultPersistsInSessionScopedStoreAcrossResume(t *testing.T) {
 	}
 }
 
-func TestRawToolResultStoreWriteFailureKeepsCompressedOnlyAndWarns(t *testing.T) {
+func TestRawToolResultStoreWriteFailureFallsBackToRawAndWarns(t *testing.T) {
 	rawOutput := strings.Repeat("INFO heartbeat ready\n", 90) + "panic: boom\n"
 	rawStorePath := filepath.Join(t.TempDir(), "raw-store-is-file")
 	if err := os.WriteFile(rawStorePath, []byte("not a dir"), 0o644); err != nil {
@@ -211,9 +291,13 @@ func TestRawToolResultStoreWriteFailureKeepsCompressedOnlyAndWarns(t *testing.T)
 		testutil.Turn{Text: "done"},
 	)
 	var warnings []string
+	var compression *event.Compression
 	sink := event.FuncSink(func(e event.Event) {
 		if e.Kind == event.Notice && e.Level == event.LevelWarn {
 			warnings = append(warnings, e.Text)
+		}
+		if e.Kind == event.ToolResult && e.Tool.ID == "tool-store-fail" {
+			compression = e.Tool.Compression
 		}
 	})
 	a := New(prov, reg, NewSession(""), Options{
@@ -227,9 +311,32 @@ func TestRawToolResultStoreWriteFailureKeepsCompressedOnlyAndWarns(t *testing.T)
 	if _, ok := a.RawToolResult("tool-store-fail"); ok {
 		t.Fatal("raw result should be unavailable after store write failure")
 	}
+	var toolMsg provider.Message
+	for _, msg := range prov.Requests()[1].Messages {
+		if msg.Role == provider.RoleTool && msg.ToolCallID == "tool-store-fail" {
+			toolMsg = msg
+			break
+		}
+	}
+	if toolMsg.Content != rawOutput {
+		t.Fatalf("store failure model output = %q, want bounded raw output", toolMsg.Content)
+	}
+	if compression == nil {
+		t.Fatal("store failure passthrough metadata = nil")
+	}
+	if compression.Route != "passthrough" || compression.Quality != "passthrough" || compression.QualityReason != "store_failed" {
+		t.Fatalf("store failure decision metadata = %+v", compression)
+	}
+	if compression.RawRef != "" || compression.Lossy || compression.SavedChars != 0 || compression.SavedTokens != 0 {
+		t.Fatalf("store failure claimed addressable or lossy compression: %+v", compression)
+	}
+	if got := a.ToolCompressions(); len(got) != 0 {
+		t.Fatalf("store failure counted as compression: %+v", got)
+	}
 	found := false
 	for _, warning := range warnings {
-		if strings.Contains(warning, "raw tool result store failed") && strings.Contains(warning, "tool-store-fail") {
+		if strings.Contains(warning, "raw tool result store failed") && strings.Contains(warning, "tool-store-fail") &&
+			strings.Contains(warning, "using raw/truncated output") {
 			found = true
 			break
 		}
@@ -275,6 +382,15 @@ func TestToolOutputCompressionEmitsMetadataOnToolResult(t *testing.T) {
 	if got.RawRef != "raw://tool/tool-meta" || got.Strategy == "" || got.Summary == "" {
 		t.Fatalf("ToolResult compression identity metadata = %+v", got)
 	}
+	if got.Route != "profile" || got.Profile != "go-test" || got.Quality != "degraded" {
+		t.Fatalf("ToolResult compression route metadata = %+v", got)
+	}
+	if !got.Lossy || got.OmittedLines <= 0 || got.QualityReason == "" {
+		t.Fatalf("ToolResult compression quality metadata = %+v", got)
+	}
+	if got.UnparsedLines <= 0 || len(got.UnparsedSamples) == 0 {
+		t.Fatalf("ToolResult compression unparsed metadata = %+v", got)
+	}
 	if got.RawChars <= got.CompressedChars || got.SavedChars <= 0 || got.SavedTokens <= 0 {
 		t.Fatalf("ToolResult compression delta metadata = %+v, want positive savings", got)
 	}
@@ -286,6 +402,45 @@ func TestToolOutputCompressionEmitsMetadataOnToolResult(t *testing.T) {
 	}
 	if got.CompressedTokens != estimatedTestTokens(gotOutput) || got.SavedTokens != got.RawTokens-got.CompressedTokens {
 		t.Fatalf("ToolResult token metrics = %+v, want estimates from final output", got)
+	}
+}
+
+func TestToolOutputCompressionMetricsCompareBoundedAlternatives(t *testing.T) {
+	rawOutput := strings.Repeat("raw output line that exceeds the model boundary\n", 2000)
+	candidate := "bounded summary"
+
+	reg := tool.NewRegistry()
+	reg.Add(contextpackStaticTool{name: "bash", output: rawOutput, readOnly: true})
+	prov := testutil.NewMock("mock",
+		testutil.Turn{ToolCalls: []provider.ToolCall{{ID: "tool-bounded-metrics", Name: "bash", Arguments: `{"command":"custom"}`}}},
+		testutil.Turn{Text: "done"},
+	)
+	var got *event.Compression
+	sink := event.FuncSink(func(e event.Event) {
+		if e.Kind == event.ToolResult && e.Tool.ID == "tool-bounded-metrics" {
+			got = e.Tool.Compression
+		}
+	})
+	a := New(prov, reg, NewSession(""), Options{
+		ToolOutputCompressor: fixedToolOutputCompressor{result: contextpack.Result{
+			Content:    candidate,
+			Compressed: true,
+			Route:      contextpack.RouteGeneric,
+			Profile:    "generic",
+			Quality:    contextpack.ParseQualityDegraded,
+			Lossy:      true,
+		}},
+	}, sink)
+
+	if err := a.Run(context.Background(), "run command"); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if got == nil {
+		t.Fatal("ToolResult compression metadata = nil")
+	}
+	rawVisible, _ := truncateToolOutput(rawOutput)
+	if got.RawChars != utf8.RuneCountInString(rawVisible) || got.RawTokens != estimatedTestTokens(rawVisible) {
+		t.Fatalf("bounded raw metrics = chars:%d tokens:%d, want chars:%d tokens:%d", got.RawChars, got.RawTokens, utf8.RuneCountInString(rawVisible), estimatedTestTokens(rawVisible))
 	}
 }
 

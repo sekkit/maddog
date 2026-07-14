@@ -27,7 +27,27 @@ not claim savings unless pxpipe/Maddog telemetry proves it for the session.
 
 ## Managed Mode
 
-Maddog can start a loopback-only sidecar:
+Configure the local sidecar once. When a `pxpipe-*` provider is selected, Maddog
+then provisions the pinned `pxpipe-proxy` package through `npx` (when needed),
+starts the loopback sidecar, waits for it to become healthy, and only then sends
+the model request. No separate `npx pxpipe-proxy` terminal is required.
+
+```toml
+[pxpipe]
+enabled = true
+auto_install = true
+auto_start = true
+models = ["gpt-5.6"]
+openai_upstream = "https://your-openai-compatible-gateway.example"
+```
+
+For example, selecting `pxpipe-gpt/gpt-5.6` with this configuration is enough:
+
+```sh
+maddog run --model pxpipe-gpt/gpt-5.6 "your task"
+```
+
+The lifecycle commands remain useful for diagnostics and explicit stop/restart:
 
 ```sh
 maddog pxpipe status
@@ -35,7 +55,7 @@ maddog pxpipe start
 maddog pxpipe stop
 ```
 
-Useful flags:
+Command-line flags temporarily override `[pxpipe]`:
 
 ```sh
 maddog pxpipe start \
@@ -48,13 +68,32 @@ Defaults:
 
 - `HOST=127.0.0.1`
 - `PORT=47821`
-- `PXPIPE_MODELS=claude-fable-5,gpt-5.6`
+- `PXPIPE_MODELS` from `[pxpipe].models` (default: `claude-fable-5,gpt-5.6`)
 - `PXPIPE_LOG=<maddog-state>/pxpipe/events.jsonl`
 
-When `--anthropic-upstream` or `--openai-upstream` is omitted, Maddog derives a
-non-loopback upstream from the configured providers when possible. Set the flags
-explicitly for aggregator or regional gateways so pxpipe does not fall back to a
-first-party endpoint accidentally.
+`[pxpipe].anthropic_upstream` and `[pxpipe].openai_upstream` are the persistent
+source of truth. If either is omitted, Maddog derives a non-loopback upstream from
+configured providers as a compatibility fallback. Set persistent values explicitly
+for aggregator or regional gateways so pxpipe never falls back to a first-party
+endpoint accidentally.
+
+One pxpipe process has only one `OPENAI_UPSTREAM`. When two providers use
+different OpenAI-compatible gateways, bind the second provider to a dedicated
+managed instance instead of pointing both providers at the same port:
+
+```toml
+[[pxpipe.instances]]
+name = "sevnx"
+providers = ["pxpipe-sevnx-gpt"]
+host = "127.0.0.1"
+port = 47822
+models = ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]
+openai_upstream = "https://www.sevnx.one"
+```
+
+Selecting `pxpipe-sevnx-gpt/*` automatically provisions and starts port 47822.
+Each non-default port gets its own PID state, runner log, and pxpipe event log.
+The legacy fields directly under `[pxpipe]` remain the default instance.
 
 `maddog doctor` reports pxpipe state, dashboard URL, provider loopback checks,
 and log file size. It does not read or print pxpipe event contents.
