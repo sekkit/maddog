@@ -19,7 +19,7 @@ func TestCompressCompoundShellCommandAvoidsSingleCommandProfile(t *testing.T) {
 		ReadOnly: true,
 	}, Options{ThresholdBytes: 64, MaxBytes: 320, RawRef: "raw://tool/compound"})
 
-	if !got.Compressed {
+	if !got.Route.IsCompression() {
 		t.Fatalf("compound output should still receive conservative generic compression: %+v", got)
 	}
 	if got.Strategy == "git-status-summary" || got.Strategy == "go-test-failure" {
@@ -43,7 +43,7 @@ func TestCompressQuotedCommandTextAvoidsProfile(t *testing.T) {
 		ReadOnly: true,
 	}, Options{ThresholdBytes: 64, MaxBytes: 180, RawRef: "raw://tool/quoted"})
 
-	if !got.Compressed {
+	if !got.Route.IsCompression() {
 		t.Fatalf("quoted command output should still receive generic compression: %+v", got)
 	}
 	if got.Strategy == "git-status-summary" {
@@ -51,6 +51,123 @@ func TestCompressQuotedCommandTextAvoidsProfile(t *testing.T) {
 	}
 	if got.Route != RouteGeneric || got.Profile != "generic" {
 		t.Fatalf("quoted command route/profile = %q/%q, want generic/generic", got.Route, got.Profile)
+	}
+}
+
+func TestCompressExecutableIdentityUsesExecutionGOOS(t *testing.T) {
+	raw := "## main...origin/main\n" + strings.Repeat(" M pkg/file.go\n", 40)
+	tests := []struct {
+		name      string
+		goos      string
+		command   string
+		wantRoute Route
+	}{
+		{name: "linux preserves executable case", goos: "linux", command: "Git status --short", wantRoute: RouteGeneric},
+		{name: "linux preserves exe suffix", goos: "linux", command: "git.exe status --short", wantRoute: RouteGeneric},
+		{name: "windows normalizes executable", goos: "windows", command: "Git.EXE status --short", wantRoute: RouteProfile},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := Compress(ToolOutput{
+				ToolName: "bash",
+				Shell:    "bash",
+				GOOS:     tt.goos,
+				Args:     `{"command":` + strconv.Quote(tt.command) + `}`,
+				Output:   raw,
+				ReadOnly: true,
+			}, Options{ThresholdBytes: 64, MaxBytes: 240, RawRef: "raw://tool/executable-semantics"})
+
+			if got.Route != tt.wantRoute {
+				t.Fatalf("route = %q, want %q; strategy=%q\n%s", got.Route, tt.wantRoute, got.Strategy, got.Content)
+			}
+		})
+	}
+}
+
+func TestCompressCommandLexingUsesExecutionShell(t *testing.T) {
+	raw := "## main...origin/main\n" + strings.Repeat(" M pkg/file.go\n", 40)
+	tests := []struct {
+		name      string
+		toolName  string
+		shell     string
+		command   string
+		wantRoute Route
+	}{
+		{
+			name:      "powershell backslash does not escape redirect",
+			toolName:  "bash",
+			shell:     "powershell",
+			command:   `git status --short \> status.txt`,
+			wantRoute: RouteGeneric,
+		},
+		{
+			name:      "bash backslash escapes redirect",
+			toolName:  "powershell",
+			shell:     "bash",
+			command:   `git status --short \> status.txt`,
+			wantRoute: RouteProfile,
+		},
+		{
+			name:      "powershell backtick escapes redirect",
+			toolName:  "bash",
+			shell:     "pwsh",
+			command:   "git status --short `> status.txt",
+			wantRoute: RouteProfile,
+		},
+		{
+			name:      "unknown receipt overrides shell-like tool name",
+			toolName:  "bash",
+			shell:     "unknown-shell",
+			command:   "git status --short",
+			wantRoute: RouteGeneric,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := Compress(ToolOutput{
+				ToolName: tt.toolName,
+				Shell:    tt.shell,
+				GOOS:     "windows",
+				Args:     `{"command":` + strconv.Quote(tt.command) + `}`,
+				Output:   raw,
+				ReadOnly: true,
+			}, Options{ThresholdBytes: 64, MaxBytes: 240, RawRef: "raw://tool/shell-semantics"})
+
+			if got.Route != tt.wantRoute {
+				t.Fatalf("route = %q, want %q; strategy=%q\n%s", got.Route, tt.wantRoute, got.Strategy, got.Content)
+			}
+		})
+	}
+}
+
+func TestCompressEnvironmentAssignmentUsesExecutionShell(t *testing.T) {
+	raw := "## main...origin/main\n" + strings.Repeat(" M pkg/file.go\n", 40)
+	tests := []struct {
+		name      string
+		shell     string
+		wantRoute Route
+	}{
+		{name: "bash assignment prefix", shell: "bash", wantRoute: RouteProfile},
+		{name: "powershell assignment is executable text", shell: "powershell", wantRoute: RouteGeneric},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := Compress(ToolOutput{
+				ToolName: "bash",
+				Shell:    tt.shell,
+				GOOS:     "windows",
+				Args:     `{"command":"MADDOG_MODE=test git status --short"}`,
+				Output:   raw,
+				ReadOnly: true,
+			}, Options{ThresholdBytes: 64, MaxBytes: 240, RawRef: "raw://tool/assignment-semantics"})
+
+			if got.Route != tt.wantRoute {
+				t.Fatalf("route = %q, want %q; strategy=%q\n%s", got.Route, tt.wantRoute, got.Strategy, got.Content)
+			}
+		})
 	}
 }
 
@@ -83,7 +200,7 @@ func TestCompressProfilesRespectInvocationShape(t *testing.T) {
 				Output:   tt.raw,
 				ReadOnly: true,
 			}, Options{ThresholdBytes: 64, MaxBytes: 240, RawRef: "raw://tool/shape"})
-			if !got.Compressed {
+			if !got.Route.IsCompression() {
 				t.Fatalf("output should remain eligible for compression: %+v", got)
 			}
 			if tt.wantStrategy != "" && got.Strategy != tt.wantStrategy {
@@ -116,8 +233,8 @@ func TestCompressionResultReportsProfileQuality(t *testing.T) {
 	if got.Quality != ParseQualityDegraded || got.QualityReason == "" {
 		t.Fatalf("quality = %q reason=%q, want explicit degraded reason", got.Quality, got.QualityReason)
 	}
-	if !got.Lossy || got.OmittedLines <= 0 {
-		t.Fatalf("loss metadata = lossy:%v omitted:%d, want omitted raw lines", got.Lossy, got.OmittedLines)
+	if !got.Route.IsCompression() || got.OmittedLines <= 0 {
+		t.Fatalf("loss metadata = lossy:%v omitted:%d, want omitted raw lines", got.Route.IsCompression(), got.OmittedLines)
 	}
 	if got.UnparsedLines <= 0 || !containsSample(got.UnparsedSamples, "unparsed runner diagnostic") {
 		t.Fatalf("unparsed metadata = lines:%d samples:%q, want unknown diagnostic", got.UnparsedLines, got.UnparsedSamples)

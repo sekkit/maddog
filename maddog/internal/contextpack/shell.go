@@ -17,11 +17,12 @@ type shellCompression struct {
 }
 
 func compressShellOutput(output ToolOutput, raw string, maxBytes int) (shellCompression, bool) {
-	if !looksLikeShell(output) {
+	semantics := commandSemanticsFor(output)
+	if !semantics.supported() {
 		return shellCompression{}, false
 	}
 	cmd := commandText(output.Args)
-	desc := describeCommand(output.ToolName, cmd)
+	desc := describeCommand(semantics, cmd)
 	if desc.Executable != "" {
 		for _, profile := range builtinShellProfiles {
 			if !profile.match(desc) {
@@ -71,9 +72,12 @@ func compressShellOutput(output ToolOutput, raw string, maxBytes int) (shellComp
 	return shellCompression{}, false
 }
 
-func looksLikeShell(output ToolOutput) bool {
-	name := strings.ToLower(strings.TrimSpace(output.ToolName))
-	return name == "bash" || name == "shell" || name == "powershell" || name == "pwsh"
+func commandSemanticsFor(output ToolOutput) commandSemantics {
+	shell := strings.TrimSpace(output.Shell)
+	if shell == "" {
+		shell = output.ToolName
+	}
+	return newCommandSemantics(shell, output.GOOS)
 }
 
 func commandText(args string) string {

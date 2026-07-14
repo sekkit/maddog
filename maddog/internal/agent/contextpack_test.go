@@ -46,6 +46,102 @@ func (c fixedToolOutputCompressor) Compress(contextpack.ToolOutput, contextpack.
 	return c.result
 }
 
+type contextpackExecutionTool struct {
+	contextpackStaticTool
+	receipt tool.ExecutionReceipt
+}
+
+func (t contextpackExecutionTool) ExecutionReceipt(json.RawMessage) tool.ExecutionReceipt {
+	return t.receipt
+}
+
+type capturingToolOutputCompressor struct {
+	got *contextpack.ToolOutput
+}
+
+func (c capturingToolOutputCompressor) Compress(output contextpack.ToolOutput, _ contextpack.Options) contextpack.Result {
+	*c.got = output
+	return contextpack.Result{
+		Content:       output.Output,
+		Route:         contextpack.RoutePassthrough,
+		Quality:       contextpack.ParseQualityPassthrough,
+		QualityReason: "test_passthrough",
+	}
+}
+
+func TestToolOutputCompressionReceivesExecutionReceipt(t *testing.T) {
+	rawOutput := strings.Repeat("raw payload line\n", 20)
+	var got contextpack.ToolOutput
+
+	reg := tool.NewRegistry()
+	reg.Add(contextpackExecutionTool{
+		contextpackStaticTool: contextpackStaticTool{name: "bash", output: rawOutput, readOnly: true},
+		receipt:               tool.ExecutionReceipt{Shell: "  PoWeRsHeLl ", GOOS: " WINDOWS "},
+	})
+	prov := testutil.NewMock("mock",
+		testutil.Turn{ToolCalls: []provider.ToolCall{{ID: "tool-execution-receipt", Name: "bash", Arguments: `{"command":"git status --short"}`}}},
+		testutil.Turn{Text: "done"},
+	)
+	a := New(prov, reg, NewSession(""), Options{
+		ToolOutputCompressor: capturingToolOutputCompressor{got: &got},
+	}, event.Discard)
+
+	if err := a.Run(context.Background(), "run command"); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if got.Shell != "powershell" || got.GOOS != "windows" {
+		t.Fatalf("compressor execution receipt = shell:%q goos:%q, want powershell/windows", got.Shell, got.GOOS)
+	}
+}
+
+func TestToolOutputNonCompressionRouteOverridesCandidateContent(t *testing.T) {
+	rawOutput := strings.Repeat("raw payload line\n", 200)
+	tests := []struct {
+		name  string
+		route contextpack.Route
+	}{
+		{name: "passthrough", route: contextpack.RoutePassthrough},
+		{name: "empty", route: contextpack.Route("")},
+		{name: "unknown", route: contextpack.Route("future-route")},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			callID := "tool-route-" + tt.name
+			reg := tool.NewRegistry()
+			reg.Add(contextpackStaticTool{name: "bash", output: rawOutput, readOnly: true})
+			prov := testutil.NewMock("mock",
+				testutil.Turn{ToolCalls: []provider.ToolCall{{ID: callID, Name: "bash", Arguments: `{"command":"custom"}`}}},
+				testutil.Turn{Text: "done"},
+			)
+			a := New(prov, reg, NewSession(""), Options{
+				ToolOutputCompressor: fixedToolOutputCompressor{result: contextpack.Result{
+					Content: "compressed candidate",
+					Route:   tt.route,
+				}},
+			}, event.Discard)
+
+			if err := a.Run(context.Background(), "run command"); err != nil {
+				t.Fatalf("Run: %v", err)
+			}
+
+			var toolMsg provider.Message
+			for _, msg := range prov.Requests()[1].Messages {
+				if msg.Role == provider.RoleTool && msg.ToolCallID == callID {
+					toolMsg = msg
+					break
+				}
+			}
+			if toolMsg.Content != rawOutput {
+				t.Fatalf("route %q used compressor candidate: got %q, want raw output", tt.route, toolMsg.Content)
+			}
+			if _, ok := a.RawToolResult(callID); ok {
+				t.Fatalf("route %q should not retain a raw artifact", tt.route)
+			}
+		})
+	}
+}
+
 func TestToolOutputCompressionRejectsModelTokenExpansion(t *testing.T) {
 	rawOutput := strings.Repeat("abcd", 250)
 	candidate := strings.Repeat("界", 260)
@@ -58,9 +154,8 @@ func TestToolOutputCompressionRejectsModelTokenExpansion(t *testing.T) {
 	)
 	a := New(prov, reg, NewSession(""), Options{
 		ToolOutputCompressor: fixedToolOutputCompressor{result: contextpack.Result{
-			Content:    candidate,
-			Compressed: true,
-			Lossy:      true,
+			Content: candidate,
+			Route:   contextpack.RouteGeneric,
 		}},
 	}, event.Discard)
 
@@ -96,9 +191,8 @@ func TestToolOutputCompressionRequiresMinimumTokenSaving(t *testing.T) {
 	)
 	a := New(prov, reg, NewSession(""), Options{
 		ToolOutputCompressor: fixedToolOutputCompressor{result: contextpack.Result{
-			Content:    candidate,
-			Compressed: true,
-			Lossy:      true,
+			Content: candidate,
+			Route:   contextpack.RouteGeneric,
 		}},
 	}, event.Discard)
 
@@ -222,10 +316,16 @@ func TestToolOutputCompressionPolicyOffFeedsModelRawAndStoresNoRawRef(t *testing
 		testutil.Turn{ToolCalls: []provider.ToolCall{{ID: "tool-off", Name: "bash", Arguments: `{"command":"go test ./..."}`}}},
 		testutil.Turn{Text: "done"},
 	)
+	var compression *event.Compression
+	sink := event.FuncSink(func(e event.Event) {
+		if e.Kind == event.ToolResult && e.Tool.ID == "tool-off" {
+			compression = e.Tool.Compression
+		}
+	})
 	a := New(prov, reg, NewSession(""), Options{
 		ToolOutputCompressor:  contextpack.DefaultCompressor{},
 		ToolOutputCompression: contextpack.Options{Policy: "off", ThresholdBytes: 1, MaxBytes: 80},
-	}, event.Discard)
+	}, sink)
 
 	if err := a.Run(context.Background(), "run tests"); err != nil {
 		t.Fatalf("Run: %v", err)
@@ -244,6 +344,15 @@ func TestToolOutputCompressionPolicyOffFeedsModelRawAndStoresNoRawRef(t *testing
 	}
 	if _, ok := a.RawToolResult("tool-off"); ok {
 		t.Fatal("policy=off should not externalize or retain a raw result")
+	}
+	if compression == nil {
+		t.Fatal("policy=off passthrough metadata = nil")
+	}
+	if compression.Route != "passthrough" || compression.Quality != "passthrough" || compression.QualityReason != "policy_off" {
+		t.Fatalf("policy=off decision metadata = %+v", compression)
+	}
+	if compression.IsCompression() || compression.RawRef != "" || compression.Lossy {
+		t.Fatalf("policy=off claimed addressable or lossy compression: %+v", compression)
 	}
 }
 
@@ -423,12 +532,10 @@ func TestToolOutputCompressionMetricsCompareBoundedAlternatives(t *testing.T) {
 	})
 	a := New(prov, reg, NewSession(""), Options{
 		ToolOutputCompressor: fixedToolOutputCompressor{result: contextpack.Result{
-			Content:    candidate,
-			Compressed: true,
-			Route:      contextpack.RouteGeneric,
-			Profile:    "generic",
-			Quality:    contextpack.ParseQualityDegraded,
-			Lossy:      true,
+			Content: candidate,
+			Route:   contextpack.RouteGeneric,
+			Profile: "generic",
+			Quality: contextpack.ParseQualityDegraded,
 		}},
 	}, sink)
 

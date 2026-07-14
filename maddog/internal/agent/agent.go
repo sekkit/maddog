@@ -2827,11 +2827,11 @@ func (a *Agent) modelToolOutput(call provider.ToolCall, t tool.Tool, raw string)
 		output, truncMsg := truncateToolOutput(body)
 		return output, truncMsg, nil
 	}
-	if compressed, meta, ok := a.compressToolOutput(call, t, raw); ok {
-		body = compressed
+	if compressed, meta := a.compressToolOutput(call, t, raw); meta != nil {
 		compression = meta
-	} else if meta != nil {
-		compression = meta
+		if meta.IsCompression() {
+			body = compressed
+		}
 	} else if a.toolOutputCompressor != nil {
 		a.clearRawToolResult(call.ID)
 	}
@@ -2843,13 +2843,14 @@ func (a *Agent) modelToolOutput(call provider.ToolCall, t tool.Tool, raw string)
 	return output, truncMsg, compression
 }
 
-func (a *Agent) compressToolOutput(call provider.ToolCall, t tool.Tool, raw string) (string, *event.Compression, bool) {
+func (a *Agent) compressToolOutput(call provider.ToolCall, t tool.Tool, raw string) (string, *event.Compression) {
 	if a == nil || a.toolOutputCompressor == nil || call.ID == "" {
-		return "", nil, false
+		return "", nil
 	}
 	rawRef := "raw://tool/" + call.ID
 	opts := a.toolOutputCompression
 	opts.RawRef = rawRef
+	receipt := tool.ExecutionReceiptFor(t, json.RawMessage(call.Arguments))
 	result, recovered := func() (result contextpack.Result, recovered any) {
 		defer func() {
 			if r := recover(); r != nil {
@@ -2858,6 +2859,8 @@ func (a *Agent) compressToolOutput(call provider.ToolCall, t tool.Tool, raw stri
 		}()
 		result = a.toolOutputCompressor.Compress(contextpack.ToolOutput{
 			ToolName: call.Name,
+			Shell:    receipt.Shell,
+			GOOS:     receipt.GOOS,
 			Args:     call.Arguments,
 			Output:   raw,
 			ReadOnly: t.ReadOnly(),
@@ -2868,30 +2871,38 @@ func (a *Agent) compressToolOutput(call provider.ToolCall, t tool.Tool, raw stri
 		a.sink.Emit(event.Event{Kind: event.Notice, Level: event.LevelWarn, Text: fmt.Sprintf(
 			"tool output compression failed for %s: %v; using raw/truncated output",
 			call.Name, recovered)})
-		return "", nil, false
+		return "", nil
 	}
-	if !result.Compressed || result.Content == "" {
-		return "", nil, false
+	if !result.Route.IsCompression() {
+		a.clearRawToolResult(call.ID)
+		reason := strings.TrimSpace(result.QualityReason)
+		if reason == "" {
+			reason = "not_compressed"
+		}
+		return "", passthroughToolOutputEvent(reason)
+	}
+	if result.Content == "" {
+		return "", nil
 	}
 	compressed := formatCompressedToolOutput(result, rawRef)
 	if compressed == "" {
-		return "", nil, false
+		return "", nil
 	}
 	compressedVisible, _ := truncateToolOutput(compressed)
 	rawVisible, _ := truncateToolOutput(raw)
 	rawTokens := estimateToolCompressionTokens(rawVisible)
 	compressedTokens := estimateToolCompressionTokens(compressedVisible)
 	if rawTokens-compressedTokens < minToolCompressionSavedTokens {
-		return "", nil, false
+		return "", nil
 	}
 	if err := a.storeRawToolResult(call.ID, raw); err != nil {
 		a.clearRawToolResult(call.ID)
 		a.sink.Emit(event.Event{Kind: event.Notice, Level: event.LevelWarn, Text: fmt.Sprintf(
 			"raw tool result store failed for %s (%s): %v; using raw/truncated output",
 			call.Name, call.ID, err)})
-		return "", passthroughToolOutputEvent("store_failed"), false
+		return "", passthroughToolOutputEvent("store_failed")
 	}
-	return compressed, toolCompressionEvent(result, rawRef), true
+	return compressed, toolCompressionEvent(result, rawRef)
 }
 
 func toolCompressionEvent(result contextpack.Result, rawRef string) *event.Compression {
@@ -2903,7 +2914,7 @@ func toolCompressionEvent(result contextpack.Result, rawRef string) *event.Compr
 		QualityReason:    result.QualityReason,
 		UnparsedLines:    result.UnparsedLines,
 		UnparsedSamples:  append([]string(nil), result.UnparsedSamples...),
-		Lossy:            result.Lossy,
+		Lossy:            result.Route.IsCompression(),
 		OmittedLines:     result.OmittedLines,
 		Strategy:         result.Strategy,
 		Summary:          result.Summary,

@@ -12,6 +12,7 @@
 package event
 
 import (
+	"maddog/internal/contextpackroute"
 	"maddog/internal/evidence"
 	"maddog/internal/nilutil"
 	"maddog/internal/provider"
@@ -208,7 +209,13 @@ type Compression struct {
 // IsCompression reports whether the decision reduced model-visible output.
 // Empty legacy routes remain compression events for backward compatibility.
 func (c *Compression) IsCompression() bool {
-	return c != nil && c.Route != "passthrough"
+	if c == nil {
+		return false
+	}
+	if c.Route == "" {
+		return true
+	}
+	return contextpackroute.Route(c.Route).IsCompression()
 }
 
 // FileDiff is a previewed change carried on a writer tool's full ToolDispatch

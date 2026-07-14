@@ -4,6 +4,8 @@ import (
 	"regexp"
 	"strings"
 	"unicode/utf8"
+
+	"maddog/internal/contextpackroute"
 )
 
 const (
@@ -17,6 +19,10 @@ var pathLinePattern = regexp.MustCompile(`(^|[\s(])(([A-Za-z]:[\\/])?[A-Za-z0-9_
 // context.
 type ToolOutput struct {
 	ToolName string
+	// Shell and GOOS describe the execution environment, not the model-visible
+	// tool name. Empty values require conservative command classification.
+	Shell    string
+	GOOS     string
 	Args     string
 	Output   string
 	Error    string
@@ -40,12 +46,13 @@ type ToolOutputCompressor interface {
 // DefaultCompressor is Maddog's built-in deterministic compressor.
 type DefaultCompressor struct{}
 
-type Route string
+// Route selects the model-visible ContextPack transform.
+type Route = contextpackroute.Route
 
 const (
-	RoutePassthrough Route = "passthrough"
-	RouteGeneric     Route = "generic"
-	RouteProfile     Route = "profile"
+	RoutePassthrough = contextpackroute.RoutePassthrough
+	RouteGeneric     = contextpackroute.RouteGeneric
+	RouteProfile     = contextpackroute.RouteProfile
 )
 
 type ParseQuality string
@@ -59,7 +66,6 @@ const (
 // Result is the model-visible output plus compression metadata.
 type Result struct {
 	Content          string
-	Compressed       bool
 	RawRef           string
 	Route            Route
 	Profile          string
@@ -67,7 +73,6 @@ type Result struct {
 	QualityReason    string
 	UnparsedLines    int
 	UnparsedSamples  []string
-	Lossy            bool
 	OmittedLines     int
 	Strategy         string
 	Summary          string
@@ -79,19 +84,28 @@ type Result struct {
 	SavedTokens      int
 }
 
+func passthroughResult(content, reason string) Result {
+	return Result{
+		Content:       content,
+		Route:         RoutePassthrough,
+		Quality:       ParseQualityPassthrough,
+		QualityReason: reason,
+	}
+}
+
 type lineRun struct {
 	text  string
 	count int
 }
 
 // Compress reduces high-volume tool output while keeping failure-oriented
-// context intact. Short outputs pass through without compression metadata.
+// context intact. Passthrough results omit savings and raw-reference metadata.
 func Compress(output ToolOutput, opts Options) Result {
 	return DefaultCompressor{}.Compress(output, opts)
 }
 
 // Compress reduces high-volume tool output while keeping failure-oriented
-// context intact. Short outputs pass through without compression metadata.
+// context intact. Passthrough results omit savings and raw-reference metadata.
 func (DefaultCompressor) Compress(output ToolOutput, opts Options) Result {
 	raw := output.Output
 	if output.Error != "" {
@@ -99,10 +113,10 @@ func (DefaultCompressor) Compress(output ToolOutput, opts Options) Result {
 	}
 	policy := normalizePolicy(opts.Policy)
 	if policy == "off" {
-		return Result{Content: raw}
+		return passthroughResult(raw, "policy_off")
 	}
 	if policy != "aggressive" && len(raw) <= effectiveThreshold(opts.ThresholdBytes) {
-		return Result{Content: raw}
+		return passthroughResult(raw, "below_threshold")
 	}
 
 	maxBytes := effectiveMax(opts.MaxBytes)
@@ -145,12 +159,11 @@ func (DefaultCompressor) Compress(output ToolOutput, opts Options) Result {
 		unparsedLines, unparsedSamples = omittedRawLineDetails(raw, content)
 	}
 	if compressedChars >= rawChars {
-		return Result{Content: raw}
+		return passthroughResult(raw, "no_savings")
 	}
 
 	result := Result{
 		Content:         content,
-		Compressed:      true,
 		RawRef:          opts.RawRef,
 		Route:           route,
 		Profile:         profile,
@@ -158,7 +171,6 @@ func (DefaultCompressor) Compress(output ToolOutput, opts Options) Result {
 		QualityReason:   qualityReason,
 		UnparsedLines:   unparsedLines,
 		UnparsedSamples: append([]string(nil), unparsedSamples...),
-		Lossy:           true,
 		OmittedLines:    omittedLineCount(raw, content),
 		Strategy:        strategy,
 		Summary:         summaryFor(output, raw, content),

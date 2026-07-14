@@ -6,6 +6,25 @@ import (
 	"unicode/utf8"
 )
 
+func TestRouteIsCompression(t *testing.T) {
+	tests := []struct {
+		route Route
+		want  bool
+	}{
+		{route: RouteGeneric, want: true},
+		{route: RouteProfile, want: true},
+		{route: RoutePassthrough, want: false},
+		{route: Route(""), want: false},
+		{route: Route("future-route"), want: false},
+	}
+
+	for _, tt := range tests {
+		if got := tt.route.IsCompression(); got != tt.want {
+			t.Fatalf("route %q IsCompression() = %v, want %v", tt.route, got, tt.want)
+		}
+	}
+}
+
 func TestDefaultCompressorImplementsToolOutputCompressor(t *testing.T) {
 	var compressor ToolOutputCompressor = DefaultCompressor{}
 
@@ -15,7 +34,7 @@ func TestDefaultCompressorImplementsToolOutputCompressor(t *testing.T) {
 		RawRef:         "raw://tool/interface",
 	})
 
-	if !got.Compressed || got.Strategy == "" || got.Summary == "" {
+	if !got.Route.IsCompression() || got.Strategy == "" || got.Summary == "" {
 		t.Fatalf("compressor result missing strategy/summary metadata: %+v", got)
 	}
 	if got.RawTokens <= 0 || got.CompressedTokens <= 0 || got.SavedTokens <= 0 {
@@ -33,8 +52,12 @@ func TestCompressLeavesShortOutputUnchanged(t *testing.T) {
 	if got.Content != "ok\n" {
 		t.Fatalf("content = %q, want original output", got.Content)
 	}
-	if got.Compressed || got.SavedChars != 0 || got.RawRef != "" {
+	if got.Route.IsCompression() || got.SavedChars != 0 || got.RawRef != "" {
 		t.Fatalf("short output should not report compression metadata: %+v", got)
+	}
+	if got.Route != RoutePassthrough || got.Quality != ParseQualityPassthrough || got.QualityReason != "below_threshold" {
+		t.Fatalf("short output route/quality/reason = %q/%q/%q, want passthrough/passthrough/below_threshold",
+			got.Route, got.Quality, got.QualityReason)
 	}
 }
 
@@ -50,8 +73,12 @@ func TestCompressionPolicyOffLeavesLargeOutputUncompressed(t *testing.T) {
 	if got.Content != raw {
 		t.Fatalf("policy=off content length = %d, want raw length %d", len(got.Content), len(raw))
 	}
-	if got.Compressed || got.RawRef != "" || got.SavedChars != 0 || got.SavedTokens != 0 {
+	if got.Route.IsCompression() || got.RawRef != "" || got.SavedChars != 0 || got.SavedTokens != 0 {
 		t.Fatalf("policy=off should suppress compression metadata: %+v", got)
+	}
+	if got.Route != RoutePassthrough || got.Quality != ParseQualityPassthrough || got.QualityReason != "policy_off" {
+		t.Fatalf("policy=off route/quality/reason = %q/%q/%q, want passthrough/passthrough/policy_off",
+			got.Route, got.Quality, got.QualityReason)
 	}
 }
 
@@ -63,7 +90,7 @@ func TestCompressionPolicyAutoHonorsThresholdAndAggressiveBypassesIt(t *testing.
 		Output:   raw,
 		ReadOnly: true,
 	}, Options{Policy: "auto", ThresholdBytes: len(raw) + 1, MaxBytes: 48, RawRef: "raw://tool/auto"})
-	if auto.Content != raw || auto.Compressed {
+	if auto.Content != raw || auto.Route.IsCompression() {
 		t.Fatalf("policy=auto should leave output below threshold unchanged: %+v", auto)
 	}
 
@@ -72,7 +99,7 @@ func TestCompressionPolicyAutoHonorsThresholdAndAggressiveBypassesIt(t *testing.
 		Output:   raw,
 		ReadOnly: true,
 	}, Options{Policy: "aggressive", ThresholdBytes: len(raw) + 1, MaxBytes: 48, RawRef: "raw://tool/aggressive"})
-	if !aggressive.Compressed {
+	if !aggressive.Route.IsCompression() {
 		t.Fatalf("policy=aggressive should compress compressible output below auto threshold: %+v", aggressive)
 	}
 }
@@ -94,7 +121,7 @@ func TestCompressLongShellOutputPreservesFailuresAndDedupe(t *testing.T) {
 		ReadOnly: true,
 	}, Options{ThresholdBytes: 256, MaxBytes: 240, RawRef: "raw://session/tool-1"})
 
-	if !got.Compressed {
+	if !got.Route.IsCompression() {
 		t.Fatalf("expected compressed result, got %+v", got)
 	}
 	if got.RawRef != "raw://session/tool-1" {
@@ -135,7 +162,7 @@ func TestCompressMultibyteOutputKeepsUTF8AndRuneMetrics(t *testing.T) {
 		ReadOnly: true,
 	}, Options{ThresholdBytes: 64, MaxBytes: 180, RawRef: "raw://session/multibyte"})
 
-	if !got.Compressed {
+	if !got.Route.IsCompression() {
 		t.Fatalf("expected compressed result, got %+v", got)
 	}
 	if !utf8.ValidString(got.Content) {
@@ -186,8 +213,12 @@ func TestCompressNoSavingsReturnsUncompressedWithoutMetrics(t *testing.T) {
 	if got.Content != raw {
 		t.Fatalf("content = %q, want original raw output", got.Content)
 	}
-	if got.Compressed || got.RawRef != "" || got.RawChars != 0 || got.CompressedChars != 0 || got.SavedChars != 0 {
+	if got.Route.IsCompression() || got.RawRef != "" || got.RawChars != 0 || got.CompressedChars != 0 || got.SavedChars != 0 {
 		t.Fatalf("no-savings output should be uncompressed with no metadata: %+v", got)
+	}
+	if got.Route != RoutePassthrough || got.Quality != ParseQualityPassthrough || got.QualityReason != "no_savings" {
+		t.Fatalf("no-savings route/quality/reason = %q/%q/%q, want passthrough/passthrough/no_savings",
+			got.Route, got.Quality, got.QualityReason)
 	}
 }
 

@@ -32,6 +32,34 @@ type Tool interface {
 	ReadOnly() bool
 }
 
+// ExecutionReceipt describes the interpreter and host semantics that actually
+// governed one tool invocation. Empty fields mean the tool does not expose that
+// information and callers must behave conservatively.
+type ExecutionReceipt struct {
+	Shell string
+	GOOS  string
+}
+
+// ExecutionReceiptProvider is an optional capability for tools whose model name
+// does not identify their actual execution environment. The bash tool uses it
+// because it can resolve to Bash or PowerShell while remaining model-visible as
+// "bash".
+type ExecutionReceiptProvider interface {
+	ExecutionReceipt(args json.RawMessage) ExecutionReceipt
+}
+
+// ExecutionReceiptFor returns a normalized receipt when the tool exposes one.
+func ExecutionReceiptFor(t Tool, args json.RawMessage) ExecutionReceipt {
+	provider, ok := t.(ExecutionReceiptProvider)
+	if !ok {
+		return ExecutionReceipt{}
+	}
+	receipt := provider.ExecutionReceipt(args)
+	receipt.Shell = strings.ToLower(strings.TrimSpace(receipt.Shell))
+	receipt.GOOS = strings.ToLower(strings.TrimSpace(receipt.GOOS))
+	return receipt
+}
+
 // Previewer is an optional capability a writer Tool may implement: given the
 // same raw JSON args Execute would receive, compute the file change the call
 // *would* make — without touching disk. A front-end uses it to show an approval

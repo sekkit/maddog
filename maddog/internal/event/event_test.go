@@ -225,6 +225,31 @@ func TestChannelBackedSink(t *testing.T) {
 	}
 }
 
+func TestCompressionIsCompressionUsesKnownRoutes(t *testing.T) {
+	tests := []struct {
+		name  string
+		route string
+		want  bool
+	}{
+		{name: "legacy empty", route: "", want: true},
+		{name: "generic", route: "generic", want: true},
+		{name: "profile", route: "profile", want: true},
+		{name: "passthrough", route: "passthrough", want: false},
+		{name: "unknown", route: "future-route", want: false},
+	}
+
+	if (*Compression)(nil).IsCompression() {
+		t.Fatal("nil compression metadata must not count as compression")
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := (&Compression{Route: tt.route}).IsCompression(); got != tt.want {
+				t.Fatalf("route %q IsCompression() = %v, want %v", tt.route, got, tt.want)
+			}
+		})
+	}
+}
+
 // --- FuncSink forwards every concurrent Emit exactly once ---
 
 // FuncSink.Emit forwards to the wrapped func with no synchronization of its own,

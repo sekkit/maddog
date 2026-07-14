@@ -112,6 +112,14 @@ func (b bash) resolved() sandbox.Shell {
 	return sandbox.ResolveShell("", "", nil)
 }
 
+// ExecutionReceipt exposes the interpreter that actually runs this invocation.
+func (b bash) ExecutionReceipt(json.RawMessage) tool.ExecutionReceipt {
+	return tool.ExecutionReceipt{
+		Shell: b.resolved().Kind.String(),
+		GOOS:  runtime.GOOS,
+	}
+}
+
 func (bash) Schema() json.RawMessage {
 	return json.RawMessage(`{"type":"object","properties":{"command":{"type":"string","description":"Shell command to execute"},"run_in_background":{"type":"boolean","description":"Run detached: returns a job id immediately and keeps running across turns (no foreground timeout). Read new output with bash_output, wait with wait, stop it with kill_shell. Use for long-running commands like servers, watchers, or builds you don't need to block on."},"preserve_background_processes":{"type":"boolean","description":"After the shell command exits normally, keep any process-group members it intentionally left behind. Use only for deliberate daemonization, browser/GUI/session launchers such as playwright-cli open, or nohup/disown/setsid; cancellation and timeouts still kill the process group."}},"required":["command"]}`)
 }

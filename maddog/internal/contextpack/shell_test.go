@@ -24,7 +24,7 @@ func TestShellCompressorGoTestFailureExtractsHighSignal(t *testing.T) {
 		ReadOnly: true,
 	}, Options{ThresholdBytes: 128, MaxBytes: 360, RawRef: "raw://tool/go-test"})
 
-	if !got.Compressed {
+	if !got.Route.IsCompression() {
 		t.Fatalf("go test output was not compressed: %+v", got)
 	}
 	if got.Strategy != "go-test-failure" {
@@ -81,7 +81,7 @@ func TestShellCompressorNPMBuildKeepsFirstFatalError(t *testing.T) {
 		ReadOnly: true,
 	}, Options{ThresholdBytes: 128, MaxBytes: 320, RawRef: "raw://tool/npm-build"})
 
-	if !got.Compressed {
+	if !got.Route.IsCompression() {
 		t.Fatalf("npm build output was not compressed: %+v", got)
 	}
 	if got.Strategy != "npm-build-error" {
@@ -133,7 +133,7 @@ func TestShellCompressorNPMTestKeepsFailureAndTail(t *testing.T) {
 		ReadOnly: true,
 	}, Options{ThresholdBytes: 128, MaxBytes: 420, RawRef: "raw://tool/npm-test"})
 
-	if !got.Compressed {
+	if !got.Route.IsCompression() {
 		t.Fatalf("npm test output was not compressed: %+v", got)
 	}
 	if got.Strategy != "npm-test-failure" {
@@ -164,7 +164,7 @@ func TestShellCompressorGitStatusSummarizesAndKeepsTail(t *testing.T) {
 		ReadOnly: true,
 	}, Options{ThresholdBytes: 128, MaxBytes: 360, RawRef: "raw://tool/git-status"})
 
-	if !got.Compressed {
+	if !got.Route.IsCompression() {
 		t.Fatalf("git status output was not compressed: %+v", got)
 	}
 	if got.Strategy != "git-status-summary" {
@@ -197,7 +197,7 @@ func TestShellCompressorGitDiffPreservesFileHeadersAndHunkTail(t *testing.T) {
 		ReadOnly: true,
 	}, Options{ThresholdBytes: 128, MaxBytes: 420, RawRef: "raw://tool/git-diff"})
 
-	if !got.Compressed {
+	if !got.Route.IsCompression() {
 		t.Fatalf("git diff output was not compressed: %+v", got)
 	}
 	if got.Strategy != "git-diff-summary" {
@@ -226,7 +226,7 @@ func TestShellCompressorDedupeRepeatedNonAdjacentLogs(t *testing.T) {
 		ReadOnly: true,
 	}, Options{ThresholdBytes: 128, MaxBytes: 260, RawRef: "raw://tool/server-log"})
 
-	if !got.Compressed {
+	if !got.Route.IsCompression() {
 		t.Fatalf("server log output was not compressed: %+v", got)
 	}
 	if got.Strategy != "server-log-dedupe" {
@@ -259,7 +259,7 @@ func TestShellCompressorRipgrepAggregatesByFile(t *testing.T) {
 		ReadOnly: true,
 	}, Options{ThresholdBytes: 128, MaxBytes: 320, RawRef: "raw://tool/rg"})
 
-	if !got.Compressed {
+	if !got.Route.IsCompression() {
 		t.Fatalf("rg output was not compressed: %+v", got)
 	}
 	if got.Strategy != "rg-file-sampling" {
@@ -297,7 +297,7 @@ func TestShellCompressorRipgrepParsesColumnsWindowsAndColonMatches(t *testing.T)
 		ReadOnly: true,
 	}, Options{ThresholdBytes: 16, MaxBytes: 420, RawRef: "raw://tool/rg-columns"})
 
-	if !got.Compressed {
+	if !got.Route.IsCompression() {
 		t.Fatalf("rg column output was not compressed: %+v", got)
 	}
 	for _, want := range []string{

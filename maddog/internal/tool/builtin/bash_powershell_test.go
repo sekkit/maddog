@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"maddog/internal/sandbox"
+	"maddog/internal/tool"
 )
 
 func powershellPath(t *testing.T) string {
@@ -124,5 +125,28 @@ func TestBashDescriptionReflectsShell(t *testing.T) {
 	sh := bash{shell: sandbox.Shell{Kind: sandbox.ShellBash, Path: "bash"}}
 	if strings.Contains(sh.Description(), "PowerShell") {
 		t.Errorf("bash description should not mention PowerShell: %q", sh.Description())
+	}
+}
+
+func TestBashExecutionReceiptReflectsResolvedShell(t *testing.T) {
+	tests := []struct {
+		name      string
+		shell     sandbox.Shell
+		wantShell string
+	}{
+		{name: "bash", shell: sandbox.Shell{Kind: sandbox.ShellBash, Path: "bash"}, wantShell: "bash"},
+		{name: "powershell", shell: sandbox.Shell{Kind: sandbox.ShellPowerShell, Path: "pwsh"}, wantShell: "powershell"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			receipt := tool.ExecutionReceiptFor(bash{shell: tt.shell}, nil)
+			if receipt.Shell != tt.wantShell {
+				t.Fatalf("receipt shell = %q, want %q", receipt.Shell, tt.wantShell)
+			}
+			if receipt.GOOS != runtime.GOOS {
+				t.Fatalf("receipt GOOS = %q, want %q", receipt.GOOS, runtime.GOOS)
+			}
+		})
 	}
 }

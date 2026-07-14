@@ -16,10 +16,34 @@ const (
 	outputShapePackageText    outputShape = "package-script-text"
 )
 
+type commandSemantics struct {
+	shell string
+	goos  string
+}
+
+func newCommandSemantics(shell, goos string) commandSemantics {
+	shell = strings.ToLower(strings.TrimSpace(shell))
+	switch shell {
+	case "shell":
+		shell = "bash"
+	case "pwsh":
+		shell = "powershell"
+	}
+	return commandSemantics{
+		shell: shell,
+		goos:  strings.ToLower(strings.TrimSpace(goos)),
+	}
+}
+
+func (s commandSemantics) supported() bool {
+	return s.shell == "bash" || s.shell == "powershell"
+}
+
 // commandDescriptor is a conservative, single-pass view of a shell command.
 // It is used only for output routing and never changes or executes a command.
 type commandDescriptor struct {
 	Shell       string
+	GOOS        string
 	Raw         string
 	Segments    [][]string
 	Tokens      []string
@@ -33,9 +57,10 @@ type commandDescriptor struct {
 	OutputShape outputShape
 }
 
-func describeCommand(shell, raw string) commandDescriptor {
+func describeCommand(semantics commandSemantics, raw string) commandDescriptor {
 	desc := commandDescriptor{
-		Shell: strings.ToLower(strings.TrimSpace(shell)),
+		Shell: semantics.shell,
+		GOOS:  semantics.goos,
 		Raw:   strings.TrimSpace(raw),
 	}
 	var token strings.Builder
@@ -66,13 +91,31 @@ func describeCommand(shell, raw string) commandDescriptor {
 				quote = 0
 				continue
 			}
-			if quote == '"' && (ch == '`' || (ch == '$' && i+1 < len(desc.Raw) && desc.Raw[i+1] == '(')) {
-				desc.Ambiguous = true
-			}
-			if ch == '\\' && quote == '"' && i+1 < len(desc.Raw) && isEscapableCommandByte(desc.Raw[i+1]) {
-				i++
-				token.WriteByte(desc.Raw[i])
-				continue
+			if quote == '"' {
+				if ch == '$' && i+1 < len(desc.Raw) && desc.Raw[i+1] == '(' {
+					desc.Ambiguous = true
+				}
+				if desc.Shell == "powershell" && ch == '`' {
+					if i+1 >= len(desc.Raw) {
+						desc.Ambiguous = true
+						continue
+					}
+					i++
+					if desc.Raw[i] != '\n' {
+						token.WriteByte(desc.Raw[i])
+					}
+					continue
+				}
+				if desc.Shell == "bash" && ch == '`' {
+					desc.Ambiguous = true
+				}
+				if desc.Shell == "bash" && ch == '\\' && i+1 < len(desc.Raw) && isBashDoubleQuoteEscapable(desc.Raw[i+1]) {
+					i++
+					if desc.Raw[i] != '\n' {
+						token.WriteByte(desc.Raw[i])
+					}
+					continue
+				}
 			}
 			token.WriteByte(ch)
 			continue
@@ -97,8 +140,19 @@ func describeCommand(shell, raw string) commandDescriptor {
 				i++
 			}
 		case '`':
-			desc.Ambiguous = true
 			tokenStarted = true
+			if desc.Shell == "powershell" {
+				if i+1 >= len(desc.Raw) {
+					desc.Ambiguous = true
+					continue
+				}
+				i++
+				if desc.Raw[i] != '\n' {
+					token.WriteByte(desc.Raw[i])
+				}
+				continue
+			}
+			desc.Ambiguous = true
 			token.WriteByte(ch)
 		case '$':
 			if i+1 < len(desc.Raw) && desc.Raw[i+1] == '(' {
@@ -108,9 +162,11 @@ func describeCommand(shell, raw string) commandDescriptor {
 			token.WriteByte(ch)
 		case '\\':
 			tokenStarted = true
-			if i+1 < len(desc.Raw) && isEscapableCommandByte(desc.Raw[i+1]) {
+			if desc.Shell == "bash" && i+1 < len(desc.Raw) {
 				i++
-				token.WriteByte(desc.Raw[i])
+				if desc.Raw[i] != '\n' {
+					token.WriteByte(desc.Raw[i])
+				}
 			} else {
 				token.WriteByte(ch)
 			}
@@ -136,10 +192,12 @@ func (d *commandDescriptor) resolveInvocation() {
 	}
 	tokens := d.Tokens
 	i := 0
-	for i < len(tokens) && isEnvironmentAssignment(tokens[i]) {
-		i++
+	if d.Shell == "bash" {
+		for i < len(tokens) && isEnvironmentAssignment(tokens[i]) {
+			i++
+		}
 	}
-	if i < len(tokens) && commandBaseName(tokens[i]) == "env" {
+	if i < len(tokens) && commandBaseName(tokens[i], d.GOOS) == "env" {
 		i++
 		for i < len(tokens) {
 			switch {
@@ -160,7 +218,7 @@ resolved:
 	if i >= len(tokens) {
 		return
 	}
-	d.Executable = commandBaseName(tokens[i])
+	d.Executable = commandBaseName(tokens[i], d.GOOS)
 	d.Args = append([]string(nil), tokens[i+1:]...)
 	for _, arg := range d.Args {
 		if strings.HasPrefix(arg, "-") {
@@ -256,15 +314,21 @@ func gitSubcommandParts(args []string) (string, []string, bool) {
 	return "", nil, false
 }
 
-func commandBaseName(value string) string {
+func commandBaseName(value, goos string) string {
 	value = strings.TrimSpace(value)
-	if index := strings.LastIndexAny(value, `/\`); index >= 0 {
+	if strings.EqualFold(strings.TrimSpace(goos), "windows") {
+		if index := strings.LastIndexAny(value, `/\`); index >= 0 {
+			value = value[index+1:]
+		}
+		if strings.HasSuffix(strings.ToLower(value), ".exe") {
+			value = value[:len(value)-4]
+		}
+		return strings.ToLower(value)
+	}
+	if index := strings.LastIndexByte(value, '/'); index >= 0 {
 		value = value[index+1:]
 	}
-	if strings.HasSuffix(strings.ToLower(value), ".exe") {
-		value = value[:len(value)-4]
-	}
-	return strings.ToLower(value)
+	return value
 }
 
 func isEnvironmentAssignment(token string) bool {
@@ -284,7 +348,6 @@ func isEnvironmentAssignment(token string) bool {
 	return true
 }
 
-func isEscapableCommandByte(ch byte) bool {
-	return ch == ' ' || ch == '\t' || ch == '\\' || ch == '\'' || ch == '"' ||
-		ch == ';' || ch == '|' || ch == '&' || ch == '<' || ch == '>' || ch == '$' || ch == '`'
+func isBashDoubleQuoteEscapable(ch byte) bool {
+	return ch == '\\' || ch == '"' || ch == '$' || ch == '`' || ch == '\n'
 }
