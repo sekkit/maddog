@@ -210,7 +210,7 @@ func TestSkillEvalCommandEvaluatesRepeatedHeldOutBundles(t *testing.T) {
 	}
 }
 
-func TestSkillEvalCommandRunsConfiguredProviderReplay(t *testing.T) {
+func TestSkillEvalCommandRunsConfiguredProviderReplayAsDiagnosticOnly(t *testing.T) {
 	isolateCLIConfigHome(t)
 	t.Setenv("MADDOG_TEST_KEY", "test-key")
 	userConfig := config.UserConfigPath()
@@ -246,12 +246,13 @@ api_key_env = "MADDOG_TEST_KEY"
 		Validation: skilleval.ValidationInfo{Valid: true},
 	})
 
+	rc := 0
 	out := captureStdout(t, func() {
-		rc := skillevalCommand([]string{"--bundle", bundlePath, "--candidate", candidatePath, "--json", "--min-bundles", "1"})
-		if rc != 0 {
-			t.Fatalf("skillevalCommand rc = %d, want 0", rc)
-		}
+		rc = skillevalCommand([]string{"--bundle", bundlePath, "--candidate", candidatePath, "--json", "--min-bundles", "1"})
 	})
+	if rc == 0 {
+		t.Fatal("skillevalCommand rc = 0, want diagnostic-only guardrail failure")
+	}
 	if !strings.Contains(out, "provider replay answer") {
 		t.Fatalf("provider replay output missing: %s", out)
 	}
@@ -262,7 +263,9 @@ api_key_env = "MADDOG_TEST_KEY"
 		"\"mode\": \"provider_replay\"",
 		"\"provider\": \"local\"",
 		"\"model_ref\": \"local\"",
-		"\"promotion_grade\": true",
+		"\"guardrail_pass\": false",
+		"\"promotion_grade\": false",
+		"promotion requires paired incumbent/candidate evaluation",
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("provider provenance %s missing: %s", want, out)

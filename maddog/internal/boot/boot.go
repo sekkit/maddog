@@ -1765,6 +1765,8 @@ func NewProviderWithProxy(e *config.ProviderEntry, proxy netclient.ProxySpec) (p
 			"api_key_env":        e.AuthEnvName(),
 			"auth":               e.AuthConfig(),
 			"chat_url":           e.ChatURL,
+			"client_profile":     e.ClientProfile,
+			"client_version":     e.ClientVersion,
 			"thinking":           e.Thinking,
 			"effort":             config.EffectiveEffort(e),
 			"reasoning_protocol": config.ReasoningProtocolForEntry(e),

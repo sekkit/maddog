@@ -342,6 +342,7 @@ var ChineseTraditional = Messages{
   maddog config reasoning-language [auto|zh|en]        設定可見思考語言
   maddog mcp <add|remove|list>                        管理 maddog.toml 裡的 MCP 伺服器
   maddog hypergraphrag [status]                       查看 HyperGraphRAG 程式碼智慧後端
+  maddog skillopt <optimize|status|resume|cancel|promote|rollback|cleanup>   執行離線技能最佳化生命週期
   maddog doctor [--json]                              輸出脫敏的本機診斷資訊
   maddog version
   maddog help

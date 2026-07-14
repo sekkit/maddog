@@ -21,6 +21,7 @@ func init() { tool.RegisterBuiltin(codeIndex{}) }
 
 type codeIndex struct {
 	workDir     string
+	readRoots   []string
 	forbidRoots []string
 }
 
@@ -110,7 +111,7 @@ func (c codeIndex) Execute(ctx context.Context, args json.RawMessage) (string, e
 }
 
 func (c codeIndex) collect(ctx context.Context, root string, limit int, outline bool) ([]codeSymbol, bool, error) {
-	if confineRead(c.forbidRoots, root) {
+	if confineReadTo(c.readRoots, c.forbidRoots, root) {
 		return nil, false, nil
 	}
 	info, err := os.Stat(root)
@@ -131,7 +132,7 @@ func (c codeIndex) collect(ctx context.Context, root string, limit int, outline 
 				return nil
 			}
 			if d.IsDir() {
-				if skipForbidDir(path, c.forbidRoots) {
+				if confineReadTo(c.readRoots, c.forbidRoots, path) {
 					return filepath.SkipDir
 				}
 				if path != root && skipCodeIndexDir(d.Name()) {
@@ -139,7 +140,7 @@ func (c codeIndex) collect(ctx context.Context, root string, limit int, outline 
 				}
 				return nil
 			}
-			if supportedCodeIndexFile(path) && !confineRead(c.forbidRoots, path) {
+			if supportedCodeIndexFile(path) && !confineReadTo(c.readRoots, c.forbidRoots, path) {
 				files = append(files, path)
 				if len(files) >= codeIndexMaxFiles {
 					return filepath.SkipAll

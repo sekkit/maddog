@@ -50,8 +50,14 @@ type Candidate struct {
 	EvaluationBundleIDs []string        `json:"evaluation_bundle_ids,omitempty"`
 	PromotionGrade      bool            `json:"promotion_grade,omitempty"`
 	PromotedPath        string          `json:"promoted_path,omitempty"`
-	CreatedAt           time.Time       `json:"created_at"`
-	UpdatedAt           time.Time       `json:"updated_at"`
+	// Promotion metadata is persisted so rollback can use the exact
+	// compare-and-swap snapshot created by Store.ReplaceWithContent.
+	PromotionScope   skill.Scope            `json:"promotion_scope,omitempty"`
+	BaseHash         string                 `json:"base_hash,omitempty"`
+	PromotedHash     string                 `json:"promoted_hash,omitempty"`
+	PreviousSnapshot *skill.VersionSnapshot `json:"previous_snapshot,omitempty"`
+	CreatedAt        time.Time              `json:"created_at"`
+	UpdatedAt        time.Time              `json:"updated_at"`
 }
 
 type AuditRecord struct {
@@ -328,11 +334,47 @@ func (s *CandidateStore) Promote(hash string, activeStore *skill.Store, scope sk
 			return Candidate{}, "", err
 		}
 	}
-	path, err := PromoteSkill(activeStore, c.Skill, scope)
+	promotionFailure := func(cause error) (Candidate, string, error) {
+		if c.Status == CandidatePromoting {
+			c.Status = CandidatePending
+			c.UpdatedAt = s.now()
+			_ = writeJSON(s.path(c.Hash), c)
+			_ = s.appendAudit("promote_failed", c, "", cause.Error())
+		}
+		return Candidate{}, "", cause
+	}
+	// Resolve the exact bytes currently active and pass their hash to the
+	// versioned promoter. This closes the read/modify/write race: a concurrent
+	// user edit makes ReplaceWithContent fail instead of being overwritten.
+	var expectedBaseHash string
+	if existing, ok := activeStore.Read(c.Skill.Name); ok {
+		if !sameFrozenSkillMetadata(c.Skill, existing) {
+			return promotionFailure(fmt.Errorf("active skill %q capability metadata differs; refusing replacement", c.Skill.Name))
+		}
+		if strings.TrimSpace(existing.Path) == "" || strings.HasPrefix(existing.Path, "(") {
+			return promotionFailure(fmt.Errorf("skill %q is not backed by a writable file", c.Skill.Name))
+		}
+		raw, readErr := os.ReadFile(existing.Path)
+		if readErr != nil {
+			return promotionFailure(fmt.Errorf("read active skill %q before promotion: %w", c.Skill.Name, readErr))
+		}
+		expectedBaseHash = strings.TrimSpace(c.BaseHash)
+		currentHash := skill.ContentHash(string(raw))
+		if expectedBaseHash == "" {
+			expectedBaseHash = currentHash
+		} else if expectedBaseHash != currentHash {
+			return promotionFailure(fmt.Errorf("active skill %q base hash changed: current %s, expected %s", c.Skill.Name, currentHash, expectedBaseHash))
+		}
+	}
+	promotion, err := PromoteSkillVersioned(activeStore, c.Skill, scope, expectedBaseHash)
 	if err != nil {
 		if existing, ok := activeStore.Read(c.Skill.Name); ok && sameSkill(c.Skill, existing) {
 			c.Status = CandidatePromoted
 			c.PromotedPath = existing.Path
+			c.PromotionScope = scope
+			if raw, readErr := os.ReadFile(existing.Path); readErr == nil {
+				c.PromotedHash = skill.ContentHash(string(raw))
+			}
 			c.UpdatedAt = s.now()
 			if writeErr := writeJSON(s.path(c.Hash), c); writeErr != nil {
 				return Candidate{}, "", writeErr
@@ -349,13 +391,26 @@ func (s *CandidateStore) Promote(hash string, activeStore *skill.Store, scope sk
 		return Candidate{}, "", err
 	}
 	c.Status = CandidatePromoted
-	c.PromotedPath = path
+	c.PromotedPath = promotion.Path
+	c.PromotionScope = scope
+	c.PromotedHash = promotion.PromotedHash
+	c.BaseHash = expectedBaseHash
+	if promotion.Previous != nil {
+		previous := *promotion.Previous
+		c.PreviousSnapshot = &previous
+	} else {
+		// Keep an explicit non-existent snapshot for a newly-created skill so
+		// rollback can still use the same CAS path and verify the target path.
+		c.PreviousSnapshot = &skill.VersionSnapshot{
+			Name: c.Skill.Name, Scope: scope, Path: promotion.Path, Existed: false,
+		}
+	}
 	c.UpdatedAt = s.now()
 	if err := writeJSON(s.path(c.Hash), c); err != nil {
 		return Candidate{}, "", err
 	}
-	_ = s.appendAudit("promote", c, path, "")
-	return c, path, nil
+	_ = s.appendAudit("promote", c, promotion.Path, "")
+	return c, promotion.Path, nil
 }
 
 func (s *CandidateStore) Rollback(hash string, activeStore *skill.Store, reason string) (Candidate, error) {
@@ -390,13 +445,32 @@ func (s *CandidateStore) Rollback(hash string, activeStore *skill.Store, reason 
 	if err != nil {
 		return Candidate{}, err
 	}
-	if strings.TrimSpace(string(raw)) != strings.TrimSpace(RenderSkillMarkdown(c.Skill)) {
+	currentHash := skill.ContentHash(string(raw))
+	wantHash := strings.TrimSpace(c.PromotedHash)
+	if wantHash == "" {
+		// Backward-compatible candidates created before promotion metadata was
+		// introduced still get an exact byte comparison before removal.
+		wantHash = skill.ContentHash(RenderSkillMarkdown(c.Skill))
+	}
+	if currentHash != wantHash {
 		return Candidate{}, fmt.Errorf("promoted skill %q changed since promotion", c.Skill.Name)
 	}
-	if err := os.Remove(promotedPath); err != nil {
-		return Candidate{}, err
+	if c.PreviousSnapshot != nil {
+		scope := c.PromotionScope
+		if scope == "" {
+			scope = c.PreviousSnapshot.Scope
+		}
+		if _, err := activeStore.Restore(c.Skill.Name, scope, currentHash, *c.PreviousSnapshot); err != nil {
+			return Candidate{}, fmt.Errorf("restore skill %q: %w", c.Skill.Name, err)
+		}
+	} else {
+		// Compatibility path for pre-versioned candidate records. It remains
+		// guarded by the exact promoted-byte hash check above.
+		if err := os.Remove(promotedPath); err != nil {
+			return Candidate{}, err
+		}
+		_ = os.Remove(filepath.Dir(promotedPath))
 	}
-	_ = os.Remove(filepath.Dir(promotedPath))
 	c.Status = CandidateRolledBack
 	c.Validation.Valid = false
 	c.Validation.Reason = strings.TrimSpace(reason)
@@ -501,9 +575,28 @@ func (s *CandidateStore) appendAudit(action string, c Candidate, path, reason st
 }
 
 func sameSkill(want, got skill.Skill) bool {
-	return strings.TrimSpace(want.Name) == strings.TrimSpace(got.Name) &&
-		strings.TrimSpace(want.Description) == strings.TrimSpace(got.Description) &&
+	return sameFrozenSkillMetadata(want, got) &&
 		strings.TrimSpace(want.Body) == strings.TrimSpace(got.Body)
+}
+
+// sameFrozenSkillMetadata keeps promotion scoped to body-only optimization.
+// Capability fields are intentionally immutable until a separate reviewed
+// migration path exists.
+func sameFrozenSkillMetadata(want, got skill.Skill) bool {
+	if strings.TrimSpace(want.Name) != strings.TrimSpace(got.Name) ||
+		strings.TrimSpace(want.Description) != strings.TrimSpace(got.Description) ||
+		want.RunAs != got.RunAs ||
+		strings.TrimSpace(want.Model) != strings.TrimSpace(got.Model) ||
+		strings.TrimSpace(want.Effort) != strings.TrimSpace(got.Effort) ||
+		len(want.AllowedTools) != len(got.AllowedTools) {
+		return false
+	}
+	for i := range want.AllowedTools {
+		if strings.TrimSpace(want.AllowedTools[i]) != strings.TrimSpace(got.AllowedTools[i]) {
+			return false
+		}
+	}
+	return true
 }
 
 func writeNewJSON(path string, v any) error {

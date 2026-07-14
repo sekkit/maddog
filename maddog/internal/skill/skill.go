@@ -13,6 +13,8 @@
 package skill
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"os"
@@ -20,8 +22,10 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"maddog/internal/config"
+	"maddog/internal/fileutil"
 	"maddog/internal/frontmatter"
 )
 
@@ -76,9 +80,14 @@ func IsValidName(name string) bool { return config.IsValidSkillName(name) }
 // MaddogHomeDir overrides the canonical Maddog home; empty uses
 // config.MaddogHomeDir(), or HomeDir/.maddog when HomeDir is explicitly set.
 type Options struct {
-	HomeDir         string
-	MaddogHomeDir   string
-	ProjectRoot     string
+	HomeDir       string
+	MaddogHomeDir string
+	ProjectRoot   string
+	// ProjectOnly restricts discovery to convention skill roots beneath
+	// ProjectRoot. Custom, global, and built-in skills remain hidden. It is used
+	// by isolated evaluation sessions so host-level playbooks cannot leak into a
+	// candidate's prompt or tool surface.
+	ProjectOnly     bool
 	CustomPaths     []string
 	ExcludedPaths   []string
 	DisabledNames   []string
@@ -95,6 +104,7 @@ type Store struct {
 	homeDir         string
 	maddogHomeDir   string
 	projectRoot     string
+	projectOnly     bool
 	customPaths     []string
 	excludedPaths   map[string]bool
 	disabled        map[string]bool
@@ -104,6 +114,22 @@ type Store struct {
 	mu              sync.RWMutex
 	injected        map[string]Skill
 }
+
+// VersionSnapshot identifies an immutable copy of a skill file before a
+// versioned mutation. Existed=false represents the absence of a previous file
+// and lets Restore safely undo a newly-created skill.
+type VersionSnapshot struct {
+	Name         string    `json:"name"`
+	Scope        Scope     `json:"scope"`
+	Path         string    `json:"path"`
+	Hash         string    `json:"hash,omitempty"`
+	SnapshotPath string    `json:"snapshot_path,omitempty"`
+	Mode         uint32    `json:"mode,omitempty"`
+	Existed      bool      `json:"existed"`
+	CreatedAt    time.Time `json:"created_at,omitempty"`
+}
+
+var skillMutationLocks sync.Map
 
 // New builds a Store. Relative custom paths and a relative project root are made
 // absolute; "~" in a custom path expands to the home dir.
@@ -147,11 +173,12 @@ func New(opts Options) *Store {
 		homeDir:         home,
 		maddogHomeDir:   maddogHome,
 		projectRoot:     root,
+		projectOnly:     opts.ProjectOnly,
 		customPaths:     custom,
 		excludedPaths:   excluded,
 		disabled:        disabledNameSet(opts.DisabledNames),
 		maxDepth:        normalizeMaxDepth(opts.MaxDepth),
-		disableBuiltins: opts.DisableBuiltins,
+		disableBuiltins: opts.DisableBuiltins || opts.ProjectOnly,
 		stderr:          stderr,
 		injected:        map[string]Skill{},
 	}
@@ -199,18 +226,20 @@ func (s *Store) roots() []discoveryRoot {
 			dirs = append(dirs, de{filepath.Join(s.projectRoot, c, SkillsDirname), ScopeProject, c == ".claude"})
 		}
 	}
-	for _, d := range s.customPaths {
-		dirs = append(dirs, de{d, ScopeCustom, false})
-	}
-	if s.maddogHomeDir != "" {
-		dirs = append(dirs, de{filepath.Join(s.maddogHomeDir, SkillsDirname), ScopeGlobal, false})
-	}
-	for _, c := range config.ConventionDirs {
-		dir := filepath.Join(s.homeDir, c, SkillsDirname)
-		if s.maddogHomeDir != "" && config.CanonicalSkillPath(filepath.Dir(dir)) == config.CanonicalSkillPath(s.maddogHomeDir) {
-			continue
+	if !s.projectOnly {
+		for _, d := range s.customPaths {
+			dirs = append(dirs, de{d, ScopeCustom, false})
 		}
-		dirs = append(dirs, de{dir, ScopeGlobal, c == ".claude"})
+		if s.maddogHomeDir != "" {
+			dirs = append(dirs, de{filepath.Join(s.maddogHomeDir, SkillsDirname), ScopeGlobal, false})
+		}
+		for _, c := range config.ConventionDirs {
+			dir := filepath.Join(s.homeDir, c, SkillsDirname)
+			if s.maddogHomeDir != "" && config.CanonicalSkillPath(filepath.Dir(dir)) == config.CanonicalSkillPath(s.maddogHomeDir) {
+				continue
+			}
+			dirs = append(dirs, de{dir, ScopeGlobal, c == ".claude"})
+		}
 	}
 	out := make([]discoveryRoot, 0, len(dirs))
 	for _, d := range dirs {
@@ -634,26 +663,33 @@ func (s *Store) Create(name string, scope Scope) (string, error) {
 // <name>/SKILL.md skill, refusing to clobber an existing directory-layout or
 // legacy flat skill of the same name. Returns the written path.
 func (s *Store) CreateWithContent(name string, scope Scope, content string) (string, error) {
+	if s == nil {
+		return "", fmt.Errorf("skill store is nil")
+	}
 	if !IsValidName(name) {
 		return "", fmt.Errorf("invalid skill name %q — use letters, digits, '_', '-', '.'", name)
 	}
-	var root string
-	switch scope {
-	case ScopeProject:
-		if s.projectRoot == "" {
-			return "", fmt.Errorf("project scope requires a workspace — run from a project directory, or use global scope")
-		}
-		root = filepath.Join(s.projectRoot, config.ProjectConventionDir, SkillsDirname)
-	default:
-		root = s.globalSkillsRoot()
+	root, err := s.skillsRootForScope(scope)
+	if err != nil {
+		return "", err
 	}
+	unlock := lockSkillMutation(root, name)
+	defer unlock()
+
 	flat := filepath.Join(root, name+".md")
 	folder := filepath.Join(root, name, SkillFile)
 	if _, err := os.Stat(flat); err == nil {
 		return "", fmt.Errorf("skill %q already exists at %s", name, flat)
+	} else if !os.IsNotExist(err) {
+		return "", err
 	}
 	if _, err := os.Stat(folder); err == nil {
 		return "", fmt.Errorf("skill %q already exists at %s", name, folder)
+	} else if !os.IsNotExist(err) {
+		return "", err
+	}
+	if existing, ok := s.Read(name); ok {
+		return "", fmt.Errorf("skill %q already exists at %s; target path %s does not match", name, existing.Path, folder)
 	}
 	if err := os.MkdirAll(filepath.Dir(folder), 0o755); err != nil {
 		return "", err
@@ -670,7 +706,336 @@ func (s *Store) CreateWithContent(name string, scope Scope, content string) (str
 	if _, err := f.WriteString(content); err != nil {
 		return "", err
 	}
+	if err := f.Sync(); err != nil {
+		return "", err
+	}
 	return folder, nil
+}
+
+// ContentHash returns the SHA-256 hash used for skill version compare-and-swap.
+// It hashes the exact on-disk bytes; callers must not trim or normalize content.
+func ContentHash(content string) string {
+	sum := sha256.Sum256([]byte(content))
+	return hex.EncodeToString(sum[:])
+}
+
+// ReplaceWithContent atomically replaces an existing canonical skill when its
+// exact file hash still matches expectedBaseHash. The previous bytes are kept
+// in a content-addressed, immutable snapshot and returned for a later Restore.
+// Retrying after a crash is idempotent when the replacement is already active
+// and the expected snapshot was durably created.
+func (s *Store) ReplaceWithContent(name string, scope Scope, expectedBaseHash, content string) (VersionSnapshot, error) {
+	if s == nil {
+		return VersionSnapshot{}, fmt.Errorf("skill store is nil")
+	}
+	name = strings.TrimSpace(name)
+	expectedBaseHash = strings.TrimSpace(expectedBaseHash)
+	if !IsValidName(name) {
+		return VersionSnapshot{}, fmt.Errorf("invalid skill name %q", name)
+	}
+	if !isContentHash(expectedBaseHash) {
+		return VersionSnapshot{}, fmt.Errorf("invalid expected base hash %q", expectedBaseHash)
+	}
+	if err := validateContentName(name, content); err != nil {
+		return VersionSnapshot{}, err
+	}
+	root, err := s.skillsRootForScope(scope)
+	if err != nil {
+		return VersionSnapshot{}, err
+	}
+	unlock := lockSkillMutation(root, name)
+	defer unlock()
+
+	path, raw, mode, err := s.readWritableSkill(name, scope, root)
+	if err != nil {
+		return VersionSnapshot{}, err
+	}
+	currentHash := ContentHash(string(raw))
+	newHash := ContentHash(content)
+	snapshotPath := versionSnapshotPath(root, name, expectedBaseHash)
+	if currentHash != expectedBaseHash {
+		if currentHash == newHash {
+			snapshot, snapErr := loadVersionSnapshot(name, scope, path, expectedBaseHash, snapshotPath)
+			if snapErr == nil {
+				return snapshot, nil
+			}
+		}
+		return VersionSnapshot{}, fmt.Errorf("skill %q changed concurrently: current hash %s does not match expected base hash %s", name, currentHash, expectedBaseHash)
+	}
+
+	snapshot, err := writeVersionSnapshot(name, scope, path, expectedBaseHash, snapshotPath, raw, mode)
+	if err != nil {
+		return VersionSnapshot{}, err
+	}
+	if err := fileutil.AtomicWriteFile(path, []byte(content), mode.Perm()); err != nil {
+		return VersionSnapshot{}, fmt.Errorf("replace skill %q: %w", name, err)
+	}
+	written, err := os.ReadFile(path)
+	if err != nil {
+		return VersionSnapshot{}, fmt.Errorf("verify replaced skill %q: %w", name, err)
+	}
+	if got := ContentHash(string(written)); got != newHash {
+		return VersionSnapshot{}, fmt.Errorf("verify replaced skill %q: hash %s, want %s", name, got, newHash)
+	}
+	return snapshot, nil
+}
+
+// Restore compare-and-swaps the current promoted bytes back to snapshot. When
+// snapshot.Existed is false, Restore removes the newly-created canonical skill.
+// It refuses to touch a different path or overwrite post-promotion user edits.
+func (s *Store) Restore(name string, scope Scope, expectedCurrentHash string, snapshot VersionSnapshot) (string, error) {
+	if s == nil {
+		return "", fmt.Errorf("skill store is nil")
+	}
+	name = strings.TrimSpace(name)
+	expectedCurrentHash = strings.TrimSpace(expectedCurrentHash)
+	if !IsValidName(name) {
+		return "", fmt.Errorf("invalid skill name %q", name)
+	}
+	if !isContentHash(expectedCurrentHash) {
+		return "", fmt.Errorf("invalid expected current hash %q", expectedCurrentHash)
+	}
+	root, err := s.skillsRootForScope(scope)
+	if err != nil {
+		return "", err
+	}
+	unlock := lockSkillMutation(root, name)
+	defer unlock()
+
+	path, raw, _, err := s.readWritableSkill(name, scope, root)
+	if err != nil {
+		if !snapshot.Existed && os.IsNotExist(err) {
+			return snapshot.Path, nil
+		}
+		return "", err
+	}
+	if got := ContentHash(string(raw)); got != expectedCurrentHash {
+		return "", fmt.Errorf("skill %q changed since promotion: current hash %s does not match expected hash %s", name, got, expectedCurrentHash)
+	}
+	if snapshot.Name != name || snapshot.Scope != scope || !sameSkillPath(snapshot.Path, path) {
+		return "", fmt.Errorf("skill %q restore path mismatch: active %s, snapshot %s", name, path, snapshot.Path)
+	}
+	if !snapshot.Existed {
+		if snapshot.Hash != "" || snapshot.SnapshotPath != "" {
+			return "", fmt.Errorf("skill %q new-file snapshot contains unexpected previous content", name)
+		}
+		if err := os.Remove(path); err != nil {
+			return "", fmt.Errorf("remove promoted skill %q: %w", name, err)
+		}
+		folder := filepath.Join(root, name, SkillFile)
+		if sameSkillPath(path, folder) {
+			_ = os.Remove(filepath.Dir(folder))
+		}
+		return path, nil
+	}
+	if !isContentHash(snapshot.Hash) {
+		return "", fmt.Errorf("skill %q previous snapshot has invalid hash %q", name, snapshot.Hash)
+	}
+	wantSnapshotPath := versionSnapshotPath(root, name, snapshot.Hash)
+	if !sameSkillPath(snapshot.SnapshotPath, wantSnapshotPath) {
+		return "", fmt.Errorf("skill %q snapshot path mismatch: got %s, want %s", name, snapshot.SnapshotPath, wantSnapshotPath)
+	}
+	previous, err := os.ReadFile(wantSnapshotPath)
+	if err != nil {
+		return "", fmt.Errorf("read previous snapshot for skill %q: %w", name, err)
+	}
+	if got := ContentHash(string(previous)); got != snapshot.Hash {
+		return "", fmt.Errorf("skill %q previous snapshot was modified: hash %s, want %s", name, got, snapshot.Hash)
+	}
+	mode := os.FileMode(snapshot.Mode).Perm()
+	if mode == 0 {
+		mode = 0o644
+	}
+	if err := fileutil.AtomicWriteFile(path, previous, mode); err != nil {
+		return "", fmt.Errorf("restore skill %q: %w", name, err)
+	}
+	return path, nil
+}
+
+func (s *Store) skillsRootForScope(scope Scope) (string, error) {
+	switch scope {
+	case ScopeProject:
+		if s.projectRoot == "" {
+			return "", fmt.Errorf("project scope requires a workspace — run from a project directory, or use global scope")
+		}
+		return filepath.Join(s.projectRoot, config.ProjectConventionDir, SkillsDirname), nil
+	case ScopeGlobal, "":
+		return s.globalSkillsRoot(), nil
+	default:
+		return "", fmt.Errorf("scope %q is not writable", scope)
+	}
+}
+
+func lockSkillMutation(root, name string) func() {
+	key := config.CanonicalSkillPath(filepath.Join(root, name))
+	value, _ := skillMutationLocks.LoadOrStore(key, &sync.Mutex{})
+	mu := value.(*sync.Mutex)
+	mu.Lock()
+	return mu.Unlock
+}
+
+func (s *Store) readWritableSkill(name string, scope Scope, root string) (string, []byte, os.FileMode, error) {
+	flat := filepath.Join(root, name+".md")
+	folder := filepath.Join(root, name, SkillFile)
+	flatInfo, flatErr := os.Stat(flat)
+	folderInfo, folderErr := os.Stat(folder)
+	flatExists := flatErr == nil
+	folderExists := folderErr == nil
+	if flatErr != nil && !os.IsNotExist(flatErr) {
+		return "", nil, 0, flatErr
+	}
+	if folderErr != nil && !os.IsNotExist(folderErr) {
+		return "", nil, 0, folderErr
+	}
+	if flatExists && folderExists {
+		return "", nil, 0, fmt.Errorf("skill %q has ambiguous writable paths %s and %s", name, flat, folder)
+	}
+	if !flatExists && !folderExists {
+		if existing, ok := s.Read(name); ok {
+			return "", nil, 0, fmt.Errorf("skill %q active path %s does not match writable scope path %s", name, existing.Path, folder)
+		}
+		return "", nil, 0, fmt.Errorf("skill %q does not exist: %w", name, os.ErrNotExist)
+	}
+	path, info := flat, flatInfo
+	if folderExists {
+		path, info = folder, folderInfo
+	}
+	if !info.Mode().IsRegular() {
+		return "", nil, 0, fmt.Errorf("skill %q path %s is not a regular file", name, path)
+	}
+	if err := ensurePathWithinRoot(root, path); err != nil {
+		return "", nil, 0, err
+	}
+	active, ok := s.Read(name)
+	if !ok {
+		return "", nil, 0, fmt.Errorf("skill %q at %s is not a readable active skill", name, path)
+	}
+	if active.Scope != scope || !sameSkillPath(active.Path, path) {
+		return "", nil, 0, fmt.Errorf("skill %q active path %s does not match requested path %s", name, active.Path, path)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return "", nil, 0, err
+	}
+	return path, raw, info.Mode(), nil
+}
+
+func writeVersionSnapshot(name string, scope Scope, path, hash, snapshotPath string, raw []byte, mode os.FileMode) (VersionSnapshot, error) {
+	if got := ContentHash(string(raw)); got != hash {
+		return VersionSnapshot{}, fmt.Errorf("skill %q snapshot source hash %s does not match expected %s", name, got, hash)
+	}
+	if snapshot, err := loadVersionSnapshot(name, scope, path, hash, snapshotPath); err == nil {
+		return snapshot, nil
+	} else if !os.IsNotExist(err) {
+		return VersionSnapshot{}, err
+	}
+	if err := os.MkdirAll(filepath.Dir(snapshotPath), 0o700); err != nil {
+		return VersionSnapshot{}, err
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(snapshotPath), ".snapshot-*.tmp")
+	if err != nil {
+		return VersionSnapshot{}, err
+	}
+	tmpPath := tmp.Name()
+	defer os.Remove(tmpPath)
+	if _, err := tmp.Write(raw); err != nil {
+		_ = tmp.Close()
+		return VersionSnapshot{}, err
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return VersionSnapshot{}, err
+	}
+	if err := tmp.Close(); err != nil {
+		return VersionSnapshot{}, err
+	}
+	if err := os.Chmod(tmpPath, mode.Perm()); err != nil {
+		return VersionSnapshot{}, err
+	}
+	if err := os.Link(tmpPath, snapshotPath); err != nil {
+		if snapshot, loadErr := loadVersionSnapshot(name, scope, path, hash, snapshotPath); loadErr == nil {
+			return snapshot, nil
+		}
+		return VersionSnapshot{}, fmt.Errorf("create immutable snapshot for skill %q: %w", name, err)
+	}
+	return loadVersionSnapshot(name, scope, path, hash, snapshotPath)
+}
+
+func loadVersionSnapshot(name string, scope Scope, path, hash, snapshotPath string) (VersionSnapshot, error) {
+	raw, err := os.ReadFile(snapshotPath)
+	if err != nil {
+		return VersionSnapshot{}, err
+	}
+	if got := ContentHash(string(raw)); got != hash {
+		return VersionSnapshot{}, fmt.Errorf("immutable snapshot for skill %q was modified: hash %s, want %s", name, got, hash)
+	}
+	info, err := os.Stat(snapshotPath)
+	if err != nil {
+		return VersionSnapshot{}, err
+	}
+	return VersionSnapshot{
+		Name:         name,
+		Scope:        scope,
+		Path:         path,
+		Hash:         hash,
+		SnapshotPath: snapshotPath,
+		Mode:         uint32(info.Mode().Perm()),
+		Existed:      true,
+		CreatedAt:    info.ModTime().UTC(),
+	}, nil
+}
+
+func versionSnapshotPath(root, name, hash string) string {
+	return filepath.Join(root, ".versions", name, hash+".md")
+}
+
+func validateContentName(name, content string) error {
+	normalized := strings.TrimPrefix(strings.ReplaceAll(content, "\r\n", "\n"), "\uFEFF")
+	fm, _ := splitFrontmatter(normalized)
+	if declared := strings.TrimSpace(fm[skillFrontmatterName]); declared != "" && declared != name {
+		return fmt.Errorf("skill content name %q does not match target name %q", declared, name)
+	}
+	return nil
+}
+
+func ensurePathWithinRoot(root, path string) error {
+	rootAbs, err := filepath.Abs(root)
+	if err != nil {
+		return err
+	}
+	pathAbs, err := filepath.Abs(path)
+	if err != nil {
+		return err
+	}
+	rel, err := filepath.Rel(rootAbs, pathAbs)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return fmt.Errorf("skill path %s escapes writable root %s", path, root)
+	}
+	resolvedRoot, rootErr := filepath.EvalSymlinks(rootAbs)
+	resolvedPath, pathErr := filepath.EvalSymlinks(pathAbs)
+	if rootErr == nil && pathErr == nil {
+		rel, err = filepath.Rel(resolvedRoot, resolvedPath)
+		if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			return fmt.Errorf("skill path %s resolves outside writable root %s", path, root)
+		}
+	}
+	return nil
+}
+
+func sameSkillPath(a, b string) bool {
+	return config.CanonicalSkillPath(a) == config.CanonicalSkillPath(b)
+}
+
+func isContentHash(hash string) bool {
+	if len(hash) != sha256.Size*2 {
+		return false
+	}
+	for _, r := range hash {
+		if (r < '0' || r > '9') && (r < 'a' || r > 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 func (s *Store) globalSkillsRoot() string {

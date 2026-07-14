@@ -212,6 +212,12 @@ func RenderTOMLForScope(c *Config, scope RenderScope) string {
 			if p.AuthScheme != "" {
 				fmt.Fprintf(&b, "auth_scheme = %q\n", p.AuthScheme)
 			}
+			if p.ClientProfile != "" {
+				fmt.Fprintf(&b, "client_profile = %q   # provider wire-compat profile, e.g. claude_code\n", p.ClientProfile)
+			}
+			if p.ClientVersion != "" {
+				fmt.Fprintf(&b, "client_version = %q   # version used by client_profile compatibility headers\n", p.ClientVersion)
+			}
 			if p.IdentityEnv != "" {
 				fmt.Fprintf(&b, "identity_env = %q   # workload identity JWT/OIDC assertion env var\n", p.IdentityEnv)
 			}

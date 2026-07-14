@@ -399,13 +399,14 @@ func TestRunCapturesOfflineReplayBundle(t *testing.T) {
 	sess.Add(provider.Message{Role: provider.RoleAssistant, Content: "previous answer"})
 	exec := agent.New(nil, nil, sess, agent.Options{}, event.Discard)
 	c := New(Options{
-		Runner:        answeringRunner{session: sess, answer: "done"},
-		Executor:      exec,
-		SessionDir:    dir,
-		SessionPath:   path,
-		Label:         "test",
-		WorkspaceRoot: workspace,
-		Skills:        []skill.Skill{{Name: "parser-helper", Description: "parses logs"}},
+		Runner:              answeringRunner{session: sess, answer: "done"},
+		Executor:            exec,
+		SessionDir:          dir,
+		SessionPath:         path,
+		Label:               "test",
+		WorkspaceRoot:       workspace,
+		EnableReplayCapture: true,
+		Skills:              []skill.Skill{{Name: "parser-helper", Description: "parses logs"}},
 	})
 
 	if err := c.Run(context.Background(), "parse the log"); err != nil {
@@ -425,14 +426,38 @@ func TestRunCapturesOfflineReplayBundle(t *testing.T) {
 	if bundle.Outcome.Success || bundle.Outcome.GoalMet || bundle.Outcome.Confidence != skilleval.OutcomeConfidenceUnverified {
 		t.Fatalf("Outcome = %+v, want unverified final answer without success", bundle.Outcome)
 	}
-	if len(bundle.Skills) != 1 || bundle.Skills[0].Name != "parser-helper" {
-		t.Fatalf("Skills = %+v, want parser-helper snapshot", bundle.Skills)
+	if len(bundle.Skills) != 0 {
+		t.Fatalf("Skills = %+v, want unrelated skill omitted by safe capture", bundle.Skills)
 	}
 	if len(bundle.Messages) != 2 || bundle.Messages[0].Content != "parse the log" || bundle.Messages[1].Content != "done" {
 		t.Fatalf("Messages = %+v, want only current turn messages", bundle.Messages)
 	}
 	if len(bundle.History) == 0 || bundle.History[0].Kind != "turn" || !strings.Contains(bundle.History[0].Text, "parse the log") {
 		t.Fatalf("History = %+v, want turn summary", bundle.History)
+	}
+}
+
+func TestRunDisableReplayCapturePreventsRecursiveBundle(t *testing.T) {
+	dir := t.TempDir()
+	workspace := t.TempDir()
+	sess := agent.NewSession("sys")
+	exec := agent.New(nil, nil, sess, agent.Options{}, event.Discard)
+	c := New(Options{
+		Runner:               answeringRunner{session: sess, answer: "done"},
+		Executor:             exec,
+		SessionDir:           dir,
+		SessionPath:          filepath.Join(dir, "session.jsonl"),
+		Label:                "test",
+		WorkspaceRoot:        workspace,
+		DisableReplayCapture: true,
+	})
+
+	if err := c.Run(context.Background(), "evaluation rollout"); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(workspace, config.ProjectConventionDir, "skilleval")
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("replay capture directory exists at %s; stat err=%v", path, err)
 	}
 }
 
@@ -455,12 +480,13 @@ func TestRunCapturesCompressionMetricsInReplayBundle(t *testing.T) {
 		ToolOutputCompression: contextpack.Options{ThresholdBytes: 128, MaxBytes: 260},
 	}, event.Discard)
 	c := New(Options{
-		Runner:        exec,
-		Executor:      exec,
-		SessionDir:    dir,
-		SessionPath:   filepath.Join(dir, "session.jsonl"),
-		Label:         "test",
-		WorkspaceRoot: workspace,
+		Runner:              exec,
+		Executor:            exec,
+		SessionDir:          dir,
+		SessionPath:         filepath.Join(dir, "session.jsonl"),
+		Label:               "test",
+		WorkspaceRoot:       workspace,
+		EnableReplayCapture: true,
 	})
 
 	if err := c.Run(context.Background(), "inspect logs"); err != nil {
@@ -497,14 +523,15 @@ func TestRunCapturesDynamicSkillCandidateAfterRunSkill(t *testing.T) {
 		t.Fatalf("Inject dynamic skill: %v", err)
 	}
 	c := New(Options{
-		Runner:        runSkillRunner{session: sess, skillName: dynamic.Name, answer: "done"},
-		Executor:      exec,
-		SessionDir:    dir,
-		SessionPath:   path,
-		Label:         "test",
-		WorkspaceRoot: workspace,
-		SkillStore:    store,
-		Skills:        store.List(),
+		Runner:              runSkillRunner{session: sess, skillName: dynamic.Name, answer: "done"},
+		Executor:            exec,
+		SessionDir:          dir,
+		SessionPath:         path,
+		Label:               "test",
+		WorkspaceRoot:       workspace,
+		EnableReplayCapture: true,
+		SkillStore:          store,
+		Skills:              store.List(),
 	})
 
 	if err := c.Run(context.Background(), "parse the log"); err != nil {
@@ -539,15 +566,16 @@ func TestRunRemovesGeneratedDynamicSkillAfterCapture(t *testing.T) {
 	store := skill.New(skill.Options{HomeDir: t.TempDir(), ProjectRoot: workspace, DisableBuiltins: true})
 	generated := "---\nname: dynamic-docs\ndescription: Runtime docs helper\n---\nInspect the requested files and draft concise docs."
 	c := New(Options{
-		Runner:            answeringRunner{session: sess, answer: "done"},
-		Executor:          exec,
-		SessionDir:        dir,
-		SessionPath:       filepath.Join(dir, "session.jsonl"),
-		Label:             "test",
-		WorkspaceRoot:     workspace,
-		SkillStore:        store,
-		Skills:            store.List(),
-		SkillOrchestrator: skill.NewOrchestrator(store, skill.NewGenerator(controllerSkillProvider{text: generated})),
+		Runner:              answeringRunner{session: sess, answer: "done"},
+		Executor:            exec,
+		SessionDir:          dir,
+		SessionPath:         filepath.Join(dir, "session.jsonl"),
+		Label:               "test",
+		WorkspaceRoot:       workspace,
+		EnableReplayCapture: true,
+		SkillStore:          store,
+		Skills:              store.List(),
+		SkillOrchestrator:   skill.NewOrchestrator(store, skill.NewGenerator(controllerSkillProvider{text: generated})),
 	})
 
 	if err := c.Run(context.Background(), "draft docs for parser"); err != nil {
@@ -580,15 +608,16 @@ func TestSubmitSlashDynamicSkillCreatesCandidate(t *testing.T) {
 	}
 	events := make(chan event.Event, 4)
 	c := New(Options{
-		Runner:        answeringRunner{session: sess, answer: "done"},
-		Executor:      exec,
-		Sink:          event.FuncSink(func(e event.Event) { events <- e }),
-		SessionDir:    dir,
-		SessionPath:   filepath.Join(dir, "session.jsonl"),
-		Label:         "test",
-		WorkspaceRoot: workspace,
-		SkillStore:    store,
-		Skills:        store.List(),
+		Runner:              answeringRunner{session: sess, answer: "done"},
+		Executor:            exec,
+		Sink:                event.FuncSink(func(e event.Event) { events <- e }),
+		SessionDir:          dir,
+		SessionPath:         filepath.Join(dir, "session.jsonl"),
+		Label:               "test",
+		WorkspaceRoot:       workspace,
+		EnableReplayCapture: true,
+		SkillStore:          store,
+		Skills:              store.List(),
 	})
 
 	c.Submit("/dynamic-parser parse the log")
@@ -614,14 +643,15 @@ func TestRunDoesNotCreateCandidateForUnusedDynamicSkill(t *testing.T) {
 		t.Fatalf("Inject dynamic skill: %v", err)
 	}
 	c := New(Options{
-		Runner:        answeringRunner{session: sess, answer: "done"},
-		Executor:      exec,
-		SessionDir:    dir,
-		SessionPath:   filepath.Join(dir, "session.jsonl"),
-		Label:         "test",
-		WorkspaceRoot: workspace,
-		SkillStore:    store,
-		Skills:        store.List(),
+		Runner:              answeringRunner{session: sess, answer: "done"},
+		Executor:            exec,
+		SessionDir:          dir,
+		SessionPath:         filepath.Join(dir, "session.jsonl"),
+		Label:               "test",
+		WorkspaceRoot:       workspace,
+		EnableReplayCapture: true,
+		SkillStore:          store,
+		Skills:              store.List(),
 	})
 
 	if err := c.Run(context.Background(), "parse the log"); err != nil {
@@ -641,13 +671,14 @@ func TestRunDoesNotCreateCandidateForStaticRunSkill(t *testing.T) {
 	exec := agent.New(nil, nil, sess, agent.Options{}, event.Discard)
 	staticSkill := skill.Skill{Name: "static-parser", Description: "Parses logs", Body: "Use static parser.", RunAs: skill.RunInline}
 	c := New(Options{
-		Runner:        runSkillRunner{session: sess, skillName: staticSkill.Name, answer: "done"},
-		Executor:      exec,
-		SessionDir:    dir,
-		SessionPath:   filepath.Join(dir, "session.jsonl"),
-		Label:         "test",
-		WorkspaceRoot: workspace,
-		Skills:        []skill.Skill{staticSkill},
+		Runner:              runSkillRunner{session: sess, skillName: staticSkill.Name, answer: "done"},
+		Executor:            exec,
+		SessionDir:          dir,
+		SessionPath:         filepath.Join(dir, "session.jsonl"),
+		Label:               "test",
+		WorkspaceRoot:       workspace,
+		EnableReplayCapture: true,
+		Skills:              []skill.Skill{staticSkill},
 	})
 
 	if err := c.Run(context.Background(), "parse the log"); err != nil {

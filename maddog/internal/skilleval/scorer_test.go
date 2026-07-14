@@ -76,4 +76,7 @@ func TestScoreReplayPromotionGradeRequiresParseableContextualScorer(t *testing.T
 	if !strings.Contains(userPrompt, "Task: fix parser") || !strings.Contains(userPrompt, "Candidate skill: parser-helper") || !strings.Contains(userPrompt, "Use the parser checklist") {
 		t.Fatalf("scorer prompt missing task/candidate context: %s", userPrompt)
 	}
+	if strings.Contains(userPrompt, "expected answer") || strings.Contains(userPrompt, "provider returned text") {
+		t.Fatalf("scorer prompt leaked raw assistant answer: %s", userPrompt)
+	}
 }

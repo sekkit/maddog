@@ -20,6 +20,7 @@ func init() { tool.RegisterBuiltin(listDir{}) }
 type listDir struct {
 	workDir     string
 	paths       *PathResolver
+	readRoots   []string
 	forbidRoots []string
 }
 
@@ -56,7 +57,7 @@ func (l listDir) Execute(ctx context.Context, args json.RawMessage) (string, err
 	}
 	rp := resolveReadablePath(l.workDir, p.Path, l.paths)
 	p.Path = rp.Path
-	if confineRead(l.forbidRoots, p.Path) {
+	if confineReadTo(l.readRoots, l.forbidRoots, p.Path) {
 		return "(empty directory)", nil
 	}
 
@@ -107,7 +108,7 @@ func (l listDir) listRecursive(root string, rp ResolvedPath) (string, error) {
 			case ".git", "node_modules", ".DS_Store", "__pycache__", ".idea", ".vscode":
 				return filepath.SkipDir
 			}
-			if skipForbidDir(p, l.forbidRoots) {
+			if confineReadTo(l.readRoots, l.forbidRoots, p) {
 				return filepath.SkipDir
 			}
 		}

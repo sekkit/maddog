@@ -30,6 +30,10 @@ type Spec struct {
 	// command cannot exfiltrate or fetch; many dev commands (module/package
 	// downloads) need it, so it defaults on at the config layer.
 	Network bool
+	// ScrubEnvironment removes secret-bearing variables from shell subprocesses
+	// while leaving them available to the parent process's model provider. This
+	// is used by isolated evaluation runs so a candidate cannot print API keys.
+	ScrubEnvironment bool
 	// Shell is the interpreter the bash tool runs under. A zero value (empty
 	// Path) means the tool resolves one itself; the composition root sets it from
 	// [tools.shell] so the configured choice rides along with the spec.

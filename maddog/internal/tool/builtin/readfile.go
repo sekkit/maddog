@@ -33,6 +33,7 @@ func init() { tool.RegisterBuiltin(readFile{}) }
 type readFile struct {
 	workDir     string
 	paths       *PathResolver
+	readRoots   []string
 	forbidRoots []string
 }
 
@@ -81,7 +82,7 @@ func (r readFile) Execute(ctx context.Context, args json.RawMessage) (string, er
 	rp := resolveReadablePath(r.workDir, p.Path, r.paths)
 	p.Path = rp.Path
 	displayPath := rp.DisplayPath
-	if confineRead(r.forbidRoots, p.Path) {
+	if confineReadTo(r.readRoots, r.forbidRoots, p.Path) {
 		err := &os.PathError{Op: "open", Path: p.Path, Err: os.ErrNotExist}
 		if rp.External {
 			return "", fmt.Errorf("read %s: %s", displayPath, rp.ErrorText(err))

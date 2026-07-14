@@ -11,17 +11,19 @@ import (
 )
 
 type EvaluationRequest struct {
-	Candidate   Candidate
-	BundlePaths []string
-	Bundles     []BundleV2
-	Provider    provider.Provider
-	Tools       *tool.Registry
-	Scorer      provider.Provider
-	ModelRef    string
-	DryRun      bool
-	MinBundles  int
-	MinScore    float64
-	MaxTokens   int
+	Candidate        Candidate
+	BundlePaths      []string
+	Bundles          []BundleV2
+	Provider         provider.Provider
+	Tools            *tool.Registry
+	Scorer           provider.Provider
+	ScorerProvenance ScoringProvenance
+	Grader           VerifiedGrader
+	ModelRef         string
+	DryRun           bool
+	MinBundles       int
+	MinScore         float64
+	MaxTokens        int
 }
 
 type EvaluationResult struct {
@@ -36,7 +38,86 @@ type EvaluationResult struct {
 	Mode           string
 	Provider       string
 	ModelRef       string
+	Scoring        ScoringProvenance
 	PromotionGrade bool
+}
+
+// ScoringProvenance describes the evidence source used to score replay
+// outcomes. Promotion requires either a verified grader fingerprint or an
+// explicitly independent scorer whose provider differs from the replay model.
+type ScoringProvenance struct {
+	Kind           string `json:"kind,omitempty"`
+	Name           string `json:"name,omitempty"`
+	Provider       string `json:"provider,omitempty"`
+	ModelRef       string `json:"model_ref,omitempty"`
+	Fingerprint    string `json:"fingerprint,omitempty"`
+	ReplayProvider string `json:"replay_provider,omitempty"`
+	Independent    bool   `json:"independent,omitempty"`
+	Verified       bool   `json:"verified,omitempty"`
+}
+
+type VerifiedGradeRequest struct {
+	Bundle    BundleV2
+	Candidate Candidate
+	Replay    OutcomeInfo
+}
+
+type VerifiedGrade struct {
+	Score    float64 `json:"score"`
+	Success  bool    `json:"success"`
+	GoalMet  bool    `json:"goal_met"`
+	Verified bool    `json:"verified"`
+	Reason   string  `json:"reason,omitempty"`
+}
+
+// VerifiedGrader is implemented by deterministic or externally verified case
+// graders. Returning Verified=false keeps the case diagnostic-only.
+type VerifiedGrader interface {
+	Grade(context.Context, VerifiedGradeRequest) (VerifiedGrade, error)
+	Provenance() ScoringProvenance
+}
+
+type PairedEvaluationRequest struct {
+	Incumbent        Candidate
+	Candidate        Candidate
+	BundlePaths      []string
+	Bundles          []BundleV2
+	Provider         provider.Provider
+	Tools            *tool.Registry
+	Scorer           provider.Provider
+	ScorerProvenance ScoringProvenance
+	Grader           VerifiedGrader
+	ModelRef         string
+	DryRun           bool
+	MinBundles       int
+	MinScore         float64
+	MinDelta         float64
+	MaxTokens        int
+}
+
+type PairedCaseResult struct {
+	Identity        string      `json:"identity"`
+	BundleID        string      `json:"bundle_id"`
+	Dataset         string      `json:"dataset,omitempty"`
+	Split           string      `json:"split,omitempty"`
+	CaseID          string      `json:"case_id,omitempty"`
+	IncumbentReplay OutcomeInfo `json:"incumbent_replay"`
+	CandidateReplay OutcomeInfo `json:"candidate_replay"`
+	IncumbentScore  ScoreResult `json:"incumbent_score"`
+	CandidateScore  ScoreResult `json:"candidate_score"`
+	Delta           float64     `json:"delta"`
+}
+
+type PairedEvaluationResult struct {
+	Bundles        []BundleV2         `json:"bundles"`
+	BundleIDs      []string           `json:"bundle_ids"`
+	Cases          []PairedCaseResult `json:"cases"`
+	Incumbent      EvaluationResult   `json:"incumbent"`
+	Candidate      EvaluationResult   `json:"candidate"`
+	Delta          float64            `json:"delta"`
+	Guardrail      GuardrailResult    `json:"guardrail"`
+	Scoring        ScoringProvenance  `json:"scoring"`
+	PromotionGrade bool               `json:"promotion_grade"`
 }
 
 func (r EvaluationResult) Provenance() EvaluationProvenance {
@@ -63,6 +144,110 @@ func EvaluateCandidate(ctx context.Context, req EvaluationRequest) (EvaluationRe
 	if err := ValidateHeldOutBundles(req.BundlePaths, bundles, req.Candidate); err != nil {
 		return EvaluationResult{}, err
 	}
+	result, err := evaluateCandidateOnBundles(ctx, req, bundles, bundleIDs)
+	if err != nil {
+		return EvaluationResult{}, err
+	}
+	if req.DryRun && !strings.HasPrefix(result.Guardrail.Reason, "need at least ") {
+		result.Guardrail = GuardrailResult{Reason: "dry-run preview is not promotion-grade evidence"}
+	} else if result.Guardrail.Pass {
+		result.Guardrail = GuardrailResult{Reason: "promotion requires paired incumbent/candidate evaluation"}
+	}
+	result.PromotionGrade = false
+	return result, nil
+}
+
+func EvaluatePairedCandidates(ctx context.Context, req PairedEvaluationRequest) (PairedEvaluationResult, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	bundles, bundleIDs, err := loadEvaluationBundles(req.BundlePaths, req.Bundles)
+	if err != nil {
+		return PairedEvaluationResult{}, err
+	}
+	if len(bundles) == 0 {
+		return PairedEvaluationResult{}, fmt.Errorf("paired skill evaluation requires at least one held-out bundle")
+	}
+	if err := ValidateHeldOutBundles(req.BundlePaths, bundles, req.Incumbent); err != nil {
+		return PairedEvaluationResult{}, fmt.Errorf("incumbent held-out validation: %w", err)
+	}
+	if err := ValidateHeldOutBundles(req.BundlePaths, bundles, req.Candidate); err != nil {
+		return PairedEvaluationResult{}, fmt.Errorf("candidate held-out validation: %w", err)
+	}
+	common := EvaluationRequest{
+		BundlePaths:      req.BundlePaths,
+		Bundles:          bundles,
+		Provider:         req.Provider,
+		Tools:            req.Tools,
+		Scorer:           req.Scorer,
+		ScorerProvenance: req.ScorerProvenance,
+		Grader:           req.Grader,
+		ModelRef:         req.ModelRef,
+		DryRun:           req.DryRun,
+		MinBundles:       req.MinBundles,
+		MinScore:         req.MinScore,
+		MaxTokens:        req.MaxTokens,
+	}
+	incumbentReq := common
+	incumbentReq.Candidate = req.Incumbent
+	incumbent, err := evaluateCandidateOnBundles(ctx, incumbentReq, bundles, bundleIDs)
+	if err != nil {
+		return PairedEvaluationResult{}, fmt.Errorf("evaluate incumbent: %w", err)
+	}
+	candidateReq := common
+	candidateReq.Candidate = req.Candidate
+	candidate, err := evaluateCandidateOnBundles(ctx, candidateReq, bundles, bundleIDs)
+	if err != nil {
+		return PairedEvaluationResult{}, fmt.Errorf("evaluate candidate: %w", err)
+	}
+	if len(incumbent.Replays) != len(bundles) || len(candidate.Replays) != len(bundles) || len(incumbent.Scores) != len(bundles) || len(candidate.Scores) != len(bundles) {
+		return PairedEvaluationResult{}, fmt.Errorf("paired evaluation returned incomplete case results")
+	}
+	cases := make([]PairedCaseResult, 0, len(bundles))
+	for i := range bundles {
+		cases = append(cases, PairedCaseResult{
+			Identity:        EvaluationCaseIdentity(bundles[i]),
+			BundleID:        bundles[i].ID,
+			Dataset:         bundles[i].Dataset,
+			Split:           bundles[i].Split,
+			CaseID:          bundles[i].CaseID,
+			IncumbentReplay: incumbent.Replays[i],
+			CandidateReplay: candidate.Replays[i],
+			IncumbentScore:  incumbent.Scores[i],
+			CandidateScore:  candidate.Scores[i],
+			Delta:           candidate.Scores[i].Score - incumbent.Scores[i].Score,
+		})
+	}
+	guard := CheckPairedPromotionGuardrail(
+		bundles,
+		incumbent.Replays,
+		candidate.Replays,
+		incumbent.Scores,
+		candidate.Scores,
+		req.Candidate,
+		GuardrailConfig{MinBundles: req.MinBundles, MinScore: req.MinScore, MinDelta: req.MinDelta},
+		candidate.Scoring,
+	)
+	if req.DryRun && !strings.HasPrefix(guard.Reason, "need at least ") {
+		guard = GuardrailResult{Reason: "dry-run preview is not promotion-grade evidence"}
+	}
+	delta := candidate.Score.Score - incumbent.Score.Score
+	candidate.Guardrail = guard
+	candidate.PromotionGrade = !req.DryRun && guard.Pass
+	return PairedEvaluationResult{
+		Bundles:        bundles,
+		BundleIDs:      bundleIDs,
+		Cases:          cases,
+		Incumbent:      incumbent,
+		Candidate:      candidate,
+		Delta:          delta,
+		Guardrail:      guard,
+		Scoring:        candidate.Scoring,
+		PromotionGrade: candidate.PromotionGrade,
+	}, nil
+}
+
+func evaluateCandidateOnBundles(ctx context.Context, req EvaluationRequest, bundles []BundleV2, bundleIDs []string) (EvaluationResult, error) {
 	mode := EvaluationModeProviderReplay
 	providerName := ""
 	if req.DryRun {
@@ -80,11 +265,13 @@ func EvaluateCandidate(ctx context.Context, req EvaluationRequest) (EvaluationRe
 	if scorer == nil && !req.DryRun {
 		scorer = req.Provider
 	}
+	scoring := evaluationScoringProvenance(req, providerName, scorer)
 	baseline := make([]OutcomeInfo, 0, len(bundles))
 	replays := make([]OutcomeInfo, 0, len(bundles))
 	scores := make([]ScoreResult, 0, len(bundles))
 	for _, bundle := range bundles {
 		var replayed OutcomeInfo
+		var err error
 		if req.DryRun {
 			replayed = DryRunReplay(bundle, req.Candidate)
 		} else if req.Tools != nil && req.Tools.Len() > 0 {
@@ -98,24 +285,31 @@ func EvaluateCandidate(ctx context.Context, req EvaluationRequest) (EvaluationRe
 				return EvaluationResult{}, err
 			}
 		}
-		score, err := ScoreReplayWithContext(ctx, scorer, ScoreReplayRequest{
-			Original:          bundle.Outcome,
-			Replayed:          replayed,
-			Bundle:            bundle,
-			Candidate:         req.Candidate,
-			RequireModelScore: !req.DryRun,
-		})
-		if err != nil {
-			return EvaluationResult{}, err
+		var score ScoreResult
+		if req.Grader != nil && !req.DryRun {
+			grade, gradeErr := req.Grader.Grade(ctx, VerifiedGradeRequest{Bundle: bundle, Candidate: req.Candidate, Replay: replayed})
+			if gradeErr != nil {
+				return EvaluationResult{}, gradeErr
+			}
+			score = scoreFromVerifiedGrade(grade)
+			replayed = applyVerifiedGrade(replayed, grade, scoring)
+		} else {
+			score, err = ScoreReplayWithContext(ctx, scorer, ScoreReplayRequest{
+				Original:          bundle.Outcome,
+				Replayed:          replayed,
+				Bundle:            bundle,
+				Candidate:         req.Candidate,
+				RequireModelScore: !req.DryRun,
+			})
+			if err != nil {
+				return EvaluationResult{}, err
+			}
 		}
 		baseline = append(baseline, bundle.Outcome)
 		replays = append(replays, replayed)
 		scores = append(scores, score)
 	}
 	guard := CheckPromotionGuardrail(bundles, baseline, replays, scores, req.Candidate, GuardrailConfig{MinBundles: req.MinBundles, MinScore: req.MinScore})
-	if req.DryRun && !strings.HasPrefix(guard.Reason, "need at least ") {
-		guard = GuardrailResult{Reason: "dry-run preview is not promotion-grade evidence"}
-	}
 	return EvaluationResult{
 		Bundles:        bundles,
 		BundleIDs:      bundleIDs,
@@ -128,8 +322,91 @@ func EvaluateCandidate(ctx context.Context, req EvaluationRequest) (EvaluationRe
 		Mode:           mode,
 		Provider:       providerName,
 		ModelRef:       strings.TrimSpace(req.ModelRef),
-		PromotionGrade: !req.DryRun && guard.Pass,
+		Scoring:        scoring,
+		PromotionGrade: false,
 	}, nil
+}
+
+func evaluationScoringProvenance(req EvaluationRequest, replayProvider string, scorer provider.Provider) ScoringProvenance {
+	var out ScoringProvenance
+	if req.Grader != nil {
+		out = req.Grader.Provenance()
+		if strings.TrimSpace(out.Kind) == "" {
+			out.Kind = "verified_grader"
+		}
+	} else {
+		out = req.ScorerProvenance
+		if strings.TrimSpace(out.Kind) == "" && scorer != nil {
+			out.Kind = "model_scorer"
+		}
+		if strings.TrimSpace(out.Provider) == "" && scorer != nil {
+			out.Provider = strings.TrimSpace(scorer.Name())
+		}
+	}
+	out.Kind = strings.TrimSpace(out.Kind)
+	out.Name = strings.TrimSpace(out.Name)
+	out.Provider = strings.TrimSpace(out.Provider)
+	out.ModelRef = strings.TrimSpace(out.ModelRef)
+	out.Fingerprint = strings.TrimSpace(out.Fingerprint)
+	out.ReplayProvider = strings.TrimSpace(replayProvider)
+	return out
+}
+
+func scoreFromVerifiedGrade(grade VerifiedGrade) ScoreResult {
+	score := grade.Score
+	if score < 0 {
+		score = 0
+	}
+	if score > 1 {
+		score = 1
+	}
+	reason := strings.TrimSpace(grade.Reason)
+	if reason == "" {
+		reason = "verified grader result"
+	}
+	if !grade.Verified {
+		reason = "unverified grader result: " + reason
+	}
+	return ScoreResult{Score: score, Reason: reason}
+}
+
+func applyVerifiedGrade(replayed OutcomeInfo, grade VerifiedGrade, provenance ScoringProvenance) OutcomeInfo {
+	replayed.Success = grade.Success
+	replayed.GoalMet = grade.GoalMet
+	if !grade.Verified {
+		replayed.Confidence = OutcomeConfidenceUnverified
+		replayed.ConfidenceReason = "grader did not verify this case"
+		return replayed
+	}
+	replayed.Confidence = OutcomeConfidenceVerified
+	reason := strings.TrimSpace(grade.Reason)
+	if reason == "" {
+		reason = strings.TrimSpace(provenance.Name)
+	}
+	if reason == "" {
+		reason = strings.TrimSpace(provenance.Fingerprint)
+	}
+	if reason == "" {
+		reason = "external verifier"
+	}
+	replayed.ConfidenceReason = "verified by grader: " + reason
+	return replayed
+}
+
+func EvaluationCaseIdentity(bundle BundleV2) string {
+	caseID := strings.TrimSpace(bundle.CaseID)
+	if caseID == "" {
+		return strings.TrimSpace(bundle.ID)
+	}
+	parts := make([]string, 0, 3)
+	if dataset := strings.TrimSpace(bundle.Dataset); dataset != "" {
+		parts = append(parts, dataset)
+	}
+	if split := strings.TrimSpace(bundle.Split); split != "" {
+		parts = append(parts, split)
+	}
+	parts = append(parts, caseID)
+	return strings.Join(parts, "/")
 }
 
 func loadEvaluationBundles(paths []string, supplied []BundleV2) ([]BundleV2, []string, error) {
