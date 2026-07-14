@@ -8,6 +8,7 @@ import { asArray } from "./array";
 import { addBreadcrumb } from "./breadcrumbs";
 import { app, onEvent, onReady } from "./bridge";
 import { invalidateCache } from "./composerHistory";
+import { createTraceEntry, type FlowTraceEntry } from "./flowTrace";
 import { formatGuardianAssessmentNotice } from "./guardianEvents";
 import { createRafBatch } from "./rafBatch";
 import { t } from "./i18n";
@@ -50,6 +51,7 @@ export type MessageActionState = { turn: number; scope: MessageActionScope };
 export type HydrateReason = "switch-tab" | "new-session" | "resume-session" | "open-topic" | "startup";
 
 const HISTORY_PAGE_TURNS = 60;
+const MAX_TRACE_EVENTS = 1000;
 
 export type Item =
   | { kind: "user"; id: string; text: string; submitText?: string; failed?: boolean; createdAt?: number; checkpointTurn?: number }
@@ -93,6 +95,7 @@ type ToolItem = Extract<Item, { kind: "tool" }>;
 
 interface State {
   items: Item[];
+  flowTrace: FlowTraceEntry[];
   running: boolean;
   turnActive: boolean;
   pendingPrompt: boolean;
@@ -140,6 +143,7 @@ interface State {
 
 export const initialState: State = {
   items: [],
+  flowTrace: [],
   running: false,
   turnActive: false,
   pendingPrompt: false,
@@ -381,6 +385,7 @@ type Action =
   | { type: "local_notice"; level: "info" | "warn"; text: string }
   | { type: "clearApproval" }
   | { type: "clearAsk" }
+  | { type: "clearFlowTrace" }
   | { type: "reset" };
 
 // ---- reducer helpers (unchanged logic) ----
@@ -590,6 +595,7 @@ function flushPendingUser(s: State): State {
 }
 
 function applyEvent(s: State, e: WireEvent): State {
+  s = { ...s, flowTrace: appendTrace(s.flowTrace, e) };
   if (s.discardTurn) {
     if (e.kind === "turn_done") return { ...s, discardTurn: false, running: false, turnActive: false, pendingPrompt: false, cancelRequested: false, cancellable: false, currentAssistant: undefined, live: undefined };
     return s;
@@ -962,10 +968,16 @@ export function reducer(s: State, a: Action): State {
     case "local_notice": return { ...s, running: false, turnActive: false, seq: s.seq + 1, items: [...s.items, { kind: "notice", id: `n${s.seq}`, level: a.level, text: a.text }] };
     case "clearApproval": return { ...s, approval: undefined, pendingPrompt: false };
     case "clearAsk": return { ...s, ask: undefined, pendingPrompt: false };
+    case "clearFlowTrace": return { ...s, flowTrace: [] };
     case "reset": return { ...initialState, meta: s.meta, context: { used: 0, window: s.context.window, sessionTokens: 0, compactRatio: s.context.compactRatio }, balance: s.balance, effort: s.effort, jobs: s.jobs, hydrating: s.hydrating, hydrateReason: s.hydrateReason, hydrateError: s.hydrateError, hydrateHistoryLoaded: s.hydrateHistoryLoaded, hydratePlaceholderItems: s.hydratePlaceholderItems, backendActivationPending: s.backendActivationPending, sessionGen: s.sessionGen + 1 };
     case "event": return applyEvent(s, a.e);
     default: return s;
   }
+}
+
+function appendTrace(trace: FlowTraceEntry[], event: WireEvent): FlowTraceEntry[] {
+  const next = [...trace, createTraceEntry((trace[trace.length - 1]?.seq ?? 0) + 1, event)];
+  return next.length <= MAX_TRACE_EVENTS ? next : next.slice(next.length - MAX_TRACE_EVENTS);
 }
 
 // ---- per-tab state map ----
@@ -1949,8 +1961,14 @@ export function useController() {
     } catch { /* ignore */ }
   }, []);
 
+  const clearFlowTrace = useCallback(() => {
+    if (!activeTabId) return;
+    dispatchTo(activeTabId, { type: "clearFlowTrace" });
+  }, [activeTabId, dispatchTo]);
+
   return {
     state: activeState,
+    flowTrace: activeState.flowTrace,
     activeTabId,
     send, sendToTab, runShell, steer, notice, cancel, approve, answerQuestion, setControllerMode, setCollaborationMode, setToolApprovalMode, setGoal, clearGoal,
     newSession, clearSession, listSessions, listTrashedSessions, resumeSession, openChannelSession, previewSession, deleteSession, restoreSession, purgeTrashedSession, renameSession,
@@ -1958,6 +1976,7 @@ export function useController() {
     refreshMeta, pickWorkspace, switchWorkspace, compact, rewind, setModel, setEffort, setTokenMode,
     fetchMemory, remember, forget, saveDoc,
     switchTab, openProjectTab, openGlobalTab, openTopicSession, ensureBlankTab, activateTopic, ensureBlankSurface, closeTab, reorderTabs,
+    clearFlowTrace,
     syncActiveTab: syncActiveTabFromBackend,
   };
 }

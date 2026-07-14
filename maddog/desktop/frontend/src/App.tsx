@@ -48,6 +48,7 @@ import { UndoRewindBanner } from "./components/UndoRewindBanner";
 import { ClearContextCard } from "./components/ClearContextCard";
 import { StatusBar } from "./components/StatusBar";
 import { CommandPalette, type PaletteItem } from "./components/CommandPalette";
+import { FlowInspector } from "./components/FlowInspector";
 import { UpdateBanner } from "./components/UpdateBanner";
 import { ContextPanel } from "./components/ContextPanel";
 import { DashboardPanel } from "./components/DashboardPanel";
@@ -61,6 +62,7 @@ import { ProjectTree } from "./components/ProjectTree";
 import { HeartbeatPanel } from "./custom/features/heartbeat/HeartbeatPanel";
 import "./custom/features/heartbeat/heartbeat.css";
 import { CopyButton } from "./components/CopyButton";
+import { traceToJsonl } from "./lib/flowTrace";
 import { parseTodos } from "./lib/tools";
 import { shouldShowTodoPanel, todoDismissalKey } from "./lib/todoVisibility";
 import {
@@ -795,6 +797,7 @@ function TextSizeHotkeys() {
 export default function App() {
   const {
     state,
+    flowTrace,
     activeTabId,
     send,
     sendToTab,
@@ -832,6 +835,7 @@ export default function App() {
     openGlobalTab,
     closeTab,
     reorderTabs,
+    clearFlowTrace,
     openTopicSession,
     activateTopic,
     syncActiveTab,
@@ -933,6 +937,7 @@ export default function App() {
   const [topicTitleDraft, setTopicTitleDraft] = useState("");
   const topicExportOpen = useOverlayStore((s) => s.topicExportOpen);
   const setTopicExportOpen = useOverlayStore((s) => s.setTopicExportOpen);
+  const [flowInspectorOpen, setFlowInspectorOpen] = useState(false);
   const sidebarSearchOpen = useOverlayStore((s) => s.sidebarSearchOpen);
   const setSidebarSearchOpen = useOverlayStore((s) => s.setSidebarSearchOpen);
   const sidebarSearchFocusSignal = useOverlayStore((s) => s.sidebarSearchFocusSignal);
@@ -1432,6 +1437,17 @@ export default function App() {
     document.addEventListener("mousedown", onDown);
     return () => document.removeEventListener("mousedown", onDown);
   }, [topicExportOpen]);
+
+  const exportFlowTrace = useCallback(async () => {
+    const base = safeFilename(sessionTitle);
+    setTopicExportOpen(false);
+    try {
+      const path = await app.PickExportFile(`${base}-flow.jsonl`, "application/x-ndjson");
+      if (path) await app.SaveExportFile(path, traceToJsonl(flowTrace), false);
+    } catch (err) {
+      console.error("Failed to export AI flow trace", err);
+    }
+  }, [flowTrace, sessionTitle, setTopicExportOpen]);
 
   const exportSession = useCallback(
     async (format: "markdown" | "json" | "pdf" | "image") => {
@@ -3143,6 +3159,17 @@ export default function App() {
               )}
               {!sidebarImDetailConnection && (
               <>
+              <Tooltip label={t("flow.title")}>
+                <button
+                  className="topicbar__action-btn topicbar__action-btn--icon topicbar__action-btn--utility"
+                  type="button"
+                  disabled={!flowTrace.length}
+                  aria-label={t("flow.title")}
+                  onClick={() => setFlowInspectorOpen(true)}
+                >
+                  <Activity size={14} />
+                </button>
+              </Tooltip>
               <Tooltip label={t("topicBar.copyAll")}>
                 <CopyButton
                   getText={getSessionMarkdown}
@@ -3156,7 +3183,7 @@ export default function App() {
                   <button
                     className="topicbar__action-btn topicbar__action-btn--icon topicbar__action-btn--utility"
                     type="button"
-                    disabled={!sessionHasContent}
+                    disabled={!sessionHasContent && !flowTrace.length}
                     aria-label={t("topicBar.export")}
                     aria-haspopup="menu"
                     aria-expanded={topicExportOpen}
@@ -3174,6 +3201,10 @@ export default function App() {
                     <button type="button" role="menuitem" onClick={() => void exportSession("json")}>
                       <FileJson size={13} />
                       <span>{t("topicBar.exportJson")}</span>
+                    </button>
+                    <button type="button" role="menuitem" disabled={!flowTrace.length} onClick={() => void exportFlowTrace()}>
+                      <Activity size={13} />
+                      <span>{t("flow.exportJsonl")}</span>
                     </button>
                     <button type="button" role="menuitem" onClick={() => void exportSession("pdf")}>
                       <FileDown size={13} />
@@ -3581,6 +3612,15 @@ export default function App() {
             }}
           />
         </Suspense>
+      )}
+
+      {flowInspectorOpen && (
+        <FlowInspector
+          entries={flowTrace}
+          onClose={() => setFlowInspectorOpen(false)}
+          onClear={clearFlowTrace}
+          onExport={() => void exportFlowTrace()}
+        />
       )}
 
       <CommandPalette

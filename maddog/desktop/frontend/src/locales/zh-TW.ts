@@ -252,6 +252,20 @@ export const zhTW: Record<string, string> = {
   "topicBar.exportMarkdown": "匯出 Markdown",
   "topicBar.exportJson": "匯出 JSON",
 
+  // AI 資料流偵錯
+  "flow.title": "AI Flow",
+  "flow.summary": "{events} 個事件 · {tools} 個工具 · {usage} 筆用量 · {failures} 個失敗",
+  "flow.copyTrace": "複製追蹤記錄",
+  "flow.exportTrace": "匯出追蹤記錄",
+  "flow.clearTrace": "清除追蹤記錄",
+  "flow.close": "關閉 AI Flow",
+  "flow.empty": "目前分頁尚未擷取到代理事件。",
+  "flow.timeline": "AI 事件時間軸",
+  "flow.detail": "所選事件 JSON",
+  "flow.event": "事件",
+  "flow.copyJson": "複製 JSON",
+  "flow.exportJsonl": "AI Flow JSONL",
+
   // 範圍標籤
   "scope.global": "範圍：全域",
   "scope.project": "專案 · {name}",
