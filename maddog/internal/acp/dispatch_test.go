@@ -181,6 +181,16 @@ func TestUpdateSinkDropsAndWarns(t *testing.T) {
 	}
 }
 
+func TestUpdateSinkIgnoresRefreshedToolDispatch(t *testing.T) {
+	fn := &fakeNotifier{}
+	sink := newUpdateSink(fn, "sess-1")
+	sink.Emit(event.Event{Kind: event.ToolDispatch, Tool: event.Tool{ID: "call-1", Name: "edit_file"}})
+	sink.Emit(event.Event{Kind: event.ToolDispatch, Tool: event.Tool{ID: "call-1", Name: "edit_file", Refreshed: true}})
+	if got := len(fn.notifs); got != 1 {
+		t.Fatalf("refreshed dispatch emitted duplicate ACP tool_call: got %d want 1", got)
+	}
+}
+
 // approveCall records one approve(id, allow, session, persist) callback.
 type approveCall struct {
 	id      string

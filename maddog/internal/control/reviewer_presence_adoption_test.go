@@ -37,6 +37,7 @@ func TestReviewerFailureRequiresPresenceEveryInvocation(t *testing.T) {
 			}
 		}),
 	})
+	controller.EnableInteractiveApproval()
 	type result struct {
 		allow  bool
 		reason string
@@ -74,5 +75,18 @@ func TestReviewerFailureRequiresPresenceEveryInvocation(t *testing.T) {
 	}
 	if reviewer.requests != 2 {
 		t.Fatalf("reviewer requests = %d, want 2", reviewer.requests)
+	}
+}
+
+func TestReviewerFailureFailsClosedWithoutInteractiveUser(t *testing.T) {
+	reviewer := &unavailableReviewerProvider{}
+	guardianSession := guardian.NewSession(reviewer, tool.NewRegistry(), guardian.PolicyPrompt(), "test", 0, nil, event.Discard)
+	executor := agent.New(&recordingProvider{name: "executor"}, tool.NewRegistry(), agent.NewSession("sys"), agent.Options{}, event.Discard)
+	controller := New(Options{Executor: executor, Guardian: guardianSession, Sink: event.Discard})
+	controller.EnableMachineApproval()
+
+	allow, _, _, err := (gateApprover{controller}).ApproveWithReason(context.Background(), "write_file", "main.go", json.RawMessage(`{"path":"main.go"}`))
+	if err == nil || allow || !strings.Contains(err.Error(), "interactive user") {
+		t.Fatalf("headless reviewer failure = (allow=%v, err=%v), want fail-closed interactive-user error", allow, err)
 	}
 }

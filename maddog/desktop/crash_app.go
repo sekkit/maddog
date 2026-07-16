@@ -242,6 +242,9 @@ func crashReportFromDetail(kind, detail string) (crashReport, error) {
 }
 
 func (a *App) ReportCrash(kind, detail string) error {
+	if a.SafeMode() {
+		return fmt.Errorf("network reporting is disabled in Safe Mode")
+	}
 	r, err := crashReportFromDetail(kind, detail)
 	if err != nil {
 		return err

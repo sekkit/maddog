@@ -8,7 +8,7 @@ import { asArray } from "./array";
 import { addBreadcrumb } from "./breadcrumbs";
 import { app, onEvent, onReady } from "./bridge";
 import { invalidateCache } from "./composerHistory";
-import { createTraceEntry, type FlowTraceEntry } from "./flowTrace";
+import { appendTraceEntry, type FlowTraceEntry } from "./flowTrace";
 import { formatGuardianAssessmentNotice } from "./guardianEvents";
 import { createRafBatch } from "./rafBatch";
 import { t } from "./i18n";
@@ -976,8 +976,7 @@ export function reducer(s: State, a: Action): State {
 }
 
 function appendTrace(trace: FlowTraceEntry[], event: WireEvent): FlowTraceEntry[] {
-  const next = [...trace, createTraceEntry((trace[trace.length - 1]?.seq ?? 0) + 1, event)];
-  return next.length <= MAX_TRACE_EVENTS ? next : next.slice(next.length - MAX_TRACE_EVENTS);
+  return appendTraceEntry(trace, event, MAX_TRACE_EVENTS);
 }
 
 // ---- per-tab state map ----

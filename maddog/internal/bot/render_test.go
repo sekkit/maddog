@@ -198,6 +198,17 @@ func TestRenderSinkSendsProgressWithoutToolOutput(t *testing.T) {
 	}
 }
 
+func TestRenderSinkIgnoresRefreshedToolDispatch(t *testing.T) {
+	adapter := newFakeAdapter(PlatformWeixin, "fake-weixin")
+	sink := newRenderSink(context.Background(), adapter, "weixin-weixin", "weixin", "chat-1", ChatDM, "user-1", "msg-1", slog.New(slog.NewTextHandler(io.Discard, nil)), nil, nil)
+	sink.Emit(event.Event{Kind: event.ToolDispatch, Tool: event.Tool{ID: "tool-1", Name: "edit_file"}})
+	sink.lastProgress = time.Now().Add(-renderProgressMinInterval)
+	sink.Emit(event.Event{Kind: event.ToolDispatch, Tool: event.Tool{ID: "tool-1", Name: "edit_file", Refreshed: true}})
+	if got := len(adapter.sentMessages()); got != 1 {
+		t.Fatalf("refreshed dispatch sent duplicate progress messages: got %d want 1", got)
+	}
+}
+
 func TestRenderSinkLimitsProgressMessages(t *testing.T) {
 	adapter := newFakeAdapter(PlatformWeixin, "fake-weixin")
 	sink := newRenderSink(context.Background(), adapter, "weixin-weixin", "weixin", "chat-1", ChatDM, "user-1", "msg-1", slog.New(slog.NewTextHandler(io.Discard, nil)), nil, nil)

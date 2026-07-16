@@ -48,6 +48,20 @@ export function createTraceEntry(seq: number, e: WireEvent, now = Date.now()): F
   return { seq, ts: now, kind: e.kind, summary: traceSummary(e), event: redactWireEvent(e) };
 }
 
+export function appendTraceEntry(trace: FlowTraceEntry[], event: WireEvent, limit: number): FlowTraceEntry[] {
+  const toolID = event.kind === "tool_dispatch" && event.tool?.refreshed ? event.tool.id : undefined;
+  if (toolID) {
+    const index = trace.findIndex((entry) => entry.kind === "tool_dispatch" && entry.event.tool?.id === toolID);
+    if (index >= 0) {
+      const next = [...trace];
+      next[index] = createTraceEntry(trace[index].seq, event);
+      return next;
+    }
+  }
+  const next = [...trace, createTraceEntry((trace[trace.length - 1]?.seq ?? 0) + 1, event)];
+  return next.length <= limit ? next : next.slice(next.length - limit);
+}
+
 export function traceToJsonl(entries: FlowTraceEntry[]): string {
   return entries.map((entry) => JSON.stringify(entry)).join("\n") + (entries.length ? "\n" : "");
 }

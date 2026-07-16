@@ -56,6 +56,11 @@ func Run(args []string, version string) int {
 	if cmd == "--acp" {
 		cmd = "acp"
 	}
+	// Recovery must remain usable when user config itself is corrupt. Route it
+	// before config loading, theme probing, providers, plugins, MCP, or network.
+	if cmd == "repair" {
+		return repairCommand(args[1:])
+	}
 	if cfg, err := config.Load(); err == nil {
 		if cfg.Language != "" {
 			i18n.DetectLanguage(cfg.Language)
@@ -191,6 +196,17 @@ func setupWithOptions(ctx context.Context, modelName string, maxStepsOverride in
 	})
 }
 
+func setupMachine(ctx context.Context, modelName string, maxSteps int, offline bool, sink event.Sink, restrictTools bool, allowed []string, addDirs []string) (*control.Controller, error) {
+	if !offline {
+		migrateMCPConfigForCLIWorkspace()
+	}
+	ctrl, err := boot.Build(ctx, boot.Options{Model: modelName, MaxSteps: maxSteps, RequireKey: true, OfflineEvaluation: offline, Sink: sink, SessionDir: resolveCLISessionDir(), RestrictTools: restrictTools, AllowedTools: allowed, AdditionalRoots: addDirs})
+	if err == nil {
+		ctrl.EnableMachineApproval()
+	}
+	return ctrl, err
+}
+
 // resolveCLISessionDir returns the session dir for CLI invocations. When the
 // current working directory maps to a project session dir, the project dir is
 // used so /resume shows project history. Falls back to the global session dir.
@@ -278,14 +294,37 @@ func runAgent(args []string) int {
 	resume := fs.String("resume", "", "resume a specific session file (non-interactive; takes precedence over --continue)")
 	skillName := fs.String("skill", "", "force a named project skill for this run")
 	evalMode := fs.Bool("eval-mode", false, "run in isolated offline evaluation mode")
+	formatFlag := fs.String("output-format", "text", "output format: text, json, or stream-json")
+	printAlias := fs.Bool("print", false, "alias for --output-format text")
+	var allowedTools, addDirs stringList
+	fs.Var(&allowedTools, "allowed-tools", "restrict tool names (comma-separated; repeatable)")
+	fs.Var(&addDirs, "add-dir", "additional writable directory (comma-separated; repeatable)")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
+	allowedToolsSet := false
+	fs.Visit(func(f *flag.Flag) { allowedToolsSet = allowedToolsSet || f.Name == "allowed-tools" })
+	format, err := parseOutputFormat(*formatFlag)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, i18n.M.ErrorPrefix, err)
+		return 2
+	}
+	if *printAlias {
+		format = outputText
+	}
+	finishPreflight := func(e error) {
+		if format != outputText {
+			_ = newMachineSink(os.Stdout, format).Finish(e)
+		}
+	}
 	if *evalMode && (*cont || strings.TrimSpace(*resume) != "") {
-		fmt.Fprintln(os.Stderr, i18n.M.ErrorPrefix, "--eval-mode cannot be combined with --continue or --resume")
+		e := errors.New("--eval-mode cannot be combined with --continue or --resume")
+		fmt.Fprintln(os.Stderr, i18n.M.ErrorPrefix, e)
+		finishPreflight(e)
 		return 2
 	}
 	if rc := chdirTo(*dir); rc != 0 {
+		finishPreflight(fmt.Errorf("cannot change to directory %q", *dir))
 		return rc
 	}
 	cfg, _ := config.Load()
@@ -297,6 +336,7 @@ func runAgent(args []string) int {
 	}
 	if prompt == "" {
 		fmt.Fprintln(os.Stderr, i18n.M.UsageRunHint)
+		finishPreflight(errors.New(i18n.M.UsageRunHint))
 		return 2
 	}
 
@@ -306,6 +346,7 @@ func runAgent(args []string) int {
 		resumeSession, err = loadResumableSession(*resume)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, i18n.M.ErrorPrefix, err)
+			finishPreflight(err)
 			return 1
 		}
 	}
@@ -341,6 +382,73 @@ func runAgent(args []string) int {
 		if sessions, err := agent.ListSessions(resolveCLISessionDir()); err == nil && len(sessions) > 0 {
 			*model = modelForResumePath(*model, sessions[0].Path, cfg)
 		}
+	}
+	if format != outputText || allowedToolsSet || len(addDirs) > 0 {
+		var ms *machineSink
+		if format != outputText {
+			ms = newMachineSink(os.Stdout, format)
+			sink = ms
+		}
+		finish := func(e error) {
+			if ms != nil {
+				_ = ms.Finish(e)
+			}
+		}
+		ctrl, err := setupMachine(ctx, *model, *maxSteps, *evalMode, sink, allowedToolsSet, allowedTools, addDirs)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, i18n.M.ErrorPrefix, err)
+			finish(err)
+			return 1
+		}
+		defer ctrl.Close()
+		if *resume != "" {
+			if err := ctrl.Resume(resumeSession, *resume); err != nil {
+				fmt.Fprintln(os.Stderr, i18n.M.ErrorPrefix, err)
+				finish(err)
+				return 1
+			}
+		} else if *cont {
+			sessions, e := agent.ListSessions(ctrl.SessionDir())
+			if e == nil && len(sessions) == 0 {
+				e = errors.New(i18n.M.NoSessionToResume)
+			}
+			if e != nil {
+				fmt.Fprintln(os.Stderr, i18n.M.ErrorPrefix, e)
+				finish(e)
+				return 1
+			}
+			loaded, e := agent.LoadSession(sessions[0].Path)
+			if e != nil {
+				fmt.Fprintln(os.Stderr, i18n.M.ErrorPrefix, e)
+				finish(e)
+				return 1
+			}
+			if e = ctrl.Resume(loaded, sessions[0].Path); e != nil {
+				fmt.Fprintln(os.Stderr, i18n.M.ErrorPrefix, e)
+				finish(e)
+				return 1
+			}
+		}
+		if ctrl.SessionPath() == "" && ctrl.SessionDir() != "" {
+			if e := ctrl.SetSessionPath(agent.NewSessionPath(ctrl.SessionDir(), ctrl.Label())); e != nil {
+				fmt.Fprintln(os.Stderr, i18n.M.ErrorPrefix, e)
+				finish(e)
+				return 1
+			}
+		}
+		runInput, e := forcedSkillInput(ctrl, *skillName, prompt)
+		if e != nil {
+			fmt.Fprintln(os.Stderr, i18n.M.ErrorPrefix, e)
+			finish(e)
+			return 1
+		}
+		runErr := ctrl.Run(ctx, runInput)
+		finish(runErr)
+		if runErr != nil {
+			fmt.Fprintln(os.Stderr, i18n.M.ErrorPrefix, runErr)
+			return 1
+		}
+		return 0
 	}
 	ctrl, err := setupWithOptions(ctx, *model, *maxSteps, true, *evalMode, sink)
 	if err != nil {

@@ -172,6 +172,10 @@ type Tool struct {
 	// Args still streaming) so a frontend can show the card immediately; a second,
 	// full ToolDispatch (Partial false, Args set) follows when the call completes.
 	Partial bool
+	// Refreshed marks a repeated full dispatch whose preview was recomputed after
+	// an earlier writer changed disk. Upsert-capable frontends replace by ID;
+	// append-only sinks ignore it.
+	Refreshed bool
 	// ParentID, when set, is the ID of the tool call that spawned this one — a
 	// sub-agent's calls carry the parent `task` call's ID so a frontend can nest
 	// them under it. Empty for top-level calls.

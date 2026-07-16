@@ -3149,7 +3149,7 @@ func (m *chatTUI) ingestEvent(e event.Event) {
 	case event.ToolDispatch:
 		// The early (partial) dispatch only carries the name — the full dispatch
 		// with args prints the line. The running spinner covers the gap meanwhile.
-		if e.Tool.Partial {
+		if e.Tool.Partial || e.Tool.Refreshed {
 			break
 		}
 		m.finalizeStreamed()

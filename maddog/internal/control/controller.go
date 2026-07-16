@@ -67,13 +67,14 @@ var errNoSessionPath = errors.New("session has content but no session path; conv
 // Controller drives one chat session. Construct with New; drive with the command
 // methods; observe through the Sink passed in Options.
 type Controller struct {
-	runner        agent.Runner
-	executor      *agent.Agent
-	imageFallback provider.Provider
-	guardianSess  *guardian.Session // nil when guardian is disabled
-	guardianPath  string            // persisted guardian session file ("" when disabled)
-	sink          event.Sink
-	policy        permission.Policy
+	runner          agent.Runner
+	executor        *agent.Agent
+	imageFallback   provider.Provider
+	guardianSess    *guardian.Session // nil when guardian is disabled
+	guardianPath    string            // persisted guardian session file ("" when disabled)
+	sink            event.Sink
+	policy          permission.Policy
+	machineApproval bool
 
 	label             string
 	systemPrompt      string
@@ -1697,6 +1698,7 @@ func (c *Controller) Approve(id string, allow, session, persist bool) {
 // Interactive frontends (chat, desktop) call this; the headless run keeps the
 // silent gate and a nil asker from setup.
 func (c *Controller) EnableInteractiveApproval() {
+	c.machineApproval = false
 	trustGate := planModeReadOnlyTrustApprover{c}
 	if c.executor != nil {
 		c.executor.SetGate(c.newInteractiveGate())
@@ -1707,6 +1709,16 @@ func (c *Controller) EnableInteractiveApproval() {
 		SetPlanModeReadOnlyTrustGate(agent.PlanModeReadOnlyTrustGate)
 	}); ok {
 		setter.SetPlanModeReadOnlyTrustGate(trustGate)
+	}
+}
+
+// EnableMachineApproval applies the real approval/reviewer path without
+// installing an asker. Any decision requiring a present user fails closed.
+func (c *Controller) EnableMachineApproval() {
+	c.machineApproval = true
+	if c.executor != nil {
+		c.executor.SetGate(c.newInteractiveGate())
+		c.executor.SetAsker(nil)
 	}
 }
 
@@ -2787,6 +2799,19 @@ func (c *Controller) snapshot(markActivity bool) error {
 	// EnsureBranchMeta / SetBranchModel / TouchBranchMeta sequence.
 	preview, turns := agent.SessionPreviewFromMessages(s.Snapshot())
 	return agent.UpdateSessionMeta(path, modelRef, preview, turns, markActivity)
+}
+
+// SaveRecoveryBranch preserves the in-memory transcript beside its original
+// session path when a CAS-protected snapshot cannot safely replace the file.
+func (c *Controller) SaveRecoveryBranch(reason string) error {
+	c.mu.Lock()
+	path := c.sessionPath
+	c.mu.Unlock()
+	if path == "" || c.executor == nil {
+		return fmt.Errorf("recovery branch requires an active session path")
+	}
+	_, err := c.executor.Session().SaveRecoveryBranch(agent.RecoveryBranchOptions{OriginalPath: path, Reason: reason})
+	return err
 }
 
 func (c *Controller) messageCount() int {
@@ -4209,6 +4234,9 @@ func (c *Controller) requestApprovalDecisionWithOptions(ctx context.Context, too
 	// not a tool permission, so it deliberately stays interactive.
 	if !opts.alwaysPrompt && c.approval.preApprovedForDecision(tool, subject, opts.fresh) {
 		return approvalReply{allow: true}, nil
+	}
+	if c.machineApproval {
+		return approvalReply{}, fmt.Errorf("approval for %s requires an interactive user; headless execution denied", tool)
 	}
 
 	c.approval.promptMu.Lock()

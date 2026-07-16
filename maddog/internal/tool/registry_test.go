@@ -85,6 +85,16 @@ func TestRegistrySuspendPrefixBlocksLateAddsUntilResume(t *testing.T) {
 	}
 }
 
+func TestRegistryExplicitEmptyRestrictionBlocksExistingAndFutureTools(t *testing.T) {
+	r := NewRegistry()
+	r.Add(stubTool{name: "before"})
+	r.RestrictTo(nil)
+	r.Add(stubTool{name: "after"})
+	if got := r.Names(); len(got) != 0 {
+		t.Fatalf("explicit empty restriction exposed tools: %v", got)
+	}
+}
+
 // TestRegistrySchemasSorted proves Schemas() emits tool definitions in
 // deterministic alphabetical order regardless of insertion order, so a logically
 // identical tool set produces a stable provider-facing request prefix (prompt

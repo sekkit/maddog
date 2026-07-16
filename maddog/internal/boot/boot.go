@@ -138,6 +138,17 @@ type Options struct {
 	// the core coding tools visible and moves skills, MCP, LSP, web_fetch,
 	// install_source, and task behind connect_tool_source.
 	TokenMode string
+	// AllowedTools restricts the session tool surface after normal trust and
+	// confinement construction. It can only remove tools.
+	AllowedTools []string
+	// RestrictTools distinguishes an explicit empty allowlist (deny every tool)
+	// from an omitted allowlist.
+	RestrictTools bool
+	// AdditionalRoots extends the workspace write confinement for this session.
+	AdditionalRoots []string
+	// SafeMode builds from Maddog defaults, without sessions, plugins, MCP,
+	// network services, migrations, skills, sidecars, or user configuration.
+	SafeMode bool
 }
 
 // Build loads config, resolves the model(s), and returns a Controller wrapping a
@@ -145,7 +156,7 @@ type Options struct {
 // returned controller owns plugin subprocesses; call Close (via Controller.Close)
 // to release them.
 func Build(ctx context.Context, opts Options) (*control.Controller, error) {
-	offline := opts.OfflineEvaluation
+	offline := opts.OfflineEvaluation || opts.SafeMode
 	stderr := opts.Stderr
 	if stderr == nil {
 		stderr = os.Stderr
@@ -162,7 +173,16 @@ func Build(ctx context.Context, opts Options) (*control.Controller, error) {
 		archiveDir = ""
 		memoryUserDir = ""
 	}
-	cfg, err := config.LoadForRoot(root)
+	var cfg *config.Config
+	var err error
+	if opts.SafeMode {
+		cfg = config.Default()
+		opts.RequireKey = false
+		opts.AllowedTools = []string{"read_file", "list_files"}
+		opts.RestrictTools = true
+	} else {
+		cfg, err = config.LoadForRoot(root)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -384,13 +404,15 @@ func Build(ctx context.Context, opts Options) (*control.Controller, error) {
 	if offline {
 		bashNetwork = false
 	}
+	forbidReadRoots := cfg.ForbidReadRootsForRoot(root)
 	writeRoots := cfg.WriteRootsForRoot(root)
+	writeRoots = append(writeRoots, canonicalAdditionalRoots(root, opts.AdditionalRoots, forbidReadRoots)...)
 	bashMode := cfg.BashMode()
 	if offline {
 		writeRoots = []string{root}
 		bashMode = "enforce"
 	}
-	bashSpec := sandbox.Spec{Mode: bashMode, WriteRoots: writeRoots, ForbidReadRoots: cfg.ForbidReadRootsForRoot(root), Network: bashNetwork}
+	bashSpec := sandbox.Spec{Mode: bashMode, WriteRoots: writeRoots, ForbidReadRoots: forbidReadRoots, Network: bashNetwork}
 	bashSpec.ScrubEnvironment = offline
 	bashSpec.Shell = shell
 	if !offline && bashSpec.Mode == "enforce" && !sandbox.Available() {
@@ -419,7 +441,7 @@ func Build(ctx context.Context, opts Options) (*control.Controller, error) {
 	if offline {
 		readRoots = []string{root}
 	}
-	addBuiltins(reg, enabledBuiltins, writeRoots, readRoots, bashSpec, bashTimeout, searchSpec, stderr, root, proxySpec, cfg.ForbidReadRootsForRoot(root), readPathResolver)
+	addBuiltins(reg, enabledBuiltins, writeRoots, readRoots, bashSpec, bashTimeout, searchSpec, stderr, root, proxySpec, forbidReadRoots, readPathResolver)
 	// Use the caller-supplied shared host when set, so controllers for the same
 	// workspace root reuse running MCP processes (e.g. one CodeGraph daemon
 	// instead of one per tab). Otherwise construct a private host per controller.
@@ -1235,6 +1257,9 @@ func Build(ctx context.Context, opts Options) (*control.Controller, error) {
 	var runner agent.Runner = executor
 	label := entry.Model
 	var classifier *control.ProviderAutoPlanClassifier
+	if opts.RestrictTools {
+		reg.RestrictTo(opts.AllowedTools)
+	}
 
 	if !offline && !tokenEconomy && !strings.EqualFold(strings.TrimSpace(cfg.Agent.AutoPlan), "off") && cfg.Agent.AutoPlanClassifier != "" {
 		cm := cfg.Agent.AutoPlanClassifier
@@ -1840,6 +1865,51 @@ func addBuiltins(reg *tool.Registry, enabled, writeRoots, readRoots []string, ba
 			reg.Add(t)
 		}
 	}
+}
+
+func canonicalAdditionalRoots(base string, roots, forbidReadRoots []string) []string {
+	out := make([]string, 0, len(roots))
+	seen := map[string]bool{}
+	for _, raw := range roots {
+		raw = strings.TrimSpace(raw)
+		if raw == "" {
+			continue
+		}
+		p := raw
+		if !filepath.IsAbs(p) {
+			p = filepath.Join(base, p)
+		}
+		if abs, err := filepath.Abs(p); err == nil {
+			p = abs
+		}
+		if real, err := filepath.EvalSymlinks(p); err == nil {
+			p = real
+		}
+		p = filepath.Clean(p)
+		if pathsOverlapAnyRoot(p, forbidReadRoots) {
+			continue
+		}
+		if !seen[p] {
+			seen[p] = true
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+func pathsOverlapAnyRoot(path string, roots []string) bool {
+	for _, root := range roots {
+		root = filepath.Clean(root)
+		if pathWithinRoot(path, root) || pathWithinRoot(root, path) {
+			return true
+		}
+	}
+	return false
+}
+
+func pathWithinRoot(path, root string) bool {
+	rel, err := filepath.Rel(root, path)
+	return err == nil && (rel == "." || filepath.IsLocal(rel))
 }
 
 func builtinToolEnabled(enabled []string, name string) bool {

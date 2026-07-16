@@ -241,11 +241,13 @@ func LookupBuiltin(name string) (Tool, bool) {
 
 // Registry is a per-run set of tools: enabled built-ins plus plugin tools.
 type Registry struct {
-	mu        sync.RWMutex
-	tools     map[string]Tool
-	order     []string
-	canon     map[string]json.RawMessage
-	suspended map[string]bool
+	mu         sync.RWMutex
+	tools      map[string]Tool
+	order      []string
+	canon      map[string]json.RawMessage
+	suspended  map[string]bool
+	allowed    map[string]bool
+	restricted bool
 }
 
 // NewRegistry returns an empty registry.
@@ -261,6 +263,9 @@ func (r *Registry) Add(t Tool) {
 	defer r.mu.Unlock()
 
 	name := t.Name()
+	if r.restricted && !r.allowed[name] {
+		return
+	}
 	for prefix := range r.suspended {
 		if strings.HasPrefix(name, prefix) {
 			return
@@ -271,6 +276,31 @@ func (r *Registry) Add(t Tool) {
 	}
 	r.tools[name] = t
 	r.canon[name] = provider.CanonicalizeSchema(t.Schema())
+}
+
+// RestrictTo applies a session-local allow overlay. Existing and future tools
+// outside the set are omitted; this never grants tools or bypasses policy.
+func (r *Registry) RestrictTo(names []string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.restricted = true
+	r.allowed = make(map[string]bool, len(names))
+	for _, name := range names {
+		name = strings.TrimSpace(name)
+		if name != "" {
+			r.allowed[name] = true
+		}
+	}
+	kept := r.order[:0]
+	for _, name := range r.order {
+		if r.allowed[name] {
+			kept = append(kept, name)
+		} else {
+			delete(r.tools, name)
+			delete(r.canon, name)
+		}
+	}
+	r.order = kept
 }
 
 // MCPNamePrefix is the namespace every MCP tool name carries: the

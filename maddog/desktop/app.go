@@ -44,6 +44,7 @@ import (
 	"maddog/internal/memory"
 	"maddog/internal/plugin"
 	"maddog/internal/provider"
+	"maddog/internal/repair"
 	"maddog/internal/skill"
 	"maddog/internal/skilleval"
 	"maddog/internal/tool"
@@ -123,6 +124,11 @@ type App struct {
 	skillRootsCache skillRootsCache
 
 	heartbeat *HeartbeatEngine // scheduled heartbeat tasks; nil until startup
+
+	// repairGate is process-local. Safe Mode never persists an "enabled" switch;
+	// only the crash-loop guard's bounded launch decision creates it.
+	repairGate   *repair.ProcessGate
+	startupGuard *repair.StartupGuard
 }
 
 type skillRootsCache struct {
@@ -306,6 +312,7 @@ func NewApp() *App {
 		botInstalls:           map[string]*botInstallSession{},
 		botRuntime:            newDesktopBotRuntime(),
 		codeIntelBenchRunning: map[string]int{},
+		startupGuard:          repair.NewStartupGuard(filepath.Join(config.MemoryUserDir(), "startup-probation.json"), 3, 2*time.Minute),
 	}
 }
 
@@ -322,11 +329,20 @@ func (a *App) Platform() string {
 	return goruntime.GOOS
 }
 
+// SafeMode reports whether this process crossed the crash-loop threshold and
+// was started with the offline recovery policy.
+func (a *App) SafeMode() bool {
+	return a.repairGate != nil && a.repairGate.SafeMode()
+}
+
 // startup runs once the webview process is up, before the frontend can issue any
 // bound call. It captures the Wails context (needed for EventsEmit), then kicks
 // off the initialization in a background goroutine so the webview loads immediately.
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
+	if a.startupGuard != nil {
+		_ = a.startupGuard.MarkReady()
+	}
 	installSystemQuitHook()
 	a.startTray()
 
@@ -338,7 +354,14 @@ func (a *App) startup(ctx context.Context) {
 	a.heartbeat = newHeartbeatEngine(a)
 	a.heartbeat.Start()
 
-	go a.restoreOrBuildTabs()
+	go func() {
+		a.restoreOrBuildTabs()
+		// restoreOrBuildTabs is the startup probation boundary. Once it returns,
+		// the launch is healthy and the next crash does not count this run.
+		if a.startupGuard != nil {
+			time.AfterFunc(30*time.Second, func() { _ = a.startupGuard.MarkHealthy() })
+		}
+	}()
 	a.goSafe("refreshBotRuntime", a.refreshBotRuntime)
 	a.goSafe("sendStartupPing", a.sendStartupPing)
 	a.goSafe("flushMetrics", a.flushMetrics)
@@ -606,6 +629,9 @@ func (a *App) snapshotAllTabs() {
 
 // shutdown snapshots all tabs, saves the final window geometry, and closes tabs.
 func (a *App) shutdown(context.Context) {
+	if a.startupGuard != nil {
+		_ = a.startupGuard.MarkClean()
+	}
 	if a.heartbeat != nil {
 		a.heartbeat.Stop()
 	}
@@ -1943,7 +1969,12 @@ func (a *App) prepareRemovedSessionRuntimes(removed []removedSessionRuntime) err
 			continue
 		}
 		if err := item.ctrl.Snapshot(); err != nil {
-			return err
+			// Deletion must remain possible when the runtime was opened from a
+			// stale, missing, or externally changed transcript. Preserve the
+			// in-memory conversation as a recovery branch before moving the original.
+			if recoveryErr := item.ctrl.SaveRecoveryBranch("session delete snapshot conflict"); recoveryErr != nil {
+				return fmt.Errorf("session snapshot failed (%v), recovery failed: %w", err, recoveryErr)
+			}
 		}
 		if err := item.ctrl.SetSessionPath(""); err != nil {
 			return err

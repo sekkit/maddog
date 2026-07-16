@@ -180,6 +180,7 @@ type Status interface {
 // state.
 type SessionPersistence interface {
 	Snapshot() error
+	SaveRecoveryBranch(reason string) error
 	SnapshotActivity() error
 	SessionCache() (hit, miss int)
 	BeginDestroySession(sessionPath string) SessionDestroyHandle

@@ -11,6 +11,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"maddog/internal/diff"
 	"maddog/internal/event"
 	"maddog/internal/provider"
 	"maddog/internal/tool"
@@ -109,6 +110,30 @@ type fakeTool struct {
 	delay    time.Duration
 	err      error
 	calls    *int32 // shared counter to assert all dispatched
+}
+
+type dependentPreviewTool struct {
+	name        string
+	state       *int
+	advance     bool
+	failChanged bool
+}
+
+func (f dependentPreviewTool) Name() string            { return f.name }
+func (f dependentPreviewTool) Description() string     { return "" }
+func (f dependentPreviewTool) Schema() json.RawMessage { return json.RawMessage(`{"type":"object"}`) }
+func (f dependentPreviewTool) ReadOnly() bool          { return false }
+func (f dependentPreviewTool) Execute(context.Context, json.RawMessage) (string, error) {
+	if f.advance {
+		*f.state++
+	}
+	return "ok", nil
+}
+func (f dependentPreviewTool) Preview(json.RawMessage) (diff.Change, error) {
+	if f.failChanged && *f.state > 0 {
+		return diff.Change{}, errors.New("dependent input changed")
+	}
+	return diff.Change{Diff: "stale preview", Added: 1}, nil
 }
 
 func (f fakeTool) Name() string            { return f.name }
@@ -238,6 +263,52 @@ func TestExecuteBatchParallelReadOnly(t *testing.T) {
 	// Allow generous slack for CI; even 2x serial would prove we got parallelism.
 	if elapsed >= 2*delay {
 		t.Errorf("read-only batch took %v (>= %v) — not parallel", elapsed, 2*delay)
+	}
+}
+
+func TestExecuteBatchRefreshIsUIOnlyAndCopyOnWrite(t *testing.T) {
+	state := 0
+	reg := tool.NewRegistry()
+	reg.Add(dependentPreviewTool{name: "first", state: &state, advance: true})
+	reg.Add(dependentPreviewTool{name: "second", state: &state, failChanged: true})
+
+	calls := []provider.ToolCall{
+		{ID: "first", Name: "first"},
+		{ID: "second", Name: "second", Diff: "stale preview", Added: 1},
+	}
+	session := NewSession("")
+	session.Add(provider.Message{Role: provider.RoleAssistant, ToolCalls: append([]provider.ToolCall(nil), calls...)})
+	rewriteVersion := session.RewriteVersion()
+	var dispatches []event.Tool
+	a := New(nil, reg, session, Options{}, event.FuncSink(func(e event.Event) {
+		if e.Kind == event.ToolDispatch {
+			dispatches = append(dispatches, e.Tool)
+		}
+	}))
+
+	a.executeBatch(context.Background(), calls)
+
+	if calls[1].Diff != "stale preview" || calls[1].Added != 1 {
+		t.Fatalf("caller-owned calls mutated: %+v", calls[1])
+	}
+	if session.RewriteVersion() != rewriteVersion {
+		t.Fatalf("UI-only refresh changed rewriteVersion: got %d want %d", session.RewriteVersion(), rewriteVersion)
+	}
+	stored := session.Snapshot()[0].ToolCalls[1]
+	if stored.Diff != "stale preview" || stored.Added != 1 {
+		t.Fatalf("UI-only refresh changed provider transcript: %+v", stored)
+	}
+	var refreshed *event.Tool
+	for i := range dispatches {
+		if dispatches[i].ID == "second" && dispatches[i].Refreshed {
+			refreshed = &dispatches[i]
+		}
+	}
+	if refreshed == nil {
+		t.Fatal("missing refreshed dependent preview dispatch")
+	}
+	if refreshed.Diff != "" || refreshed.Added != 0 || refreshed.Removed != 0 {
+		t.Fatalf("failed dependent preview retained stale diff: %+v", *refreshed)
 	}
 }
 
