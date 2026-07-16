@@ -49,9 +49,15 @@ The dirty root worktree is never committed or overwritten by this effort.
   Anthropic usage.
 - **Verified existing:** historical timestamp display, pinned conversations,
   pending approval replay, and existing typed provider errors.
-- **Next:** MCP trust/receipt/catalog and Strict Reader Execution; session
-  lease/CAS; todo/progress/approval state machine; recovery/Safe Mode; delivery
-  worktree; image lightbox; CLI machine protocol.
-- **Known baseline failures:** `internal/control.TestSlashArgItems` expects an
-  obsolete `/effort` option set; the full desktop suite exceeded the local
-  timeout. Neither failure was introduced by the completed batches.
+- **Complete on this branch:** MCP trust/receipt/catalog and Strict Reader
+  Execution; session lease/CAS and recovery branches; todo/progress/approval
+  state machine; grounded edit receipts and preview refresh; offline
+  repair/Safe Mode and updater rollback; delivery worktree kernel with explicit
+  lifecycle and leases; image lightbox; versioned CLI text/JSON/stream-JSON
+  automation protocol.
+- **Verification:** core packages 1429 tests passed; desktop packages 636 tests
+  passed; frontend test-all, typecheck, CSS checks, and production build passed.
+- **Known baseline failure:** `internal/control.TestSlashArgItems` expects an
+  obsolete `/effort` option set (`auto/high/max`), while the existing
+  implementation exposes (`auto/low/medium/high`). This predates the adoption
+  branch and is unrelated to the migrated features.
