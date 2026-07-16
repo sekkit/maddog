@@ -262,6 +262,7 @@ export interface AppBindings {
   ForgetForTab(tabID: string, name: string): Promise<void>;
   SaveDoc(path: string, body: string): Promise<string>;
   SaveDocForTab(tabID: string, path: string, body: string): Promise<string>;
+  SafeMode(): Promise<boolean>;
   DesktopStartupSettings(): Promise<DesktopStartupSettingsView>;
   Settings(): Promise<SettingsView>;
   HooksSettings(scope: string): Promise<HooksSettingsView>;
@@ -2826,6 +2827,9 @@ function makeMockApp(): AppBindings {
     },
     async SaveDocForTab(_tabID: string, path: string, body: string) {
       return this.SaveDoc(path, body);
+    },
+    async SafeMode() {
+      return false;
     },
     async DesktopStartupSettings() {
       const { bot, desktopLanguage, desktopLayoutStyle, desktopWindowChrome, desktopTheme, desktopThemeStyle, displayMode, statusBarStyle, statusBarItems, checkUpdates } = settings;
