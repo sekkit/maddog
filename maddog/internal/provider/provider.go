@@ -101,12 +101,23 @@ type ToolSchema struct {
 type Request struct {
 	Messages    []Message
 	Tools       []ToolSchema
-	Temperature float64
+	Temperature *float64 // nil = omit; non-nil = send the value, including 0
 	MaxTokens   int
 	// NativeAdvisor asks providers that support Anthropic's advisor server-side
 	// tool to expose it on this request. Providers that do not support native
 	// advisor ignore this field.
 	NativeAdvisor *NativeAdvisorConfig
+}
+
+// TemperaturePtr wraps an explicitly requested temperature, including zero.
+func TemperaturePtr(v float64) *float64 { return &v }
+
+// OptionalTemperature preserves the historical config meaning where zero is unset.
+func OptionalTemperature(v float64) *float64 {
+	if v == 0 {
+		return nil
+	}
+	return &v
 }
 
 // NativeAdvisorConfig describes the server-side advisor tool exposed by

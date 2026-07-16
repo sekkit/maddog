@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -13,6 +14,26 @@ import (
 	"maddog/internal/provider"
 	"maddog/internal/tool"
 )
+
+func TestArchiveMessagesUsesPrivateStorage(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "archive")
+	path, err := archiveMessages(dir, []provider.Message{{Role: provider.RoleUser, Content: "private"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtime.GOOS == "windows" {
+		return
+	}
+	for target, want := range map[string]os.FileMode{dir: 0o700, path: 0o600} {
+		info, err := os.Stat(target)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := info.Mode().Perm(); got != want {
+			t.Fatalf("mode %s = %o, want %o", target, got, want)
+		}
+	}
+}
 
 // fakeProvider returns a fixed reply and records the messages it was asked to
 // complete, so tests can drive summarization without a network call.

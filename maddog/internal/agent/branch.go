@@ -143,7 +143,7 @@ func saveBranchMeta(sessionPath string, m BranchMeta, touchUpdated bool) error {
 	if touchUpdated || m.UpdatedAt.IsZero() {
 		m.UpdatedAt = now
 	}
-	if err := os.MkdirAll(filepath.Dir(metaPath), 0o755); err != nil {
+	if err := fileutil.EnsurePrivateDir(filepath.Dir(metaPath)); err != nil {
 		return err
 	}
 	b, err := json.MarshalIndent(m, "", "  ")
@@ -165,11 +165,15 @@ func saveBranchMeta(sessionPath string, m BranchMeta, touchUpdated bool) error {
 		os.Remove(tmpPath)
 		return err
 	}
+	if err := fileutil.ProtectPrivateFile(tmpPath); err != nil {
+		os.Remove(tmpPath)
+		return err
+	}
 	if err := fileutil.ReplaceFile(tmpPath, metaPath); err != nil {
 		os.Remove(tmpPath)
 		return err
 	}
-	return nil
+	return fileutil.ProtectPrivateFile(metaPath)
 }
 
 func EnsureBranchMeta(sessionPath string) (BranchMeta, error) {

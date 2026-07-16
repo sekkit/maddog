@@ -2196,7 +2196,7 @@ func (a *Agent) stream(ctx context.Context, turn int) (string, string, string, [
 	ch, err := a.prov.Stream(ctx, provider.Request{
 		Messages:      a.messagesForProviderRequest(),
 		Tools:         a.toolSchemasForRequest(),
-		Temperature:   a.temperature,
+		Temperature:   provider.OptionalTemperature(a.temperature),
 		NativeAdvisor: a.nativeAdvisorForRequest(),
 	})
 	if err != nil {

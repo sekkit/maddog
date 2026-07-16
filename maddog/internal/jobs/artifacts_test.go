@@ -6,12 +6,51 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
 
 	"maddog/internal/event"
 )
+
+func TestCompletedJobProtectsArtifactDirectoryAndFiles(t *testing.T) {
+	sessionPath := filepath.Join(t.TempDir(), "session.jsonl")
+	dir := ArtifactDir(sessionPath)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	m := NewManager(event.Discard)
+	defer m.Close()
+	m.SetActiveSessionPath("session", sessionPath)
+	j := m.StartForSession("session", "bash", "private", func(context.Context, io.Writer) (string, error) {
+		return "private output", nil
+	})
+	<-j.done
+
+	for _, path := range []string{dir, filepath.Join(dir, j.ID+jobLogExt), filepath.Join(dir, j.ID+jobMetaExt)} {
+		if _, err := os.Stat(path); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if runtime.GOOS == "windows" {
+		return
+	}
+	checks := map[string]os.FileMode{
+		dir:                                 0o700,
+		filepath.Join(dir, j.ID+jobLogExt):  0o600,
+		filepath.Join(dir, j.ID+jobMetaExt): 0o600,
+	}
+	for path, want := range checks {
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := info.Mode().Perm(); got != want {
+			t.Fatalf("mode %s = %o, want %o", path, got, want)
+		}
+	}
+}
 
 func TestCompletedJobPersistsOutputAndReleasesMemory(t *testing.T) {
 	sessionPath := filepath.Join(t.TempDir(), "session.jsonl")
@@ -191,6 +230,15 @@ func TestMigrateArtifactDirFallsBackToCopyWhenRenameFails(t *testing.T) {
 	}
 	if string(got) != "persisted output" {
 		t.Fatalf("migrated artifact = %q, want persisted output", got)
+	}
+	if runtime.GOOS != "windows" {
+		info, err := os.Stat(filepath.Join(dst, "bash-1.log"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := info.Mode().Perm(); got != 0o600 {
+			t.Fatalf("migrated artifact mode = %o, want 600", got)
+		}
 	}
 	if _, err := os.Stat(filepath.Join(src, "bash-1.log")); !os.IsNotExist(err) {
 		t.Fatalf("source artifact should be removed after copy fallback, stat err = %v", err)

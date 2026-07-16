@@ -716,7 +716,7 @@ func (s *SubagentStore) sessionPath(ref string) string { return filepath.Join(s.
 func (s *SubagentStore) metaPath(ref string) string    { return filepath.Join(s.dir, ref+".meta.json") }
 
 func (s *SubagentStore) saveMeta(meta SubagentMeta) error {
-	if err := os.MkdirAll(s.dir, 0o755); err != nil {
+	if err := fileutil.EnsurePrivateDir(s.dir); err != nil {
 		return err
 	}
 	data, err := json.MarshalIndent(meta, "", "  ")
@@ -738,7 +738,16 @@ func (s *SubagentStore) saveMeta(meta SubagentMeta) error {
 		os.Remove(tmpPath)
 		return err
 	}
-	return fileutil.ReplaceFile(tmpPath, s.metaPath(meta.Ref))
+	if err := fileutil.ProtectPrivateFile(tmpPath); err != nil {
+		os.Remove(tmpPath)
+		return err
+	}
+	path := s.metaPath(meta.Ref)
+	if err := fileutil.ReplaceFile(tmpPath, path); err != nil {
+		os.Remove(tmpPath)
+		return err
+	}
+	return fileutil.ProtectPrivateFile(path)
 }
 
 func (s *SubagentStore) parentDestroyed(run *SubagentRun) bool {

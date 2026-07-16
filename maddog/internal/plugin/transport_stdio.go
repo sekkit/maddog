@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"maddog/internal/proc"
+	"maddog/internal/secrets"
 )
 
 const closeWaitBudget = 5 * time.Second
@@ -65,7 +66,7 @@ func newStdioTransport(ctx context.Context, s Spec) (*stdioTransport, error) {
 			releaseSlot()
 		}
 	}()
-	env := mergeEnv(os.Environ(), s.Env)
+	env := mergeEnv(secrets.ProcessEnv(), s.Env)
 	exe, env, err := resolveStdioExecutable(ctx, s, env)
 	if err != nil {
 		return nil, err

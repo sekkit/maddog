@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 
+	"maddog/internal/fileutil"
 	"maddog/internal/store"
 )
 
@@ -48,7 +49,7 @@ func writeMeta(path string, meta artifactMeta) error {
 	if path == "" {
 		return fmt.Errorf("empty metadata path")
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := fileutil.EnsurePrivateDir(filepath.Dir(path)); err != nil {
 		return err
 	}
 	b, err := json.MarshalIndent(meta, "", "  ")
@@ -69,7 +70,15 @@ func writeMeta(path string, meta artifactMeta) error {
 		os.Remove(tmpPath)
 		return err
 	}
-	return os.Rename(tmpPath, path)
+	if err := fileutil.ProtectPrivateFile(tmpPath); err != nil {
+		os.Remove(tmpPath)
+		return err
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		os.Remove(tmpPath)
+		return err
+	}
+	return fileutil.ProtectPrivateFile(path)
 }
 
 func readMeta(path string) (artifactMeta, error) {

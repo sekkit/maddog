@@ -89,7 +89,7 @@ func (r ReplayRunner) Run(ctx context.Context, bundle BundleV2, candidate Candid
 			{Role: provider.RoleSystem, Content: replaySystemPrompt(candidate)},
 			{Role: provider.RoleUser, Content: replayUserPrompt(bundle)},
 		},
-		Temperature: 0,
+		Temperature: provider.TemperaturePtr(0),
 		MaxTokens:   maxTokens,
 	})
 	if err != nil {

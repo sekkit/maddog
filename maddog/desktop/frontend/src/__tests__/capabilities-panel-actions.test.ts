@@ -2,7 +2,7 @@ import { JSDOM } from "jsdom";
 import React from "react";
 import { act } from "react";
 import { createRoot } from "react-dom/client";
-import { MCPServersSettingsPage } from "../components/CapabilitiesPanel";
+import { MCPServersSettingsPage, failureKind, summarizeServerError } from "../components/CapabilitiesPanel";
 import type { AppBindings } from "../lib/bridge";
 import { LocaleProvider } from "../lib/i18n";
 import { mcpServerLifecycleActions, mcpServerRetryableFromAvailableList } from "../lib/mcpServerLifecycle";
@@ -47,6 +47,16 @@ ok(!automaticIdle.canReconnect, "automatic idle server should wait for backgroun
 
 const failed = mcpServerLifecycleActions({ ...server("failed"), runtimeState: "issue" });
 ok(failed.showRetryInRow, "failed server row should expose retry");
+
+for (const prefix of ["npm error", "npm ERR!"]) {
+  const error = `plugin "fs": stderr: ${prefix} code ECONNREFUSED ${prefix} FetchError: request to https://registry.npmjs.org/pkg failed, reason: connect ECONNREFUSED 127.0.0.1:7890`;
+  ok(summarizeServerError(error) === "fs: npm ECONNREFUSED · registry.npmjs.org → 127.0.0.1:7890", `${prefix} should retain endpoints`);
+}
+const privateError = 'plugin "private": stderr: npm error code ECONNREFUSED npm error request to https://build-user:registry-secret@packages.example.test/npm failed, reason: connect ECONNREFUSED proxy.internal.test:8443';
+const privateSummary = summarizeServerError(privateError);
+ok(privateSummary.includes("packages.example.test → proxy.internal.test:8443"), "private endpoint hosts should remain actionable");
+ok(!privateSummary.includes("build-user") && !privateSummary.includes("registry-secret"), "npm endpoint summaries must not expose credentials");
+ok(failureKind({ ...server("failed"), error: privateError }) === "network", "npm refusal should be classified as network");
 
 ok(mcpServerRetryableFromAvailableList(server("initializing")), "connecting server should be included in available-list retry all");
 ok(mcpServerRetryableFromAvailableList({ ...server("deferred"), startIntent: "automatic" }), "automatic idle server should be included in available-list retry all");

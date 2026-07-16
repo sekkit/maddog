@@ -160,11 +160,15 @@ func (c *responsesClient) buildRequest(req provider.Request) responsesRequest {
 	}
 	tools := make([]responsesTool, 0, len(req.Tools))
 	for _, t := range req.Tools {
+		parameters := t.Parameters
+		if len(parameters) == 0 {
+			parameters = provider.CanonicalizeSchema(nil)
+		}
 		tools = append(tools, responsesTool{
 			Type:        "function",
 			Name:        t.Name,
 			Description: t.Description,
-			Parameters:  t.Parameters,
+			Parameters:  parameters,
 		})
 	}
 	out := responsesRequest{
@@ -332,7 +336,7 @@ type responsesRequest struct {
 	Tools        []responsesTool     `json:"tools,omitempty"`
 	Reasoning    *responsesReasoning `json:"reasoning,omitempty"`
 	Stream       bool                `json:"stream"`
-	Temperature  float64             `json:"temperature,omitempty"`
+	Temperature  *float64            `json:"temperature,omitempty"`
 	MaxTokens    int                 `json:"max_output_tokens,omitempty"`
 }
 

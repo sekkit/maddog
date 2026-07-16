@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"maddog/internal/event"
+	"maddog/internal/fileutil"
 	"maddog/internal/nilutil"
 )
 
@@ -365,13 +366,17 @@ func (m *Manager) openArtifactLocked(parentSession, id string) (logPath, metaPat
 	if dir == "" {
 		return "", "", nil, "artifact directory unavailable"
 	}
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := fileutil.EnsurePrivateDir(dir); err != nil {
 		return filepath.Join(dir, id+jobLogExt), filepath.Join(dir, id+jobMetaExt), nil, err.Error()
 	}
 	logPath = filepath.Join(dir, id+jobLogExt)
 	metaPath = filepath.Join(dir, id+jobMetaExt)
-	f, err := os.Create(logPath)
+	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
 	if err != nil {
+		return logPath, metaPath, nil, err.Error()
+	}
+	if err := fileutil.ProtectPrivateFile(logPath); err != nil {
+		_ = f.Close()
 		return logPath, metaPath, nil, err.Error()
 	}
 	return logPath, metaPath, f, ""
@@ -445,7 +450,7 @@ func (j *Job) moveArtifactToDirLocked(dir string) error {
 	if filepath.Clean(filepath.Dir(j.artifactPath)) == filepath.Clean(dir) {
 		return nil
 	}
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := fileutil.EnsurePrivateDir(dir); err != nil {
 		return err
 	}
 	newLogPath := filepath.Join(dir, filepath.Base(j.artifactPath))
@@ -1084,7 +1089,7 @@ func migrateArtifactDirSkipping(src, dst string, skip map[string]bool) error {
 		}
 		return err
 	}
-	if err := os.MkdirAll(dst, 0o755); err != nil {
+	if err := fileutil.EnsurePrivateDir(dst); err != nil {
 		return err
 	}
 	for _, entry := range entries {
@@ -1103,8 +1108,11 @@ func migrateArtifactDirSkipping(src, dst string, skip map[string]bool) error {
 }
 
 func moveArtifactFile(src, dst string) error {
+	if err := fileutil.ProtectPrivateFile(src); err != nil {
+		return err
+	}
 	if err := renamePath(src, dst); err == nil {
-		return nil
+		return fileutil.ProtectPrivateFile(dst)
 	}
 	if err := copyArtifactFile(src, dst); err != nil {
 		return err
@@ -1118,12 +1126,13 @@ func copyArtifactFile(src, dst string) error {
 		return err
 	}
 	defer in.Close()
-	info, err := in.Stat()
+	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
 	if err != nil {
 		return err
 	}
-	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, info.Mode().Perm())
-	if err != nil {
+	if err := fileutil.ProtectPrivateFile(dst); err != nil {
+		_ = out.Close()
+		_ = os.Remove(dst)
 		return err
 	}
 	_, copyErr := io.Copy(out, in)

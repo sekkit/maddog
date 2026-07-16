@@ -26,6 +26,7 @@ import (
 
 	"maddog/internal/config"
 	"maddog/internal/proc"
+	"maddog/internal/secrets"
 )
 
 // Event is a point in the agent loop a hook can fire at.
@@ -392,8 +393,13 @@ func DefaultSpawner(ctx context.Context, in SpawnInput) SpawnResult {
 	cctx, cancel := context.WithTimeout(ctx, in.Timeout)
 	defer cancel()
 
-	name, args := shellInvocation(in.Command)
+	command := expandPluginRoot(in.Command, os.Getenv("MADDOG_PLUGIN_ROOT"))
+	name, args, spawnErr := spawnCommand(cctx, command)
+	if spawnErr != nil {
+		return SpawnResult{ExitCode: -1, SpawnErr: spawnErr}
+	}
 	cmd := exec.CommandContext(cctx, name, args...)
+	cmd.Env = secrets.ProcessEnv()
 	proc.HideWindow(cmd)
 	cmd.Dir = in.Cwd
 	cmd.Stdin = strings.NewReader(in.Stdin)
@@ -407,8 +413,8 @@ func DefaultSpawner(ctx context.Context, in SpawnInput) SpawnResult {
 	err := cmd.Run()
 	res := SpawnResult{
 		ExitCode:  -1,
-		Stdout:    strings.TrimSpace(outBuf.String()),
-		Stderr:    strings.TrimSpace(errBuf.String()),
+		Stdout:    decodeHookOutput(outBuf.Bytes(), outBuf.truncated),
+		Stderr:    decodeHookOutput(errBuf.Bytes(), errBuf.truncated),
 		Truncated: outBuf.truncated || errBuf.truncated,
 	}
 	switch {
@@ -427,6 +433,24 @@ func DefaultSpawner(ctx context.Context, in SpawnInput) SpawnResult {
 		res.ExitCode = 0
 	}
 	return res
+}
+
+func spawnCommand(ctx context.Context, command string, argv ...[]string) (string, []string, error) {
+	if len(argv) > 0 && argv[0] != nil {
+		if runtime.GOOS == "windows" {
+			if shell, args, matched, err := windowsPOSIXShellArgvInvocation(command, argv[0]); matched {
+				return shell, args, err
+			}
+		}
+		return command, argv[0], nil
+	}
+	if runtime.GOOS == "windows" {
+		if shell, args, matched, err := windowsPOSIXShellInvocation(command); matched {
+			return shell, args, err
+		}
+	}
+	name, args := shellInvocation(command)
+	return name, args, nil
 }
 
 func shellInvocation(command string) (string, []string) {
@@ -460,6 +484,7 @@ func (c *cappedBuffer) Write(p []byte) (int, error) {
 }
 
 func (c *cappedBuffer) String() string { return c.buf.String() }
+func (c *cappedBuffer) Bytes() []byte  { return c.buf.Bytes() }
 
 func maddogHome(override string) string {
 	if override != "" {

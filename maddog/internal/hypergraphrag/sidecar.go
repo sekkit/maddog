@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"maddog/internal/codegraph"
+	"maddog/internal/secrets"
 )
 
 const (
@@ -180,7 +181,7 @@ func (b *BenchmarkBackend) run(ctx context.Context, actionArgs ...string) ([]byt
 	args := append([]string{}, b.cfg.Args...)
 	args = append(args, actionArgs...)
 	cmd := exec.CommandContext(ctx, b.cfg.Command, args...)
-	cmd.Env = os.Environ()
+	cmd.Env = secrets.ProcessEnv()
 	for k, v := range b.cfg.Env {
 		if strings.TrimSpace(k) == "" {
 			continue

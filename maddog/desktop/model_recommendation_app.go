@@ -156,7 +156,7 @@ func classifyModelRecommendations(ctx context.Context, prov provider.Provider, c
 			{Role: provider.RoleSystem, Content: modelRecommendationClassifierPrompt},
 			{Role: provider.RoleUser, Content: "CANDIDATES:\n" + string(payload)},
 		},
-		Temperature: 0,
+		Temperature: provider.TemperaturePtr(0),
 		MaxTokens:   180,
 	})
 	if err != nil {

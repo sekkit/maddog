@@ -478,6 +478,40 @@ func TestReadStream(t *testing.T) {
 	}
 }
 
+func TestReadStreamMergesCumulativeUsage(t *testing.T) {
+	sse := `event: message_start
+data: {"type":"message_start","message":{"usage":{"input_tokens":10,"cache_creation_input_tokens":2,"cache_read_input_tokens":3}}}
+
+event: message_delta
+data: {"type":"message_delta","usage":{"input_tokens":13,"output_tokens":7,"cache_creation_input_tokens":5,"cache_read_input_tokens":9},"delta":{"stop_reason":"end_turn"}}
+
+event: message_stop
+data: {"type":"message_stop"}
+`
+	c := &client{name: "anthropic"}
+	resp := &http.Response{Body: io.NopCloser(strings.NewReader(sse))}
+	ch := make(chan provider.Chunk)
+	go c.readStream(context.Background(), resp, ch)
+	var usage *provider.Usage
+	for ck := range ch {
+		if ck.Type == provider.ChunkError {
+			t.Fatalf("unexpected error chunk: %v", ck.Err)
+		}
+		if ck.Type == provider.ChunkUsage {
+			usage = ck.Usage
+		}
+	}
+	if usage == nil {
+		t.Fatal("expected usage")
+	}
+	if usage.PromptTokens != 27 || usage.CompletionTokens != 7 || usage.TotalTokens != 34 {
+		t.Fatalf("usage = %+v", usage)
+	}
+	if usage.CacheHitTokens != 9 || usage.CacheMissTokens != 18 {
+		t.Fatalf("cache usage = %+v", usage)
+	}
+}
+
 const sseAdvisorIterations = `event: message_start
 data: {"type":"message_start","message":{"usage":{"input_tokens":412,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":1,"iterations":[{"type":"message","input_tokens":412,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":1}]}}}
 

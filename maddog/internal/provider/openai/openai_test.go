@@ -253,8 +253,10 @@ func TestResponsesWireStreamsTextAndUsage(t *testing.T) {
 	}
 
 	ch, err := p.Stream(context.Background(), provider.Request{
-		Messages:  []provider.Message{{Role: provider.RoleSystem, Content: "be terse"}, {Role: provider.RoleUser, Content: "ping"}},
-		MaxTokens: 64,
+		Messages:    []provider.Message{{Role: provider.RoleSystem, Content: "be terse"}, {Role: provider.RoleUser, Content: "ping"}},
+		Tools:       []provider.ToolSchema{{Name: "noargs"}},
+		Temperature: provider.TemperaturePtr(0),
+		MaxTokens:   64,
 	})
 	if err != nil {
 		t.Fatalf("Stream: %v", err)
@@ -279,6 +281,15 @@ func TestResponsesWireStreamsTextAndUsage(t *testing.T) {
 	}
 	if gotBody["model"] != "gpt-5.5" || gotBody["stream"] != true || gotBody["max_output_tokens"] != float64(64) {
 		t.Fatalf("request body = %+v", gotBody)
+	}
+	if gotBody["temperature"] != float64(0) {
+		t.Fatalf("temperature = %v, want explicit zero", gotBody["temperature"])
+	}
+	tools, _ := gotBody["tools"].([]any)
+	tool, _ := tools[0].(map[string]any)
+	parameters, _ := tool["parameters"].(map[string]any)
+	if parameters["type"] != "object" || parameters["properties"] == nil {
+		t.Fatalf("tool parameters = %#v, want empty object schema", parameters)
 	}
 	reasoning, _ := gotBody["reasoning"].(map[string]any)
 	if reasoning["effort"] != "high" {
@@ -937,7 +948,7 @@ func TestBuildRequestContentNullForAssistantToolCalls(t *testing.T) {
 	if !strings.Contains(s, `"content":"all done"`) {
 		t.Errorf("text assistant turn should keep its string content: %s", s)
 	}
-	if !strings.Contains(s, `"parameters":{"type":"object"}`) {
+	if !strings.Contains(s, `"parameters":{"properties":{},"type":"object"}`) {
 		t.Errorf("no-param tool should serialize a valid empty-object schema: %s", s)
 	}
 }
@@ -994,7 +1005,30 @@ func TestBuildRequestOmitsEmptyToolDescriptionAndParameters(t *testing.T) {
 	if _, ok := fn["description"]; ok {
 		t.Fatalf("empty description should be omitted: %s", body)
 	}
-	if _, ok := fn["parameters"]; ok {
-		t.Fatalf("nil parameters should be omitted: %s", body)
+	if got, want := string(fn["parameters"]), `{"properties":{},"type":"object"}`; got != want {
+		t.Fatalf("nil parameters should default to %s, got %s in %s", want, got, body)
+	}
+}
+
+func TestBuildRequestTemperatureSerialization(t *testing.T) {
+	c := &client{model: "m"}
+	for _, tc := range []struct {
+		name string
+		temp *float64
+		want string
+	}{
+		{name: "unset", want: ""},
+		{name: "zero", temp: provider.TemperaturePtr(0), want: `"temperature":0`},
+		{name: "nonzero", temp: provider.TemperaturePtr(0.25), want: `"temperature":0.25`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			body, err := json.Marshal(c.buildRequest(provider.Request{Temperature: tc.temp}))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(string(body), "temperature") != (tc.want != "") || (tc.want != "" && !strings.Contains(string(body), tc.want)) {
+				t.Fatalf("body = %s, want temperature marker %q", body, tc.want)
+			}
+		})
 	}
 }

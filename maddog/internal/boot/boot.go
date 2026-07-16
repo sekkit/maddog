@@ -50,6 +50,7 @@ import (
 	"maddog/internal/provider/costwrap"
 	"maddog/internal/pxpipe"
 	"maddog/internal/sandbox"
+	"maddog/internal/secrets"
 	"maddog/internal/skill"
 	"maddog/internal/tool"
 	"maddog/internal/tool/builtin"
@@ -164,6 +165,7 @@ func Build(ctx context.Context, opts Options) (*control.Controller, error) {
 	if err != nil {
 		return nil, err
 	}
+	secrets.RegisterCredentialEnvKeys(cfg.CredentialEnvNames())
 	optimizationConfig := cfg.EffectiveSkillOptimizationConfig()
 	modelName := opts.Model
 	if modelName == "" {

@@ -3,7 +3,10 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+
+	"maddog/internal/secrets"
 )
 
 // TestLoadDotEnvIgnoresHomeEnv proves Maddog no longer imports ~/.env: a project
@@ -86,6 +89,45 @@ func TestLoadDotEnvReadsGlobalCredentials(t *testing.T) {
 	}
 	if got := os.Getenv("KEY_SHARED"); got != "global_wins" {
 		t.Errorf("global credentials should win over project .env: KEY_SHARED=%q want global_wins", got)
+	}
+}
+
+func TestCredentialEnvNamesIncludesUnconfiguredStoredKeys(t *testing.T) {
+	cfgHome := t.TempDir()
+	t.Setenv("HOME", cfgHome)
+	t.Setenv("MADDOG_HOME", filepath.Join(cfgHome, "maddog-home"))
+	t.Setenv("MADDOG_CREDENTIALS_STORE", "file")
+	t.Setenv("USERPROFILE", cfgHome)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(cfgHome, ".config"))
+	t.Setenv("AppData", filepath.Join(cfgHome, "AppData"))
+
+	credentialPath := UserCredentialsPath()
+	if err := os.MkdirAll(filepath.Dir(credentialPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(credentialPath, []byte("CONFIGURED_PROVIDER_KEY=configured\nSTALE_PROVIDER_KEY=stale\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := &Config{Providers: []ProviderEntry{{APIKeyEnv: "CONFIGURED_PROVIDER_KEY"}}}
+	got := cfg.CredentialEnvNames()
+	if strings.Join(got, ",") != "CONFIGURED_PROVIDER_KEY,STALE_PROVIDER_KEY" {
+		t.Fatalf("CredentialEnvNames() = %v", got)
+	}
+}
+
+func TestSetCredentialImmediatelyIsolatesRuntimeAddedKey(t *testing.T) {
+	cfgHome := t.TempDir()
+	t.Setenv("MADDOG_HOME", filepath.Join(cfgHome, "maddog-home"))
+	t.Setenv("MADDOG_CREDENTIALS_STORE", "file")
+	const key = "MADDOG_TEST_RUNTIME_ADDED_CREDENTIAL"
+	if _, err := SetCredential(key, "private-runtime-value"); err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range secrets.ProcessEnv() {
+		if strings.HasPrefix(strings.ToUpper(entry), key+"=") {
+			t.Fatalf("runtime-added credential leaked to child env: %q", entry)
+		}
 	}
 }
 

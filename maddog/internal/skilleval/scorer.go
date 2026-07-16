@@ -38,7 +38,7 @@ func ScoreReplayWithContext(ctx context.Context, frontier provider.Provider, req
 			{Role: provider.RoleSystem, Content: "Score the replayed skill-eval outcome against the original from 0.0 to 1.0. Return a number first, then a short reason."},
 			{Role: provider.RoleUser, Content: scoreReplayPrompt(req)},
 		},
-		Temperature: 0,
+		Temperature: provider.TemperaturePtr(0),
 		MaxTokens:   200,
 	})
 	if err != nil {

@@ -27,7 +27,7 @@ func (s *Session) Save(path string) error {
 	if path == "" {
 		return fmt.Errorf("empty session path")
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := fileutil.EnsurePrivateDir(filepath.Dir(path)); err != nil {
 		return fmt.Errorf("create session dir: %w", err)
 	}
 	// Write to a sibling tmp file then rename, so a crash mid-write can't
@@ -49,11 +49,15 @@ func (s *Session) Save(path string) error {
 		os.Remove(tmpPath)
 		return err
 	}
+	if err := fileutil.ProtectPrivateFile(tmpPath); err != nil {
+		os.Remove(tmpPath)
+		return err
+	}
 	if err := fileutil.ReplaceFile(tmpPath, path); err != nil {
 		os.Remove(tmpPath)
 		return err
 	}
-	return nil
+	return fileutil.ProtectPrivateFile(path)
 }
 
 // LoadSession reads a JSONL file written by Save into a fresh Session value.
@@ -162,7 +166,7 @@ func MarkCleanupPending(sessionPath, operation string) error {
 	if path == "" {
 		return nil
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := fileutil.EnsurePrivateDir(filepath.Dir(path)); err != nil {
 		return err
 	}
 	meta := CleanupPendingMeta{Operation: strings.TrimSpace(operation), CreatedAt: time.Now().UnixMilli()}
@@ -170,7 +174,10 @@ func MarkCleanupPending(sessionPath, operation string) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, b, 0o644)
+	if err := os.WriteFile(path, b, 0o600); err != nil {
+		return err
+	}
+	return fileutil.ProtectPrivateFile(path)
 }
 
 // ClearCleanupPending removes a delayed-cleanup marker after physical cleanup.

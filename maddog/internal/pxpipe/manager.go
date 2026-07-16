@@ -22,6 +22,7 @@ import (
 
 	"maddog/internal/config"
 	"maddog/internal/event"
+	"maddog/internal/secrets"
 )
 
 const (
@@ -195,7 +196,7 @@ func (m *Manager) Start(ctx context.Context, opt StartOptions) (Status, error) {
 	defer logFile.Close()
 
 	cmd := m.commandContext(ctx, command[0], command[1:]...)
-	cmd.Env = mergeEnv(os.Environ(), env)
+	cmd.Env = mergeEnv(secrets.ProcessEnv(), env)
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
 	if err := cmd.Start(); err != nil {

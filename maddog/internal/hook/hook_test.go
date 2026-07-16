@@ -8,6 +8,8 @@ import (
 	"runtime"
 	"testing"
 	"time"
+
+	fileencoding "maddog/internal/fileutil/encoding"
 )
 
 func writeSettings(t *testing.T, dir, json string) {
@@ -312,5 +314,61 @@ func TestDefaultSpawnerOutputCap(t *testing.T) {
 	}
 	if len(r.Stdout) > outputCapBytes {
 		t.Errorf("captured output %d exceeds cap %d", len(r.Stdout), outputCapBytes)
+	}
+}
+
+func TestExpandPluginRootSupportsMaddogAndClaudeAliases(t *testing.T) {
+	root := `C:\Program Files\Maddog\plugins\check`
+	for _, token := range []string{"${MADDOG_PLUGIN_ROOT}", "$MADDOG_PLUGIN_ROOT", "%MADDOG_PLUGIN_ROOT%", "${CLAUDE_PLUGIN_ROOT}", "$CLAUDE_PLUGIN_ROOT", "%CLAUDE_PLUGIN_ROOT%"} {
+		if got := expandPluginRoot(token+`/hook.sh`, root); got != root+`/hook.sh` {
+			t.Fatalf("%s expanded to %q", token, got)
+		}
+	}
+	if got := expandPluginRoot("$MADDOG_PLUGIN_ROOT_OLD", root); got != "$MADDOG_PLUGIN_ROOT_OLD" {
+		t.Fatalf("longer name changed: %q", got)
+	}
+	if got := expandPluginRoot("${CLAUDE_PLUGIN_ROOT:-missing}", root); got != "${CLAUDE_PLUGIN_ROOT:-missing}" {
+		t.Fatalf("parameter expression changed: %q", got)
+	}
+}
+
+func TestExpandPluginRootDoesNotReprocessRoot(t *testing.T) {
+	root := `$MADDOG_PLUGIN_ROOT/${CLAUDE_PLUGIN_ROOT}`
+	if got := expandPluginRoot("${MADDOG_PLUGIN_ROOT}|%CLAUDE_PLUGIN_ROOT%", root); got != root+"|"+root {
+		t.Fatalf("recursive expansion: %q", got)
+	}
+}
+
+func TestParseWindowsPOSIXShellInvocationPreservesScript(t *testing.T) {
+	fields, ok := parseHookShellFields(`sh -lc 'printf "%s" "$MADDOG_PLUGIN_ROOT"'`)
+	if !ok || len(fields) != 3 || fields[0] != "sh" || fields[1] != "-lc" || fields[2] != `printf "%s" "$MADDOG_PLUGIN_ROOT"` {
+		t.Fatalf("fields = %#v ok=%v", fields, ok)
+	}
+	if !hasCommandStringFlag(fields[1:]) {
+		t.Fatal("-lc should contain command-string flag")
+	}
+	if !hasCommandStringFlag([]string{"-O", "extglob", "-c", "printf ok"}) {
+		t.Fatal("-O operand before -c should be accepted")
+	}
+}
+
+func TestParseWindowsPOSIXShellInvocationPreservesWindowsRoot(t *testing.T) {
+	fields, ok := parseHookShellFields(`bash -c "node C:\Program Files\Maddog\hook.mjs"`)
+	if !ok || len(fields) != 3 {
+		t.Fatalf("fields = %#v ok=%v", fields, ok)
+	}
+	if got, want := fields[2], `node C:\Program Files\Maddog\hook.mjs`; got != want {
+		t.Fatalf("Windows path = %q, want %q", got, want)
+	}
+}
+
+func TestDecodeHookOutputLegacyAndTruncatedUTF8(t *testing.T) {
+	want := `'sh' 不是内部或外部命令`
+	raw := fileencoding.Encode(want, fileencoding.GB18030)
+	if got := decodeHookOutput(raw, false); got != want {
+		t.Fatalf("legacy output = %q", got)
+	}
+	if got := decodeHookOutput([]byte("中文")[:5], true); got != "中" {
+		t.Fatalf("truncated UTF-8 = %q", got)
 	}
 }

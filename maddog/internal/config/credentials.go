@@ -11,6 +11,7 @@ import (
 	"github.com/BurntSushi/toml"
 
 	"maddog/internal/fileutil"
+	"maddog/internal/secrets"
 )
 
 const (
@@ -177,6 +178,28 @@ func credentialEnvNamesFromConfig(cfg *Config) []string {
 	return out
 }
 
+// CredentialEnvNames returns every valid environment-variable name present in
+// Maddog's credential store, including stale keys no longer referenced by the
+// active config. Callers use names only to isolate child processes.
+func (c *Config) CredentialEnvNames() []string {
+	names := credentialEnvNamesFromConfig(c)
+	seen := make(map[string]bool, len(names))
+	for _, name := range names {
+		seen[name] = true
+	}
+	lines, _ := readCredentialFileLines(UserCredentialsPath())
+	for _, line := range lines {
+		name, ok := credentialLineKey(line)
+		if !ok || seen[name] {
+			continue
+		}
+		seen[name] = true
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
 func resolveProviderCredentialsForRoot(root string, cfg *Config) {
 	if cfg == nil || len(cfg.Providers) == 0 {
 		return
@@ -235,6 +258,11 @@ func StoreCredentialLines(lines []string) (string, error) {
 	if err := storeCredentialsInFile(UserCredentialsPath(), assignments); err != nil {
 		return "", err
 	}
+	keys := make([]string, 0, len(assignments))
+	for key := range assignments {
+		keys = append(keys, key)
+	}
+	secrets.RegisterCredentialEnvKeys(keys)
 	pinCredentialAssignments(assignments)
 	return UserCredentialsPath(), nil
 }
@@ -581,7 +609,7 @@ func writeCredentialFileLines(path string, lines []string) error {
 	}
 	dir := filepath.Dir(path)
 	if dir != "" && dir != "." {
-		if err := os.MkdirAll(dir, 0o700); err != nil {
+		if err := fileutil.EnsurePrivateDir(dir); err != nil {
 			return err
 		}
 	}
@@ -599,7 +627,7 @@ func writeCredentialFileLines(path string, lines []string) error {
 		os.Remove(tmpPath)
 		return err
 	}
-	if err := os.Chmod(tmpPath, 0o600); err != nil {
+	if err := fileutil.ProtectPrivateFile(tmpPath); err != nil {
 		os.Remove(tmpPath)
 		return err
 	}
@@ -607,7 +635,7 @@ func writeCredentialFileLines(path string, lines []string) error {
 		os.Remove(tmpPath)
 		return err
 	}
-	return nil
+	return fileutil.ProtectPrivateFile(path)
 }
 
 func credentialLineKey(line string) (string, bool) {
