@@ -1149,15 +1149,6 @@ func (a *App) rebuild() error {
 		return err
 	}
 	a.bindControllerDisplayRecorder(ctrl)
-	a.mu.Lock()
-	tab.Ctrl = ctrl
-	tab.model = model
-	tab.Label = ctrl.Label()
-	tab.StartupErr = ""
-	tab.Ready = true
-	a.saveTabsLocked()
-	a.mu.Unlock()
-	a.emitReady(a.ctx)
 	ctrl.EnableInteractiveApproval()
 	applyTabModeToController(ctrl, tab.mode)
 	// applyTabModeToController only encodes plan+yolo from tab.mode.
@@ -1170,10 +1161,23 @@ func (a *App) rebuild() error {
 	path := agent.ContinueSessionPath(prevPath, ctrl.SessionDir(), ctrl.Label())
 	if len(carried) > 0 {
 		carried = withFreshSystemPrompt(carried, systemPromptFrom(ctrl.History()))
-		ctrl.Resume(&agent.Session{Messages: carried}, path)
+		err = ctrl.Resume(&agent.Session{Messages: carried}, path)
 	} else if path != "" {
-		ctrl.SetSessionPath(path)
+		err = ctrl.SetSessionPath(path)
 	}
+	if err != nil {
+		ctrl.Close()
+		return err
+	}
+	a.mu.Lock()
+	tab.Ctrl = ctrl
+	tab.model = model
+	tab.Label = ctrl.Label()
+	tab.StartupErr = ""
+	tab.Ready = true
+	a.saveTabsLocked()
+	a.mu.Unlock()
+	a.emitReady(a.ctx)
 	a.persistTabSessionPath(tab, path)
 	return nil
 }

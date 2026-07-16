@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
@@ -20,6 +21,7 @@ import (
 	"github.com/wailsapp/wails/v2/pkg/options/windows"
 
 	"maddog/internal/config"
+	"maddog/internal/repair"
 
 	// Blank imports wire compile-time built-ins into their registries, exactly as
 	// the CLI does — boot.Build resolves providers/tools from these registries.
@@ -83,7 +85,18 @@ func macTitleBar(customWindowChrome bool) *mac.TitleBar {
 }
 
 func main() {
+	// Decide recovery posture before config loading and before Wails creates a
+	// webview. Packaging may invoke the same guard externally; this is the final
+	// in-process boundary and does not claim an installer integration.
+	guard := repair.NewStartupGuard(filepath.Join(config.MemoryUserDir(), "startup-probation.json"), 3, 2*time.Minute)
+	safe, guardErr := guard.Begin()
 	app := NewApp()
+	app.startupGuard = guard
+	app.repairGate = repair.NewProcessGate(guardErr != nil || safe)
+	if app.SafeMode() {
+		println("Maddog entered offline Safe Mode; run the recovery command before starting the desktop")
+		return
+	}
 	customWindowChrome := false
 	if cfg, err := config.Load(); err == nil {
 		customWindowChrome = cfg.DesktopUsesCustomWindowChrome()

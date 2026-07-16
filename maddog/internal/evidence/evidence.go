@@ -2,7 +2,9 @@ package evidence
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
+	"fmt"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -19,6 +21,175 @@ type TodoItem struct {
 	Status     string `json:"status"`
 	ActiveForm string `json:"activeForm,omitempty"`
 	Level      int    `json:"level,omitempty"`
+}
+
+// ValidateSerialTodos enforces one current item and ordered completion. A
+// phase stays pending while its level-1 children execute, then becomes current
+// for its own sign-off after every child completes.
+func ValidateSerialTodos(todos []TodoItem) error {
+	inProgress := false
+	for i, todo := range todos {
+		switch todoStatus(todo.Status) {
+		case "completed", "pending":
+		case "in_progress":
+			if inProgress {
+				return fmt.Errorf("todo %d %q is a second in_progress item; serial task lists allow exactly one current item", i+1, todo.Content)
+			}
+			inProgress = true
+		default:
+			return fmt.Errorf("todo %d %q has invalid status %q", i+1, todo.Content, todo.Status)
+		}
+	}
+	if len(todos) > 0 && todos[0].Level == 1 {
+		return fmt.Errorf("todo 1 %q is a level-1 sub-step with no phase above it", todos[0].Content)
+	}
+	seenCurrent, seenPending := false, false
+	for _, segment := range serialTodoSegments(todos) {
+		state, err := validateSerialSegment(todos, segment)
+		if err != nil {
+			return err
+		}
+		switch state {
+		case "completed":
+			if seenCurrent || seenPending {
+				return fmt.Errorf("todo %d %q is completed after unfinished work", segment.head+1, todos[segment.head].Content)
+			}
+		case "in_progress":
+			if seenPending {
+				return fmt.Errorf("todo %d %q is in_progress after pending work", segment.head+1, todos[segment.head].Content)
+			}
+			seenCurrent = true
+		case "pending", "stale":
+			seenPending = true
+		}
+	}
+	if len(todos) > 0 && seenPending && !seenCurrent {
+		return fmt.Errorf("serial task list has pending work but no in_progress item")
+	}
+	return nil
+}
+
+type todoSegment struct{ head, end int }
+
+func serialTodoSegments(todos []TodoItem) []todoSegment {
+	var segments []todoSegment
+	for i := 0; i < len(todos); {
+		end := i + 1
+		if todos[i].Level == 0 {
+			for end < len(todos) && todos[end].Level == 1 {
+				end++
+			}
+		}
+		segments = append(segments, todoSegment{head: i, end: end})
+		i = end
+	}
+	return segments
+}
+
+func validateSerialSegment(todos []TodoItem, segment todoSegment) (string, error) {
+	head := todos[segment.head]
+	if segment.end == segment.head+1 {
+		return todoStatus(head.Status), nil
+	}
+	seenCurrent, seenPending, completed := false, false, 0
+	unfinished := -1
+	for i := segment.head + 1; i < segment.end; i++ {
+		switch todoStatus(todos[i].Status) {
+		case "completed":
+			if seenCurrent || seenPending {
+				return "", fmt.Errorf("todo %d %q is completed after unfinished work", i+1, todos[i].Content)
+			}
+			completed++
+		case "in_progress":
+			if seenPending {
+				return "", fmt.Errorf("todo %d %q is in_progress after pending work", i+1, todos[i].Content)
+			}
+			seenCurrent = true
+			if unfinished < 0 {
+				unfinished = i
+			}
+		default:
+			seenPending = true
+			if unfinished < 0 {
+				unfinished = i
+			}
+		}
+	}
+	switch todoStatus(head.Status) {
+	case "completed":
+		if unfinished >= 0 {
+			return "", fmt.Errorf("phase %d %q is completed but sub-step %d %q is unfinished", segment.head+1, head.Content, unfinished+1, todos[unfinished].Content)
+		}
+		return "completed", nil
+	case "in_progress":
+		if unfinished >= 0 {
+			return "", fmt.Errorf("phase %d %q cannot be in_progress while sub-step %d %q is unfinished", segment.head+1, head.Content, unfinished+1, todos[unfinished].Content)
+		}
+		return "in_progress", nil
+	default:
+		if seenCurrent {
+			return "in_progress", nil
+		}
+		if completed == 0 {
+			return "pending", nil
+		}
+		return "stale", nil
+	}
+}
+
+func FirstUnfinishedSubStep(todos []TodoItem, index int) (int, bool) {
+	if index < 0 || index >= len(todos) || todos[index].Level != 0 || index+1 >= len(todos) || todos[index+1].Level != 1 {
+		return -1, false
+	}
+	for i := index + 1; i < len(todos) && todos[i].Level == 1; i++ {
+		if todoStatus(todos[i].Status) != "completed" {
+			return i, true
+		}
+	}
+	return -1, true
+}
+
+func AdvanceSerialTodo(todos []TodoItem, index int) bool {
+	if index < 0 || index >= len(todos) || todoStatus(todos[index].Status) != "in_progress" {
+		return false
+	}
+	if unfinished, phase := FirstUnfinishedSubStep(todos, index); phase && unfinished >= 0 {
+		return false
+	}
+	todos[index].Status = "completed"
+	if todos[index].Level == 1 {
+		for i := index + 1; i < len(todos) && todos[i].Level == 1; i++ {
+			if todoStatus(todos[i].Status) == "pending" {
+				todos[i].Status = "in_progress"
+				return true
+			}
+		}
+		head := index - 1
+		for head >= 0 && todos[head].Level == 1 {
+			head--
+		}
+		if head >= 0 && todoStatus(todos[head].Status) != "completed" {
+			todos[head].Status = "in_progress"
+			return true
+		}
+	}
+	for i := range todos {
+		if todoStatus(todos[i].Status) == "in_progress" {
+			return true
+		}
+	}
+	for i := range todos {
+		if todoStatus(todos[i].Status) != "pending" {
+			continue
+		}
+		if child, phase := FirstUnfinishedSubStep(todos, i); phase && child >= 0 {
+			todos[child].Status = "in_progress"
+			return true
+		}
+		todos[i].Status = "in_progress"
+		return true
+	}
+	return true
 }
 
 // TodoStepMatch is the result of matching complete_step.step against the latest
@@ -44,6 +215,7 @@ type Receipt struct {
 	Paths              []string        `json:"paths,omitempty"`
 	Read               bool            `json:"read,omitempty"`
 	Write              bool            `json:"write,omitempty"`
+	OutputBytes        int             `json:"output_bytes,omitempty"`
 	Todos              []TodoItem      `json:"todos,omitempty"`
 	GoalAcceptanceLoop int             `json:"goal_acceptance_loop,omitempty"`
 	DifficultDecision  bool            `json:"difficult_decision,omitempty"`
@@ -114,6 +286,56 @@ func (l *Ledger) Count() int {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return len(l.receipts)
+}
+
+// Len is the receipt-index seam used by adaptive progress guards.
+func (l *Ledger) Len() int { return l.Count() }
+
+// SuccessfulProgressSignaturesSince returns stable identities for successful
+// reads, commands, and writes. Callers de-duplicate them across a turn so exact
+// repeats cannot renew the progress lease.
+func (l *Ledger) SuccessfulProgressSignaturesSince(index int) []string {
+	if l == nil {
+		return nil
+	}
+	if index < 0 {
+		index = 0
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	var out []string
+	for i := index; i < len(l.receipts); i++ {
+		if signature, ok := progressReceiptSignature(l.receipts[i]); ok {
+			out = append(out, signature)
+		}
+	}
+	return out
+}
+
+func progressReceiptSignature(r Receipt) (string, bool) {
+	if !r.Success {
+		return "", false
+	}
+	kind := ""
+	switch {
+	case r.Write:
+		kind = "mutation"
+	case r.Command != "":
+		kind = "command"
+	case r.Read && r.OutputBytes > 0:
+		kind = "read"
+	default:
+		return "", false
+	}
+	payload := strings.TrimSpace(string(r.Args))
+	var decoded any
+	if json.Unmarshal(r.Args, &decoded) == nil {
+		if canonical, err := json.Marshal(decoded); err == nil {
+			payload = string(canonical)
+		}
+	}
+	sum := sha256.Sum256([]byte(kind + "\x00" + r.ToolName + "\x00" + payload))
+	return fmt.Sprintf("%x", sum), true
 }
 
 // Snapshot returns a deep copy of the receipts recorded for the current turn.

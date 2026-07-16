@@ -56,6 +56,13 @@ type editApplyResult struct {
 	applied int
 	matches int
 	fuzzy   bool
+	receipt editReplacementReceipt
+}
+
+type editReplacementReceipt struct {
+	matched, replacement string
+	occurrences          int
+	fuzzy                bool
 }
 
 type editRange struct {
@@ -77,17 +84,20 @@ func applyOldStringEdit(content, oldString, newString string, replaceAll bool) e
 				updated: strings.ReplaceAll(content, old, newStr),
 				applied: count,
 				matches: count,
+				receipt: editReplacementReceipt{matched: old, replacement: newStr, occurrences: count},
 			}
 		}
 		ranges := fuzzyEditRanges(content, old)
 		if len(ranges) == 0 {
 			return editApplyResult{updated: content}
 		}
+		replacement := matchReplacementLineEndings(content, newStr)
 		return editApplyResult{
 			updated: replaceEditRanges(content, ranges, matchReplacementLineEndings(content, newStr)),
 			applied: len(ranges),
 			matches: len(ranges),
 			fuzzy:   true,
+			receipt: editReplacementReceipt{matched: matchedRangeSample(content, old, ranges), replacement: replacement, occurrences: len(ranges), fuzzy: true},
 		}
 	}
 
@@ -102,16 +112,29 @@ func applyOldStringEdit(content, oldString, newString string, replaceAll bool) e
 			applied: 1,
 			matches: 1,
 			fuzzy:   true,
+			receipt: editReplacementReceipt{matched: matchedRangeSample(content, old, ranges), replacement: matchReplacementLineEndings(content, newStr), occurrences: 1, fuzzy: true},
 		}
 	case 1:
 		return editApplyResult{
 			updated: strings.Replace(content, old, newStr, 1),
 			applied: 1,
 			matches: 1,
+			receipt: editReplacementReceipt{matched: old, replacement: newStr, occurrences: 1},
 		}
 	default:
 		return editApplyResult{updated: content, matches: count}
 	}
+}
+
+func matchedRangeSample(content, fallback string, ranges []editRange) string {
+	if len(ranges) == 0 {
+		return fallback
+	}
+	r := ranges[0]
+	if r.start < 0 || r.end < r.start || r.end > len(content) {
+		return fallback
+	}
+	return clipPostWriteSpan(content[r.start:r.end], maxCapturedReceiptSpanBytes)
 }
 
 func oldStringNotFoundError(path, oldString, content string) error {

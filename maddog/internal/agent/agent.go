@@ -145,10 +145,12 @@ type Gate interface {
 // mode will not trust without a user decision. ToolName is the provider-visible
 // name; ServerName and RawToolName are the MCP identifiers persisted in config.
 type PlanModeReadOnlyTrustRequest struct {
-	ToolName    string
-	ServerName  string
-	RawToolName string
-	Args        json.RawMessage
+	ToolName              string
+	ServerName            string
+	RawToolName           string
+	Args                  json.RawMessage
+	IdentityFingerprint   string
+	CapabilityFingerprint string
 }
 
 // PlanModeReadOnlyTrustGate optionally confirms an MCP server's self-reported
@@ -1145,6 +1147,14 @@ func (a *Agent) Run(ctx context.Context, input string) (runErr error) {
 	streamRecoveries := 0
 	pauseTurnContinuations := 0
 	graceRound := false
+	todoProgress, trackingTodoProgress := a.canonicalTodoProgress()
+	todoStallRounds := 0
+	seenTodoProgress := make(map[string]struct{})
+	if a.evidence != nil {
+		for _, signature := range a.evidence.SuccessfulProgressSignaturesSince(0) {
+			seenTodoProgress[signature] = struct{}{}
+		}
+	}
 	executorHandoff := a.executorHandoffGuard && strings.Contains(input, executorHandoffMarker)
 	for step := 0; a.maxSteps <= 0 || step < a.maxSteps || graceRound || a.advisorRetryPending; step++ {
 		// Consume a queued steer and persist it to the session so it
@@ -1322,6 +1332,10 @@ func (a *Agent) Run(ctx context.Context, input string) (runErr error) {
 			return fmt.Errorf("paused after %d tool-call rounds (%s) — the work so far is saved; send another message to continue, or set %s higher or to 0 for no limit", a.maxSteps, a.maxStepsKey, a.maxStepsKey)
 		}
 
+		receiptMark := 0
+		if a.evidence != nil {
+			receiptMark = a.evidence.Len()
+		}
 		results := a.executeBatch(ctx, calls)
 		for i, call := range calls {
 			a.session.Add(provider.Message{
@@ -1332,6 +1346,36 @@ func (a *Agent) Run(ctx context.Context, input string) (runErr error) {
 			})
 		}
 		a.evaluateRoutingAfterTools(ctx, step+1)
+		if !a.planMode.Load() {
+			nextProgress, nextTracking := a.canonicalTodoProgress()
+			hostProgress := false
+			if a.evidence != nil {
+				for _, signature := range a.evidence.SuccessfulProgressSignaturesSince(receiptMark) {
+					if _, seen := seenTodoProgress[signature]; !seen {
+						seenTodoProgress[signature] = struct{}{}
+						hostProgress = true
+					}
+				}
+			}
+			switch {
+			case !nextTracking:
+				todoStallRounds = 0
+			case !trackingTodoProgress || nextProgress > todoProgress || hostProgress:
+				todoStallRounds = 0
+			default:
+				todoStallRounds++
+			}
+			todoProgress, trackingTodoProgress = nextProgress, nextTracking
+			if todoStallRounds == todoProgressNudgeRounds {
+				nudge := todoProgressNudgeMessage(todoStallRounds)
+				a.session.Add(provider.Message{Role: provider.RoleUser, Content: a.withTurnPreferences(nudge)})
+				a.sink.Emit(event.Event{Kind: event.Notice, Level: event.LevelInfo, Text: fmt.Sprintf("Todo progress stalled for %d tool-call rounds; asking the assistant to reassess.", todoStallRounds)})
+			}
+			if todoStallRounds >= maxTodoStallRounds {
+				a.sink.Emit(event.Event{Kind: event.Notice, Level: event.LevelInfo, Text: "Task progress stalled; pausing before more tools are called."})
+				return &todoStallPause{rounds: todoStallRounds}
+			}
+		}
 
 		// The prompt only grows from here; compact before the next turn so it
 		// stays within the model's window.
@@ -1354,6 +1398,21 @@ func (a *Agent) Run(ctx context.Context, input string) (runErr error) {
 		key = "agent.max_steps"
 	}
 	return fmt.Errorf("paused after %d tool-call rounds (%s) — the work so far is saved; send another message to continue, or set max_steps higher or to 0 for no limit", a.maxSteps, key)
+}
+
+const (
+	todoProgressNudgeRounds = 8
+	maxTodoStallRounds      = 16
+)
+
+func todoProgressNudgeMessage(rounds int) string {
+	return fmt.Sprintf("Host progress check: the current todo has produced no new completion, unique read, command, or mutation for %d tool-call rounds. Reassess before using more tools: sign off the current item if it is done, narrow the remaining work without replacing the active item, or explain a real blocker. Do not repeat reads, commands, or writes just to reset this guard.", rounds)
+}
+
+type todoStallPause struct{ rounds int }
+
+func (e *todoStallPause) Error() string {
+	return fmt.Sprintf("paused after %d tool-call rounds without advancing the current todo — the work so far is saved; inspect the blocker or send another message to continue", e.rounds)
 }
 
 // resetRoutingForTurn scopes frontier upgrades and the advisor turn budget to a
@@ -1857,6 +1916,21 @@ func (a *Agent) incompleteCanonicalTodos() ([]evidence.TodoStepMatch, bool) {
 	return evidence.IncompleteTodos(a.todoState), true
 }
 
+func (a *Agent) canonicalTodoProgress() (int, bool) {
+	a.todoMu.Lock()
+	defer a.todoMu.Unlock()
+	completed := 0
+	incomplete := false
+	for _, todo := range a.todoState {
+		if canonicalTodoStatus(todo.Status) == "completed" {
+			completed++
+		} else {
+			incomplete = true
+		}
+	}
+	return completed, incomplete
+}
+
 // advanceCanonicalTodo flips the canonical todo matching a signed-off step to
 // completed (promoting the next pending item to in_progress) and emits a
 // synthetic todo_write so the task panel reflects it without the model
@@ -1872,8 +1946,10 @@ func (a *Agent) advanceCanonicalTodo(step string) {
 		a.todoMu.Unlock()
 		return
 	}
-	a.todoState[m.Index-1].Status = "completed"
-	promoteNextPendingTodo(a.todoState)
+	if !evidence.AdvanceSerialTodo(a.todoState, m.Index-1) {
+		a.todoMu.Unlock()
+		return
+	}
 	snapshot := append([]evidence.TodoItem(nil), a.todoState...)
 	a.todoMu.Unlock()
 	a.recordTodoState(snapshot)
@@ -2196,7 +2272,7 @@ func (a *Agent) stream(ctx context.Context, turn int) (string, string, string, [
 	ch, err := a.prov.Stream(ctx, provider.Request{
 		Messages:      a.messagesForProviderRequest(),
 		Tools:         a.toolSchemasForRequest(),
-		Temperature:   a.temperature,
+		Temperature:   provider.OptionalTemperature(a.temperature),
 		NativeAdvisor: a.nativeAdvisorForRequest(),
 	})
 	if err != nil {
@@ -2339,33 +2415,31 @@ func (a *Agent) systemPrompt() string {
 // after the batch in call order, so emission stays serial even when execution
 // parallelised.
 func (a *Agent) executeBatch(ctx context.Context, calls []provider.ToolCall) []string {
+	calls = append([]provider.ToolCall(nil), calls...)
 	for _, c := range calls {
-		t, ok := a.tools.Get(c.Name)
-		ev := event.Tool{ID: c.ID, Name: c.Name, Args: c.Arguments, ReadOnly: ok && t.ReadOnly()}
-		ev.FileDiff = event.FileDiff{Diff: c.Diff, Added: c.Added, Removed: c.Removed}
-		if ok && ev.Diff == "" && ev.Added == 0 && ev.Removed == 0 {
-			if ch, ok := tool.PreviewChange(t, json.RawMessage(c.Arguments)); ok {
-				ev.FileDiff = event.FileDiff{Diff: ch.Diff, Added: ch.Added, Removed: ch.Removed}
-			}
-		}
-		if ok {
-			if pr, ok := t.(interface {
-				ResolveProfile(json.RawMessage) *event.Profile
-			}); ok {
-				ev.Profile = pr.ResolveProfile(json.RawMessage(c.Arguments))
-			}
-		}
-		a.sink.Emit(event.Event{Kind: event.ToolDispatch, Tool: ev})
+		a.emitFullToolDispatch(c, false)
 	}
 
 	results := make([]string, len(calls))
 	outcomes := make([]toolOutcome, len(calls))
 	durations := make([]int64, len(calls))
+	earlierWriterRan := false
 	run := func(i int) {
+		t, known := a.tools.Get(calls[i].Name)
+		writer := known && !t.ReadOnly()
+		if earlierWriterRan && writer {
+			if refreshed, changed := refreshCurrentFileDiff(t, calls[i]); changed {
+				calls[i] = refreshed
+				a.emitFullToolDispatch(refreshed, true)
+			}
+		}
 		start := time.Now()
 		outcomes[i] = a.executeOne(ctx, calls[i])
 		durations[i] = time.Since(start).Milliseconds()
 		results[i] = outcomes[i].output
+		if writer {
+			earlierWriterRan = true
+		}
 	}
 	cancelled := false
 	markCancelled := func(start int) {
@@ -2460,6 +2534,42 @@ func (a *Agent) executeBatch(ctx context.Context, calls []provider.ToolCall) []s
 		a.applyStormBreaker(calls, outcomes, results)
 	}
 	return results
+}
+
+func (a *Agent) emitFullToolDispatch(c provider.ToolCall, refreshed bool) {
+	t, ok := a.tools.Get(c.Name)
+	ev := event.Tool{ID: c.ID, Name: c.Name, Args: c.Arguments, ReadOnly: ok && t.ReadOnly(), Refreshed: refreshed}
+	ev.FileDiff = event.FileDiff{Diff: c.Diff, Added: c.Added, Removed: c.Removed}
+	if ok && ev.Diff == "" && ev.Added == 0 && ev.Removed == 0 {
+		if ch, ok := tool.PreviewChange(t, json.RawMessage(c.Arguments)); ok {
+			ev.FileDiff = event.FileDiff{Diff: ch.Diff, Added: ch.Added, Removed: ch.Removed}
+		}
+	}
+	if ok {
+		if pr, ok := t.(interface {
+			ResolveProfile(json.RawMessage) *event.Profile
+		}); ok {
+			ev.Profile = pr.ResolveProfile(json.RawMessage(c.Arguments))
+		}
+	}
+	a.sink.Emit(event.Event{Kind: event.ToolDispatch, Tool: ev})
+}
+
+func refreshCurrentFileDiff(t tool.Tool, call provider.ToolCall) (provider.ToolCall, bool) {
+	pv, ok := t.(tool.Previewer)
+	if !ok {
+		return call, false
+	}
+	refreshed := call
+	refreshed.Diff = ""
+	refreshed.Added = 0
+	refreshed.Removed = 0
+	if change, err := pv.Preview(json.RawMessage(call.Arguments)); err == nil {
+		refreshed.Diff = change.Diff
+		refreshed.Added = change.Added
+		refreshed.Removed = change.Removed
+	}
+	return refreshed, refreshed.Diff != call.Diff || refreshed.Added != call.Added || refreshed.Removed != call.Removed
 }
 
 func (a *Agent) withPreviewFileDiffs(calls []provider.ToolCall) []provider.ToolCall {
@@ -2786,6 +2896,9 @@ func (a *Agent) executeOne(ctx context.Context, call provider.ToolCall) toolOutc
 			}
 		} else {
 			rec := evidence.ReceiptFromToolCall(call.Name, json.RawMessage(call.Arguments), err == nil, t.ReadOnly())
+			if rec.Read && err == nil {
+				rec.OutputBytes = len(strings.TrimSpace(result))
+			}
 			a.evidence.Record(rec)
 			if err == nil && call.Name == "todo_write" {
 				a.setTodoState(rec.Todos)
@@ -3010,6 +3123,12 @@ func (a *Agent) checkPlanModeReadOnlyTrust(ctx context.Context, call provider.To
 		ServerName:  server,
 		RawToolName: rawTool,
 		Args:        json.RawMessage(call.Arguments),
+	}
+	if snapshot, ok := t.(tool.MCPTrustSnapshot); ok {
+		identity, capability, valid := snapshot.MCPTrustFingerprints()
+		if valid {
+			req.IdentityFingerprint, req.CapabilityFingerprint = identity, capability
+		}
 	}
 	allow, reason, err := a.planModeReadOnlyTrust.CheckPlanModeReadOnlyTrust(ctx, req)
 	if err != nil {

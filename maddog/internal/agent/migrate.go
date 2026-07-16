@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"maddog/internal/fileutil"
 	"maddog/internal/provider"
 )
 
@@ -512,7 +513,7 @@ func transformAndCopyJsonl(src, dst string) error {
 		return err
 	}
 	defer in.Close()
-	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+	if err := fileutil.EnsurePrivateDir(filepath.Dir(dst)); err != nil {
 		return err
 	}
 	tmp, err := os.CreateTemp(filepath.Dir(dst), ".session.*.tmp")
@@ -587,7 +588,14 @@ func transformAndCopyJsonl(src, dst string) error {
 	if err := tmp.Close(); err != nil {
 		return err
 	}
+	if err := fileutil.ProtectPrivateFile(tmpPath); err != nil {
+		os.Remove(tmpPath)
+		return err
+	}
 	if err := os.Rename(tmpPath, dst); err != nil {
+		return err
+	}
+	if err := fileutil.ProtectPrivateFile(dst); err != nil {
 		return err
 	}
 	ok = true
@@ -628,7 +636,10 @@ func moveFlatImport(oldPath, newPath string, srcInfo os.FileInfo) bool {
 	if d < -2*time.Second || d > 2*time.Second {
 		return false
 	}
-	if err := os.MkdirAll(filepath.Dir(newPath), 0o755); err != nil {
+	if err := fileutil.EnsurePrivateDir(filepath.Dir(newPath)); err != nil {
+		return false
+	}
+	if err := fileutil.ProtectPrivateFile(oldPath); err != nil {
 		return false
 	}
 	return os.Rename(oldPath, newPath) == nil
@@ -655,11 +666,7 @@ func recordImportedTitle(destDir, base, summary string) {
 	if err != nil {
 		return
 	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, b, 0o644); err != nil {
-		return
-	}
-	_ = os.Rename(tmp, path)
+	_ = fileutil.AtomicWriteFile(path, b, 0o600)
 }
 
 func importMarkerExists(destDir, marker string) bool {
@@ -674,7 +681,7 @@ func writeImportMarkers(destDir string, markers ...string) {
 	if strings.TrimSpace(destDir) == "" {
 		return
 	}
-	if err := os.MkdirAll(destDir, 0o755); err != nil {
+	if err := fileutil.EnsurePrivateDir(destDir); err != nil {
 		return
 	}
 	seen := map[string]bool{}
@@ -684,7 +691,7 @@ func writeImportMarkers(destDir string, markers ...string) {
 			continue
 		}
 		seen[marker] = true
-		_ = os.WriteFile(filepath.Join(destDir, marker), nil, 0o644)
+		_ = fileutil.AtomicWriteFile(filepath.Join(destDir, marker), nil, 0o600)
 	}
 }
 
@@ -812,7 +819,7 @@ func copyBranchMetaSidecar(srcPath, dstPath string) {
 		return
 	}
 	dstMeta := BranchMetaPath(dstPath)
-	if err := os.MkdirAll(filepath.Dir(dstMeta), 0o755); err != nil {
+	if err := fileutil.EnsurePrivateDir(filepath.Dir(dstMeta)); err != nil {
 		return
 	}
 	tmp, err := os.CreateTemp(filepath.Dir(dstMeta), ".branch.*.tmp")
@@ -826,6 +833,10 @@ func copyBranchMetaSidecar(srcPath, dstPath string) {
 		return
 	}
 	if err := tmp.Close(); err != nil {
+		os.Remove(tmpPath)
+		return
+	}
+	if err := fileutil.ProtectPrivateFile(tmpPath); err != nil {
 		os.Remove(tmpPath)
 		return
 	}
@@ -874,7 +885,7 @@ func copyFileIfExists(src, dst string) error {
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+	if err := fileutil.EnsurePrivateDir(filepath.Dir(dst)); err != nil {
 		return err
 	}
 	tmp, err := os.CreateTemp(filepath.Dir(dst), ".subagent.*.tmp")
@@ -891,8 +902,15 @@ func copyFileIfExists(src, dst string) error {
 		os.Remove(tmpPath)
 		return err
 	}
+	if err := fileutil.ProtectPrivateFile(tmpPath); err != nil {
+		os.Remove(tmpPath)
+		return err
+	}
 	if err := os.Rename(tmpPath, dst); err != nil {
 		os.Remove(tmpPath)
+		return err
+	}
+	if err := fileutil.ProtectPrivateFile(dst); err != nil {
 		return err
 	}
 	_ = os.Chtimes(dst, info.ModTime(), info.ModTime())

@@ -147,6 +147,7 @@ func TestToolResultLoadsSessionScopedRawOutputAfterResume(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 	snapshot := exec.Session().Snapshot()
+	c.Close()
 
 	resumed := agent.New(prov, reg, agent.NewSession(""), agent.Options{}, event.Discard)
 	resumed.SetSession(&agent.Session{Messages: snapshot})
@@ -188,10 +189,13 @@ func TestResumeBindsSessionScopedRawOutputStore(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 	snapshot := exec.Session().Snapshot()
+	c.Close()
 
 	resumed := agent.New(prov, reg, agent.NewSession(""), agent.Options{}, event.Discard)
 	resumedController := New(Options{Executor: resumed, SessionDir: dir})
-	resumedController.Resume(&agent.Session{Messages: snapshot}, sessionPath)
+	if err := resumedController.Resume(&agent.Session{Messages: snapshot}, sessionPath); err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
 
 	got := resumedController.ToolResult("tool-resume-raw")
 	if got == nil {

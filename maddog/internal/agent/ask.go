@@ -15,9 +15,8 @@ import (
 // than guessing or asking in prose. The frontend renders selectable options, the
 // user picks, and the choices come back as the tool result. It reaches the user
 // through the Asker carried on the call
-// context (CallContext); with no asker (headless runs) it returns an explicit
-// model-assumption fallback so an autonomous run never blocks or pretends a user
-// answered.
+// context (CallContext); with no asker (headless runs) it fails closed rather
+// than inventing a user decision.
 type AskTool struct{}
 
 func NewAskTool() *AskTool { return &AskTool{} }
@@ -117,9 +116,7 @@ func (*AskTool) Execute(ctx context.Context, args json.RawMessage) (string, erro
 
 	_, _, asker, ok := CallContext(ctx)
 	if !ok || asker == nil {
-		// Headless / no interactive user: don't block an autonomous run, but make
-		// the provenance explicit so the model doesn't treat this as a user choice.
-		return "No interactive user answered. This is a model-assumption fallback, not a user answer. Proceed with your best judgment, state the assumption you made, and prefer the safest reversible option when choices differ in risk.", nil
+		return "", fmt.Errorf("ask requires an interactive user; headless execution cannot choose on the user's behalf")
 	}
 
 	answers, err := asker.Ask(ctx, qs)

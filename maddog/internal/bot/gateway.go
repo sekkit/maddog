@@ -890,7 +890,11 @@ func (gw *BotGateway) getOrCreateSession(ctx context.Context, key string, msg In
 	}
 	ctrl.EnableInteractiveApproval()
 	ctrl.SetToolApprovalMode(toolApprovalMode)
-	ctrl.EnsureSessionPath()
+	if err := ctrl.EnsureSessionPath(); err != nil {
+		gw.logger.Error("acquire session lease failed", "err", err)
+		ctrl.Close()
+		return nil
+	}
 
 	gw.mu.Lock()
 	// Re-check under the lock: while we were off-lock in boot.Build, a second

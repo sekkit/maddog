@@ -515,6 +515,19 @@ func (c *client) readStream(ctx context.Context, resp *http.Response, out chan<-
 	var iterations []provider.UsageIteration
 	var stopReason string
 	haveUsage := false
+	mergeUsage := func(u *wireUsage) {
+		if u == nil {
+			return
+		}
+		inTok = max(inTok, u.InputTokens)
+		outTok = max(outTok, u.OutputTokens)
+		cacheCreate = max(cacheCreate, u.CacheCreationInputTokens)
+		cacheRead = max(cacheRead, u.CacheReadInputTokens)
+		if u.Iterations != nil {
+			iterations = providerUsageIterations(u.Iterations)
+		}
+		haveUsage = true
+	}
 
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
@@ -544,14 +557,7 @@ func (c *client) readStream(ctx context.Context, resp *http.Response, out chan<-
 		switch ev.Type {
 		case "message_start":
 			if ev.Message != nil && ev.Message.Usage != nil {
-				u := ev.Message.Usage
-				inTok = u.InputTokens
-				cacheCreate = u.CacheCreationInputTokens
-				cacheRead = u.CacheReadInputTokens
-				if u.Iterations != nil {
-					iterations = providerUsageIterations(u.Iterations)
-				}
-				haveUsage = true
+				mergeUsage(ev.Message.Usage)
 			}
 		case "content_block_start":
 			if ev.ContentBlock == nil {
@@ -633,11 +639,7 @@ func (c *client) readStream(ctx context.Context, resp *http.Response, out chan<-
 				stopReason = ev.Delta.StopReason
 			}
 			if ev.Usage != nil {
-				outTok = ev.Usage.OutputTokens
-				if ev.Usage.Iterations != nil {
-					iterations = providerUsageIterations(ev.Usage.Iterations)
-				}
-				haveUsage = true
+				mergeUsage(ev.Usage)
 			}
 		case "message_stop":
 			// Stream complete; fall through to finalize below.

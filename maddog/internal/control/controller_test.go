@@ -1710,7 +1710,7 @@ func TestPlanModeReadOnlyTrustApprovalPersistsMCPTrust(t *testing.T) {
 	ids := make(chan string, 2)
 	var approval event.Approval
 	var notices []string
-	var rememberedServer, rememberedTool string
+	var remembered agent.PlanModeReadOnlyTrustRequest
 	prompts := 0
 	c := New(Options{
 		Sink: event.FuncSink(func(e event.Event) {
@@ -1723,9 +1723,9 @@ func TestPlanModeReadOnlyTrustApprovalPersistsMCPTrust(t *testing.T) {
 				notices = append(notices, e.Text)
 			}
 		}),
-		OnRememberMCPReadOnlyTrust: func(serverName, rawToolName string) MCPReadOnlyTrustResult {
-			rememberedServer, rememberedTool = serverName, rawToolName
-			return MCPReadOnlyTrustResult{Server: serverName, Tool: rawToolName, Path: "maddog.toml", Saved: true}
+		OnRememberMCPReadOnlyTrust: func(req agent.PlanModeReadOnlyTrustRequest) MCPReadOnlyTrustResult {
+			remembered = req
+			return MCPReadOnlyTrustResult{Server: req.ServerName, Tool: req.RawToolName, Path: "maddog.toml", Saved: true}
 		},
 	})
 
@@ -1733,10 +1733,12 @@ func TestPlanModeReadOnlyTrustApprovalPersistsMCPTrust(t *testing.T) {
 		c.Approve(<-ids, true, true, true)
 	}()
 	req := agent.PlanModeReadOnlyTrustRequest{
-		ToolName:    "mcp__github__issue_read",
-		ServerName:  "github",
-		RawToolName: "issue/read",
-		Args:        json.RawMessage(`{"issue":1}`),
+		ToolName:              "mcp__github__issue_read",
+		ServerName:            "github",
+		RawToolName:           "issue/read",
+		Args:                  json.RawMessage(`{"issue":1}`),
+		IdentityFingerprint:   "identity-fingerprint",
+		CapabilityFingerprint: "capability-fingerprint",
 	}
 	allow, reason, err := planModeReadOnlyTrustApprover{c}.CheckPlanModeReadOnlyTrust(context.Background(), req)
 	if err != nil || !allow || reason != "" {
@@ -1745,8 +1747,8 @@ func TestPlanModeReadOnlyTrustApprovalPersistsMCPTrust(t *testing.T) {
 	if approval.Tool != "mcp__github__issue_read" || !strings.Contains(approval.Subject, "github/issue/read") || !strings.Contains(approval.Reason, "read-only") {
 		t.Fatalf("approval = %+v, want MCP read-only trust prompt", approval)
 	}
-	if rememberedServer != "github" || rememberedTool != "issue/read" {
-		t.Fatalf("remembered MCP trust = %s/%s, want github/issue/read", rememberedServer, rememberedTool)
+	if remembered.ServerName != "github" || remembered.RawToolName != "issue/read" || remembered.IdentityFingerprint == "" || remembered.CapabilityFingerprint == "" {
+		t.Fatalf("remembered MCP trust = %+v, want complete github/issue/read snapshot", remembered)
 	}
 	if len(notices) != 1 || !strings.Contains(notices[0], "github/issue/read") {
 		t.Fatalf("notices = %v, want MCP trust saved notice", notices)
@@ -1765,12 +1767,17 @@ func TestPlanModeReadOnlyTrustApprovalPersistsMCPTrust(t *testing.T) {
 
 func TestPlanModeReadOnlyTrustApprovalIgnoresToolAutoApproval(t *testing.T) {
 	approvalRequests := make(chan event.Approval, 1)
+	remembered := false
 	c := New(Options{
 		Sink: event.FuncSink(func(e event.Event) {
 			if e.Kind == event.ApprovalRequest {
 				approvalRequests <- e.Approval
 			}
 		}),
+		OnRememberMCPReadOnlyTrust: func(agent.PlanModeReadOnlyTrustRequest) MCPReadOnlyTrustResult {
+			remembered = true
+			return MCPReadOnlyTrustResult{}
+		},
 	})
 	c.SetAutoApproveTools(true)
 
@@ -1813,6 +1820,9 @@ func TestPlanModeReadOnlyTrustApprovalIgnoresToolAutoApproval(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("MCP read-only trust prompt stayed blocked after Approve")
+	}
+	if remembered {
+		t.Fatal("session-only approval must not persist an MCP capability receipt")
 	}
 
 	allow, reason, err := planModeReadOnlyTrustApprover{c}.CheckPlanModeReadOnlyTrust(context.Background(), req)

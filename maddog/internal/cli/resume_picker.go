@@ -88,7 +88,10 @@ func (m chatTUI) applyResumePick() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	_ = m.ctrl.Snapshot()
-	m.ctrl.Resume(loaded, target.Path)
+	if err := m.ctrl.Resume(loaded, target.Path); err != nil {
+		m.notice("resume: " + err.Error())
+		return m, nil
+	}
 	m.replayActiveBranch(i18n.M.ResumedTitle)
 	return m, nil
 }

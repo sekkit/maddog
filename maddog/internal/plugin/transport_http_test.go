@@ -2,6 +2,7 @@ package plugin
 
 import (
 	"context"
+	"crypto/ed25519"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -11,8 +12,82 @@ import (
 	"testing"
 	"time"
 
+	"maddog/internal/mcpcatalog"
+	"maddog/internal/mcptrust"
 	"maddog/internal/tool"
 )
+
+func TestProductionCatalogGateBlocksHTTPBeforeNetwork(t *testing.T) {
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { calls.Add(1) }))
+	defer srv.Close()
+
+	base := Spec{Name: "blocked", Type: "http", URL: srv.URL}
+	for _, tc := range []struct {
+		name string
+		spec Spec
+	}{
+		{name: "missing production key for strict reader", spec: ApplyProductionTrust(Spec{Name: base.Name, Type: base.Type, URL: base.URL, StrictReader: true}, t.TempDir(), t.TempDir())},
+		{name: "missing production key for catalog-required server", spec: ApplyProductionTrust(Spec{Name: base.Name, Type: base.Type, URL: base.URL, CatalogRequired: true}, t.TempDir(), t.TempDir())},
+		{name: "wrong key", spec: func() Spec {
+			pub, priv, _ := ed25519.GenerateKey(nil)
+			wrong, _, _ := ed25519.GenerateKey(nil)
+			store := mcpcatalog.NewFileStore(t.TempDir() + "/catalog.json")
+			if err := store.Save(mcpcatalog.Sign(mcpcatalog.Catalog{Version: 1, Entries: []mcpcatalog.Entry{{Name: base.Name, Type: base.Type, URL: base.URL}}}, priv)); err != nil {
+				t.Fatal(err)
+			}
+			_ = pub
+			s := base
+			s.CatalogRequired = true
+			s.CatalogAuthority = mcpcatalog.Authority{Store: store, PublicKey: wrong}
+			return s
+		}()},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, _, err := StartAll(context.Background(), []Spec{tc.spec}); err == nil {
+				t.Fatal("untrusted HTTP plugin started")
+			}
+		})
+	}
+	if got := calls.Load(); got != 0 {
+		t.Fatalf("network calls=%d, want 0", got)
+	}
+}
+
+func TestProductionTrustDoesNotRequireCatalogForCustomMCP(t *testing.T) {
+	srv := mcpHTTPServer(t, false)
+	defer srv.Close()
+
+	spec := ApplyProductionTrust(Spec{
+		Name:    "custom",
+		Type:    "http",
+		URL:     srv.URL,
+		Headers: map[string]string{"Authorization": "Bearer secret"},
+	}, t.TempDir(), t.TempDir())
+	host, tools, err := StartAll(context.Background(), []Spec{spec})
+	if err != nil {
+		t.Fatalf("custom MCP blocked by absent production catalog key: %v", err)
+	}
+	defer host.Close()
+	if len(tools) != 1 {
+		t.Fatalf("custom MCP tools = %d, want 1", len(tools))
+	}
+	snapshot, ok := tools[0].(tool.MCPTrustSnapshot)
+	if !ok {
+		t.Fatal("custom MCP tool does not expose a trust snapshot")
+	}
+	identity, capability, valid := snapshot.MCPTrustFingerprints()
+	if !valid {
+		t.Fatal("custom MCP tool trust snapshot is invalid")
+	}
+	wantIdentity := mcptrust.IdentityFingerprint(mcptrust.Identity{Name: "custom", Type: "http", URL: srv.URL})
+	wantCapability := mcptrust.CapabilityFingerprint(mcptrust.Capability{
+		Server: "custom", Tool: "greet", Schema: tools[0].Schema(), ReadOnly: tools[0].ReadOnly(), Destructive: !tools[0].ReadOnly(),
+	})
+	if identity != wantIdentity || capability != wantCapability {
+		t.Fatalf("custom MCP trust snapshot = %s/%s, want %s/%s", identity, capability, wantIdentity, wantCapability)
+	}
+}
 
 // mcpHTTPServer is a minimal Streamable HTTP MCP server for tests. When sse is
 // true it replies as text/event-stream (prefixing a server notification event

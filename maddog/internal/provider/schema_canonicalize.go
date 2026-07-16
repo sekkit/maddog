@@ -13,18 +13,29 @@ func CanonicalizeSchema(raw json.RawMessage) json.RawMessage {
 		// schema. An empty json.RawMessage makes json.Marshal of the enclosing
 		// request fail ("unexpected end of JSON input") and bricks the whole
 		// provider; emit a valid empty-object schema instead.
-		return json.RawMessage(`{"type":"object"}`)
+		return json.RawMessage(`{"properties":{},"type":"object"}`)
 	}
 	var v any
 	if err := json.Unmarshal(raw, &v); err != nil {
 		return raw
 	}
 	canon := canonicalizeSchemaValue(v)
+	ensureRootObjectProperties(canon)
 	b, err := json.Marshal(canon)
 	if err != nil {
 		return raw
 	}
 	return json.RawMessage(b)
+}
+
+func ensureRootObjectProperties(v any) {
+	m, ok := v.(map[string]any)
+	if !ok || m["type"] != "object" {
+		return
+	}
+	if _, ok := m["properties"]; !ok {
+		m["properties"] = map[string]any{}
+	}
 }
 
 func canonicalizeSchemaValue(v any) any {

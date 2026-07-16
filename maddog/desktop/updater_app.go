@@ -4,11 +4,13 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"runtime"
 
 	wruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 
 	"maddog/desktop/internal/update"
+	"maddog/internal/repair"
 )
 
 // updater_app.go is the auto-updater's bound command surface — the App methods the
@@ -25,6 +27,9 @@ func (a *App) Version() string { return version }
 // build is available for this platform. Safe to call on startup: a network error
 // surfaces in UpdateInfo.Err rather than failing, so the UI can stay quiet.
 func (a *App) CheckUpdate() (*UpdateInfo, error) {
+	if a.SafeMode() {
+		return nil, fmt.Errorf("updates are disabled in Safe Mode")
+	}
 	c, err := httpClient()
 	if err != nil {
 		return &UpdateInfo{
@@ -58,6 +63,9 @@ func (a *App) CheckUpdate() (*UpdateInfo, error) {
 // OpenDownloadPage opens the releases page in the browser — the macOS manual-update
 // path and a fallback link elsewhere.
 func (a *App) OpenDownloadPage() {
+	if a.SafeMode() {
+		return
+	}
 	page := downloadPage()
 	if c, err := httpClient(); err == nil {
 		ctx, cancel := context.WithTimeout(a.reqCtx(), httpTimeout)
@@ -75,6 +83,9 @@ func (a *App) OpenDownloadPage() {
 // deliberately a separate user action so the UI can show "downloaded" before the
 // app quits to finish the update.
 func (a *App) DownloadUpdate() (*UpdateDownloadResult, error) {
+	if a.SafeMode() {
+		return nil, fmt.Errorf("updates are disabled in Safe Mode")
+	}
 	if !canSelfUpdate() {
 		a.OpenDownloadPage()
 		return nil, nil
@@ -114,6 +125,9 @@ func (a *App) DownloadUpdate() (*UpdateDownloadResult, error) {
 
 // InstallUpdate applies the cached, verified update and then exits/relaunches.
 func (a *App) InstallUpdate() error {
+	if a.SafeMode() {
+		return fmt.Errorf("updates are disabled in Safe Mode")
+	}
 	if !canSelfUpdate() {
 		a.OpenDownloadPage()
 		return nil
@@ -123,13 +137,33 @@ func (a *App) InstallUpdate() error {
 		return a.failUpdate(err)
 	}
 	a.emitProgress("installing", meta.Size, meta.Size, "")
+	txDir, err := updateCacheDir()
+	if err != nil {
+		return a.failUpdate(err)
+	}
+	tx := repair.NewUpdateTransaction(filepath.Join(txDir, "transaction"))
+	if err = tx.Prepare(data, repair.SHA256(data)); err != nil {
+		return a.failUpdate(err)
+	}
+	defer tx.Cancel()
 	switch runtime.GOOS {
 	case "windows":
-		err = applyWindowsFile(meta.Path)
+		err = tx.Commit(applyWindowsFile)
 	case "darwin":
-		err = applyMac(meta.Path)
+		err = tx.Commit(applyMac)
 	case "linux":
-		err = applyLinux(data)
+		exe, exeErr := os.Executable()
+		if exeErr != nil {
+			err = exeErr
+			break
+		}
+		err = tx.CommitWithRollback(exe, func(staged, _ string) error {
+			b, readErr := os.ReadFile(staged)
+			if readErr != nil {
+				return readErr
+			}
+			return applyLinux(b)
+		})
 	default:
 		err = fmt.Errorf("self-update unsupported on %s", runtime.GOOS)
 	}

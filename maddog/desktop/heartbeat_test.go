@@ -110,7 +110,7 @@ func (s *heartbeatExecuteTaskCtrlStub) ToolApprovalMode() string {
 	return s.approvalMode
 }
 
-func (s *heartbeatExecuteTaskCtrlStub) SetSessionPath(string) {}
+func (s *heartbeatExecuteTaskCtrlStub) SetSessionPath(string) error { return nil }
 
 func (s *heartbeatExecuteTaskCtrlStub) SessionPath() string {
 	return ""

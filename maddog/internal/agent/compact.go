@@ -13,6 +13,7 @@ import (
 	"unicode/utf8"
 
 	"maddog/internal/event"
+	"maddog/internal/fileutil"
 	"maddog/internal/provider"
 )
 
@@ -769,7 +770,7 @@ func (a *Agent) summarize(ctx context.Context, region []provider.Message, instru
 			{Role: provider.RoleSystem, Content: sys},
 			{Role: provider.RoleUser, Content: renderTranscript(region)},
 		},
-		Temperature: a.temperature,
+		Temperature: provider.OptionalTemperature(a.temperature),
 	})
 	if err != nil {
 		return "", err
@@ -879,12 +880,17 @@ func summarizeToolArgs(args string) string {
 // archiveMessages writes the dropped originals to a timestamped .jsonl (one
 // message per line) under dir, returning the file path.
 func archiveMessages(dir string, msgs []provider.Message) (string, error) {
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := fileutil.EnsurePrivateDir(dir); err != nil {
 		return "", err
 	}
 	path := filepath.Join(dir, time.Now().Format("20060102-150405.000")+".jsonl")
-	f, err := os.Create(path)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_EXCL, 0o600)
 	if err != nil {
+		return "", err
+	}
+	if err := fileutil.ProtectPrivateFile(path); err != nil {
+		_ = f.Close()
+		_ = os.Remove(path)
 		return "", err
 	}
 	defer f.Close()

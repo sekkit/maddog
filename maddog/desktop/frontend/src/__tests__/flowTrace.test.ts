@@ -1,4 +1,4 @@
-import { createTraceEntry, traceToJsonl } from "../lib/flowTrace";
+import { appendTraceEntry, createTraceEntry, traceToJsonl } from "../lib/flowTrace";
 import type { WireEvent } from "../lib/types";
 
 let failed = 0;
@@ -67,6 +67,20 @@ check("bounds large event strings", () => {
   const json = traceToJsonl([entry]);
   assert(json.length < 10000, `trace entry was not bounded: ${json.length}`);
   assert(json.includes("[truncated"), "expected truncation marker");
+});
+
+check("upserts refreshed tool dispatches by ID", () => {
+  let trace = appendTraceEntry([], {
+    kind: "tool_dispatch",
+    tool: { id: "edit-1", name: "edit_file", diff: "stale", added: 1, readOnly: false },
+  }, 100);
+  trace = appendTraceEntry(trace, {
+    kind: "tool_dispatch",
+    tool: { id: "edit-1", name: "edit_file", diff: "fresh", removed: 1, refreshed: true, readOnly: false },
+  }, 100);
+  assert(trace.length === 1, `expected one upserted dispatch, got ${trace.length}`);
+  assert(trace[0].seq === 1, `expected stable sequence, got ${trace[0].seq}`);
+  assert(trace[0].event.tool?.diff === "fresh", "refreshed preview did not replace the stale trace entry");
 });
 
 if (failed > 0) process.exit(1);

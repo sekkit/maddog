@@ -83,7 +83,7 @@ func (c *Controller) runImageFallback(ctx context.Context, input string, images 
 			Content: imageFallbackPrompt(input, images),
 			Images:  reqImages,
 		}},
-		Temperature: 0,
+		Temperature: provider.TemperaturePtr(0),
 		MaxTokens:   imageFallbackMaxTokens,
 	})
 	if err != nil {

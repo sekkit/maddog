@@ -27,8 +27,29 @@ func (s *Session) Save(path string) error {
 	if path == "" {
 		return fmt.Errorf("empty session path")
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := fileutil.EnsurePrivateDir(filepath.Dir(path)); err != nil {
 		return fmt.Errorf("create session dir: %w", err)
+	}
+	var runtimeLease *SessionLease
+	if !sessionLeaseOwned(path) {
+		var leaseErr error
+		runtimeLease, leaseErr = TryAcquireSessionLease(path)
+		if leaseErr != nil {
+			return leaseErr
+		}
+		defer runtimeLease.Release()
+	}
+	unlock, err := tryLockSessionLeaseFile(store.SessionLockFile(path))
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	msgs := s.Snapshot()
+	if err := s.casBeforeSave(path, msgs); err != nil {
+		// Preserve the stale in-memory work in a recovery branch. The branch is
+		// intentionally best-effort; the conflict remains the primary error.
+		_, _ = s.SaveRecoveryBranch(RecoveryBranchOptions{OriginalPath: path, Reason: "stale transcript write"})
+		return err
 	}
 	// Write to a sibling tmp file then rename, so a crash mid-write can't
 	// leave a partial JSONL that won't reload.
@@ -38,7 +59,7 @@ func (s *Session) Save(path string) error {
 	}
 	tmpPath := tmp.Name()
 	enc := json.NewEncoder(tmp)
-	for _, m := range s.Snapshot() { // copy under the lock — a turn may be appending
+	for _, m := range msgs { // copy under the lock — a turn may be appending
 		if err := enc.Encode(m); err != nil {
 			tmp.Close()
 			os.Remove(tmpPath)
@@ -49,11 +70,42 @@ func (s *Session) Save(path string) error {
 		os.Remove(tmpPath)
 		return err
 	}
+	if err := fileutil.ProtectPrivateFile(tmpPath); err != nil {
+		os.Remove(tmpPath)
+		return err
+	}
 	if err := fileutil.ReplaceFile(tmpPath, path); err != nil {
 		os.Remove(tmpPath)
 		return err
 	}
-	return nil
+	if err := fileutil.ProtectPrivateFile(path); err != nil {
+		return err
+	}
+	d, err := digestSessionMessages(msgs)
+	if err != nil {
+		return err
+	}
+	return s.casAfterSave(path, d)
+}
+
+// SaveTranscriptOnly preserves the JSONL compatibility path when a sidecar is
+// damaged: callers can durably retain the transcript while surfacing the sidecar
+// error to repair logic. It deliberately never creates or updates metadata.
+func (s *Session) SaveTranscriptOnly(path string) error {
+	if strings.TrimSpace(path) == "" {
+		return fmt.Errorf("empty session path")
+	}
+	msgs := s.Snapshot()
+	data := make([]byte, 0)
+	for _, m := range msgs {
+		b, err := json.Marshal(m)
+		if err != nil {
+			return err
+		}
+		data = append(data, b...)
+		data = append(data, '\n')
+	}
+	return fileutil.AtomicWriteFile(path, data, 0o600)
 }
 
 // LoadSession reads a JSONL file written by Save into a fresh Session value.
@@ -96,6 +148,14 @@ func LoadSession(path string) (*Session, error) {
 		s.normalizedDirty = true
 	}
 	s.Messages = normalized
+	if d, derr := digestSessionMessages(s.Messages); derr == nil {
+		s.persistedPath = path
+		s.persistedDigest = d
+		if m, ok, merr := LoadBranchMeta(path); merr == nil && ok {
+			s.persistedRevision = m.Revision
+		}
+		s.persistedOK = true
+	}
 	return s, nil
 }
 
@@ -162,7 +222,7 @@ func MarkCleanupPending(sessionPath, operation string) error {
 	if path == "" {
 		return nil
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := fileutil.EnsurePrivateDir(filepath.Dir(path)); err != nil {
 		return err
 	}
 	meta := CleanupPendingMeta{Operation: strings.TrimSpace(operation), CreatedAt: time.Now().UnixMilli()}
@@ -170,7 +230,10 @@ func MarkCleanupPending(sessionPath, operation string) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, b, 0o644)
+	if err := os.WriteFile(path, b, 0o600); err != nil {
+		return err
+	}
+	return fileutil.ProtectPrivateFile(path)
 }
 
 // ClearCleanupPending removes a delayed-cleanup marker after physical cleanup.

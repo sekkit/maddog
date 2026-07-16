@@ -42,7 +42,7 @@ func (p ProviderProposer) Propose(ctx context.Context, req ProposalRequest) (Pro
 			{Role: provider.RoleSystem, Content: providerProposalSystemPrompt},
 			{Role: provider.RoleUser, Content: input},
 		},
-		Temperature: 0,
+		Temperature: provider.TemperaturePtr(0),
 		MaxTokens:   maxTokens,
 	})
 	if err != nil {

@@ -113,7 +113,7 @@ func (s *updateSink) Emit(e event.Event) {
 	case event.ToolDispatch:
 		// Skip the early (Partial) dispatch: it carries no args, and the full one
 		// that follows is the single pending tool_call the protocol expects.
-		if e.Tool.Partial {
+		if e.Tool.Partial || e.Tool.Refreshed {
 			return
 		}
 		s.send(toolCall{

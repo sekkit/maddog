@@ -47,7 +47,7 @@ func (g Generator) generateOnce(ctx context.Context, task string) (string, error
 			{Role: provider.RoleSystem, Content: dynamicSkillSystemPrompt},
 			{Role: provider.RoleUser, Content: strings.TrimSpace(task)},
 		},
-		Temperature: 0.2,
+		Temperature: provider.TemperaturePtr(0.2),
 		MaxTokens:   1200,
 	})
 	if err != nil {

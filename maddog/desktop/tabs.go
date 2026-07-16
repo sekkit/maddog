@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
@@ -1884,8 +1885,10 @@ func (a *App) CloseTab(tabID string) error {
 			// clear the path or drain for them.
 			return nil
 		}
-		tab.Ctrl.SetSessionPath("") // future snapshots become no-ops
-		a.quiesceTabAutosave(tab)   // wait for any in-flight snapshot to finish
+		if err := tab.Ctrl.SetSessionPath(""); err != nil {
+			slog.Warn("desktop: release tab session lease", "err", err)
+		}
+		a.quiesceTabAutosave(tab) // wait for any in-flight snapshot to finish
 		tab.Ctrl.Cancel()
 		tab.Ctrl.Close()
 		// Release the shared plugin host reference. The host stays alive as
@@ -2024,7 +2027,9 @@ func (a *App) closeTabRuntime(tab *WorkspaceTab) {
 		return
 	}
 	if tab.Ctrl != nil {
-		tab.Ctrl.SetSessionPath("") // future snapshots become no-ops
+		if err := tab.Ctrl.SetSessionPath(""); err != nil {
+			slog.Warn("desktop: release tab session lease", "err", err)
+		}
 		a.quiesceTabAutosave(tab)
 		tab.Ctrl.Cancel()
 		tab.Ctrl.Close()
@@ -2240,29 +2245,46 @@ func (a *App) buildTabControllerWithContext(tab *WorkspaceTab, loadedSession loa
 			a.mu.Unlock()
 		}
 		var path string
+		var leaseErr error
 		// Prefer the exact session file persisted for this tab. Topic lookup is a
 		// compatibility fallback for older desktop-tabs.json files that only stored
 		// topicId and could pick the wrong session when one topic had multiple files.
 		if loaded, pinnedPath, ok := loadPinnedTabSessionWithPreload(dir, tab.SessionPath, loadedSession); ok {
 			if loaded != nil {
-				ctrl.Resume(loaded, pinnedPath)
+				leaseErr = ctrl.Resume(loaded, pinnedPath)
 			} else {
-				ctrl.SetSessionPath(pinnedPath)
+				leaseErr = ctrl.SetSessionPath(pinnedPath)
 			}
-			path = pinnedPath
+			if leaseErr == nil {
+				path = pinnedPath
+			}
 		}
-		if path == "" && tab.TopicID != "" {
+		if leaseErr == nil && path == "" && tab.TopicID != "" {
 			existingPath := findTopicSession(dir, tab.TopicID)
 			if existingPath != "" {
 				if loaded, err := loadResumableSession(existingPath); err == nil {
-					ctrl.Resume(loaded, existingPath)
-					path = existingPath
+					leaseErr = ctrl.Resume(loaded, existingPath)
+					if leaseErr == nil {
+						path = existingPath
+					}
 				}
 			}
 		}
-		if path == "" {
+		if leaseErr == nil && path == "" {
 			path = agent.NewSessionPath(dir, ctrl.Label())
-			ctrl.SetSessionPath(path)
+			leaseErr = ctrl.SetSessionPath(path)
+		}
+		if leaseErr != nil {
+			ctrl.Close()
+			a.releaseTabSharedHost(tab)
+			a.mu.Lock()
+			if !tab.removed && a.tabs[tab.ID] == tab {
+				tab.StartupErr = leaseErr.Error()
+				tab.Ready = true
+			}
+			a.mu.Unlock()
+			a.emitReady(wailsCtx, tab.ID)
+			return
 		}
 		// Write/update scope/session meta.
 		if path != "" {

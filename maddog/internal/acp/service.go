@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"maddog/internal/agent"
+	"maddog/internal/config"
 	"maddog/internal/control"
 	"maddog/internal/event"
 	"maddog/internal/fileutil"
@@ -342,7 +343,10 @@ func (s *service) sessionNew(ctx context.Context, raw json.RawMessage) (any, err
 	// and session/load can find it again by id across process restarts.
 	if dir := ctrl.SessionDir(); dir != "" {
 		sess.transcript = transcriptPath(dir, id)
-		ctrl.SetSessionPath(sess.transcript)
+		if err := ctrl.SetSessionPath(sess.transcript); err != nil {
+			ctrl.Close()
+			return nil, &RPCError{Code: ErrInternal, Message: "session/new: " + err.Error()}
+		}
 	}
 
 	s.mu.Lock()
@@ -471,7 +475,10 @@ func (s *service) openExistingSession(ctx context.Context, method, id, cwdParam 
 		ctrl.Close()
 		return SessionConfigState{}, &RPCError{Code: ErrInvalidParams, Message: method + ": unknown session " + id}
 	}
-	ctrl.Resume(loaded, path)
+	if err := ctrl.Resume(loaded, path); err != nil {
+		ctrl.Close()
+		return SessionConfigState{}, &RPCError{Code: ErrInternal, Message: method + ": " + err.Error()}
+	}
 
 	meta := metadataForLoadedSession(path, id, cwd, ctrl.History())
 	meta.Model = cfgState.Model
@@ -706,7 +713,19 @@ func (s *service) rebuildSession(ctx context.Context, sess *acpSession, cfgState
 	newCtrl.EnableInteractiveApproval()
 	sink.bindApprove(newCtrl.Approve)
 	sink.bindAnswer(newCtrl.AnswerQuestion)
-	newCtrl.AdoptHistory(carried, prevPath)
+	// Transfer the writable transcript lease before publishing the replacement
+	// controller. Restore it if the replacement cannot acquire the path.
+	if err := cur.SetSessionPath(""); err != nil {
+		newCtrl.Close()
+		sess.mu.Unlock()
+		return &RPCError{Code: ErrInternal, Message: "session config: release session lease: " + err.Error()}
+	}
+	if err := newCtrl.AdoptHistory(carried, prevPath); err != nil {
+		newCtrl.Close()
+		_ = cur.SetSessionPath(prevPath)
+		sess.mu.Unlock()
+		return &RPCError{Code: ErrInternal, Message: "session config: " + err.Error()}
+	}
 	// InheritLifecycleFrom wires two concrete controllers' turn/hook state; it's a
 	// construction concern, not part of the driving port. cur is always the
 	// *control.Controller the factory built for this session, so this is safe.
@@ -1545,7 +1564,7 @@ func mcpSpecs(in []MCPServerSpec, cwd string) ([]plugin.Spec, error) {
 		default:
 			return nil, fmt.Errorf("MCP server %q uses unsupported transport %q", m.Name, m.Type)
 		}
-		out = append(out, plugin.Spec{
+		out = append(out, plugin.ApplyProductionTrust(plugin.Spec{
 			Name:    strings.TrimSpace(m.Name),
 			Type:    typ,
 			Command: strings.TrimSpace(m.Command),
@@ -1554,7 +1573,7 @@ func mcpSpecs(in []MCPServerSpec, cwd string) ([]plugin.Spec, error) {
 			URL:     strings.TrimSpace(m.URL),
 			Headers: mapString(m.Headers),
 			Dir:     cwd,
-		})
+		}, config.MaddogHomeDir(), config.CacheDir()))
 	}
 	return out, nil
 }

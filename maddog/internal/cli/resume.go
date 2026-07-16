@@ -66,7 +66,10 @@ func (m *chatTUI) runResumeCommand(input string) {
 	}
 	// Persist the conversation we're leaving so switching back later restores it.
 	_ = m.ctrl.Snapshot()
-	m.ctrl.Resume(loaded, target.Path)
+	if err := m.ctrl.Resume(loaded, target.Path); err != nil {
+		m.notice("resume: " + err.Error())
+		return
+	}
 	m.replayActiveBranch(i18n.M.ResumedTitle)
 }
 

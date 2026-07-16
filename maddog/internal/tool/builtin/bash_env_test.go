@@ -10,7 +10,24 @@ import (
 	"testing"
 
 	"maddog/internal/sandbox"
+	"maddog/internal/secrets"
 )
+
+func TestBashCommandEnvRemovesStoredCredentialAndKeepsOrdinaryEnv(t *testing.T) {
+	const credential = "MADDOG_TEST_BASH_STORED_CREDENTIAL"
+	t.Setenv(credential, "private")
+	t.Setenv("MADDOG_TEST_BASH_VISIBLE", "ordinary")
+	secrets.RegisterCredentialEnvKeys([]string{strings.ToLower(credential)})
+
+	env := bashCommandEnv(context.Background(), false)
+	joined := strings.Join(env, "\n")
+	if strings.Contains(strings.ToUpper(joined), credential+"=") {
+		t.Fatal("stored credential leaked into bash child environment")
+	}
+	if !strings.Contains(joined, "MADDOG_TEST_BASH_VISIBLE=ordinary") {
+		t.Fatal("ordinary environment variable was removed")
+	}
+}
 
 func TestBashMergesLoginShellPath(t *testing.T) {
 	if runtime.GOOS == "windows" {

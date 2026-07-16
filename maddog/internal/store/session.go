@@ -65,3 +65,25 @@ func SessionCleanupPending(sessionPath string) string {
 	}
 	return sessionStem(sessionPath) + ".cleanup-pending.json"
 }
+
+// SessionLeaseInfo and SessionLeaseLock are runtime-only coordination sidecars.
+func SessionLeaseInfo(sessionPath string) string {
+	if sessionPath == "" {
+		return ""
+	}
+	return sessionPath + ".lease.json"
+}
+
+func SessionLeaseLock(sessionPath string) string {
+	if sessionPath == "" {
+		return ""
+	}
+	return sessionPath + ".lease.lock"
+}
+
+func SessionLockFile(sessionPath string) string {
+	if sessionPath == "" {
+		return ""
+	}
+	return sessionPath + ".lock"
+}

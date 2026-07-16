@@ -1,0 +1,133 @@
+package repair
+
+import (
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"time"
+)
+
+type startupState struct {
+	ConsecutiveFailures int       `json:"consecutiveFailures"`
+	LastLaunch          time.Time `json:"lastLaunch"`
+	ProbationUntil      time.Time `json:"probationUntil"`
+	Phase               string    `json:"phase"`
+}
+type StartupStatus struct {
+	ConsecutiveFailures int       `json:"consecutiveFailures"`
+	Phase               string    `json:"phase"`
+	LastLaunch          time.Time `json:"lastLaunch"`
+}
+
+type StartupGuard struct {
+	path      string
+	threshold int
+	probation time.Duration
+	now       func() time.Time
+}
+
+func NewStartupGuard(path string, threshold int, probation time.Duration) *StartupGuard {
+	if threshold < 1 {
+		threshold = 3
+	}
+	if probation <= 0 {
+		probation = 2 * time.Minute
+	}
+	return &StartupGuard{path: path, threshold: threshold, probation: probation, now: time.Now}
+}
+
+func (g *StartupGuard) read() startupState {
+	raw, err := os.ReadFile(g.path)
+	if err != nil {
+		return startupState{}
+	}
+	var s startupState
+	if json.Unmarshal(raw, &s) != nil {
+		return startupState{}
+	}
+	return s
+}
+func (g *StartupGuard) write(s startupState) error {
+	if err := os.MkdirAll(filepath.Dir(g.path), 0o700); err != nil {
+		return err
+	}
+	raw, err := json.Marshal(s)
+	if err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(g.path), ".startup-*")
+	if err != nil {
+		return err
+	}
+	name := tmp.Name()
+	defer os.Remove(name)
+	if _, err = tmp.Write(raw); err == nil {
+		err = tmp.Sync()
+	}
+	if closeErr := tmp.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		return err
+	}
+	return os.Rename(name, g.path)
+}
+
+func (g *StartupGuard) withLock(fn func(startupState) (startupState, error)) error {
+	if err := os.MkdirAll(filepath.Dir(g.path), 0o700); err != nil {
+		return err
+	}
+	lock := g.path + ".lock"
+	f, err := os.OpenFile(lock, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	if err != nil {
+		return fmt.Errorf("startup state locked: %w", err)
+	}
+	defer func() { _ = f.Close(); _ = os.Remove(lock) }()
+	next, err := fn(g.read())
+	if err != nil {
+		return err
+	}
+	return g.write(next)
+}
+
+// Begin records a launch before optional components are initialized. Reaching
+// the threshold enters Safe Mode for this process and a short probation window.
+func (g *StartupGuard) Begin() (bool, error) {
+	var safe bool
+	err := g.withLock(func(s startupState) (startupState, error) {
+		now := g.now()
+		if s.Phase == "healthy" || s.Phase == "clean" || (!s.ProbationUntil.IsZero() && now.After(s.ProbationUntil)) {
+			s.ConsecutiveFailures = 0
+		}
+		s.ConsecutiveFailures++
+		s.LastLaunch = now
+		s.Phase = "launching"
+		safe = s.ConsecutiveFailures >= g.threshold
+		if safe {
+			s.ProbationUntil = now.Add(g.probation)
+		}
+		return s, nil
+	})
+	return safe, err
+}
+func (g *StartupGuard) mark(phase string, reset bool) error {
+	return g.withLock(func(s startupState) (startupState, error) {
+		s.Phase = phase
+		if reset {
+			s.ConsecutiveFailures = 0
+			s.ProbationUntil = time.Time{}
+		}
+		return s, nil
+	})
+}
+func (g *StartupGuard) MarkReady() error   { return g.mark("ready", false) }
+func (g *StartupGuard) MarkHealthy() error { return g.mark("healthy", true) }
+func (g *StartupGuard) MarkClean() error   { return g.mark("clean", true) }
+func (g *StartupGuard) Status() StartupStatus {
+	s := g.read()
+	return StartupStatus{ConsecutiveFailures: s.ConsecutiveFailures, Phase: s.Phase, LastLaunch: s.LastLaunch}
+}
+func (g *StartupGuard) Reset() error {
+	return g.withLock(func(startupState) (startupState, error) { return startupState{Phase: "clean"}, nil })
+}

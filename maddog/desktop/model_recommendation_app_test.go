@@ -59,7 +59,7 @@ func TestClassifyModelRecommendationsUsesProvider(t *testing.T) {
 	if len(p.req.Messages) != 2 || p.req.Messages[0].Role != provider.RoleSystem {
 		t.Fatalf("request messages = %+v", p.req.Messages)
 	}
-	if p.req.Temperature != 0 || p.req.MaxTokens != 180 {
+	if p.req.Temperature == nil || *p.req.Temperature != 0 || p.req.MaxTokens != 180 {
 		t.Fatalf("request limits = temp %v max %d", p.req.Temperature, p.req.MaxTokens)
 	}
 }

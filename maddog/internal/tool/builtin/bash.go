@@ -18,6 +18,7 @@ import (
 	"maddog/internal/jobs"
 	"maddog/internal/proc"
 	"maddog/internal/sandbox"
+	"maddog/internal/secrets"
 	"maddog/internal/tool"
 )
 
@@ -568,7 +569,7 @@ func commandPreview(cmd string) string {
 }
 
 func bashCommandEnv(ctx context.Context, scrubSecrets bool) []string {
-	env := os.Environ()
+	env := secrets.ProcessEnv()
 	if scrubSecrets {
 		env = scrubSecretEnvironment(env)
 	}

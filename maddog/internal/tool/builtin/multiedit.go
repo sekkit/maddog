@@ -90,6 +90,7 @@ func (m multiEdit) Execute(ctx context.Context, args json.RawMessage) (string, e
 	// edit_file calls.
 	applied := 0
 	usedFuzzy := false
+	receipts := make([]editReplacementReceipt, 0, len(p.Edits))
 	for i, step := range p.Edits {
 		if step.OldString == "" {
 			return "", fmt.Errorf("edit %d: old_string is required", i+1)
@@ -100,6 +101,7 @@ func (m multiEdit) Execute(ctx context.Context, args json.RawMessage) (string, e
 			content = result.updated
 			applied += result.applied
 			usedFuzzy = usedFuzzy || result.fuzzy
+			receipts = append(receipts, result.receipt)
 		case result.matches == 0:
 			return "", fmt.Errorf("edit %d: old_string not found", i+1)
 		default:
@@ -110,8 +112,9 @@ func (m multiEdit) Execute(ctx context.Context, args json.RawMessage) (string, e
 	if err := writeFileEncoded(p.Path, content, enc); err != nil {
 		return "", fmt.Errorf("write %s: %w", p.Path, err)
 	}
+	summary := fmt.Sprintf("multi_edit %s: %d edits applied (%d total replacements)", p.Path, len(p.Edits), applied)
 	if usedFuzzy {
-		return fmt.Sprintf("multi_edit %s: %d edits applied (%d total replacements) (fuzzy match)", p.Path, len(p.Edits), applied), nil
+		summary += " (fuzzy match)"
 	}
-	return fmt.Sprintf("multi_edit %s: %d edits applied (%d total replacements)", p.Path, len(p.Edits), applied), nil
+	return withActualPostWriteReceipts(summary, receipts), nil
 }

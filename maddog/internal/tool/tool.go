@@ -124,6 +124,60 @@ type MCPMetadata interface {
 	MCPRawToolName() string
 }
 
+// MCPTrustSnapshot exposes credential-safe fingerprints of the exact MCP
+// identity and capability observed during discovery. It lets an authenticated
+// approval persist a receipt without exposing transport credentials upstream.
+type MCPTrustSnapshot interface {
+	MCPTrustFingerprints() (identity, capability string, ok bool)
+}
+
+// TargetResolver exposes the real tool behind a proxy/delegating adapter.
+// Strict reader construction follows this chain before accepting the tool.
+type TargetResolver interface{ TargetTool() Tool }
+
+// StrictReaderAdapter returns an execution view that revalidates trust at the
+// final dispatch boundary. External tools implement this without making the
+// generic tool package depend on their transport.
+type StrictReaderAdapter interface{ StrictReaderTool() Tool }
+
+// NewStrictReaderRegistry creates the only registry shape suitable for
+// planner/review/read-only children. It checks the resolved target, not merely
+// a proxy's advertised ReadOnly flag.
+func NewStrictReaderRegistry(source *Registry) *Registry {
+	out := NewRegistry()
+	if source == nil {
+		return out
+	}
+	for _, name := range source.Names() {
+		t, ok := source.Get(name)
+		if !ok || !strictReaderTool(t) {
+			continue
+		}
+		if adapter, ok := t.(StrictReaderAdapter); ok {
+			t = adapter.StrictReaderTool()
+		}
+		out.Add(t)
+	}
+	return out
+}
+
+func strictReaderTool(t Tool) bool {
+	for depth := 0; t != nil && depth < 32; depth++ {
+		if p, ok := t.(TargetResolver); ok {
+			t = p.TargetTool()
+			continue
+		}
+		if !t.ReadOnly() {
+			return false
+		}
+		if u, ok := t.(PlanModeUntrustedReadOnly); ok && u.PlanModeUntrustedReadOnly() {
+			return false
+		}
+		return true
+	}
+	return false
+}
+
 // SnipHint describes how context maintenance should shorten a stale, oversized
 // result this tool produced. Head/Tail are the line counts kept from each end
 // when the result has many lines; HeadChars/TailChars bound the kept runes when
@@ -187,11 +241,13 @@ func LookupBuiltin(name string) (Tool, bool) {
 
 // Registry is a per-run set of tools: enabled built-ins plus plugin tools.
 type Registry struct {
-	mu        sync.RWMutex
-	tools     map[string]Tool
-	order     []string
-	canon     map[string]json.RawMessage
-	suspended map[string]bool
+	mu         sync.RWMutex
+	tools      map[string]Tool
+	order      []string
+	canon      map[string]json.RawMessage
+	suspended  map[string]bool
+	allowed    map[string]bool
+	restricted bool
 }
 
 // NewRegistry returns an empty registry.
@@ -207,6 +263,9 @@ func (r *Registry) Add(t Tool) {
 	defer r.mu.Unlock()
 
 	name := t.Name()
+	if r.restricted && !r.allowed[name] {
+		return
+	}
 	for prefix := range r.suspended {
 		if strings.HasPrefix(name, prefix) {
 			return
@@ -217,6 +276,31 @@ func (r *Registry) Add(t Tool) {
 	}
 	r.tools[name] = t
 	r.canon[name] = provider.CanonicalizeSchema(t.Schema())
+}
+
+// RestrictTo applies a session-local allow overlay. Existing and future tools
+// outside the set are omitted; this never grants tools or bypasses policy.
+func (r *Registry) RestrictTo(names []string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.restricted = true
+	r.allowed = make(map[string]bool, len(names))
+	for _, name := range names {
+		name = strings.TrimSpace(name)
+		if name != "" {
+			r.allowed[name] = true
+		}
+	}
+	kept := r.order[:0]
+	for _, name := range r.order {
+		if r.allowed[name] {
+			kept = append(kept, name)
+		} else {
+			delete(r.tools, name)
+			delete(r.canon, name)
+		}
+	}
+	r.order = kept
 }
 
 // MCPNamePrefix is the namespace every MCP tool name carries: the

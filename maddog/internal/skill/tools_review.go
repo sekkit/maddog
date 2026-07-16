@@ -9,6 +9,7 @@ import (
 	"time"
 
 	reviewrules "maddog/internal/review"
+	"maddog/internal/secrets"
 )
 
 type subagentTaskPreparer func(context.Context, string) (string, error)
@@ -48,7 +49,7 @@ func runSubagentGit(ctx context.Context, cwd string, args ...string) (string, er
 	if cwd != "" {
 		cmd.Dir = cwd
 	}
-	cmd.Env = append(os.Environ(), "GIT_OPTIONAL_LOCKS=0")
+	cmd.Env = append(secrets.ProcessEnv(), "GIT_OPTIONAL_LOCKS=0")
 	out, err := cmd.Output()
 	if err != nil {
 		return "", fmt.Errorf("git %s: %w", strings.Join(args, " "), err)

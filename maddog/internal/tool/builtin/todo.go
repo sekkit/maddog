@@ -85,6 +85,9 @@ func (todoWrite) Execute(ctx context.Context, args json.RawMessage) (string, err
 			return "", fmt.Errorf("todo %d: invalid status %q (want pending|in_progress|completed)", i+1, t.Status)
 		}
 	}
+	if err := evidence.ValidateSerialTodos(toEvidenceTodos(p.Todos)); err != nil {
+		return "", err
+	}
 	if err := verifyTodoCompletionTransitions(ctx, p.Todos); err != nil {
 		return "", err
 	}

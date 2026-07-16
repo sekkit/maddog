@@ -20,6 +20,7 @@ import (
 
 	"github.com/BurntSushi/toml"
 
+	"maddog/internal/secrets"
 	"maddog/internal/skill"
 )
 
@@ -172,7 +173,7 @@ func Run(ctx context.Context, task Task, opts RunOptions) (Result, error) {
 	args = append(args, task.Prompt)
 	cmd := exec.CommandContext(caseCtx, bin, args...)
 	cmd.Dir = work
-	cmd.Env = append(os.Environ(), opts.Environment...)
+	cmd.Env = append(secrets.ProcessEnv(), opts.Environment...)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr

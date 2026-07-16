@@ -68,6 +68,16 @@ func TestParallelBashMarkersKeepOwnLineCount(t *testing.T) {
 	}
 }
 
+func TestRefreshedToolDispatchDoesNotDuplicateCard(t *testing.T) {
+	m := newTestChatTUI()
+	m.ingestEvent(event.Event{Kind: event.ToolDispatch, Tool: event.Tool{ID: "call_1", Name: "edit_file", Args: `{"path":"a.go"}`}})
+	before := len(m.transcript)
+	m.ingestEvent(event.Event{Kind: event.ToolDispatch, Tool: event.Tool{ID: "call_1", Name: "edit_file", Args: `{"path":"a.go"}`, Refreshed: true}})
+	if got := len(m.transcript); got != before {
+		t.Fatalf("refreshed dispatch added a duplicate CLI card: got %d lines want %d", got, before)
+	}
+}
+
 // No-streaming variant: a second Bash dispatches before the first emits any
 // ToolProgress, and the first's result lands last. The slot must still show
 // "⎿ N lines" driven by the ToolResult's own Output, not "-1 lines" or blank.

@@ -620,6 +620,7 @@ func ReadOnlySubagentToolRegistry(parent *tool.Registry, names []string) *tool.R
 	if parent == nil {
 		return sub
 	}
+	strict := tool.NewStrictReaderRegistry(parent)
 	src := names
 	if len(src) == 0 {
 		src = parent.Names()
@@ -636,12 +637,8 @@ func ReadOnlySubagentToolRegistry(parent *tool.Registry, names []string) *tool.R
 			sub.Add(readOnlyBash{inner: tl})
 			continue
 		}
-		if !tl.ReadOnly() {
-			continue
-		}
-		if u, ok := tl.(tool.PlanModeUntrustedReadOnly); ok && u.PlanModeUntrustedReadOnly() {
-			// An external tool's self-reported readOnlyHint isn't trusted for a
-			// read-only research sub-agent; exclude it like a writer.
+		tl, ok = strict.Get(name)
+		if !ok {
 			continue
 		}
 		sub.Add(tl)
@@ -660,15 +657,13 @@ func FilterReadOnlyRegistry(parent *tool.Registry, exclude ...string) *tool.Regi
 	if parent == nil {
 		return sub
 	}
-	for _, name := range parent.Names() {
+	strict := tool.NewStrictReaderRegistry(parent)
+	for _, name := range strict.Names() {
 		if ex[name] {
 			continue
 		}
-		tl, ok := parent.Get(name)
-		if !ok || !tl.ReadOnly() {
-			continue
-		}
-		if u, ok := tl.(tool.PlanModeUntrustedReadOnly); ok && u.PlanModeUntrustedReadOnly() {
+		tl, ok := strict.Get(name)
+		if !ok {
 			continue
 		}
 		sub.Add(tl)

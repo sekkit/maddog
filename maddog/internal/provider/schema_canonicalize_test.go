@@ -49,9 +49,17 @@ func TestCanonicalizeSchemaDependentRequired(t *testing.T) {
 	}`)
 
 	got := string(CanonicalizeSchema(raw))
-	want := `{"dependentRequired":{"cc":["billing_address","name"]},"type":"object"}`
+	want := `{"dependentRequired":{"cc":["billing_address","name"]},"properties":{},"type":"object"}`
 	if got != want {
 		t.Fatalf("CanonicalizeSchema() = %s, want %s", got, want)
+	}
+}
+
+func TestCanonicalizeSchemaAddsEmptyProperties(t *testing.T) {
+	for _, raw := range []json.RawMessage{nil, json.RawMessage(`{"type":"object"}`)} {
+		if got := string(CanonicalizeSchema(raw)); got != `{"properties":{},"type":"object"}` {
+			t.Fatalf("CanonicalizeSchema(%s) = %s", raw, got)
+		}
 	}
 }
 
