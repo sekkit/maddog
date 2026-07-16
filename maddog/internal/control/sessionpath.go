@@ -12,11 +12,11 @@ import (
 // conditional Resume and then invoke this unconditionally. Centralises the
 // per-surface copies of this logic (the CLI chat/serve fresh branches and the
 // bot's former ensureControllerSessionPath).
-func (c *Controller) EnsureSessionPath() {
+func (c *Controller) EnsureSessionPath() error {
 	if c.SessionPath() != "" || c.SessionDir() == "" {
-		return
+		return nil
 	}
-	c.SetSessionPath(agent.NewSessionPath(c.SessionDir(), c.Label()))
+	return c.SetSessionPath(agent.NewSessionPath(c.SessionDir(), c.Label()))
 }
 
 // AdoptHistory makes a freshly built controller continue an existing
@@ -28,10 +28,11 @@ func (c *Controller) EnsureSessionPath() {
 // hands the carried history (Controller.History()) here. Keeping the
 // Resume/SetSessionPath choice in one place avoids the orphaned-duplicate class
 // of bug (#2807) recurring as each surface copied it.
-func (c *Controller) AdoptHistory(msgs []provider.Message, path string) {
+func (c *Controller) AdoptHistory(msgs []provider.Message, path string) error {
 	if len(msgs) > 0 {
-		c.Resume(&agent.Session{Messages: msgs}, path)
+		return c.Resume(&agent.Session{Messages: msgs}, path)
 	} else if path != "" {
-		c.SetSessionPath(path)
+		return c.SetSessionPath(path)
 	}
+	return nil
 }

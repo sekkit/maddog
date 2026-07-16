@@ -10,6 +10,8 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+
+	"maddog/internal/mcptrust"
 )
 
 // maxHTTPBody caps how much of a JSON / SSE response body we read, so a
@@ -45,7 +47,7 @@ func newHTTPTransport(s Spec) (*httpTransport, error) {
 		name:    s.Name,
 		url:     s.URL,
 		headers: s.Headers,
-		client:  &http.Client{},
+		client:  mcptrust.CredentialSafeHTTPClient(),
 	}, nil
 }
 

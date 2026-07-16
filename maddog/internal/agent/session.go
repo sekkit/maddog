@@ -3,6 +3,7 @@
 package agent
 
 import (
+	"crypto/sha256"
 	"sync"
 
 	"maddog/internal/provider"
@@ -14,9 +15,14 @@ import (
 // the run-loop goroutine stay lock-free (serial with its own writes); cross-
 // goroutine access goes through Snapshot.
 type Session struct {
-	mu             sync.RWMutex
-	Messages       []provider.Message
-	rewriteVersion int // bumped each time the log is rewritten (compact/fold)
+	mu                sync.RWMutex
+	Messages          []provider.Message
+	persistedPath     string
+	persistedDigest   [sha256.Size]byte
+	persistedRevision int64
+	persistedOK       bool
+	version           uint64
+	rewriteVersion    int // bumped each time the log is rewritten (compact/fold)
 	// normalizedDirty is set when LoadSession repaired the history on the way in
 	// (empty tool-call names, dangling calls, truncated args, …). The repair
 	// already lives in Messages, so the next Save persists it automatically as
@@ -39,6 +45,7 @@ func (s *Session) Add(m provider.Message) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.Messages = append(s.Messages, m)
+	s.version++
 }
 
 // Replace swaps the whole message log — used by compaction, which rewrites the
@@ -47,6 +54,7 @@ func (s *Session) Replace(msgs []provider.Message) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.Messages = msgs
+	s.version++
 }
 
 // Snapshot returns a copy of the messages, safe to read from another goroutine

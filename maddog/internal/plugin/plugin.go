@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"maddog/internal/event"
+	"maddog/internal/mcptrust"
 	"maddog/internal/tool"
 )
 
@@ -72,6 +73,20 @@ type Spec struct {
 	// declarations such as agent.plan_mode_allowed_tools without reverse-parsing
 	// normalized MCP tool names back into raw server-local names.
 	ReadOnlyModelToolNames map[string]bool
+	// TrustAuthority is rechecked while dispatching strict reader calls. It is
+	// deliberately an interface so receipt/catalog storage stays outside MCP.
+	TrustAuthority mcptrust.Authority
+	// CatalogAuthority verifies the live Maddog-signed identity and capability
+	// pins. It is checked before transport startup and again before tools/call.
+	CatalogAuthority mcptrust.Authority
+	// CatalogRequired marks an official/catalog-managed server. Such servers,
+	// and StrictReader servers, fail closed before transport startup unless the
+	// Maddog-signed catalog positively identifies them. Ordinary custom MCP
+	// servers do not require a production catalog entry.
+	CatalogRequired bool
+	// StrictReader makes read-only MCP tools fail closed unless the authority
+	// positively approves their exact identity and capability snapshot.
+	StrictReader bool
 	// StripRawPrefix, when non-empty, removes this prefix from each MCP tool's
 	// raw name before namespacing. For example, StripRawPrefix="server_" turns
 	// "server_search" into "search", yielding "mcp__search__search" instead of
@@ -509,6 +524,7 @@ type Client struct {
 	prompts   []Prompt
 	resources []Resource
 	toolsMu   sync.Mutex
+	trustMu   sync.Mutex
 	tools     []ToolInfo
 
 	// toolAdapters caches the model-visible remote tool adapters produced by
@@ -950,6 +966,15 @@ func start(lifeCtx, callCtx context.Context, s Spec) (*Client, error) {
 // newTransport builds the transport for a spec's declared type. Empty / unknown
 // defaults to stdio.
 func newTransport(ctx context.Context, s Spec) (transport, error) {
+	if s.CatalogRequired || s.StrictReader {
+		if s.CatalogAuthority == nil {
+			return nil, fmt.Errorf("plugin %q: catalog trust: %w", s.Name, mcptrust.ErrUntrusted)
+		}
+		identity := mcptrust.Identity{Name: s.Name, Type: s.Type, Command: s.Command, URL: s.URL, Args: s.Args}
+		if err := s.CatalogAuthority.Check(ctx, identity, mcptrust.Capability{}); err != nil {
+			return nil, fmt.Errorf("plugin %q: catalog trust: %w", s.Name, err)
+		}
+	}
 	switch strings.ToLower(strings.TrimSpace(s.Type)) {
 	case "", "stdio":
 		return newStdioTransport(ctx, s)
@@ -1147,6 +1172,7 @@ func (c *Client) listTools(ctx context.Context) ([]tool.Tool, error) {
 			schema:          canonicalizeSchema(t.InputSchema),
 			readOnly:        c.spec.toolReadOnly(t.Name, visibleName, hinted),
 			readOnlyTrusted: trusted,
+			capability:      mcptrust.Capability{Server: c.name, Tool: t.Name, Schema: canonicalizeSchema(t.InputSchema), ReadOnly: c.spec.toolReadOnly(t.Name, visibleName, hinted), Destructive: !c.spec.toolReadOnly(t.Name, visibleName, hinted)},
 		})
 	}
 	sort.SliceStable(toolInfos, func(i, j int) bool { return toolInfos[i].Name < toolInfos[j].Name })
@@ -1243,6 +1269,8 @@ type remoteTool struct {
 	// Spec.ReadOnlyToolNames override, not the server's readOnlyHint. Plan mode
 	// uses it to decide whether to trust ReadOnly() at face value.
 	readOnlyTrusted bool
+	strictReader    bool
+	capability      mcptrust.Capability
 }
 
 func (t *remoteTool) Name() string        { return t.name }
@@ -1254,6 +1282,14 @@ func (t *remoteTool) MCPServerName() string {
 	return t.client.name
 }
 func (t *remoteTool) MCPRawToolName() string { return t.rawName }
+
+func (t *remoteTool) MCPTrustFingerprints() (string, string, bool) {
+	if t.client == nil {
+		return "", "", false
+	}
+	identity := mcptrust.Identity{Name: t.client.name, Type: t.client.spec.Type, Command: t.client.spec.Command, URL: t.client.spec.URL, Args: t.client.spec.Args}
+	return mcptrust.IdentityFingerprint(identity), mcptrust.CapabilityFingerprint(t.capability), true
+}
 
 // ReadOnly reflects MCP readOnlyHint, plus trusted first-party Spec overrides.
 // It defaults to false: opaque third-party tools must declare readOnlyHint
@@ -1268,6 +1304,12 @@ func (t *remoteTool) PlanModeUntrustedReadOnly() bool {
 	return t.readOnly && !t.readOnlyTrusted
 }
 
+func (t *remoteTool) StrictReaderTool() tool.Tool {
+	strict := *t
+	strict.strictReader = true
+	return &strict
+}
+
 func (t *remoteTool) Schema() json.RawMessage {
 	if len(t.schema) == 0 {
 		return json.RawMessage(`{"type":"object"}`)
@@ -1276,6 +1318,37 @@ func (t *remoteTool) Schema() json.RawMessage {
 }
 
 func (t *remoteTool) Execute(ctx context.Context, args json.RawMessage) (string, error) {
+	// Keep the authority check and the actual call under one client lock. A
+	// receipt may be revoked between model approval and dispatch; no stale
+	// adapter is allowed to bypass the live check.
+	t.client.trustMu.Lock()
+	defer t.client.trustMu.Unlock()
+	if t.strictReader || t.client.spec.StrictReader {
+		if !t.readOnly {
+			return "", mcptrust.ErrUntrusted
+		}
+		if t.client.spec.TrustAuthority == nil || t.client.spec.CatalogAuthority == nil {
+			return "", mcptrust.ErrUntrusted
+		}
+		identity := mcptrust.Identity{Name: t.client.name, Type: t.client.spec.Type, Command: t.client.spec.Command, URL: t.client.spec.URL, Args: t.client.spec.Args}
+		if err := t.client.spec.CatalogAuthority.Check(ctx, identity, t.capability); err != nil {
+			return "", err
+		}
+		if err := t.client.spec.TrustAuthority.Check(ctx, identity, t.capability); err != nil {
+			return "", err
+		}
+		if err := t.client.revalidateTool(ctx, t.rawName, t.capability); err != nil {
+			return "", err
+		}
+		// Recheck after the live schema query so revocation cannot race through
+		// the gap between validation and the target call.
+		if err := t.client.spec.CatalogAuthority.Check(ctx, identity, t.capability); err != nil {
+			return "", err
+		}
+		if err := t.client.spec.TrustAuthority.Check(ctx, identity, t.capability); err != nil {
+			return "", err
+		}
+	}
 	var argMap map[string]any
 	if len(args) > 0 {
 		if err := json.Unmarshal(args, &argMap); err != nil {
@@ -1290,6 +1363,35 @@ func (t *remoteTool) Execute(ctx context.Context, args json.RawMessage) (string,
 		return "", err
 	}
 	return parseToolResult(res)
+}
+
+func (c *Client) revalidateTool(ctx context.Context, raw string, approved mcptrust.Capability) error {
+	res, err := c.call(ctx, "tools/list", map[string]any{})
+	if err != nil {
+		return err
+	}
+	var out struct {
+		Tools []mcpTool `json:"tools"`
+	}
+	if err := json.Unmarshal(res, &out); err != nil {
+		return fmt.Errorf("plugin %q: decode tools/list: %w", c.name, err)
+	}
+	for _, t := range out.Tools {
+		if t.Name != raw {
+			continue
+		}
+		hinted := t.Annotations != nil && t.Annotations.ReadOnlyHint
+		visible := t.Name
+		if c.spec.StripRawPrefix != "" {
+			visible = strings.TrimPrefix(visible, c.spec.StripRawPrefix)
+		}
+		current := mcptrust.Capability{Server: c.name, Tool: t.Name, Schema: canonicalizeSchema(t.InputSchema), ReadOnly: c.spec.toolReadOnly(t.Name, visible, hinted), Destructive: !c.spec.toolReadOnly(t.Name, visible, hinted)}
+		if mcptrust.CapabilityFingerprint(current) != mcptrust.CapabilityFingerprint(approved) {
+			return mcptrust.ErrCapabilityDrift
+		}
+		return nil
+	}
+	return mcptrust.ErrCapabilityDrift
 }
 
 // parseToolResult flattens an MCP tools/call result into plain text.

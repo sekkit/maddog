@@ -48,6 +48,7 @@ import { FloatingMenu, FloatingMenuItems } from "./FloatingMenu";
 import { Markdown } from "./Markdown";
 import { Tooltip } from "./Tooltip";
 import { AnchoredPopover } from "./AnchoredPopover";
+import { ImageLightbox } from "./ImageLightbox";
 
 const WORKSPACE_TREE_MIN_WIDTH = 140;
 const WORKSPACE_TREE_DEFAULT_WIDTH = 300;
@@ -125,13 +126,13 @@ function languageFor(path: string): string | undefined {
   return byExt[ext];
 }
 
-function renderMediaPreview(preview: FilePreview): ReactElement | null {
+function renderMediaPreview(preview: FilePreview, onOpenImage?: (trigger: HTMLButtonElement) => void): ReactElement | null {
   if (!preview.url) return null;
   if (preview.kind === "image") {
     return (
-      <div className="workspace-media workspace-media--image">
+      <button className="workspace-media workspace-media--image" type="button" aria-label={`Open ${basename(preview.path)} image preview`} onClick={(event) => onOpenImage?.(event.currentTarget)}>
         <img src={preview.url} alt={basename(preview.path)} decoding="async" draggable={false} />
-      </div>
+      </button>
     );
   }
   if (preview.kind === "pdf") {
@@ -242,6 +243,8 @@ export function WorkspacePanel({
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const [openTabs, setOpenTabs] = useState<string[]>([]);
   const [preview, setPreview] = useState<FilePreview | null>(null);
+  const [lightboxOpen, setLightboxOpen] = useState(false);
+  const imageTriggerRef = useRef<HTMLButtonElement>(null);
   const [loadingPreview, setLoadingPreview] = useState(false);
   const [viewMode, setViewMode] = useState<"files" | "changed">(initialViewMode);
   const [gitHistory, setGitHistory] = useState<GitCommitView[]>([]);
@@ -413,6 +416,7 @@ export function WorkspacePanel({
     setSelectedPath(null);
     setOpenTabs([]);
     setPreview(null);
+    setLightboxOpen(false);
     setGitHistory([]);
     setExpandedCommit(null);
     setCommitDetail(null);
@@ -917,6 +921,11 @@ export function WorkspacePanel({
     setRecentOpen(false);
     setTreeVisible(true);
   }, [changeRevealRequest, openTabs, revealPathRequest, selectedPath]);
+
+  const closeLightbox = useCallback(() => {
+    setLightboxOpen(false);
+    requestAnimationFrame(() => imageTriggerRef.current?.focus());
+  }, []);
 
   const setSavedTreeWidth = useCallback(
     (width: number) => {
@@ -1486,7 +1495,10 @@ export function WorkspacePanel({
           ) : preview?.err ? (
             <div className="workspace-empty workspace-empty--error">{preview.err}</div>
           ) : preview?.kind ? (
-            renderMediaPreview(preview)
+            renderMediaPreview(preview, preview.kind === "image" ? (trigger) => {
+              imageTriggerRef.current = trigger;
+              setLightboxOpen(true);
+            } : undefined)
           ) : preview?.binary ? (
             <div className="workspace-empty">{t("workspace.binary")}</div>
           ) : preview ? (
@@ -1514,6 +1526,10 @@ export function WorkspacePanel({
           )}
         </div>
       </section>}
+
+      {lightboxOpen && preview?.kind === "image" && preview.url && (
+        <ImageLightbox src={preview.url} alt={basename(preview.path)} onClose={closeLightbox} />
+      )}
 
       {showTreeRail && (
         <section className="workspace-tree-rail" aria-label={actualTreeVisible ? t("workspace.hideTree") : t("workspace.showTree")}>

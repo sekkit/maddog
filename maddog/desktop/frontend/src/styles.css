@@ -7610,6 +7610,9 @@ body > .mermaid-diagram--fullscreen {
   align-items: flex-start;
   justify-content: center;
   min-height: 100%;
+  border: 0;
+  padding: 0;
+  cursor: zoom-in;
 }
 .workspace-media--image img {
   display: block;
@@ -7623,6 +7626,67 @@ body > .mermaid-diagram--fullscreen {
   min-height: 520px;
   border: 0;
   background: var(--bg);
+}
+
+.image-lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-modal);
+  display: grid;
+  place-items: center;
+  padding: 52px 20px 20px;
+}
+.image-lightbox__backdrop {
+  position: absolute;
+  inset: 0;
+  border: 0;
+  background: rgba(8, 10, 14, 0.9);
+  cursor: zoom-out;
+}
+.image-lightbox__toolbar {
+  position: absolute;
+  z-index: var(--z-local-raised);
+  top: 12px;
+  right: 16px;
+  display: flex;
+  gap: 6px;
+}
+.image-lightbox__stage {
+  position: relative;
+  z-index: var(--z-local-raised);
+  display: grid;
+  place-items: center;
+  max-width: 100%;
+  max-height: 100%;
+  overflow: auto;
+}
+.image-lightbox__stage img {
+  display: block;
+  border-radius: 4px;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.35);
+}
+.image-lightbox__stage--fit img {
+  max-width: min(96vw, 1800px);
+  max-height: calc(100vh - 92px);
+  width: auto;
+  height: auto;
+  object-fit: contain;
+}
+.image-lightbox__stage--original img {
+  max-width: none;
+  max-height: none;
+  width: auto;
+  height: auto;
+}
+.image-lightbox__error {
+  padding: 28px;
+  color: #f7f8fa;
+  background: rgba(30, 34, 42, 0.96);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+}
+@media (max-width: 640px) {
+  .image-lightbox { padding: 48px 8px 8px; }
+  .image-lightbox__toolbar { right: 8px; }
 }
 .workspace-note {
   margin-bottom: 10px;

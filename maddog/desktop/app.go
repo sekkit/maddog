@@ -1209,7 +1209,10 @@ func (a *App) clearActiveSessionRuntime(tab *WorkspaceTab, oldCtrl control.Sessi
 	applyTabModeToController(newCtrl, tab.mode)
 	applyTabToolApprovalModeToController(newCtrl, tab.toolApprovalMode)
 	path := agent.NewSessionPath(newCtrl.SessionDir(), newCtrl.Label())
-	newCtrl.SetSessionPath(path)
+	if err := newCtrl.SetSessionPath(path); err != nil {
+		newCtrl.Close()
+		return err
+	}
 
 	a.mu.Lock()
 	if current := a.tabs[tab.ID]; current == tab {
@@ -1942,7 +1945,9 @@ func (a *App) prepareRemovedSessionRuntimes(removed []removedSessionRuntime) err
 		if err := item.ctrl.Snapshot(); err != nil {
 			return err
 		}
-		item.ctrl.SetSessionPath("")
+		if err := item.ctrl.SetSessionPath(""); err != nil {
+			return err
+		}
 		a.quiesceTabAutosave(item.tab)
 	}
 	return nil
@@ -6382,6 +6387,20 @@ func (a *App) SetModelForTab(tabID, name string) error {
 		return err
 	}
 	a.bindControllerDisplayRecorder(newCtrl)
+	newCtrl.EnableInteractiveApproval()
+	applyTabModeToController(newCtrl, tab.mode)
+	applyTabToolApprovalModeToController(newCtrl, tab.toolApprovalMode)
+
+	path := agent.ContinueSessionPath(prevPath, newCtrl.SessionDir(), newCtrl.Label())
+	if len(carried) > 0 {
+		err = newCtrl.Resume(&agent.Session{Messages: carried}, path)
+	} else if path != "" {
+		err = newCtrl.SetSessionPath(path)
+	}
+	if err != nil {
+		newCtrl.Close()
+		return err
+	}
 	a.mu.Lock()
 	tab.Ctrl = newCtrl
 	tab.model = name
@@ -6389,16 +6408,6 @@ func (a *App) SetModelForTab(tabID, name string) error {
 	tab.Label = newCtrl.Label()
 	a.saveTabsLocked()
 	a.mu.Unlock()
-	newCtrl.EnableInteractiveApproval()
-	applyTabModeToController(newCtrl, tab.mode)
-	applyTabToolApprovalModeToController(newCtrl, tab.toolApprovalMode)
-
-	path := agent.ContinueSessionPath(prevPath, newCtrl.SessionDir(), newCtrl.Label())
-	if len(carried) > 0 {
-		newCtrl.Resume(&agent.Session{Messages: carried}, path)
-	} else if path != "" {
-		newCtrl.SetSessionPath(path)
-	}
 	applyPersistedTabGoalFallback(newCtrl, tab.goal)
 	a.persistTabSessionPath(tab, path)
 	return nil
@@ -6477,6 +6486,19 @@ func (a *App) SetEffortForTab(tabID, level string) error {
 		return err
 	}
 	a.bindControllerDisplayRecorder(newCtrl)
+	newCtrl.EnableInteractiveApproval()
+	applyTabModeToController(newCtrl, tab.mode)
+	applyTabToolApprovalModeToController(newCtrl, tab.toolApprovalMode)
+	path := agent.ContinueSessionPath(prevPath, newCtrl.SessionDir(), newCtrl.Label())
+	if len(carried) > 0 {
+		err = newCtrl.Resume(&agent.Session{Messages: carried}, path)
+	} else if path != "" {
+		err = newCtrl.SetSessionPath(path)
+	}
+	if err != nil {
+		newCtrl.Close()
+		return err
+	}
 	a.mu.Lock()
 	tab.Ctrl = newCtrl
 	tab.model = modelRef
@@ -6486,15 +6508,6 @@ func (a *App) SetEffortForTab(tabID, level string) error {
 	tab.Ready = true
 	a.saveTabsLocked()
 	a.mu.Unlock()
-	newCtrl.EnableInteractiveApproval()
-	applyTabModeToController(newCtrl, tab.mode)
-	applyTabToolApprovalModeToController(newCtrl, tab.toolApprovalMode)
-	path := agent.ContinueSessionPath(prevPath, newCtrl.SessionDir(), newCtrl.Label())
-	if len(carried) > 0 {
-		newCtrl.Resume(&agent.Session{Messages: carried}, path)
-	} else if path != "" {
-		newCtrl.SetSessionPath(path)
-	}
 	applyPersistedTabGoalFallback(newCtrl, tab.goal)
 	a.persistTabSessionPath(tab, path)
 	return nil
@@ -6555,6 +6568,19 @@ func (a *App) SetTokenModeForTab(tabID, mode string) error {
 	if oldCtrl != nil {
 		oldCtrl.Close()
 	}
+	newCtrl.EnableInteractiveApproval()
+	applyTabModeToController(newCtrl, tab.mode)
+	applyTabToolApprovalModeToController(newCtrl, tab.toolApprovalMode)
+	path := agent.ContinueSessionPath(prevPath, newCtrl.SessionDir(), newCtrl.Label())
+	if len(carried) > 0 {
+		err = newCtrl.Resume(&agent.Session{Messages: carried}, path)
+	} else if path != "" {
+		err = newCtrl.SetSessionPath(path)
+	}
+	if err != nil {
+		newCtrl.Close()
+		return err
+	}
 	a.mu.Lock()
 	tab.Ctrl = newCtrl
 	tab.model = modelRef
@@ -6564,15 +6590,6 @@ func (a *App) SetTokenModeForTab(tabID, mode string) error {
 	tab.Ready = true
 	a.saveTabsLocked()
 	a.mu.Unlock()
-	newCtrl.EnableInteractiveApproval()
-	applyTabModeToController(newCtrl, tab.mode)
-	applyTabToolApprovalModeToController(newCtrl, tab.toolApprovalMode)
-	path := agent.ContinueSessionPath(prevPath, newCtrl.SessionDir(), newCtrl.Label())
-	if len(carried) > 0 {
-		newCtrl.Resume(&agent.Session{Messages: carried}, path)
-	} else if path != "" {
-		newCtrl.SetSessionPath(path)
-	}
 	applyPersistedTabGoalFallback(newCtrl, tab.goal)
 	a.persistTabSessionPath(tab, path)
 	return nil

@@ -39,6 +39,7 @@ import (
 	"maddog/internal/instruction"
 	"maddog/internal/jobs"
 	"maddog/internal/lsp"
+	"maddog/internal/mcptrust"
 	"maddog/internal/memory"
 	"maddog/internal/memorycompiler"
 	"maddog/internal/netclient"
@@ -439,10 +440,10 @@ func Build(ctx context.Context, opts Options) (*control.Controller, error) {
 		opts.ExtraPlugins = nil
 	}
 	eagerEntries, bgEntries := partitionByTier(autoStartEntries)
-	extraSpecs := applyDefaultMCPCallTimeout(
+	extraSpecs := applyProductionMCPTrust(applyDefaultMCPCallTimeout(
 		applyPlanModeAllowedMCPToolTrust(applyKnownPluginOverrides(opts.ExtraPlugins, root), cfg.Agent.PlanModeAllowedTools),
 		pluginSpecOptions.DefaultCallTimeout,
-	)
+	))
 	onDemandMCPSpecs := map[string]plugin.Spec{}
 	onDemandMCPNames := []string{}
 	addOnDemandMCPSpec := func(spec plugin.Spec) {
@@ -1321,8 +1322,8 @@ func Build(ctx context.Context, opts Options) (*control.Controller, error) {
 		OnRemember: func(rule string) control.RememberResult {
 			return rememberPermissionRule(root, rule)
 		},
-		OnRememberMCPReadOnlyTrust: func(serverName, rawToolName string) control.MCPReadOnlyTrustResult {
-			return rememberMCPReadOnlyTrust(root, serverName, rawToolName)
+		OnRememberMCPReadOnlyTrust: func(req agent.PlanModeReadOnlyTrustRequest) control.MCPReadOnlyTrustResult {
+			return rememberMCPReadOnlyTrust(root, req)
 		},
 	}
 	if imageFallbackModel := strings.TrimSpace(cfg.Agent.ImageFallbackModel); imageFallbackModel != "" && !offline {
@@ -1369,7 +1370,7 @@ func Build(ctx context.Context, opts Options) (*control.Controller, error) {
 	if classifier != nil {
 		ctrlOpts.Classifier = classifier
 	}
-	return control.New(ctrlOpts), nil
+	return control.NewChecked(ctrlOpts)
 }
 
 func rememberPermissionRule(workspaceRoot, rule string) control.RememberResult {
@@ -1495,22 +1496,34 @@ func rememberPermissionConfigPath(workspaceRoot string) string {
 	return path
 }
 
-func rememberMCPReadOnlyTrust(workspaceRoot, serverName, rawToolName string) control.MCPReadOnlyTrustResult {
-	serverName = strings.TrimSpace(serverName)
-	rawToolName = strings.TrimSpace(rawToolName)
+func rememberMCPReadOnlyTrust(workspaceRoot string, req agent.PlanModeReadOnlyTrustRequest) control.MCPReadOnlyTrustResult {
+	serverName := strings.TrimSpace(req.ServerName)
+	rawToolName := strings.TrimSpace(req.RawToolName)
 	result := control.MCPReadOnlyTrustResult{Server: serverName, Tool: rawToolName}
+	identity := strings.TrimSpace(req.IdentityFingerprint)
+	capability := strings.TrimSpace(req.CapabilityFingerprint)
+	if identity == "" || capability == "" {
+		result.Err = errors.New("persist capability receipt: MCP identity and capability snapshot are required")
+		return result
+	}
+	store := mcptrust.NewFileStore(filepath.Join(config.MaddogHomeDir(), "mcp-trust", "receipts.json"))
+	if err := store.Put(context.Background(), mcptrust.Receipt{Identity: identity, Capability: capability, Approved: true}); err != nil {
+		result.Err = fmt.Errorf("persist capability receipt: %w", err)
+		return result
+	}
 	_, changed, path, err := config.TrustPluginReadOnlyToolInSourceForRoot(workspaceRoot, serverName, rawToolName)
 	result.Path = path
 	if err != nil {
+		_ = store.Revoke(context.Background(), identity, capability)
 		slog.Warn("persist MCP read-only trust", "server", serverName, "tool", rawToolName, "err", err)
 		result.Err = err
 		return result
 	}
 	if changed {
 		result.Saved = true
-		return result
+	} else {
+		result.CoveredBy = rawToolName
 	}
-	result.CoveredBy = rawToolName
 	return result
 }
 
@@ -1916,7 +1929,15 @@ func PluginSpecsForRootWithOptions(entries []config.PluginEntry, workspaceRoot s
 	for i, e := range entries {
 		specs[i] = pluginSpecFromEntryWithOptions(e, workspaceRoot, opts)
 	}
-	return applyPlanModeAllowedMCPToolTrust(specs, opts.PlanModeAllowedTools)
+	return applyProductionMCPTrust(applyPlanModeAllowedMCPToolTrust(specs, opts.PlanModeAllowedTools))
+}
+
+func applyProductionMCPTrust(specs []plugin.Spec) []plugin.Spec {
+	out := make([]plugin.Spec, len(specs))
+	for i, spec := range specs {
+		out[i] = plugin.ApplyProductionTrust(spec, config.MaddogHomeDir(), config.CacheDir())
+	}
+	return out
 }
 
 func pluginSpecFromEntryWithOptions(e config.PluginEntry, workspaceRoot string, opts PluginSpecOptions) plugin.Spec {

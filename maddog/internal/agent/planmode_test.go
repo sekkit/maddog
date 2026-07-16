@@ -199,6 +199,9 @@ type untrustedMCPReadOnlyTool struct {
 
 func (t untrustedMCPReadOnlyTool) MCPServerName() string  { return t.server }
 func (t untrustedMCPReadOnlyTool) MCPRawToolName() string { return t.raw }
+func (t untrustedMCPReadOnlyTool) MCPTrustFingerprints() (string, string, bool) {
+	return "identity-fingerprint", "capability-fingerprint", true
+}
 
 type fakePlanModeReadOnlyTrustGate struct {
 	allow  bool
@@ -260,6 +263,9 @@ func TestPlanModeUntrustedReadOnlyToolCanAskForTrust(t *testing.T) {
 	}
 	if gate.req.ToolName != "mcp__srv__normalized_query" || string(gate.req.Args) != `{"q":"x"}` {
 		t.Fatalf("trust request call metadata = %+v", gate.req)
+	}
+	if gate.req.IdentityFingerprint != "identity-fingerprint" || gate.req.CapabilityFingerprint != "capability-fingerprint" {
+		t.Fatalf("trust request fingerprint metadata = %+v", gate.req)
 	}
 }
 

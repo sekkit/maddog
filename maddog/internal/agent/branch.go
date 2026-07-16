@@ -20,6 +20,9 @@ type BranchMeta struct {
 	ID               string    `json:"id"`
 	Name             string    `json:"name,omitempty"`
 	ParentID         string    `json:"parent_id,omitempty"`
+	Recovered        bool      `json:"recovered,omitempty"`
+	RecoveryReason   string    `json:"recovery_reason,omitempty"`
+	RecoveryDigest   string    `json:"recovery_digest,omitempty"`
 	ForkTurn         int       `json:"fork_turn,omitempty"`
 	ForkMessageIndex int       `json:"fork_message_index,omitempty"`
 	CreatedAt        time.Time `json:"created_at"`
@@ -44,9 +47,12 @@ type BranchMeta struct {
 	// in-memory conversation, so ListSessions stays O(1) per session instead of
 	// O(file size). Gated by SchemaVersion (above), not Turns == 0, so a
 	// genuinely-empty session is recorded once and never re-decoded.
-	Turns        int               `json:"turns,omitempty"`
-	Preview      string            `json:"preview,omitempty"`
-	InFlightTurn *InFlightTurnMeta `json:"in_flight_turn,omitempty"`
+	Turns         int               `json:"turns,omitempty"`
+	Preview       string            `json:"preview,omitempty"`
+	InFlightTurn  *InFlightTurnMeta `json:"in_flight_turn,omitempty"`
+	Revision      int64             `json:"revision,omitempty"`
+	ContentDigest string            `json:"content_digest,omitempty"`
+	WriterID      string            `json:"writer_id,omitempty"`
 }
 
 // BranchMetaCountsVersion is stamped into BranchMeta.SchemaVersion whenever a
@@ -142,6 +148,18 @@ func saveBranchMeta(sessionPath string, m BranchMeta, touchUpdated bool) error {
 	}
 	if touchUpdated || m.UpdatedAt.IsZero() {
 		m.UpdatedAt = now
+	}
+	if existing, ok, err := LoadBranchMeta(sessionPath); err == nil && ok {
+		if m.Revision < existing.Revision {
+			m.Revision = existing.Revision
+			m.ContentDigest = existing.ContentDigest
+			m.WriterID = existing.WriterID
+		} else if m.Revision == existing.Revision && strings.TrimSpace(m.ContentDigest) == "" {
+			m.ContentDigest = existing.ContentDigest
+		}
+		if m.Revision == existing.Revision && strings.TrimSpace(m.WriterID) == "" {
+			m.WriterID = existing.WriterID
+		}
 	}
 	if err := fileutil.EnsurePrivateDir(filepath.Dir(metaPath)); err != nil {
 		return err

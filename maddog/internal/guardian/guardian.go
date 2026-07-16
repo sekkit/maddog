@@ -113,6 +113,17 @@ func NewSession(prov provider.Provider, readOnlyReg *tool.Registry, policyPrompt
 // prefix-cache warmth). Event emission is deferred to outside the lock so a
 // slow sink does not stall the next review.
 func (gs *Session) Review(ctx context.Context, toolName string, args json.RawMessage, parentSession *agent.Session) (allow bool, reason string, err error) {
+	allow, reason, _ = gs.review(ctx, toolName, args, parentSession)
+	return allow, reason, nil
+}
+
+// ReviewVerdict preserves reviewer authenticity: transport, timeout, and parse
+// failures return an error instead of being indistinguishable from a real deny.
+func (gs *Session) ReviewVerdict(ctx context.Context, toolName string, args json.RawMessage, parentSession *agent.Session) (allow bool, reason string, err error) {
+	return gs.review(ctx, toolName, args, parentSession)
+}
+
+func (gs *Session) review(ctx context.Context, toolName string, args json.RawMessage, parentSession *agent.Session) (allow bool, reason string, failure error) {
 	reviewCtx, cancel := context.WithTimeout(ctx, reviewTimeout)
 	defer cancel()
 
@@ -172,6 +183,7 @@ func (gs *Session) Review(ctx context.Context, toolName string, args json.RawMes
 	// Parse the result and update circuit breaker under the lock.
 	var assessment Assessment
 	if agentErr != nil {
+		failure = fmt.Errorf("guardian review failed: %w", agentErr)
 		assessment = Assessment{
 			RiskLevel:         "high",
 			UserAuthorization: "unknown",
@@ -183,6 +195,7 @@ func (gs *Session) Review(ctx context.Context, toolName string, args json.RawMes
 		var parseErr error
 		assessment, parseErr = ParseAssessment(last)
 		if parseErr != nil {
+			failure = fmt.Errorf("guardian verdict unparseable: %w", parseErr)
 			assessment = Assessment{
 				RiskLevel:         "high",
 				UserAuthorization: "unknown",
@@ -208,7 +221,7 @@ func (gs *Session) Review(ctx context.Context, toolName string, args json.RawMes
 	gs.emitTo(sink, assessment, toolName, subject(args), dur, reviewUsage)
 
 	if assessment.Outcome == "deny" {
-		return false, reason, nil
+		return false, reason, failure
 	}
 	return true, "", nil
 }

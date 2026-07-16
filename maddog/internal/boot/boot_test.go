@@ -25,6 +25,7 @@ import (
 	"maddog/internal/codegraph"
 	"maddog/internal/config"
 	"maddog/internal/event"
+	"maddog/internal/mcptrust"
 	"maddog/internal/memory"
 	"maddog/internal/netclient"
 	"maddog/internal/plugin"
@@ -3217,6 +3218,52 @@ func TestPluginSpecsTrustConfiguredReadOnlyTools(t *testing.T) {
 	}
 	if specs[0].ReadOnlyToolNames[""] {
 		t.Fatalf("empty trusted read-only tool name should be ignored: %+v", specs[0].ReadOnlyToolNames)
+	}
+}
+
+func TestRememberMCPReadOnlyTrustIssuesCapabilityReceipt(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("MADDOG_HOME", filepath.Join(home, ".maddog"))
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, config.ProjectConfigFilename), []byte("[[plugins]]\nname = \"github\"\ncommand = \"github-mcp\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	req := agent.PlanModeReadOnlyTrustRequest{
+		ServerName:            "github",
+		RawToolName:           "issue/read",
+		IdentityFingerprint:   "identity-fingerprint",
+		CapabilityFingerprint: "capability-fingerprint",
+	}
+	if got := rememberMCPReadOnlyTrust(root, req); got.Err != nil || !got.Saved {
+		t.Fatalf("rememberMCPReadOnlyTrust = %+v, want saved receipt", got)
+	}
+	store := mcptrust.NewFileStore(filepath.Join(config.MaddogHomeDir(), "mcp-trust", "receipts.json"))
+	if _, err := store.Get(context.Background(), req.IdentityFingerprint, req.CapabilityFingerprint); err != nil {
+		t.Fatalf("capability receipt missing after persistent approval: %v", err)
+	}
+}
+
+func TestRememberMCPReadOnlyTrustRejectsMissingSnapshot(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("MADDOG_HOME", filepath.Join(home, ".maddog"))
+	root := t.TempDir()
+	path := filepath.Join(root, config.ProjectConfigFilename)
+	original := []byte("[[plugins]]\nname = \"github\"\ncommand = \"github-mcp\"\n")
+	if err := os.WriteFile(path, original, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	got := rememberMCPReadOnlyTrust(root, agent.PlanModeReadOnlyTrustRequest{ServerName: "github", RawToolName: "issue/read"})
+	if got.Err == nil {
+		t.Fatal("missing MCP snapshot persisted trust")
+	}
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(after, original) {
+		t.Fatal("missing MCP snapshot changed trusted_read_only_tools config")
 	}
 }
 

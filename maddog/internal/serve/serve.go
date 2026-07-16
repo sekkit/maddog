@@ -135,7 +135,10 @@ func (s *Server) switchModel(ctx context.Context, ref string) error {
 	// Keep the carried conversation in its existing file so the switch doesn't
 	// orphan a duplicate (#2807).
 	newPath := agent.ContinueSessionPath(prevPath, newCtrl.SessionDir(), newCtrl.Label())
-	newCtrl.AdoptHistory(carried, newPath)
+	if err := newCtrl.AdoptHistory(carried, newPath); err != nil {
+		newCtrl.Close()
+		return fmt.Errorf("switch model: %w", err)
+	}
 
 	s.ctrl = newCtrl
 	cur.Close()
@@ -800,7 +803,10 @@ func (s *Server) resume(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "load session: "+err.Error(), http.StatusBadRequest)
 		return
 	}
-	s.ctl().Resume(loaded, realPath)
+	if err := s.ctl().Resume(loaded, realPath); err != nil {
+		http.Error(w, "resume session: "+err.Error(), http.StatusConflict)
+		return
+	}
 	w.WriteHeader(http.StatusNoContent)
 }
 

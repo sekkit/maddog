@@ -11,8 +11,8 @@ import (
 
 func TestTodoWriteAcceptsLevels(t *testing.T) {
 	args := json.RawMessage(`{"todos":[` +
-		`{"content":"Phase","status":"in_progress","level":0},` +
-		`{"content":"sub","status":"pending","level":1}]}`)
+		`{"content":"Phase","status":"pending","level":0},` +
+		`{"content":"sub","status":"in_progress","level":1}]}`)
 	if _, err := (todoWrite{}).Execute(context.Background(), args); err != nil {
 		t.Fatalf("levels 0/1 should be accepted: %v", err)
 	}

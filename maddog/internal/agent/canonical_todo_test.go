@@ -55,14 +55,14 @@ func TestAdvanceCanonicalTodoCompletesAndPromotes(t *testing.T) {
 	}
 }
 
-func TestAdvanceCanonicalTodoMatchesByNumber(t *testing.T) {
+func TestAdvanceCanonicalTodoRejectsPendingMatchByNumber(t *testing.T) {
 	a := &Agent{sink: event.Discard, todoState: []evidence.TodoItem{
 		{Content: "first", Status: "in_progress"},
 		{Content: "second", Status: "pending"},
 	}}
 	a.advanceCanonicalTodo("2")
-	if a.todoState[1].Status != "completed" {
-		t.Fatalf("numeric step did not complete the second todo: %+v", a.todoState)
+	if a.todoState[1].Status != "pending" || a.todoState[0].Status != "in_progress" {
+		t.Fatalf("pending numeric step advanced out of order: %+v", a.todoState)
 	}
 }
 

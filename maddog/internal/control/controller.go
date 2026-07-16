@@ -100,7 +100,7 @@ type Controller struct {
 	classifier                 autoPlanClassifier
 	startedOnce                bool                             // guards the one-shot SessionStart hook on first turn
 	onRemember                 func(rule string) RememberResult // set via Options; invoked when user picks "always allow"
-	onRememberMCPReadOnlyTrust func(serverName, rawToolName string) MCPReadOnlyTrustResult
+	onRememberMCPReadOnlyTrust func(agent.PlanModeReadOnlyTrustRequest) MCPReadOnlyTrustResult
 
 	// balanceURL/balanceKey target the active provider's optional wallet-balance
 	// endpoint (empty when the provider declares none). Captured at build so a
@@ -164,6 +164,7 @@ type Controller struct {
 	autosaveWG  sync.WaitGroup
 	planMode    bool
 	sessionPath string
+	leaseKeeper *SessionLeaseKeeper
 	// turn counts model turns this session, passed to hooks in their payload.
 	turn int
 
@@ -324,7 +325,7 @@ type Options struct {
 	// OnRememberMCPReadOnlyTrust persists a raw MCP tool name as trusted
 	// read-only when the user chooses "always allow" from the plan-mode trust
 	// prompt.
-	OnRememberMCPReadOnlyTrust func(serverName, rawToolName string) MCPReadOnlyTrustResult
+	OnRememberMCPReadOnlyTrust func(agent.PlanModeReadOnlyTrustRequest) MCPReadOnlyTrustResult
 	// PlanModeAllowedTools names extra custom tools the plan-mode policy may treat
 	// as read-only. Known blocked tools and unsafe bash still lose.
 	PlanModeAllowedTools []string
@@ -347,6 +348,33 @@ type Options struct {
 
 // New builds a Controller. A nil Sink is replaced with event.Discard.
 func New(opts Options) *Controller {
+	// Preserve the historical constructor's non-error API. Callers that need
+	// strict startup ownership use NewChecked; the legacy wrapper binds the
+	// path lazily through SetSessionPath/Resume so test and frontend controller
+	// replacement can report lease errors at the operation that requested it.
+	requestedPath := opts.SessionPath
+	legacy := opts
+	legacy.SessionPath = ""
+	c, err := NewChecked(legacy)
+	if err != nil {
+		return c
+	}
+	if requestedPath != "" {
+		c.mu.Lock()
+		c.sessionPath = requestedPath
+		c.guardianPath = guardian.PathFor(requestedPath)
+		c.mu.Unlock()
+		c.goals.bindStatePath(goalStatePath(requestedPath), true, false)
+		c.rebindCheckpoints(requestedPath)
+		c.setActiveJobSession(requestedPath)
+		c.bindRawToolResultDir(requestedPath)
+	}
+	return c
+}
+
+// NewChecked builds a Controller and fails closed when its writable session
+// path is already owned by another runtime.
+func NewChecked(opts Options) (*Controller, error) {
 	sink := opts.Sink
 	if nilutil.IsNil(sink) {
 		sink = event.Discard
@@ -402,6 +430,12 @@ func New(opts Options) *Controller {
 		replayMaxBundles:           opts.ReplayMaxBundles,
 		replayRedact:               opts.ReplayRedact,
 		disableSessionPersistence:  opts.DisableSessionPersistence,
+		leaseKeeper:                NewSessionLeaseKeeper(),
+	}
+	if !opts.DisableSessionPersistence && strings.TrimSpace(opts.SessionPath) != "" {
+		if err := c.leaseKeeper.Rebind(opts.SessionPath); err != nil {
+			return nil, err
+		}
 	}
 	cmds := append([]command.Command(nil), opts.Commands...)
 	c.commands.Store(&cmds)
@@ -426,7 +460,7 @@ func New(opts Options) *Controller {
 		// used by the executor. Marker parsing remains the compatibility fallback.
 		registry.Add(newGoalControlTool(c))
 	}
-	return c
+	return c, nil
 }
 
 // SetDisplayRecorder installs an optional hook used by frontends that persist a
@@ -2053,12 +2087,19 @@ func (c *Controller) NewSession() error {
 		return err
 	}
 	c.hooks.SessionEnd(context.Background())
+	newPath := c.SessionPath()
 	if c.sessionDir != "" {
-		c.mu.Lock()
-		c.sessionPath = agent.NewSessionPath(c.sessionDir, c.label)
-		c.guardianPath = guardian.PathFor(c.sessionPath)
-		c.mu.Unlock()
+		newPath = agent.NewSessionPath(c.sessionDir, c.label)
 	}
+	if !c.disableSessionPersistence {
+		if err := c.leaseKeeper.Rebind(newPath); err != nil {
+			return err
+		}
+	}
+	c.mu.Lock()
+	c.sessionPath = newPath
+	c.guardianPath = guardian.PathFor(newPath)
+	c.mu.Unlock()
 	c.setActiveJobSession(c.SessionPath())
 	c.bindRawToolResultDir(c.SessionPath())
 	c.executor.SetSession(agent.NewSession(c.systemPrompt))
@@ -2103,12 +2144,19 @@ func (c *Controller) ClearSession() error {
 		destroy.Finish()
 	}
 	c.hooks.SessionEnd(context.Background())
+	newPath := c.SessionPath()
 	if c.sessionDir != "" {
-		c.mu.Lock()
-		c.sessionPath = agent.NewSessionPath(c.sessionDir, c.label)
-		c.guardianPath = guardian.PathFor(c.sessionPath)
-		c.mu.Unlock()
+		newPath = agent.NewSessionPath(c.sessionDir, c.label)
 	}
+	if !c.disableSessionPersistence {
+		if err := c.leaseKeeper.Rebind(newPath); err != nil {
+			return err
+		}
+	}
+	c.mu.Lock()
+	c.sessionPath = newPath
+	c.guardianPath = guardian.PathFor(newPath)
+	c.mu.Unlock()
 	c.setActiveJobSession(c.SessionPath())
 	c.bindRawToolResultDir(c.SessionPath())
 	c.executor.SetSession(agent.NewSession(c.systemPrompt))
@@ -2329,6 +2377,9 @@ func (c *Controller) forkNamed(turn int, name string, switchToFork bool) (string
 		return "", c.rewindFail(err)
 	}
 	if switchToFork {
+		if err := c.leaseKeeper.Rebind(newPath); err != nil {
+			return "", c.rewindFail(err)
+		}
 		c.executor.SetSession(sess)
 		c.ResetPlannerSession()
 		c.mu.Lock()
@@ -2402,6 +2453,9 @@ func (c *Controller) Branch(name string) (string, error) {
 	}); err != nil {
 		return "", c.rewindFail(err)
 	}
+	if err := c.leaseKeeper.Rebind(newPath); err != nil {
+		return "", c.rewindFail(err)
+	}
 	c.executor.SetSession(sess)
 	c.ResetPlannerSession()
 	c.mu.Lock()
@@ -2454,6 +2508,9 @@ func (c *Controller) SwitchBranch(ref string) (agent.BranchInfo, error) {
 	}
 	loaded, err := agent.LoadSession(match.Path)
 	if err != nil {
+		return agent.BranchInfo{}, c.rewindFail(err)
+	}
+	if err := c.leaseKeeper.Rebind(match.Path); err != nil {
 		return agent.BranchInfo{}, c.rewindFail(err)
 	}
 	if c.executor != nil {
@@ -2554,7 +2611,12 @@ func (c *Controller) summarizeAt(ctx context.Context, turn int, from bool) error
 
 // Resume seeds the session from a loaded transcript and pins the active file to
 // its path so auto-save keeps appending there.
-func (c *Controller) Resume(s *agent.Session, path string) {
+func (c *Controller) Resume(s *agent.Session, path string) error {
+	if !c.disableSessionPersistence {
+		if err := c.leaseKeeper.Rebind(path); err != nil {
+			return err
+		}
+	}
 	if c.executor != nil {
 		c.executor.SetSession(s)
 	}
@@ -2571,6 +2633,7 @@ func (c *Controller) Resume(s *agent.Session, path string) {
 	c.loadGuardianSession()
 	c.recoverInterruptedTurn(path)
 	c.maybeColdResumePrune(path)
+	return nil
 }
 
 func (c *Controller) loadGuardianSession() {
@@ -2701,6 +2764,10 @@ func (c *Controller) snapshot(markActivity bool) error {
 		return errNoSessionPath
 	}
 	if err := s.Save(path); err != nil {
+		var conflict *agent.SessionSnapshotConflictError
+		if !errors.As(err, &conflict) {
+			_ = s.SaveTranscriptOnly(path)
+		}
 		return err
 	}
 	// Persist guardian session so the prefix cache stays warm after restart.
@@ -2855,7 +2922,14 @@ func (c *Controller) snapshotActivityIfChanged(startMessages int) {
 
 // SetSessionPath pins where auto-save lands (a fresh session file minted by the
 // caller when no resume path applies).
-func (c *Controller) SetSessionPath(p string) {
+func (c *Controller) SetSessionPath(p string) error {
+	if !c.disableSessionPersistence {
+		if err := c.leaseKeeper.Rebind(p); err != nil {
+			slog.Warn("controller: session lease unavailable", "err", err)
+			c.bindRawToolResultDir(p)
+			return err
+		}
+	}
 	c.mu.Lock()
 	c.sessionPath = p
 	c.guardianPath = guardian.PathFor(p)
@@ -2864,6 +2938,7 @@ func (c *Controller) SetSessionPath(p string) {
 	c.bindRawToolResultDir(p)
 	c.bindGoalState(p, true, true)
 	c.rebindCheckpoints(p)
+	return nil
 }
 
 func (c *Controller) bindRawToolResultDir(sessionPath string) {
@@ -3230,7 +3305,7 @@ func (c *Controller) ConnectMCPServer(e config.PluginEntry) (int, error) {
 // overrides scoped to the workspace, and connects it live via the mcp manager.
 func (c *Controller) connectMCPServer(e config.PluginEntry) (int, error) {
 	exp := e.ExpandedPlugin()
-	return c.mcp.connectSpec(plugin.ApplyKnownOverrides(plugin.Spec{
+	return c.mcp.connectSpec(plugin.ApplyProductionTrust(plugin.ApplyKnownOverrides(plugin.Spec{
 		Name:              exp.Name,
 		Type:              exp.Type,
 		Command:           exp.Command,
@@ -3239,7 +3314,7 @@ func (c *Controller) connectMCPServer(e config.PluginEntry) (int, error) {
 		URL:               exp.URL,
 		Headers:           exp.Headers,
 		ReadOnlyToolNames: trustedReadOnlyToolNames(exp.TrustedReadOnlyTools),
-	}, c.WorkspaceRoot()))
+	}, c.WorkspaceRoot()), config.MaddogHomeDir(), config.CacheDir()))
 }
 
 func trustedReadOnlyToolNames(names []string) map[string]bool {
@@ -3494,6 +3569,9 @@ const (
 )
 
 func (c *Controller) close(fireSessionEnd bool, jobsMode closeJobsMode) {
+	if c.leaseKeeper != nil {
+		c.leaseKeeper.Release()
+	}
 	c.mu.Lock()
 	started := c.startedOnce
 	c.mu.Unlock()
@@ -3647,9 +3725,16 @@ func (g gateApprover) ApproveWithReason(ctx context.Context, tool, subject strin
 	// session grant before it emits a prompt, so the auto-allow paths need no
 	// special-casing here. Deny rules already bit before this point.
 	if g.c.guardianSess != nil && !g.c.approval.preApproved(tool, subject) {
-		allow, reason, reviewErr := g.c.guardianSess.Review(ctx, tool, args, g.c.executor.Session())
+		allow, reason, reviewErr := g.c.guardianSess.ReviewVerdict(ctx, tool, args, g.c.executor.Session())
 		if reviewErr != nil {
-			return false, false, "", reviewErr
+			reply, err := g.c.requestStrictFreshApprovalDecision(ctx, tool, subject, args, "The automatic reviewer was unavailable. A present user must approve this call.")
+			if err != nil {
+				return false, false, reason, err
+			}
+			if !reply.allow {
+				return false, false, "the automatic reviewer was unavailable and the user declined the call", nil
+			}
+			return true, false, "", nil
 		}
 		if allow {
 			return true, false, "", nil
@@ -3688,7 +3773,7 @@ func (p planModeReadOnlyTrustApprover) CheckPlanModeReadOnlyTrust(ctx context.Co
 		p.c.approval.grantSession(req.ToolName, subject)
 	}
 	if reply.persist && p.c.onRememberMCPReadOnlyTrust != nil {
-		p.c.emitMCPReadOnlyTrustResult(p.c.onRememberMCPReadOnlyTrust(server, rawTool))
+		p.c.emitMCPReadOnlyTrustResult(p.c.onRememberMCPReadOnlyTrust(req))
 	}
 	return true, "", nil
 }
@@ -4104,18 +4189,25 @@ func (c *Controller) requestFreshApprovalDecision(ctx context.Context, tool, sub
 	return c.requestApprovalDecisionWithOptions(ctx, tool, subject, args, reason, approvalDecisionOptions{fresh: true})
 }
 
+func (c *Controller) requestStrictFreshApprovalDecision(ctx context.Context, tool, subject string, args json.RawMessage, reason string) (approvalReply, error) {
+	return c.requestApprovalDecisionWithOptions(ctx, tool, subject, args, reason, approvalDecisionOptions{fresh: true, alwaysPrompt: true})
+}
+
 type approvalDecisionOptions struct {
 	// fresh marks a user trust/business decision rather than an ordinary tool
 	// permission. It may reuse an explicit session grant, but YOLO/auto approval
 	// must not answer or drain the prompt.
 	fresh bool
+	// alwaysPrompt requires a new human decision for this invocation; session
+	// grants, Auto/YOLO, and the approved-plan window cannot satisfy it.
+	alwaysPrompt bool
 }
 
 func (c *Controller) requestApprovalDecisionWithOptions(ctx context.Context, tool, subject string, args json.RawMessage, reason string, opts approvalDecisionOptions) (approvalReply, error) {
 	// YOLO/full access and the just-approved-plan execution window auto-allow
 	// approval-gated tools without prompting. Plan approval is a user decision,
 	// not a tool permission, so it deliberately stays interactive.
-	if c.approval.preApprovedForDecision(tool, subject, opts.fresh) {
+	if !opts.alwaysPrompt && c.approval.preApprovedForDecision(tool, subject, opts.fresh) {
 		return approvalReply{allow: true}, nil
 	}
 
@@ -4124,7 +4216,7 @@ func (c *Controller) requestApprovalDecisionWithOptions(ctx context.Context, too
 
 	// Re-check: a session grant may have landed while we queued behind another
 	// prompt for the same subject.
-	if c.approval.preApprovedForDecision(tool, subject, opts.fresh) {
+	if !opts.alwaysPrompt && c.approval.preApprovedForDecision(tool, subject, opts.fresh) {
 		return approvalReply{allow: true}, nil
 	}
 	var id string

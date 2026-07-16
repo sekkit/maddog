@@ -354,7 +354,10 @@ func runAgent(args []string) int {
 	// precedence over --continue.
 	// --continue: resume the most recent saved session.
 	if *resume != "" {
-		ctrl.Resume(resumeSession, *resume)
+		if err := ctrl.Resume(resumeSession, *resume); err != nil {
+			fmt.Fprintln(os.Stderr, i18n.M.ErrorPrefix, err)
+			return 1
+		}
 	} else if *cont {
 		sessions, err := agent.ListSessions(ctrl.SessionDir())
 		if err != nil || len(sessions) == 0 {
@@ -366,10 +369,16 @@ func runAgent(args []string) int {
 			fmt.Fprintln(os.Stderr, i18n.M.ErrorPrefix, err)
 			return 1
 		}
-		ctrl.Resume(loaded, sessions[0].Path)
+		if err := ctrl.Resume(loaded, sessions[0].Path); err != nil {
+			fmt.Fprintln(os.Stderr, i18n.M.ErrorPrefix, err)
+			return 1
+		}
 	}
 	if ctrl.SessionPath() == "" && ctrl.SessionDir() != "" {
-		ctrl.SetSessionPath(agent.NewSessionPath(ctrl.SessionDir(), ctrl.Label()))
+		if err := ctrl.SetSessionPath(agent.NewSessionPath(ctrl.SessionDir(), ctrl.Label())); err != nil {
+			fmt.Fprintln(os.Stderr, i18n.M.ErrorPrefix, err)
+			return 1
+		}
 	}
 
 	runInput, err := forcedSkillInput(ctrl, *skillName, prompt)
@@ -504,9 +513,15 @@ func runServe(args []string) int {
 
 	// Auto-save target: reuse the resumed file, else a fresh one — same as chat.
 	if *resume != "" {
-		ctrl.Resume(resumeSession, *resume)
+		if err := ctrl.Resume(resumeSession, *resume); err != nil {
+			fmt.Fprintln(os.Stderr, i18n.M.ErrorPrefix, err)
+			return 1
+		}
 	}
-	ctrl.EnsureSessionPath()
+	if err := ctrl.EnsureSessionPath(); err != nil {
+		fmt.Fprintln(os.Stderr, i18n.M.ErrorPrefix, err)
+		return 1
+	}
 
 	srv := serve.New(ctrl, bc, serveCfg)
 	fmt.Printf("maddog serve — %s on http://%s\n", ctrl.Label(), *addr)
@@ -616,9 +631,15 @@ func chatREPL(args []string) int {
 			fmt.Fprintln(os.Stderr, i18n.M.ErrorPrefix, err)
 			return 1
 		}
-		ctrl.Resume(loaded, resumePath)
+		if err := ctrl.Resume(loaded, resumePath); err != nil {
+			fmt.Fprintln(os.Stderr, i18n.M.ErrorPrefix, err)
+			return 1
+		}
 	}
-	ctrl.EnsureSessionPath()
+	if err := ctrl.EnsureSessionPath(); err != nil {
+		fmt.Fprintln(os.Stderr, i18n.M.ErrorPrefix, err)
+		return 1
+	}
 
 	// Surface a missing-key warning inside the TUI banner so the first message
 	// failing is at least pre-announced; the user can still enter chat.
@@ -670,7 +691,10 @@ func chatREPL(args []string) int {
 		// Keep the carried conversation in its existing file so the switch doesn't
 		// orphan a duplicate (#2807).
 		path := agent.ContinueSessionPath(resumePath, c.SessionDir(), c.Label())
-		c.AdoptHistory(carry, path)
+		if err := c.AdoptHistory(carry, path); err != nil {
+			c.Close()
+			return nil, err
+		}
 		c.EnableInteractiveApproval()
 		if *yolo {
 			c.SetAutoApproveTools(true)

@@ -35,8 +35,8 @@ import (
 type Lifecycle interface {
 	NewSession() error
 	ClearSession() error
-	Resume(s *agent.Session, path string)
-	SetSessionPath(p string)
+	Resume(s *agent.Session, path string) error
+	SetSessionPath(p string) error
 	SessionPath() string
 	SessionDir() string
 	Label() string
