@@ -2,12 +2,56 @@ package worktree
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func TestListRejectsUnknownDeliveryState(t *testing.T) {
+	root := t.TempDir()
+	state := filepath.Join(t.TempDir(), "state")
+	m, err := NewManager(root, state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := Delivery{ID: "unknown", Path: filepath.Join(state, "deliveries", "unknown"), State: "mystery"}
+	b, err := json.Marshal(d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(state, "deliveries", d.ID+".json"), b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := m.List(); !errors.Is(err, ErrNotReady) {
+		t.Fatalf("List unknown delivery state error = %v, want ErrNotReady", err)
+	}
+	if err := m.Discard(context.Background(), d.ID); !errors.Is(err, ErrNotReady) {
+		t.Fatalf("Discard unknown delivery state error = %v, want ErrNotReady", err)
+	}
+}
+
+func TestDeliveryStateJSONRemainsStringCompatible(t *testing.T) {
+	b, err := json.Marshal(Delivery{State: StateApplied})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), `"state":"applied"`) {
+		t.Fatalf("delivery JSON = %s, want string state", b)
+	}
+
+	var d Delivery
+	if err := json.Unmarshal([]byte(`{"state":"discarded"}`), &d); err != nil {
+		t.Fatal(err)
+	}
+	if d.State != StateDiscarded {
+		t.Fatalf("decoded state = %q, want %q", d.State, StateDiscarded)
+	}
+}
 
 func gitTest(t *testing.T, dir string, args ...string) string {
 	t.Helper()

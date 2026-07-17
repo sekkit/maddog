@@ -41,6 +41,10 @@ type RecoveryBranchInfo struct {
 // canonical transcript. Identical snapshots are deduplicated and only the
 // newest MaxRecoveryBranches distinct snapshots are retained.
 func (s *Session) SaveRecoveryBranch(opts RecoveryBranchOptions) (RecoveryBranchInfo, error) {
+	return s.saveRecoveryBranch(opts, s.writeRecovery)
+}
+
+func (s *Session) saveRecoveryBranch(opts RecoveryBranchOptions, writeRecovery func(string, []provider.Message) error) (RecoveryBranchInfo, error) {
 	if strings.TrimSpace(opts.OriginalPath) == "" {
 		return RecoveryBranchInfo{}, fmt.Errorf("empty original session path")
 	}
@@ -60,13 +64,12 @@ func (s *Session) SaveRecoveryBranch(opts RecoveryBranchOptions) (RecoveryBranch
 	}
 	base := strings.TrimSuffix(opts.OriginalPath, filepath.Ext(opts.OriginalPath))
 	path := fmt.Sprintf("%s.recovery-%d.jsonl", base, time.Now().UTC().UnixNano())
-	if err := s.writeRecovery(path, msgs); err != nil {
-		return RecoveryBranchInfo{}, err
+	if err := writeRecovery(path, msgs); err != nil {
+		return RecoveryBranchInfo{}, errors.Join(err, removeRecoveryPair(path))
 	}
 	meta := BranchMeta{ID: BranchID(path), ParentID: BranchID(opts.OriginalPath), Recovered: true, RecoveryReason: opts.Reason, RecoveryDigest: digest, Revision: 1, ContentDigest: digest, WriterID: SessionWriterID(), CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC()}
 	if err := SaveBranchMeta(path, meta); err != nil {
-		_ = os.Remove(path)
-		return RecoveryBranchInfo{}, err
+		return RecoveryBranchInfo{}, errors.Join(err, removeRecoveryPair(path))
 	}
 	info := RecoveryBranchInfo{Path: path, Digest: digest, Meta: meta}
 	if err := pruneRecoveryBranches(opts.OriginalPath, MaxRecoveryBranches); err != nil {
@@ -106,16 +109,38 @@ func recoveryFiles(originalPath string) ([]recoveryFile, error) {
 		return nil, err
 	}
 	base := strings.TrimSuffix(filepath.Base(originalPath), filepath.Ext(originalPath)) + ".recovery-"
-	var out []recoveryFile
+	candidates := make(map[string]struct{})
 	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasPrefix(entry.Name(), base) || !strings.HasSuffix(entry.Name(), ".jsonl") {
+		name := entry.Name()
+		if !strings.HasPrefix(name, base) {
 			continue
 		}
-		info, err := entry.Info()
-		if err != nil {
-			return nil, err
+		switch {
+		case strings.HasSuffix(name, ".jsonl.meta"):
+			candidates[filepath.Join(dir, strings.TrimSuffix(name, ".meta"))] = struct{}{}
+		case strings.HasSuffix(name, ".jsonl"):
+			candidates[filepath.Join(dir, name)] = struct{}{}
 		}
-		out = append(out, recoveryFile{path: filepath.Join(dir, entry.Name()), modTime: info.ModTime()})
+	}
+	var out []recoveryFile
+	for path := range candidates {
+		info, transcriptErr := os.Stat(path)
+		metaInfo, metaErr := os.Stat(BranchMetaPath(path))
+		if transcriptErr != nil && !os.IsNotExist(transcriptErr) {
+			return nil, fmt.Errorf("stat recovery transcript %q: %w", path, transcriptErr)
+		}
+		if metaErr != nil && !os.IsNotExist(metaErr) {
+			return nil, fmt.Errorf("stat recovery metadata %q: %w", BranchMetaPath(path), metaErr)
+		}
+		transcriptOK := transcriptErr == nil && !info.IsDir()
+		metaOK := metaErr == nil && !metaInfo.IsDir()
+		if !transcriptOK || !metaOK {
+			if err := removeRecoveryPair(path); err != nil {
+				return nil, err
+			}
+			continue
+		}
+		out = append(out, recoveryFile{path: path, modTime: info.ModTime()})
 	}
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].modTime.Equal(out[j].modTime) {
@@ -124,6 +149,16 @@ func recoveryFiles(originalPath string) ([]recoveryFile, error) {
 		return out[i].modTime.Before(out[j].modTime)
 	})
 	return out, nil
+}
+
+func removeRecoveryPair(path string) error {
+	var errs []error
+	for _, artifact := range []string{path, BranchMetaPath(path)} {
+		if err := os.Remove(artifact); err != nil && !os.IsNotExist(err) {
+			errs = append(errs, fmt.Errorf("remove recovery artifact %q: %w", artifact, err))
+		}
+	}
+	return errors.Join(errs...)
 }
 
 func findRecoveryBranch(originalPath, digest string) (RecoveryBranchInfo, bool) {
@@ -157,10 +192,7 @@ func pruneRecoveryBranches(originalPath string, keep int) error {
 		keep = 0
 	}
 	for _, file := range files[:max(0, len(files)-keep)] {
-		if err := os.Remove(file.path); err != nil && !os.IsNotExist(err) {
-			return err
-		}
-		if err := os.Remove(BranchMetaPath(file.path)); err != nil && !os.IsNotExist(err) {
+		if err := removeRecoveryPair(file.path); err != nil {
 			return err
 		}
 	}

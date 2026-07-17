@@ -32,16 +32,28 @@ var (
 	ErrNotReady = errors.New("delivery workspace is not ready")
 )
 
+// DeliveryState identifies a persisted delivery lifecycle state.
+type DeliveryState string
+
+const (
+	// StateOpen identifies a delivery that can still be inspected, applied, or discarded.
+	StateOpen DeliveryState = "open"
+	// StateApplied identifies a delivery that has been merged into its base workspace.
+	StateApplied DeliveryState = "applied"
+	// StateDiscarded identifies a delivery whose worktree has been explicitly removed.
+	StateDiscarded DeliveryState = "discarded"
+)
+
 // Delivery is the persisted lifecycle record for one branch-backed worktree.
 type Delivery struct {
-	ID           string    `json:"id"`
-	BasePath     string    `json:"basePath"`
-	Path         string    `json:"path"`
-	Branch       string    `json:"branch"`
-	BaseRevision string    `json:"baseRevision"`
-	State        string    `json:"state"` // open, applied, discarded
-	CreatedAt    time.Time `json:"createdAt"`
-	UpdatedAt    time.Time `json:"updatedAt"`
+	ID           string        `json:"id"`
+	BasePath     string        `json:"basePath"`
+	Path         string        `json:"path"`
+	Branch       string        `json:"branch"`
+	BaseRevision string        `json:"baseRevision"`
+	State        DeliveryState `json:"state"`
+	CreatedAt    time.Time     `json:"createdAt"`
+	UpdatedAt    time.Time     `json:"updatedAt"`
 }
 
 // Inspection describes the current Git readiness and changed files of a delivery.
@@ -82,6 +94,9 @@ func (m *Manager) List() ([]Delivery, error) {
 		if err := json.Unmarshal(b, &d); err != nil {
 			return nil, fmt.Errorf("decode %s: %w", entry.Name(), err)
 		}
+		if err := validateDeliveryState(d.State); err != nil {
+			return nil, fmt.Errorf("decode %s: %w", entry.Name(), err)
+		}
 		out = append(out, d)
 	}
 	return out, nil
@@ -91,7 +106,7 @@ func (m *Manager) List() ([]Delivery, error) {
 func NewManager(basePath, statePath string) (*Manager, error) {
 	base, err := filepath.Abs(basePath)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("resolve base workspace path: %w", err)
 	}
 	info, err := os.Stat(base)
 	if err != nil || !info.IsDir() {
@@ -99,7 +114,7 @@ func NewManager(basePath, statePath string) (*Manager, error) {
 	}
 	state, err := filepath.Abs(statePath)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("resolve delivery state path: %w", err)
 	}
 	if err := os.MkdirAll(filepath.Join(state, "deliveries"), 0o700); err != nil {
 		return nil, err
@@ -138,7 +153,7 @@ func (m *Manager) Create(ctx context.Context, branch string) (Delivery, error) {
 		return Delivery{}, err
 	}
 	now := time.Now().UTC()
-	d := Delivery{ID: id, BasePath: m.base, Path: path, Branch: branch, BaseRevision: strings.TrimSpace(baseRev), State: "open", CreatedAt: now, UpdatedAt: now}
+	d := Delivery{ID: id, BasePath: m.base, Path: path, Branch: branch, BaseRevision: strings.TrimSpace(baseRev), State: StateOpen, CreatedAt: now, UpdatedAt: now}
 	if err := m.save(d); err != nil {
 		_ = m.removeWorktree(ctx, path)
 		return Delivery{}, err
@@ -159,7 +174,7 @@ func (m *Manager) Open(id string) (Delivery, error) {
 	if err != nil {
 		return Delivery{}, err
 	}
-	if d.State == "discarded" {
+	if d.State == StateDiscarded {
 		return Delivery{}, ErrNotFound
 	}
 	if !within(m.state, d.Path) {
@@ -188,7 +203,7 @@ func (m *Manager) Inspect(ctx context.Context, id string) (Inspection, error) {
 	if err != nil {
 		return Inspection{}, err
 	}
-	if d.State != "open" && d.State != "applied" {
+	if d.State != StateOpen && d.State != StateApplied {
 		return Inspection{}, ErrNotReady
 	}
 	if !within(m.state, d.Path) {
@@ -220,7 +235,7 @@ func (m *Manager) Apply(ctx context.Context, id string) error {
 	if err != nil {
 		return err
 	}
-	if d.State != "open" {
+	if d.State != StateOpen {
 		return ErrNotReady
 	}
 	lease, err := acquireLease(m.state, "base")
@@ -250,7 +265,7 @@ func (m *Manager) Apply(ctx context.Context, id string) error {
 	if _, err := m.git(ctx, "-C", m.base, "merge", "--ff-only", d.Branch); err != nil {
 		return err
 	}
-	d.State = "applied"
+	d.State = StateApplied
 	d.UpdatedAt = time.Now().UTC()
 	return m.save(d)
 }
@@ -263,7 +278,7 @@ func (m *Manager) Discard(ctx context.Context, id string) error {
 	if err != nil {
 		return err
 	}
-	if d.State == "discarded" {
+	if d.State == StateDiscarded {
 		return nil
 	}
 	baseLease, err := acquireLease(m.state, "base")
@@ -279,7 +294,7 @@ func (m *Manager) Discard(ctx context.Context, id string) error {
 	if err := m.removeWorktree(ctx, d.Path); err != nil {
 		return err
 	}
-	d.State = "discarded"
+	d.State = StateDiscarded
 	d.UpdatedAt = time.Now().UTC()
 	return m.save(d)
 }
@@ -299,9 +314,15 @@ func (m *Manager) load(id string) (Delivery, error) {
 	if err := json.Unmarshal(b, &d); err != nil {
 		return Delivery{}, err
 	}
+	if err := validateDeliveryState(d.State); err != nil {
+		return Delivery{}, err
+	}
 	return d, nil
 }
 func (m *Manager) save(d Delivery) error {
+	if err := validateDeliveryState(d.State); err != nil {
+		return err
+	}
 	if d.ID == "" || !within(m.state, d.Path) {
 		return fmt.Errorf("invalid delivery state path")
 	}
@@ -311,6 +332,15 @@ func (m *Manager) save(d Delivery) error {
 	}
 	p := filepath.Join(m.state, "deliveries", d.ID+".json")
 	return fileutil.AtomicWriteFile(p, b, 0o600)
+}
+
+func validateDeliveryState(state DeliveryState) error {
+	switch state {
+	case StateOpen, StateApplied, StateDiscarded:
+		return nil
+	default:
+		return fmt.Errorf("%w: unknown delivery state %q", ErrNotReady, state)
+	}
 }
 func (m *Manager) ensureGit(ctx context.Context) error {
 	_, err := m.git(ctx, "-C", m.base, "rev-parse", "--git-dir")

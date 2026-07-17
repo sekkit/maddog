@@ -157,6 +157,114 @@ func TestRecoveryBranchesDeduplicateAndRetainNewestFive(t *testing.T) {
 	}
 }
 
+func TestSaveRecoveryBranchReconcilesOrphanedPairs(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "session.jsonl")
+	transcriptOnly := filepath.Join(dir, "session.recovery-1.jsonl")
+	if err := os.WriteFile(transcriptOnly, []byte("{\"role\":\"user\",\"content\":\"orphan\"}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	metadataOnly := filepath.Join(dir, "session.recovery-2.jsonl")
+	if err := SaveBranchMeta(metadataOnly, BranchMeta{ID: BranchID(metadataOnly), Recovered: true}); err != nil {
+		t.Fatal(err)
+	}
+
+	s := NewSession("")
+	s.Add(provider.Message{Role: provider.RoleUser, Content: "recover me"})
+	info, err := s.SaveRecoveryBranch(RecoveryBranchOptions{OriginalPath: p, Reason: "conflict"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, orphan := range []string{transcriptOnly, BranchMetaPath(transcriptOnly), metadataOnly, BranchMetaPath(metadataOnly)} {
+		if _, err := os.Stat(orphan); !os.IsNotExist(err) {
+			t.Fatalf("orphan artifact %q retained: %v", orphan, err)
+		}
+	}
+	transcripts, err := filepath.Glob(filepath.Join(dir, "session.recovery-*.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(transcripts) != 1 || transcripts[0] != info.Path {
+		t.Fatalf("recovery transcripts = %v, want complete pair for %q", transcripts, info.Path)
+	}
+	if _, ok, err := LoadBranchMeta(info.Path); err != nil || !ok {
+		t.Fatalf("published recovery metadata ok=%v err=%v", ok, err)
+	}
+}
+
+func TestSaveRecoveryBranchReconcilesPairAfterEitherArtifactDisappears(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "session.jsonl")
+	s := NewSession("")
+	s.Add(provider.Message{Role: provider.RoleUser, Content: "recover me"})
+	first, err := s.SaveRecoveryBranch(RecoveryBranchOptions{OriginalPath: p, Reason: "first"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(first.Path); err != nil {
+		t.Fatal(err)
+	}
+	second, err := s.SaveRecoveryBranch(RecoveryBranchOptions{OriginalPath: p, Reason: "transcript lost"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.Path == first.Path {
+		t.Fatalf("metadata-only recovery reused as complete pair: %q", second.Path)
+	}
+	if _, err := os.Stat(BranchMetaPath(first.Path)); !os.IsNotExist(err) {
+		t.Fatalf("orphan metadata retained: %v", err)
+	}
+
+	if err := os.Remove(BranchMetaPath(second.Path)); err != nil {
+		t.Fatal(err)
+	}
+	third, err := s.SaveRecoveryBranch(RecoveryBranchOptions{OriginalPath: p, Reason: "metadata lost"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if third.Path == second.Path {
+		t.Fatalf("transcript-only recovery reused as complete pair: %q", third.Path)
+	}
+	if _, err := os.Stat(second.Path); !os.IsNotExist(err) {
+		t.Fatalf("orphan transcript retained: %v", err)
+	}
+
+	duplicate, err := s.SaveRecoveryBranch(RecoveryBranchOptions{OriginalPath: p, Reason: "repeat"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if duplicate.Path != third.Path {
+		t.Fatalf("complete recovery pair not deduplicated: got %q want %q", duplicate.Path, third.Path)
+	}
+}
+
+func TestSaveRecoveryBranchCleansPartialArtifactsWhenTranscriptWriteFails(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "session.jsonl")
+	s := NewSession("")
+	s.Add(provider.Message{Role: provider.RoleUser, Content: "recover me"})
+	wantErr := errors.New("injected transcript write failure")
+	var writtenPath string
+
+	_, err := s.saveRecoveryBranch(RecoveryBranchOptions{OriginalPath: p, Reason: "write failed"}, func(path string, _ []provider.Message) error {
+		writtenPath = path
+		if err := os.WriteFile(path, []byte("partial\n"), 0o600); err != nil {
+			return err
+		}
+		if err := os.WriteFile(BranchMetaPath(path), []byte("partial\n"), 0o600); err != nil {
+			return err
+		}
+		return wantErr
+	})
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("SaveRecoveryBranch error = %v, want %v", err, wantErr)
+	}
+	for _, artifact := range []string{writtenPath, BranchMetaPath(writtenPath)} {
+		if _, err := os.Stat(artifact); !os.IsNotExist(err) {
+			t.Fatalf("partial artifact %q retained: %v", artifact, err)
+		}
+	}
+}
+
 func TestSessionLeaseExclusiveAndReleases(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "session.jsonl")
 	one, err := TryAcquireSessionLease(p)

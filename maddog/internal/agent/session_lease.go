@@ -14,10 +14,12 @@ import (
 	"time"
 )
 
+// ErrSessionLeaseHeld reports that another runtime owns the session writer lease.
 var ErrSessionLeaseHeld = errors.New("session lease held by another runtime")
 var sessionLeaseOwners sync.Map
 var sessionLeaseSeq atomic.Uint64
 
+// SessionLeaseInfo identifies the runtime that owns a session writer lease.
 type SessionLeaseInfo struct {
 	SessionPath string    `json:"session_path"`
 	WriterID    string    `json:"writer_id"`
@@ -25,11 +27,14 @@ type SessionLeaseInfo struct {
 	Hostname    string    `json:"hostname,omitempty"`
 	AcquiredAt  time.Time `json:"acquired_at"`
 }
+
+// SessionLeaseError describes a session lease conflict and its current owner.
 type SessionLeaseError struct {
 	Path string
 	Info *SessionLeaseInfo
 }
 
+// Error returns a human-readable description of the session lease conflict.
 func (e *SessionLeaseError) Error() string {
 	if e == nil {
 		return ErrSessionLeaseHeld.Error()
@@ -39,8 +44,11 @@ func (e *SessionLeaseError) Error() string {
 	}
 	return fmt.Sprintf("%s: %s", ErrSessionLeaseHeld, e.Path)
 }
+
+// Unwrap makes SessionLeaseError comparable with ErrSessionLeaseHeld.
 func (e *SessionLeaseError) Unwrap() error { return ErrSessionLeaseHeld }
 
+// SessionLease grants this process exclusive writer access to one session.
 type SessionLease struct {
 	path   string
 	owner  uint64
@@ -48,6 +56,7 @@ type SessionLease struct {
 	once   sync.Once
 }
 
+// TryAcquireSessionLease acquires exclusive writer access to path if it is available.
 func TryAcquireSessionLease(path string) (*SessionLease, error) {
 	path = filepath.Clean(strings.TrimSpace(path))
 	if path == "." || path == "" {
@@ -77,6 +86,8 @@ func TryAcquireSessionLease(path string) (*SessionLease, error) {
 	}
 	return l, nil
 }
+
+// TryReclaimCurrentProcessSessionLease reacquires a session lease already owned by this process.
 func TryReclaimCurrentProcessSessionLease(path string) (*SessionLease, error) {
 	path = filepath.Clean(path)
 	unlock, err := tryLockSessionLeaseFile(store.SessionLeaseLock(path))
@@ -92,12 +103,16 @@ func TryReclaimCurrentProcessSessionLease(path string) (*SessionLease, error) {
 	}
 	return l, nil
 }
+
+// Path returns the session path protected by the lease.
 func (l *SessionLease) Path() string {
 	if l == nil {
 		return ""
 	}
 	return l.path
 }
+
+// Release relinquishes the lease and removes its owner metadata.
 func (l *SessionLease) Release() {
 	if l == nil {
 		return
@@ -110,6 +125,8 @@ func (l *SessionLease) Release() {
 		sessionLeaseOwners.CompareAndDelete(l.path, l.owner)
 	})
 }
+
+// SessionLeaseHeldByOtherRuntime reports whether another process owns path's writer lease.
 func SessionLeaseHeldByOtherRuntime(path string) bool {
 	path = filepath.Clean(path)
 	if _, ok := sessionLeaseOwners.Load(path); ok {
@@ -132,6 +149,8 @@ func sessionLeaseOwned(path string) bool {
 	_, ok := sessionLeaseOwners.Load(filepath.Clean(path))
 	return ok
 }
+
+// SessionWriterID returns the stable writer identity for the current process.
 func SessionWriterID() string {
 	return fmt.Sprintf("%s-%d", strings.TrimSpace(func() string { h, _ := os.Hostname(); return h }()), os.Getpid())
 }
@@ -139,6 +158,8 @@ func newSessionLeaseInfo(path string) SessionLeaseInfo {
 	h, _ := os.Hostname()
 	return SessionLeaseInfo{SessionPath: path, WriterID: SessionWriterID(), PID: os.Getpid(), Hostname: h, AcquiredAt: time.Now().UTC()}
 }
+
+// LoadSessionLeaseInfo loads the persisted owner metadata for path.
 func LoadSessionLeaseInfo(path string) (*SessionLeaseInfo, error) {
 	b, e := os.ReadFile(store.SessionLeaseInfo(path))
 	if e != nil {
@@ -148,6 +169,8 @@ func LoadSessionLeaseInfo(path string) (*SessionLeaseInfo, error) {
 	e = json.Unmarshal(b, &i)
 	return &i, e
 }
+
+// SaveSessionLeaseInfo atomically persists private owner metadata for path.
 func SaveSessionLeaseInfo(path string, info SessionLeaseInfo) error {
 	b, e := json.MarshalIndent(info, "", "  ")
 	if e != nil {

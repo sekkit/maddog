@@ -21,12 +21,14 @@ type startupState struct {
 // retaining the desktop runtime lease across the handoff.
 const GuardRelaunchExitCode = 75
 
+// StartupStatus is the persisted launch-health summary exposed to callers.
 type StartupStatus struct {
 	ConsecutiveFailures int       `json:"consecutiveFailures"`
 	Phase               string    `json:"phase"`
 	LastLaunch          time.Time `json:"lastLaunch"`
 }
 
+// StartupGuard records launch health and selects Safe Mode after repeated failures.
 type StartupGuard struct {
 	path      string
 	threshold int
@@ -34,6 +36,7 @@ type StartupGuard struct {
 	now       func() time.Time
 }
 
+// NewStartupGuard creates a guard backed by path with bounded failure defaults.
 func NewStartupGuard(path string, threshold int, probation time.Duration) *StartupGuard {
 	if threshold < 1 {
 		threshold = 3
@@ -130,13 +133,23 @@ func (g *StartupGuard) mark(phase string, reset bool) error {
 		return s, nil
 	})
 }
-func (g *StartupGuard) MarkReady() error   { return g.mark("ready", false) }
+
+// MarkReady records that the payload initialized its required components.
+func (g *StartupGuard) MarkReady() error { return g.mark("ready", false) }
+
+// MarkHealthy records a healthy launch and clears the failure count.
 func (g *StartupGuard) MarkHealthy() error { return g.mark("healthy", true) }
-func (g *StartupGuard) MarkClean() error   { return g.mark("clean", true) }
+
+// MarkClean records a clean shutdown and clears the failure count.
+func (g *StartupGuard) MarkClean() error { return g.mark("clean", true) }
+
+// Status returns the current persisted startup health.
 func (g *StartupGuard) Status() StartupStatus {
 	s := g.read()
 	return StartupStatus{ConsecutiveFailures: s.ConsecutiveFailures, Phase: s.Phase, LastLaunch: s.LastLaunch}
 }
+
+// Reset clears startup failures and records a clean state.
 func (g *StartupGuard) Reset() error {
 	return g.withLock(func(startupState) (startupState, error) { return startupState{Phase: "clean"}, nil })
 }

@@ -13,35 +13,54 @@ import (
 	"time"
 )
 
+// Capability names an operation controlled by a recovery policy.
 type Capability string
 
 const (
-	CapabilityWebview        Capability = "webview"
-	CapabilityPlugins        Capability = "plugins"
-	CapabilityMCP            Capability = "mcp"
-	CapabilityHooks          Capability = "hooks"
-	CapabilityBots           Capability = "bots"
-	CapabilitySessions       Capability = "sessions"
-	CapabilitySkills         Capability = "skills"
-	CapabilitySidecars       Capability = "sidecars"
+	// CapabilityWebview permits starting the desktop webview.
+	CapabilityWebview Capability = "webview"
+	// CapabilityPlugins permits loading plugins.
+	CapabilityPlugins Capability = "plugins"
+	// CapabilityMCP permits starting MCP integrations.
+	CapabilityMCP Capability = "mcp"
+	// CapabilityHooks permits running hooks.
+	CapabilityHooks Capability = "hooks"
+	// CapabilityBots permits starting bot integrations.
+	CapabilityBots Capability = "bots"
+	// CapabilitySessions permits opening user sessions.
+	CapabilitySessions Capability = "sessions"
+	// CapabilitySkills permits loading skills.
+	CapabilitySkills Capability = "skills"
+	// CapabilitySidecars permits starting sidecar processes.
+	CapabilitySidecars Capability = "sidecars"
+	// CapabilityMemoryLearning permits persistent memory learning.
 	CapabilityMemoryLearning Capability = "memory-learning"
-	CapabilityModelUpgrades  Capability = "model-upgrades"
-	CapabilityNetwork        Capability = "network"
-	CapabilityBuiltinConfig  Capability = "builtin-config"
+	// CapabilityModelUpgrades permits model upgrade operations.
+	CapabilityModelUpgrades Capability = "model-upgrades"
+	// CapabilityNetwork permits network access.
+	CapabilityNetwork Capability = "network"
+	// CapabilityBuiltinConfig permits reading built-in configuration.
+	CapabilityBuiltinConfig Capability = "builtin-config"
+	// CapabilityManualApproval permits actions explicitly approved by the user.
 	CapabilityManualApproval Capability = "manual-approval"
-	CapabilitySandbox        Capability = "sandbox"
+	// CapabilitySandbox permits sandboxed recovery operations.
+	CapabilitySandbox Capability = "sandbox"
 )
 
+// Policy defines the capabilities available to a process mode.
 type Policy struct{ allowed map[Capability]bool }
 
+// Allows reports whether the policy permits c.
 func (p Policy) Allows(c Capability) bool { return p.allowed[c] }
 
+// SafeModePolicy returns the minimal capability set allowed during recovery.
 func SafeModePolicy() Policy {
 	return Policy{allowed: map[Capability]bool{
 		CapabilityBuiltinConfig: true, CapabilityManualApproval: true, CapabilitySandbox: true,
 	}}
 }
 
+// NormalPolicy returns the complete capability set used outside Safe Mode.
 func NormalPolicy() Policy {
 	p := SafeModePolicy()
 	for _, c := range []Capability{CapabilityWebview, CapabilityPlugins, CapabilityMCP, CapabilityHooks, CapabilityBots, CapabilitySessions, CapabilitySkills, CapabilitySidecars, CapabilityMemoryLearning, CapabilityModelUpgrades, CapabilityNetwork} {
@@ -57,19 +76,27 @@ type ProcessGate struct {
 	policy Policy
 }
 
+// NewProcessGate creates a process-local capability gate for normal or Safe Mode.
 func NewProcessGate(safe bool) *ProcessGate {
 	if safe {
 		return &ProcessGate{safe: true, policy: SafeModePolicy()}
 	}
 	return &ProcessGate{policy: NormalPolicy()}
 }
-func (g *ProcessGate) SafeMode() bool           { return g != nil && g.safe }
+
+// SafeMode reports whether the gate enforces the Safe Mode policy.
+func (g *ProcessGate) SafeMode() bool { return g != nil && g.safe }
+
+// Allows reports whether the gate permits c.
 func (g *ProcessGate) Allows(c Capability) bool { return g != nil && g.policy.Allows(c) }
 
+// Repairer performs serialized repairs within a Maddog-owned root.
 type Repairer struct {
 	root, backupRoot string
 	mu               sync.Mutex
 }
+
+// Receipt records enough information to roll back a completed replacement.
 type Receipt struct {
 	Target, Backup string
 	Existed        bool
@@ -77,6 +104,7 @@ type Receipt struct {
 	CreatedAt      time.Time
 }
 
+// NewRepairer creates a repair boundary rooted at root.
 func NewRepairer(root string) *Repairer {
 	return &Repairer{root: root, backupRoot: filepath.Join(root, ".maddog", "repair-backups")}
 }
@@ -119,6 +147,7 @@ func (r *Repairer) owned(rel string) (string, error) {
 	return target, nil
 }
 
+// Replace atomically replaces a Maddog-owned relative path and returns a rollback receipt.
 func (r *Repairer) Replace(rel string, data []byte) (Receipt, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -163,6 +192,7 @@ func (r *Repairer) Replace(rel string, data []byte) (Receipt, error) {
 	return receipt, nil
 }
 
+// Rollback restores the target described by receipt to its pre-repair state.
 func (r *Repairer) Rollback(receipt Receipt) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -207,4 +237,5 @@ func (r *Repairer) Rollback(receipt Receipt) error {
 	return os.Rename(backup, target)
 }
 
+// SHA256 returns the lowercase hexadecimal SHA-256 digest of data.
 func SHA256(data []byte) string { sum := sha256.Sum256(data); return hex.EncodeToString(sum[:]) }

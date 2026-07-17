@@ -8,6 +8,7 @@ import (
 	"sync"
 )
 
+// UpdateTransaction serializes a verified staged update through commit or cancellation.
 type UpdateTransaction struct {
 	dir      string
 	mu       sync.Mutex
@@ -22,8 +23,11 @@ type fileSnapshot struct {
 	mode os.FileMode
 }
 
+// NewUpdateTransaction creates an update transaction using dir for private staging state.
 func NewUpdateTransaction(dir string) *UpdateTransaction { return &UpdateTransaction{dir: dir} }
 func (t *UpdateTransaction) stagedPath() string          { return filepath.Join(t.dir, "staged") }
+
+// Prepare verifies and stages data while exclusively locking the transaction directory.
 func (t *UpdateTransaction) Prepare(data []byte, digest string) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -56,6 +60,8 @@ func (t *UpdateTransaction) unlock() {
 	}
 	_ = os.Remove(filepath.Join(t.dir, "transaction.lock"))
 }
+
+// Commit applies the verified staged file and releases the transaction lock on success.
 func (t *UpdateTransaction) Commit(apply func(path string) error) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -190,6 +196,8 @@ func restoreAtomic(path string, data []byte, mode os.FileMode) error {
 func ReplaceFileAtomic(path string, data []byte, mode os.FileMode) error {
 	return restoreAtomic(path, data, mode)
 }
+
+// Cancel removes staged data and releases the transaction lock.
 func (t *UpdateTransaction) Cancel() error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
