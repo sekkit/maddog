@@ -18,6 +18,12 @@ func TestSignedCatalogVerifiesCanonicalPayload(t *testing.T) {
 	}
 }
 
+func TestProductionPublicKeyIsUsable(t *testing.T) {
+	if got := ProductionPublicKey(); len(got) != ed25519.PublicKeySize {
+		t.Fatalf("ProductionPublicKey length=%d, want %d", len(got), ed25519.PublicKeySize)
+	}
+}
+
 func TestExactPinRequiresEveryArgument(t *testing.T) {
 	p := Pin{Command: "x", Args: []string{"--a", "1"}}
 	if !p.Matches("x", []string{"--a", "1"}) {

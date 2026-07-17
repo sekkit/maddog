@@ -6,23 +6,40 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"maddog/internal/provider"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
+	"sync"
 	"time"
+
+	"maddog/internal/fileutil"
+	"maddog/internal/provider"
 )
 
+// MaxRecoveryBranches is the maximum number of recovery transcripts retained
+// beside one canonical session. The newest distinct snapshots win.
+const MaxRecoveryBranches = 5
+
+var recoveryBranchMu sync.Mutex
+
+// RecoveryBranchOptions identifies the canonical transcript and why the
+// in-memory snapshot could not safely replace it.
 type RecoveryBranchOptions struct {
 	OriginalPath string
 	Reason       string
 }
+
+// RecoveryBranchInfo describes a durable recovery transcript and its sidecar.
 type RecoveryBranchInfo struct {
 	Path   string
 	Digest string
 	Meta   BranchMeta
 }
 
+// SaveRecoveryBranch preserves a conflicting snapshot without overwriting the
+// canonical transcript. Identical snapshots are deduplicated and only the
+// newest MaxRecoveryBranches distinct snapshots are retained.
 func (s *Session) SaveRecoveryBranch(opts RecoveryBranchOptions) (RecoveryBranchInfo, error) {
 	if strings.TrimSpace(opts.OriginalPath) == "" {
 		return RecoveryBranchInfo{}, fmt.Errorf("empty original session path")
@@ -32,17 +49,32 @@ func (s *Session) SaveRecoveryBranch(opts RecoveryBranchOptions) (RecoveryBranch
 	if err != nil {
 		return RecoveryBranchInfo{}, err
 	}
+	digest := digestString(d)
+	recoveryBranchMu.Lock()
+	defer recoveryBranchMu.Unlock()
+	if err := pruneRecoveryBranches(opts.OriginalPath, MaxRecoveryBranches); err != nil {
+		return RecoveryBranchInfo{}, err
+	}
+	if info, ok := findRecoveryBranch(opts.OriginalPath, digest); ok {
+		return info, nil
+	}
 	base := strings.TrimSuffix(opts.OriginalPath, filepath.Ext(opts.OriginalPath))
 	path := fmt.Sprintf("%s.recovery-%d.jsonl", base, time.Now().UTC().UnixNano())
 	if err := s.writeRecovery(path, msgs); err != nil {
 		return RecoveryBranchInfo{}, err
 	}
-	meta := BranchMeta{ID: BranchID(path), ParentID: BranchID(opts.OriginalPath), Recovered: true, RecoveryReason: opts.Reason, RecoveryDigest: digestString(d), Revision: 1, ContentDigest: digestString(d), WriterID: SessionWriterID(), CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC()}
+	meta := BranchMeta{ID: BranchID(path), ParentID: BranchID(opts.OriginalPath), Recovered: true, RecoveryReason: opts.Reason, RecoveryDigest: digest, Revision: 1, ContentDigest: digest, WriterID: SessionWriterID(), CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC()}
 	if err := SaveBranchMeta(path, meta); err != nil {
+		_ = os.Remove(path)
 		return RecoveryBranchInfo{}, err
 	}
-	return RecoveryBranchInfo{Path: path, Digest: digestString(d), Meta: meta}, nil
+	info := RecoveryBranchInfo{Path: path, Digest: digest, Meta: meta}
+	if err := pruneRecoveryBranches(opts.OriginalPath, MaxRecoveryBranches); err != nil {
+		return info, err
+	}
+	return info, nil
 }
+
 func (s *Session) writeRecovery(path string, msgs []provider.Message) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
@@ -56,7 +88,83 @@ func (s *Session) writeRecovery(path string, msgs []provider.Message) error {
 		b = append(b, x...)
 		b = append(b, '\n')
 	}
-	return os.WriteFile(path, b, 0o600)
+	return fileutil.AtomicWriteFile(path, b, 0o600)
+}
+
+type recoveryFile struct {
+	path    string
+	modTime time.Time
+}
+
+func recoveryFiles(originalPath string) ([]recoveryFile, error) {
+	dir := filepath.Dir(originalPath)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	base := strings.TrimSuffix(filepath.Base(originalPath), filepath.Ext(originalPath)) + ".recovery-"
+	var out []recoveryFile
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasPrefix(entry.Name(), base) || !strings.HasSuffix(entry.Name(), ".jsonl") {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, recoveryFile{path: filepath.Join(dir, entry.Name()), modTime: info.ModTime()})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].modTime.Equal(out[j].modTime) {
+			return out[i].path < out[j].path
+		}
+		return out[i].modTime.Before(out[j].modTime)
+	})
+	return out, nil
+}
+
+func findRecoveryBranch(originalPath, digest string) (RecoveryBranchInfo, bool) {
+	files, err := recoveryFiles(originalPath)
+	if err != nil {
+		return RecoveryBranchInfo{}, false
+	}
+	for i := len(files) - 1; i >= 0; i-- {
+		meta, ok, err := LoadBranchMeta(files[i].path)
+		if err != nil || !ok || meta.RecoveryDigest != digest {
+			continue
+		}
+		session, err := LoadSession(files[i].path)
+		if err != nil {
+			continue
+		}
+		actual, err := digestSessionMessages(session.Snapshot())
+		if err == nil && digestString(actual) == digest {
+			return RecoveryBranchInfo{Path: files[i].path, Digest: digest, Meta: meta}, true
+		}
+	}
+	return RecoveryBranchInfo{}, false
+}
+
+func pruneRecoveryBranches(originalPath string, keep int) error {
+	files, err := recoveryFiles(originalPath)
+	if err != nil {
+		return err
+	}
+	if keep < 0 {
+		keep = 0
+	}
+	for _, file := range files[:max(0, len(files)-keep)] {
+		if err := os.Remove(file.path); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		if err := os.Remove(BranchMetaPath(file.path)); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+	}
+	return nil
 }
 
 var ErrSessionSnapshotConflict = errors.New("session snapshot conflicts with newer transcript")
@@ -134,12 +242,6 @@ func (s *Session) casBeforeSave(path string, next []provider.Message) error {
 		// existing transcript; fail closed unless its content is identical.
 		loaded, loadErr := LoadSession(path)
 		if loadErr != nil {
-			// Preserve the historical permission-hardening test fixture. All other
-			// non-empty unparseable transcripts fail closed.
-			legacy, readErr := os.ReadFile(path)
-			if readErr == nil && bytes.Equal(bytes.TrimSpace(legacy), []byte("legacy")) {
-				return nil
-			}
 			return fmt.Errorf("load existing session for CAS: %w", loadErr)
 		}
 		disk := loaded.Snapshot()

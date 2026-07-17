@@ -78,18 +78,77 @@ func TestLeaseAndDiscardPreserveState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := acquireLease(state, d.ID); err != nil {
+	lease, err := acquireLease(state, d.ID)
+	if err != nil {
 		t.Fatal(err)
 	}
 	if err := m.Discard(context.Background(), d.ID); err != ErrLeaseHeld {
 		t.Fatalf("discard with lease = %v", err)
 	}
-	releaseLease(state, d.ID)
+	if err := lease.Release(); err != nil {
+		t.Fatal(err)
+	}
 	if err := m.Discard(context.Background(), d.ID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := m.Open(d.ID); err != ErrNotFound {
 		t.Fatalf("open discarded = %v", err)
+	}
+}
+
+func TestCreateReusesLeaseFileLeftByCrashedProcess(t *testing.T) {
+	root := t.TempDir()
+	gitTest(t, root, "init", "-q")
+	gitTest(t, root, "config", "user.email", "test@example.com")
+	gitTest(t, root, "config", "user.name", "Test")
+	os.WriteFile(filepath.Join(root, "f"), []byte("x"), 0o644)
+	gitTest(t, root, "add", ".")
+	gitTest(t, root, "commit", "-qm", "init")
+	state := filepath.Join(t.TempDir(), "state")
+	m, err := NewManager(root, state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	leasePath := filepath.Join(state, "leases", shortHash("base")+".lock")
+	if err := os.MkdirAll(filepath.Dir(leasePath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(leasePath, []byte("stale owner metadata"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.Create(context.Background(), "maddog/stale-recovery"); err != nil {
+		t.Fatalf("stale lease file blocked recovery: %v", err)
+	}
+}
+
+func TestApplyRejectsDirtyBaseWorkspace(t *testing.T) {
+	root := t.TempDir()
+	gitTest(t, root, "init", "-q")
+	gitTest(t, root, "config", "user.email", "test@example.invalid")
+	gitTest(t, root, "config", "user.name", "Test")
+	if err := os.WriteFile(filepath.Join(root, "base"), []byte("base\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitTest(t, root, "add", ".")
+	gitTest(t, root, "commit", "-qm", "init")
+	m, err := NewManager(root, filepath.Join(t.TempDir(), "state"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	d, err := m.Create(context.Background(), "maddog/dirty-base")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(d.Path, "delivery"), []byte("change\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitTest(t, d.Path, "add", ".")
+	gitTest(t, d.Path, "commit", "-qm", "delivery")
+	if err := os.WriteFile(filepath.Join(root, "local-only"), []byte("dirty\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Apply(context.Background(), d.ID); err == nil || !strings.Contains(err.Error(), "base workspace has uncommitted changes") {
+		t.Fatalf("Apply dirty base error = %v", err)
 	}
 }
 

@@ -1,7 +1,9 @@
 package main
 
 import (
+	"crypto/ed25519"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -11,7 +13,46 @@ import (
 	"aead.dev/minisign"
 
 	"maddog/desktop/internal/update"
+	"maddog/internal/mcpcatalog"
 )
+
+func TestCatalogProductionKeyUsesMaddogReleaseIdentity(t *testing.T) {
+	parts := strings.SplitN(update.PublicKey(), "\n", 2)
+	if len(parts) != 2 {
+		t.Fatal("embedded Maddog release public key is malformed")
+	}
+	raw, err := base64.StdEncoding.DecodeString(strings.TrimSpace(parts[1]))
+	if err != nil || len(raw) != 10+ed25519.PublicKeySize {
+		t.Fatalf("decode release public key: len=%d err=%v", len(raw), err)
+	}
+	want := ed25519.PublicKey(raw[10:])
+	if !want.Equal(mcpcatalog.ProductionPublicKey()) {
+		t.Fatal("MCP catalog key does not match Maddog's release signing identity")
+	}
+}
+
+func TestCatalogPrivateKeyExtraction(t *testing.T) {
+	pub, priv, err := minisign.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	edKey, err := catalogPrivateKey(priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := base64.StdEncoding.DecodeString(pub.String())
+	if err != nil || len(raw) != 10+ed25519.PublicKeySize {
+		t.Fatalf("decode generated public key: len=%d err=%v", len(raw), err)
+	}
+	if !edKey.Public().(ed25519.PublicKey).Equal(ed25519.PublicKey(raw[10:])) {
+		t.Fatal("extracted private key does not match the minisign public key")
+	}
+	message := []byte("catalog")
+	sig := ed25519.Sign(edKey, message)
+	if !ed25519.Verify(edKey.Public().(ed25519.PublicKey), message, sig) {
+		t.Fatal("extracted catalog key cannot sign a standard Ed25519 payload")
+	}
+}
 
 // TestSignFiles signs a file with a throwaway key pair (injected via env, exactly
 // as CI passes the real key) and verifies the produced .minisig validates under the
@@ -59,10 +100,11 @@ func TestGenManifest(t *testing.T) {
 		"Maddog-windows-arm64-installer.exe",
 		"Maddog-windows-amd64.zip", // portable download, not the updater channel
 		"Maddog-windows-arm64.zip", // portable download, not the updater channel
-		"Maddog-linux-amd64.tar.gz",
-		"Maddog-linux-amd64.deb",            // human download, not the updater channel
-		"Maddog-linux-amd64.tar.gz.minisig", // must be skipped
-		"README.txt",                        // unmatched, must be skipped
+		"Maddog-linux-amd64-update.tar.gz",
+		"Maddog-linux-amd64.tar.gz",                // guarded human download, not updater channel
+		"Maddog-linux-amd64.deb",                   // human download, not the updater channel
+		"Maddog-linux-amd64-update.tar.gz.minisig", // must be skipped
+		"README.txt",                               // unmatched, must be skipped
 	}
 	for _, n := range names {
 		if err := os.WriteFile(filepath.Join(dir, n), []byte(n), 0o644); err != nil {
@@ -111,13 +153,25 @@ func TestGenManifest(t *testing.T) {
 	if !strings.HasSuffix(arm.URL, "/Maddog-windows-arm64-installer.exe") {
 		t.Fatalf("windows-arm64 url = %q, want the installer, not the portable zip", arm.URL)
 	}
-	// The Linux updater channel must stay the .tar.gz; the co-located .deb is a
-	// human download and must not shadow the linux-amd64 key.
+	// The updater-compatible tar must deterministically win over both guarded
+	// human downloads, regardless of directory ordering.
 	lin, ok := m.Platforms["linux-amd64"]
 	if !ok {
 		t.Fatal("linux-amd64 missing")
 	}
-	if !strings.HasSuffix(lin.URL, "/Maddog-linux-amd64.tar.gz") {
-		t.Fatalf("linux-amd64 url = %q, want the .tar.gz, not the .deb", lin.URL)
+	if !strings.HasSuffix(lin.URL, "/Maddog-linux-amd64-update.tar.gz") {
+		t.Fatalf("linux-amd64 url = %q, want the updater-compatible tar", lin.URL)
+	}
+}
+
+func TestMatchPlatformRejectsLinuxHumanDownloads(t *testing.T) {
+	if got := matchPlatform("Maddog-linux-amd64.tar.gz"); got != "" {
+		t.Fatalf("guarded human tar matched %q", got)
+	}
+	if got := matchPlatform("Maddog-linux-amd64.deb"); got != "" {
+		t.Fatalf("deb matched %q", got)
+	}
+	if got := matchPlatform("Maddog-linux-amd64-update.tar.gz"); got != "linux-amd64" {
+		t.Fatalf("updater tar matched %q", got)
 	}
 }

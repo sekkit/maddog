@@ -26,6 +26,7 @@ import (
 	"maddog/desktop/internal/update"
 	"maddog/internal/config"
 	"maddog/internal/netclient"
+	"maddog/internal/repair"
 )
 
 // updater.go is the transport-free core of the desktop auto-updater: manifest
@@ -570,14 +571,44 @@ func extractBinary(targz []byte, name string) ([]byte, error) {
 	return nil, fmt.Errorf("update: %q not found in archive", name)
 }
 
-// applyLinux replaces the running binary with the one inside the downloaded
-// tar.gz; the caller relaunches afterwards.
-func applyLinux(targz []byte) error {
-	bin, err := extractBinary(targz, "maddog")
+// applyLinux replaces the running payload and, when present, its installed
+// guard from the updater-compatible release archive.
+func applyLinux(targz []byte, guardPath string) error {
+	payload, err := extractBinary(targz, "maddog")
 	if err != nil {
 		return err
 	}
-	return selfupdate.Apply(bytes.NewReader(bin), selfupdate.Options{})
+	if guardPath != "" {
+		guard, err := extractBinary(targz, "maddog-guard")
+		if err != nil {
+			return err
+		}
+		info, err := os.Stat(guardPath)
+		if err != nil {
+			return err
+		}
+		if err := repair.ReplaceFileAtomic(guardPath, guard, info.Mode()); err != nil {
+			return err
+		}
+	}
+	return selfupdate.Apply(bytes.NewReader(payload), selfupdate.Options{})
+}
+
+func linuxGuardPath(exe string) string {
+	dir, base := filepath.Dir(exe), filepath.Base(exe)
+	candidates := []string{filepath.Join(dir, "maddog")}
+	if base == "maddog-desktop" && filepath.Clean(dir) == "/usr/lib/maddog" {
+		candidates = append([]string{"/usr/bin/maddog-desktop"}, candidates...)
+	}
+	for _, candidate := range candidates {
+		if filepath.Clean(candidate) == filepath.Clean(exe) {
+			continue
+		}
+		if info, err := os.Stat(candidate); err == nil && info.Mode().IsRegular() {
+			return candidate
+		}
+	}
+	return ""
 }
 
 // applyWindows writes the downloaded NSIS installer to a temp file and launches it.

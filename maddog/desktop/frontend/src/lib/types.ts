@@ -678,6 +678,25 @@ export interface WorkspaceChangesView {
   gitBranch?: string;
 }
 
+export interface DeliveryWorktree {
+  id: string;
+  basePath: string;
+  path: string;
+  branch: string;
+  baseRevision: string;
+  state: "open" | "applied" | "discarded";
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface DeliveryWorktreeInspection {
+  delivery: DeliveryWorktree;
+  head: string;
+  dirty: boolean;
+  files: string[];
+  ready: boolean;
+}
+
 export interface GitCommitView {
   hash: string;
   author: string;

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -43,11 +44,13 @@ import (
 	"maddog/internal/mcpdiag"
 	"maddog/internal/memory"
 	"maddog/internal/plugin"
+	"maddog/internal/processlock"
 	"maddog/internal/provider"
 	"maddog/internal/repair"
 	"maddog/internal/skill"
 	"maddog/internal/skilleval"
 	"maddog/internal/tool"
+	"maddog/internal/worktree"
 )
 
 // eventChannel is the Wails runtime event name the frontend subscribes to for the
@@ -129,6 +132,16 @@ type App struct {
 	// only the crash-loop guard's bounded launch decision creates it.
 	repairGate   *repair.ProcessGate
 	startupGuard *repair.StartupGuard
+	// False only when the packaged guard already recorded this launch before
+	// the desktop/webview process was created.
+	startupGuardPending bool
+	startupLease        *processlock.Lock
+
+	// deliveryStateRoot stores explicit delivery lifecycle records outside the
+	// repository. openDeliveryPath is injectable so the binding can be tested
+	// without launching an OS file manager.
+	deliveryStateRoot string
+	openDeliveryPath  func(string) error
 }
 
 type skillRootsCache struct {
@@ -313,7 +326,91 @@ func NewApp() *App {
 		botRuntime:            newDesktopBotRuntime(),
 		codeIntelBenchRunning: map[string]int{},
 		startupGuard:          repair.NewStartupGuard(filepath.Join(config.MemoryUserDir(), "startup-probation.json"), 3, 2*time.Minute),
+		startupGuardPending:   true,
+		deliveryStateRoot:     filepath.Join(config.MemoryUserDir(), "delivery-worktrees"),
+		openDeliveryPath:      openWorkspacePath,
 	}
+}
+
+func (a *App) deliveryManager() (*worktree.Manager, error) {
+	base, err := a.activeWorkspaceBase()
+	if err != nil {
+		return nil, err
+	}
+	base, err = filepath.Abs(base)
+	if err != nil {
+		return nil, err
+	}
+	identity := filepath.Clean(base)
+	if goruntime.GOOS == "windows" {
+		identity = strings.ToLower(identity)
+	}
+	hash := sha256.Sum256([]byte(identity))
+	state := filepath.Join(a.deliveryStateRoot, hex.EncodeToString(hash[:])[:16])
+	return worktree.NewManager(base, state)
+}
+
+// ListDeliveryWorktrees returns every persisted delivery for the active workspace.
+func (a *App) ListDeliveryWorktrees() ([]worktree.Delivery, error) {
+	m, err := a.deliveryManager()
+	if err != nil {
+		return nil, err
+	}
+	return m.List()
+}
+
+// CreateDeliveryWorktree explicitly creates a branch-backed delivery workspace.
+func (a *App) CreateDeliveryWorktree(branch string) (worktree.Delivery, error) {
+	m, err := a.deliveryManager()
+	if err != nil {
+		return worktree.Delivery{}, err
+	}
+	return m.Create(a.bootContext(), branch)
+}
+
+// OpenDeliveryWorktree validates a delivery and opens its directory in the OS.
+func (a *App) OpenDeliveryWorktree(id string) (worktree.Delivery, error) {
+	m, err := a.deliveryManager()
+	if err != nil {
+		return worktree.Delivery{}, err
+	}
+	delivery, err := m.Open(id)
+	if err != nil {
+		return worktree.Delivery{}, err
+	}
+	if a.openDeliveryPath != nil {
+		if err := a.openDeliveryPath(delivery.Path); err != nil {
+			return worktree.Delivery{}, err
+		}
+	}
+	return delivery, nil
+}
+
+// InspectDeliveryWorktree reports Git readiness and changed files for a delivery.
+func (a *App) InspectDeliveryWorktree(id string) (worktree.Inspection, error) {
+	m, err := a.deliveryManager()
+	if err != nil {
+		return worktree.Inspection{}, err
+	}
+	return m.Inspect(a.bootContext(), id)
+}
+
+// ApplyDeliveryWorktree explicitly fast-forwards the active workspace to a delivery.
+func (a *App) ApplyDeliveryWorktree(id string) error {
+	m, err := a.deliveryManager()
+	if err != nil {
+		return err
+	}
+	return m.Apply(a.bootContext(), id)
+}
+
+// DiscardDeliveryWorktree explicitly removes a delivery worktree and records a tombstone.
+func (a *App) DiscardDeliveryWorktree(id string) error {
+	m, err := a.deliveryManager()
+	if err != nil {
+		return err
+	}
+	return m.Discard(a.bootContext(), id)
 }
 
 func (a *App) bootContext() context.Context {
@@ -340,6 +437,16 @@ func (a *App) SafeMode() bool {
 // off the initialization in a background goroutine so the webview loads immediately.
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
+	if a.startupGuardPending && a.startupGuard != nil {
+		safe, err := a.startupGuard.Begin()
+		a.startupGuardPending = false
+		a.repairGate = repair.NewProcessGate(err != nil || safe)
+		if a.SafeMode() {
+			println("Maddog entered offline Safe Mode; run `maddog repair reset-startup` before starting the desktop")
+			runtime.Quit(ctx)
+			return
+		}
+	}
 	if a.startupGuard != nil {
 		_ = a.startupGuard.MarkReady()
 	}
@@ -629,7 +736,10 @@ func (a *App) snapshotAllTabs() {
 
 // shutdown snapshots all tabs, saves the final window geometry, and closes tabs.
 func (a *App) shutdown(context.Context) {
-	if a.startupGuard != nil {
+	if a.startupLease != nil {
+		defer a.startupLease.Release()
+	}
+	if a.startupGuard != nil && !a.SafeMode() {
 		_ = a.startupGuard.MarkClean()
 	}
 	if a.heartbeat != nil {

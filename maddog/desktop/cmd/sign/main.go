@@ -14,11 +14,16 @@
 //	                             size + sha256, and write <dir>/latest.json with GitHub
 //	                             release download URLs. The R2 mirror step rewrites those
 //	                             URLs to the CDN afterwards (url + sig fields together).
+//
+//	catalog <input> <output>     Sign a canonical MCP catalog with the same Maddog-owned
+//	                             release identity, producing the runtime JSON envelope.
 package main
 
 import (
+	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -30,6 +35,7 @@ import (
 	"aead.dev/minisign"
 
 	"maddog/desktop/internal/update"
+	"maddog/internal/mcpcatalog"
 )
 
 // platforms are the manifest keys we publish. A built artifact is matched to a key
@@ -50,6 +56,11 @@ func main() {
 			usage()
 		}
 		err = genManifest(os.Args[2], os.Args[3], os.Args[4])
+	case "catalog":
+		if len(os.Args) != 4 {
+			usage()
+		}
+		err = signCatalog(os.Args[2], os.Args[3])
 	case "genkey":
 		if len(os.Args) != 3 {
 			usage()
@@ -70,8 +81,61 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage:\n  sign <file>...\n  manifest <dir> <version> <tag>\n  genkey <dir>\n  verify <file>")
+	fmt.Fprintln(os.Stderr, "usage:\n  sign <file>...\n  manifest <dir> <version> <tag>\n  catalog <catalog.json> <signed.json>\n  genkey <dir>\n  verify <file>")
 	os.Exit(2)
+}
+
+// signCatalog signs a canonical MCP catalog with Maddog's existing release
+// identity. The decrypted private key is kept in memory and never written.
+func signCatalog(inputPath, outputPath string) error {
+	keyText := os.Getenv("MINISIGN_PRIVATE_KEY")
+	if strings.TrimSpace(keyText) == "" {
+		return fmt.Errorf("catalog: MINISIGN_PRIVATE_KEY is empty")
+	}
+	priv, err := minisign.DecryptKey(os.Getenv("MINISIGN_PASSWORD"), []byte(keyText))
+	if err != nil {
+		return fmt.Errorf("catalog: decrypt private key: %w", err)
+	}
+	edKey, err := catalogPrivateKey(priv)
+	if err != nil {
+		return err
+	}
+	if !ed25519.PublicKey(edKey.Public().(ed25519.PublicKey)).Equal(mcpcatalog.ProductionPublicKey()) {
+		return fmt.Errorf("catalog: signing key does not match embedded production key")
+	}
+	b, err := os.ReadFile(inputPath)
+	if err != nil {
+		return err
+	}
+	var catalog mcpcatalog.Catalog
+	if err := json.Unmarshal(b, &catalog); err != nil {
+		return fmt.Errorf("catalog: decode input: %w", err)
+	}
+	if catalog.Version < 1 {
+		return fmt.Errorf("catalog: version must be positive")
+	}
+	out, err := json.MarshalIndent(mcpcatalog.Sign(catalog, edKey), "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(outputPath, append(out, '\n'), 0o644)
+}
+
+func catalogPrivateKey(priv minisign.PrivateKey) (ed25519.PrivateKey, error) {
+	text, err := priv.MarshalText()
+	if err != nil {
+		return nil, err
+	}
+	parts := strings.SplitN(string(text), "\n", 2)
+	if len(parts) != 2 {
+		return nil, fmt.Errorf("catalog: malformed minisign private key")
+	}
+	raw, err := base64.StdEncoding.DecodeString(strings.TrimSpace(parts[1]))
+	if err != nil || len(raw) < 62+ed25519.PrivateKeySize {
+		return nil, fmt.Errorf("catalog: malformed minisign private key payload")
+	}
+	key := append(ed25519.PrivateKey(nil), raw[62:62+ed25519.PrivateKeySize]...)
+	return key, nil
 }
 
 // verifyFile checks <file> against <file>.minisig using the embedded public key —
@@ -207,9 +271,9 @@ func genManifest(dir, version, tag string) error {
 
 // matchPlatform returns the platform key embedded in a file name, or "" if none.
 func matchPlatform(name string) string {
-	// The .deb is a human-download package (like the macOS .dmg); the Linux updater
-	// channel is the .tar.gz. Skip it so it doesn't shadow the tarball's linux-amd64 key.
-	if strings.HasSuffix(name, ".deb") {
+	// Linux publishes a guarded human tar/deb and a legacy-compatible updater tar.
+	// Only the explicitly named updater artifact may populate the manifest key.
+	if strings.Contains(name, "linux-") && !strings.HasSuffix(name, "-update.tar.gz") {
 		return ""
 	}
 	// The Windows updater channel is the per-arch -installer.exe; the portable .zip

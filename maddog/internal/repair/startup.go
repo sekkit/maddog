@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"maddog/internal/processlock"
 )
 
 type startupState struct {
@@ -14,6 +16,11 @@ type startupState struct {
 	ProbationUntil      time.Time `json:"probationUntil"`
 	Phase               string    `json:"phase"`
 }
+
+// GuardRelaunchExitCode asks the packaged guard to start a fresh payload while
+// retaining the desktop runtime lease across the handoff.
+const GuardRelaunchExitCode = 75
+
 type StartupStatus struct {
 	ConsecutiveFailures int       `json:"consecutiveFailures"`
 	Phase               string    `json:"phase"`
@@ -78,12 +85,14 @@ func (g *StartupGuard) withLock(fn func(startupState) (startupState, error)) err
 	if err := os.MkdirAll(filepath.Dir(g.path), 0o700); err != nil {
 		return err
 	}
-	lock := g.path + ".lock"
-	f, err := os.OpenFile(lock, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	lock, acquired, err := processlock.Try(g.path + ".lock")
 	if err != nil {
 		return fmt.Errorf("startup state locked: %w", err)
 	}
-	defer func() { _ = f.Close(); _ = os.Remove(lock) }()
+	if !acquired {
+		return fmt.Errorf("startup state locked by another process")
+	}
+	defer lock.Release()
 	next, err := fn(g.read())
 	if err != nil {
 		return err

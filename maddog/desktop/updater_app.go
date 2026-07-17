@@ -157,12 +157,17 @@ func (a *App) InstallUpdate() error {
 			err = exeErr
 			break
 		}
-		err = tx.CommitWithRollback(exe, func(staged, _ string) error {
+		guardPath := linuxGuardPath(exe)
+		unit := []string{exe}
+		if guardPath != "" {
+			unit = append(unit, guardPath)
+		}
+		err = tx.CommitReleaseUnitWithRollback(unit, func(staged string) error {
 			b, readErr := os.ReadFile(staged)
 			if readErr != nil {
 				return readErr
 			}
-			return applyLinux(b)
+			return applyLinux(b, guardPath)
 		})
 	default:
 		err = fmt.Errorf("self-update unsupported on %s", runtime.GOOS)
@@ -178,10 +183,17 @@ func (a *App) InstallUpdate() error {
 	// macOS the installer/helper we launched takes over once we exit.
 	a.shutdown(a.ctx)
 	if runtime.GOOS == "linux" {
+		if guardedLinuxRelaunch(runtime.GOOS, os.Getenv) {
+			os.Exit(repair.GuardRelaunchExitCode)
+		}
 		_ = relaunch()
 	}
 	os.Exit(0)
 	return nil
+}
+
+func guardedLinuxRelaunch(goos string, getenv func(string) string) bool {
+	return goos == "linux" && getenv("MADDOG_GUARD_PREFLIGHT") == "1"
 }
 
 // ApplyUpdate is kept for older frontend bindings and tests. New UI code uses the

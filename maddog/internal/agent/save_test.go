@@ -18,11 +18,22 @@ func TestSaveProtectsTranscriptAndSessionDirectory(t *testing.T) {
 		t.Fatal(err)
 	}
 	path := filepath.Join(dir, "session.jsonl")
-	if err := os.WriteFile(path, []byte("legacy"), 0o644); err != nil {
+	initial := NewSession("system")
+	initial.Add(provider.Message{Role: provider.RoleUser, Content: "base"})
+	if err := initial.Save(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0o644); err != nil {
 		t.Fatal(err)
 	}
 
-	s := NewSession("system")
+	s, err := LoadSession(path)
+	if err != nil {
+		t.Fatal(err)
+	}
 	s.Add(provider.Message{Role: provider.RoleUser, Content: "private"})
 	if err := s.Save(path); err != nil {
 		t.Fatal(err)

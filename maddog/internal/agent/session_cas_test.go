@@ -115,6 +115,48 @@ func TestSessionSaveRejectsStaleSnapshotAndCreatesRecoveryBranch(t *testing.T) {
 	}
 }
 
+func TestRecoveryBranchesDeduplicateAndRetainNewestFive(t *testing.T) {
+	if MaxRecoveryBranches < 1 {
+		t.Fatalf("MaxRecoveryBranches=%d must preserve at least one complete snapshot", MaxRecoveryBranches)
+	}
+	p := filepath.Join(t.TempDir(), "session.jsonl")
+	s := NewSession("")
+	s.Add(provider.Message{Role: provider.RoleUser, Content: "same"})
+	one, err := s.SaveRecoveryBranch(RecoveryBranchOptions{OriginalPath: p, Reason: "first"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	two, err := s.SaveRecoveryBranch(RecoveryBranchOptions{OriginalPath: p, Reason: "duplicate"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if two.Path != one.Path {
+		t.Fatalf("duplicate recovery path=%q, want %q", two.Path, one.Path)
+	}
+
+	for i := 0; i < MaxRecoveryBranches; i++ {
+		s.Add(provider.Message{Role: provider.RoleAssistant, Content: string(rune('a' + i))})
+		if _, err := s.SaveRecoveryBranch(RecoveryBranchOptions{OriginalPath: p, Reason: "distinct"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	branches, err := filepath.Glob(filepath.Join(filepath.Dir(p), "session.recovery-*.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(branches) != MaxRecoveryBranches {
+		t.Fatalf("recovery branches=%d, want %d: %v", len(branches), MaxRecoveryBranches, branches)
+	}
+	if _, err := os.Stat(one.Path); !os.IsNotExist(err) {
+		t.Fatalf("oldest duplicate branch retained: err=%v", err)
+	}
+	for _, branch := range branches {
+		if _, ok, err := LoadBranchMeta(branch); err != nil || !ok {
+			t.Fatalf("branch meta %s ok=%v err=%v", branch, ok, err)
+		}
+	}
+}
+
 func TestSessionLeaseExclusiveAndReleases(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "session.jsonl")
 	one, err := TryAcquireSessionLease(p)

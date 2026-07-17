@@ -32,6 +32,8 @@ import type {
   ContextPanelInfo,
   DirEntry,
   DesktopStartupSettingsView,
+  DeliveryWorktree,
+  DeliveryWorktreeInspection,
   DroppedItem,
   EffortInfo,
   FilePreview,
@@ -224,6 +226,12 @@ export interface AppBindings {
   SearchFileRefs(query: string): Promise<DirEntry[]>;
   ReadFile(rel: string): Promise<FilePreview>;
   WorkspaceChanges(tabID: string): Promise<WorkspaceChangesView>;
+  ListDeliveryWorktrees(): Promise<DeliveryWorktree[]>;
+  CreateDeliveryWorktree(branch: string): Promise<DeliveryWorktree>;
+  OpenDeliveryWorktree(id: string): Promise<DeliveryWorktree>;
+  InspectDeliveryWorktree(id: string): Promise<DeliveryWorktreeInspection>;
+  ApplyDeliveryWorktree(id: string): Promise<void>;
+  DiscardDeliveryWorktree(id: string): Promise<void>;
   GitBranches(): Promise<string[]>;
   GitCheckout(branch: string): Promise<void>;
   WorkspaceGitHistory(tabID: string, path: string): Promise<GitCommitView[]>;
@@ -746,6 +754,7 @@ function makeMockApp(): AppBindings {
   let mockEffort = "auto";
   const day = 86_400_000;
   const t0 = Date.now();
+  let mockDeliveryWorktrees: DeliveryWorktree[] = [];
   // Mutable so MCP add/remove/retry are observable in browser dev.
   let capServers: ServerView[] = [
     {
@@ -2641,6 +2650,41 @@ function makeMockApp(): AppBindings {
           { path: "internal/control/controller.go", sources: ["session"], turns: [1], latestTime: Date.now() - 120_000 },
         ],
       };
+    },
+    async ListDeliveryWorktrees() {
+      return mockDeliveryWorktrees.map((delivery) => ({ ...delivery }));
+    },
+    async CreateDeliveryWorktree(branch: string) {
+      const now = new Date().toISOString();
+      const id = `delivery-${mockDeliveryWorktrees.length + 1}`;
+      const delivery: DeliveryWorktree = {
+        id,
+        basePath: cwd,
+        path: `${cwd}/.maddog-deliveries/${id}`,
+        branch: branch.trim() || `maddog/delivery/${id}`,
+        baseRevision: "abcdef123456",
+        state: "open",
+        createdAt: now,
+        updatedAt: now,
+      };
+      mockDeliveryWorktrees = [delivery, ...mockDeliveryWorktrees];
+      return { ...delivery };
+    },
+    async OpenDeliveryWorktree(id: string) {
+      const delivery = mockDeliveryWorktrees.find((item) => item.id === id);
+      if (!delivery || delivery.state === "discarded") throw new Error("delivery workspace not found");
+      return { ...delivery, updatedAt: new Date().toISOString() };
+    },
+    async InspectDeliveryWorktree(id: string) {
+      const delivery = mockDeliveryWorktrees.find((item) => item.id === id);
+      if (!delivery || delivery.state === "discarded") throw new Error("delivery workspace not found");
+      return { delivery: { ...delivery }, head: "abcdef123456", dirty: false, files: [], ready: true };
+    },
+    async ApplyDeliveryWorktree(id: string) {
+      mockDeliveryWorktrees = mockDeliveryWorktrees.map((item) => item.id === id ? { ...item, state: "applied", updatedAt: new Date().toISOString() } : item);
+    },
+    async DiscardDeliveryWorktree(id: string) {
+      mockDeliveryWorktrees = mockDeliveryWorktrees.map((item) => item.id === id ? { ...item, state: "discarded", updatedAt: new Date().toISOString() } : item);
     },
     async GitBranches() {
       return ["main", "dev", "feature/branch-switcher"];

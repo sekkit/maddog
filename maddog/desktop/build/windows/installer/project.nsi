@@ -139,6 +139,11 @@ Section
 
     !insertmacro wails.files
 
+    ; The Wails payload is private. Every user-visible launch goes through the
+    ; crash-loop guard built by scripts/desktop-build.sh.
+    Rename "$INSTDIR\${PRODUCT_EXECUTABLE}" "$INSTDIR\maddog-desktop.exe"
+    File /oname=${PRODUCT_EXECUTABLE} "..\..\guard\maddog-guard.exe"
+
     CreateShortcut "$SMPROGRAMS\${INFO_PRODUCTNAME}.lnk" "$INSTDIR\${PRODUCT_EXECUTABLE}"
     CreateShortCut "$DESKTOP\${INFO_PRODUCTNAME}.lnk" "$INSTDIR\${PRODUCT_EXECUTABLE}"
 
@@ -157,6 +162,7 @@ Section "uninstall"
 
     ; Precision uninstall: delete main application files
     Delete "$INSTDIR\${PRODUCT_EXECUTABLE}"
+    Delete "$INSTDIR\maddog-desktop.exe"
 
     Delete "$SMPROGRAMS\${INFO_PRODUCTNAME}.lnk"
     Delete "$DESKTOP\${INFO_PRODUCTNAME}.lnk"

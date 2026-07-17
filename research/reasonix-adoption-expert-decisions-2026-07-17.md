@@ -61,3 +61,24 @@ The dirty root worktree is never committed or overwritten by this effort.
   obsolete `/effort` option set (`auto/high/max`), while the existing
   implementation exposes (`auto/low/medium/high`). This predates the adoption
   branch and is unrelated to the migrated features.
+
+## Post-merge review closure
+
+- The production catalog key is embedded and tied to Maddog's release signing
+  identity; the release signer can emit canonical signed MCP catalogs without
+  writing private key material.
+- CAS no longer contains fixture-specific bypasses. Recovery branches are
+  atomic, digest-deduplicated, and retain the newest five distinct snapshots.
+- Startup and delivery locks use OS-backed process leases, so stale marker files
+  do not block recovery after a crash. Second-instance launches do not mutate the
+  crash counter.
+- The shipped guard is wired into Windows, macOS, Linux tar, and Linux deb
+  packaging. Linux updater compatibility and payload-plus-guard rollback are
+  covered explicitly.
+- Delivery worktrees are reachable through Desktop bindings and the workspace
+  toolbar with explicit create/open/inspect/apply/discard controls. Apply rejects
+  dirty delivery and base workspaces and never pushes or deletes a branch.
+- Review-fix verification: 3921 core tests passed with only the pre-existing
+  `/effort` assertion failing; 645 Desktop tests passed; frontend test-all and
+  production build passed; Windows Wails build and packaged guard runtime smoke
+  passed.

@@ -49,6 +49,7 @@ import { Markdown } from "./Markdown";
 import { Tooltip } from "./Tooltip";
 import { AnchoredPopover } from "./AnchoredPopover";
 import { ImageLightbox } from "./ImageLightbox";
+import { DeliveryWorktreeMenu } from "./DeliveryWorktreeMenu";
 
 const WORKSPACE_TREE_MIN_WIDTH = 140;
 const WORKSPACE_TREE_DEFAULT_WIDTH = 300;
@@ -1605,6 +1606,7 @@ export function WorkspacePanel({
                 </button>
               </Tooltip>
             )}
+            {showViewTabs && <DeliveryWorktreeMenu />}
           </div>
         )}
 

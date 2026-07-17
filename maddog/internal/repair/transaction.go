@@ -16,6 +16,12 @@ type UpdateTransaction struct {
 	lock     *os.File
 }
 
+type fileSnapshot struct {
+	path string
+	data []byte
+	mode os.FileMode
+}
+
 func NewUpdateTransaction(dir string) *UpdateTransaction { return &UpdateTransaction{dir: dir} }
 func (t *UpdateTransaction) stagedPath() string          { return filepath.Join(t.dir, "staged") }
 func (t *UpdateTransaction) Prepare(data []byte, digest string) error {
@@ -88,16 +94,20 @@ func (t *UpdateTransaction) CommitWithRollback(currentPath string, apply func(st
 	if SHA256(staged) != t.digest {
 		return fmt.Errorf("update: staged release digest changed")
 	}
+	currentInfo, err := os.Stat(currentPath)
+	if err != nil {
+		return err
+	}
 	current, err := os.ReadFile(currentPath)
 	if err != nil {
 		return err
 	}
 	backupPath := filepath.Join(t.dir, "current.backup")
-	if err := os.WriteFile(backupPath, current, 0o600); err != nil {
+	if err := os.WriteFile(backupPath, current, currentInfo.Mode().Perm()); err != nil {
 		return err
 	}
 	if err := apply(t.stagedPath(), backupPath); err != nil {
-		rollbackErr := os.WriteFile(currentPath, current, 0o600)
+		rollbackErr := restoreAtomic(currentPath, current, currentInfo.Mode())
 		_ = os.Remove(t.stagedPath())
 		_ = os.Remove(backupPath)
 		t.prepared = false
@@ -109,6 +119,76 @@ func (t *UpdateTransaction) CommitWithRollback(currentPath string, apply func(st
 	t.prepared = false
 	t.unlock()
 	return nil
+}
+
+// CommitReleaseUnitWithRollback applies one verified release archive to all
+// listed existing files and restores every file if the release-unit update fails.
+func (t *UpdateTransaction) CommitReleaseUnitWithRollback(paths []string, apply func(stagedPath string) error) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if !t.prepared {
+		return fmt.Errorf("update: transaction is not prepared")
+	}
+	staged, err := os.ReadFile(t.stagedPath())
+	if err != nil {
+		return err
+	}
+	if SHA256(staged) != t.digest {
+		return fmt.Errorf("update: staged release digest changed")
+	}
+	snapshots := make([]fileSnapshot, 0, len(paths))
+	for _, path := range paths {
+		info, err := os.Stat(path)
+		if err != nil {
+			return err
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		snapshots = append(snapshots, fileSnapshot{path: path, data: data, mode: info.Mode()})
+	}
+	if err := apply(t.stagedPath()); err != nil {
+		rollbackErrors := []error{err}
+		for _, snapshot := range snapshots {
+			rollbackErrors = append(rollbackErrors, restoreAtomic(snapshot.path, snapshot.data, snapshot.mode))
+		}
+		_ = os.Remove(t.stagedPath())
+		t.prepared = false
+		t.unlock()
+		return errors.Join(rollbackErrors...)
+	}
+	_ = os.Remove(t.stagedPath())
+	t.prepared = false
+	t.unlock()
+	return nil
+}
+
+func restoreAtomic(path string, data []byte, mode os.FileMode) error {
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".maddog-rollback-*")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	defer os.Remove(tmpPath)
+	if _, err = tmp.Write(data); err == nil {
+		err = tmp.Chmod(mode)
+	}
+	if err == nil {
+		err = tmp.Sync()
+	}
+	if closeErr := tmp.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		return err
+	}
+	return replacePath(tmpPath, path)
+}
+
+// ReplaceFileAtomic replaces path with synced data while preserving the supplied mode.
+func ReplaceFileAtomic(path string, data []byte, mode os.FileMode) error {
+	return restoreAtomic(path, data, mode)
 }
 func (t *UpdateTransaction) Cancel() error {
 	t.mu.Lock()

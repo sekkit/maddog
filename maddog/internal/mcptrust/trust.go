@@ -19,20 +19,29 @@ import (
 	"time"
 )
 
-var ErrUntrusted = errors.New("MCP capability is not trusted")
-var ErrRevoked = errors.New("MCP capability receipt is revoked or expired")
-var ErrCapabilityDrift = errors.New("MCP capability changed since approval")
+var (
+	// ErrUntrusted reports that no valid trust decision covers a capability.
+	ErrUntrusted = errors.New("MCP capability is not trusted")
+	// ErrRevoked reports that a persisted approval is revoked or expired.
+	ErrRevoked = errors.New("MCP capability receipt is revoked or expired")
+	// ErrCapabilityDrift reports that a tool changed after it was approved.
+	ErrCapabilityDrift = errors.New("MCP capability changed since approval")
+)
 
+// Identity is the transport-level identity of one MCP server.
 type Identity struct {
 	Name, Type, Command, URL string
 	Args                     []string
 }
+
+// Capability is the security-relevant snapshot of one MCP tool.
 type Capability struct {
 	Server, Tool          string
 	Schema                []byte
 	ReadOnly, Destructive bool
 }
 
+// IdentityFingerprint returns a credential-free stable identity digest.
 func IdentityFingerprint(i Identity) string {
 	u := credentialSafeURL(i.URL)
 	typ := strings.ToLower(strings.TrimSpace(i.Type))
@@ -48,6 +57,8 @@ func IdentityFingerprint(i Identity) string {
 	}{i.Name, typ, i.Command, u, append([]string(nil), i.Args...)}
 	return digest(v)
 }
+
+// CapabilityFingerprint returns a stable digest of a tool's security surface.
 func CapabilityFingerprint(c Capability) string {
 	v := struct {
 		Server, Tool, Schema  string
@@ -72,18 +83,22 @@ func credentialSafeURL(raw string) string {
 	return u.String()
 }
 
+// Receipt records a persisted human approval for one identity and capability.
 type Receipt struct {
 	Identity, Capability string
 	Approved             bool
 	ExpiresAt            time.Time
 	Revision             uint64
 }
+
+// Store persists and revokes capability receipts.
 type Store interface {
 	Put(context.Context, Receipt) error
 	Get(context.Context, string, string) (Receipt, error)
 	Revoke(context.Context, string, string) error
 }
 
+// MemoryStore is an in-memory receipt store for ephemeral runtimes and tests.
 type MemoryStore struct {
 	mu sync.RWMutex
 	m  map[string]Receipt
@@ -101,6 +116,7 @@ type fileReceipts struct {
 	Receipts []Receipt `json:"receipts"`
 }
 
+// NewFileStore returns a private JSON receipt store backed by path.
 func NewFileStore(path string) *FileStore { return &FileStore{Path: path} }
 func (s *FileStore) load() (fileReceipts, error) {
 	b, err := os.ReadFile(s.Path)
@@ -116,6 +132,8 @@ func (s *FileStore) load() (fileReceipts, error) {
 	}
 	return f, nil
 }
+
+// Put persists a receipt while rejecting revision rollback.
 func (s *FileStore) Put(ctx context.Context, r Receipt) error {
 	_ = ctx
 	if r.Identity == "" || r.Capability == "" {
@@ -148,6 +166,8 @@ func (s *FileStore) Put(ctx context.Context, r Receipt) error {
 	}
 	return s.save(f)
 }
+
+// Get returns a currently approved, unexpired receipt.
 func (s *FileStore) Get(ctx context.Context, i, c string) (Receipt, error) {
 	_ = ctx
 	s.mu.Lock()
@@ -169,6 +189,8 @@ func (s *FileStore) Get(ctx context.Context, i, c string) (Receipt, error) {
 	}
 	return Receipt{}, ErrUntrusted
 }
+
+// Revoke durably revokes a receipt and advances the store sequence.
 func (s *FileStore) Revoke(ctx context.Context, identity, capability string) error {
 	_ = ctx
 	s.mu.Lock()
@@ -234,8 +256,11 @@ func MigrateLegacy(ctx context.Context, legacyPath, markerPath string, decode fu
 	return os.WriteFile(markerPath, []byte("migrated\n"), 0600)
 }
 
+// NewMemoryStore returns an empty in-memory receipt store.
 func NewMemoryStore() *MemoryStore { return &MemoryStore{m: make(map[string]Receipt)} }
 func key(i, c string) string       { return i + "\x00" + c }
+
+// Put stores a receipt in memory.
 func (s *MemoryStore) Put(_ context.Context, r Receipt) error {
 	if r.Identity == "" || r.Capability == "" {
 		return errors.New("receipt identity and capability are required")
@@ -245,6 +270,8 @@ func (s *MemoryStore) Put(_ context.Context, r Receipt) error {
 	s.mu.Unlock()
 	return nil
 }
+
+// Get returns a currently approved, unexpired in-memory receipt.
 func (s *MemoryStore) Get(_ context.Context, i, c string) (Receipt, error) {
 	s.mu.RLock()
 	r, ok := s.m[key(i, c)]
@@ -257,6 +284,8 @@ func (s *MemoryStore) Get(_ context.Context, i, c string) (Receipt, error) {
 	}
 	return r, nil
 }
+
+// Revoke revokes an in-memory receipt.
 func (s *MemoryStore) Revoke(_ context.Context, i, c string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -274,8 +303,11 @@ func (s *MemoryStore) Revoke(_ context.Context, i, c string) error {
 type Authority interface {
 	Check(context.Context, Identity, Capability) error
 }
+
+// ReceiptAuthority validates capabilities against persisted human approvals.
 type ReceiptAuthority struct{ Store Store }
 
+// Check validates an identity and capability against the receipt store.
 func (a ReceiptAuthority) Check(ctx context.Context, i Identity, c Capability) error {
 	if a.Store == nil {
 		return ErrUntrusted
@@ -284,12 +316,15 @@ func (a ReceiptAuthority) Check(ctx context.Context, i Identity, c Capability) e
 	return err
 }
 
+// CheckRedirectOrigin rejects redirects that change URL scheme or authority.
 func CheckRedirectOrigin(origin, next *url.URL) error {
 	if origin == nil || next == nil || !strings.EqualFold(origin.Scheme, next.Scheme) || !strings.EqualFold(origin.Host, next.Host) {
 		return fmt.Errorf("MCP redirect changes origin")
 	}
 	return nil
 }
+
+// CredentialSafeHTTPClient returns a client that refuses cross-origin redirects.
 func CredentialSafeHTTPClient() *http.Client {
 	return &http.Client{CheckRedirect: func(req *http.Request, via []*http.Request) error {
 		if len(via) == 0 {

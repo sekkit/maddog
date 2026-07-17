@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"sync/atomic"
@@ -249,6 +250,49 @@ func TestExtractBinary(t *testing.T) {
 	}
 }
 
+func TestUpdaterArchiveKeepsLegacyPayloadNameAndGuard(t *testing.T) {
+	payload := []byte("wails-payload")
+	guard := []byte("guard-launcher")
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gz)
+	for name, body := range map[string][]byte{"maddog": payload, "maddog-guard": guard} {
+		if err := tw.WriteHeader(&tar.Header{Name: name, Mode: 0o755, Size: int64(len(body)), Typeflag: tar.TypeReg}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tw.Write(body); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := gz.Close(); err != nil {
+		t.Fatal(err)
+	}
+	for name, want := range map[string][]byte{"maddog": payload, "maddog-guard": guard} {
+		got, err := extractBinary(buf.Bytes(), name)
+		if err != nil || !bytes.Equal(got, want) {
+			t.Fatalf("extract %s = %q, err=%v", name, got, err)
+		}
+	}
+}
+
+func TestLinuxGuardPathFindsPortableGuardOnlyWhenInstalled(t *testing.T) {
+	dir := t.TempDir()
+	payload := filepath.Join(dir, "maddog-desktop")
+	if got := linuxGuardPath(payload); got != "" {
+		t.Fatalf("missing guard path = %q", got)
+	}
+	guard := filepath.Join(dir, "maddog")
+	if err := os.WriteFile(guard, []byte("guard"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if got := linuxGuardPath(payload); got != guard {
+		t.Fatalf("guard path = %q, want %q", got, guard)
+	}
+}
+
 func fastRetry(t *testing.T) {
 	t.Helper()
 	restore := retryBackoff
@@ -408,3 +452,21 @@ func TestDownloadFallsBackToSecondClient(t *testing.T) {
 type rtFunc func(*http.Request) (*http.Response, error)
 
 func (f rtFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+func TestGuardedLinuxRelaunchUsesGuardHandoff(t *testing.T) {
+	guarded := func(key string) string {
+		if key == "MADDOG_GUARD_PREFLIGHT" {
+			return "1"
+		}
+		return ""
+	}
+	if !guardedLinuxRelaunch("linux", guarded) {
+		t.Fatal("guarded Linux payload should hand relaunch back to the guard")
+	}
+	if guardedLinuxRelaunch("windows", guarded) {
+		t.Fatal("non-Linux updates must not use the Linux guard handoff")
+	}
+	if guardedLinuxRelaunch("linux", func(string) string { return "" }) {
+		t.Fatal("direct Linux payload should relaunch itself")
+	}
+}

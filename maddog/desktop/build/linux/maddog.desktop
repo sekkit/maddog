@@ -2,7 +2,7 @@
 Type=Application
 Name=Maddog
 Comment=Maddog desktop - a Wails shell around the Go kernel
-Exec=maddog
+Exec=maddog-desktop
 Icon=maddog
 Categories=Development;Utility;
 Terminal=false

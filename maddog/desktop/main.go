@@ -11,7 +11,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
@@ -21,6 +20,7 @@ import (
 	"github.com/wailsapp/wails/v2/pkg/options/windows"
 
 	"maddog/internal/config"
+	"maddog/internal/processlock"
 	"maddog/internal/repair"
 
 	// Blank imports wire compile-time built-ins into their registries, exactly as
@@ -85,16 +85,9 @@ func macTitleBar(customWindowChrome bool) *mac.TitleBar {
 }
 
 func main() {
-	// Decide recovery posture before config loading and before Wails creates a
-	// webview. Packaging may invoke the same guard externally; this is the final
-	// in-process boundary and does not claim an installer integration.
-	guard := repair.NewStartupGuard(filepath.Join(config.MemoryUserDir(), "startup-probation.json"), 3, 2*time.Minute)
-	safe, guardErr := guard.Begin()
 	app := NewApp()
-	app.startupGuard = guard
-	app.repairGate = repair.NewProcessGate(guardErr != nil || safe)
-	if app.SafeMode() {
-		println("Maddog entered offline Safe Mode; run the recovery command before starting the desktop")
+	if !preflightDirectStartup(app, filepath.Join(config.MemoryUserDir(), "desktop-runtime.lock"), os.Getenv("MADDOG_GUARD_PREFLIGHT") == "1") {
+		println("Maddog entered offline Safe Mode; run `maddog repair reset-startup` before starting the desktop")
 		return
 	}
 	customWindowChrome := false
@@ -170,4 +163,28 @@ func main() {
 	if err != nil {
 		println("Error:", err.Error())
 	}
+}
+
+func preflightDirectStartup(app *App, leasePath string, externallyGuarded bool) bool {
+	if externallyGuarded {
+		app.startupGuardPending = false
+		return true
+	}
+	lease, primary, err := processlock.Try(leasePath)
+	if err != nil {
+		app.repairGate = repair.NewProcessGate(true)
+		return false
+	}
+	app.startupGuardPending = false
+	if !primary {
+		return true
+	}
+	safe, err := app.startupGuard.Begin()
+	app.repairGate = repair.NewProcessGate(err != nil || safe)
+	if app.SafeMode() {
+		_ = lease.Release()
+		return false
+	}
+	app.startupLease = lease
+	return true
 }

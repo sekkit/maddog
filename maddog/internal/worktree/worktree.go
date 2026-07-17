@@ -20,14 +20,19 @@ import (
 	"time"
 
 	"maddog/internal/fileutil"
+	"maddog/internal/processlock"
 )
 
 var (
+	// ErrLeaseHeld reports that another live process is mutating the delivery workspace.
 	ErrLeaseHeld = errors.New("delivery workspace is already leased")
-	ErrNotFound  = errors.New("delivery workspace not found")
-	ErrNotReady  = errors.New("delivery workspace is not ready")
+	// ErrNotFound reports that the requested delivery does not exist or was discarded.
+	ErrNotFound = errors.New("delivery workspace not found")
+	// ErrNotReady reports that the requested lifecycle action is invalid for the delivery state.
+	ErrNotReady = errors.New("delivery workspace is not ready")
 )
 
+// Delivery is the persisted lifecycle record for one branch-backed worktree.
 type Delivery struct {
 	ID           string    `json:"id"`
 	BasePath     string    `json:"basePath"`
@@ -39,6 +44,7 @@ type Delivery struct {
 	UpdatedAt    time.Time `json:"updatedAt"`
 }
 
+// Inspection describes the current Git readiness and changed files of a delivery.
 type Inspection struct {
 	Delivery Delivery `json:"delivery"`
 	Head     string   `json:"head"`
@@ -47,6 +53,7 @@ type Inspection struct {
 	Ready    bool     `json:"ready"`
 }
 
+// Manager owns explicit delivery lifecycle operations for one base workspace.
 type Manager struct {
 	base, state string
 	mu          sync.Mutex
@@ -80,6 +87,7 @@ func (m *Manager) List() ([]Delivery, error) {
 	return out, nil
 }
 
+// NewManager creates a delivery manager rooted at basePath with Maddog-owned state.
 func NewManager(basePath, statePath string) (*Manager, error) {
 	base, err := filepath.Abs(basePath)
 	if err != nil {
@@ -99,13 +107,15 @@ func NewManager(basePath, statePath string) (*Manager, error) {
 	return &Manager{base: base, state: state}, nil
 }
 
+// Create creates an isolated branch-backed delivery worktree after taking the base lease.
 func (m *Manager) Create(ctx context.Context, branch string) (Delivery, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if err := acquireLease(m.state, "base"); err != nil {
+	lease, err := acquireLease(m.state, "base")
+	if err != nil {
 		return Delivery{}, err
 	}
-	defer releaseLease(m.state, "base")
+	defer lease.Release()
 	if err := m.ensureGit(ctx); err != nil {
 		return Delivery{}, err
 	}
@@ -136,9 +146,15 @@ func (m *Manager) Create(ctx context.Context, branch string) (Delivery, error) {
 	return d, nil
 }
 
+// Open validates and returns a persisted delivery without changing repository state.
 func (m *Manager) Open(id string) (Delivery, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	lease, err := acquireLease(m.state, id)
+	if err != nil {
+		return Delivery{}, err
+	}
+	defer lease.Release()
 	d, err := m.load(id)
 	if err != nil {
 		return Delivery{}, err
@@ -159,9 +175,15 @@ func (m *Manager) Open(id string) (Delivery, error) {
 	return d, nil
 }
 
+// Inspect reads Git readiness and changed files without mutating the delivery.
 func (m *Manager) Inspect(ctx context.Context, id string) (Inspection, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	lease, err := acquireLease(m.state, id)
+	if err != nil {
+		return Inspection{}, err
+	}
+	defer lease.Release()
 	d, err := m.load(id)
 	if err != nil {
 		return Inspection{}, err
@@ -201,16 +223,29 @@ func (m *Manager) Apply(ctx context.Context, id string) error {
 	if d.State != "open" {
 		return ErrNotReady
 	}
-	if err := acquireLease(m.state, "base"); err != nil {
+	lease, err := acquireLease(m.state, "base")
+	if err != nil {
 		return err
 	}
-	defer releaseLease(m.state, "base")
+	defer lease.Release()
+	deliveryLease, err := acquireLease(m.state, id)
+	if err != nil {
+		return err
+	}
+	defer deliveryLease.Release()
 	status, err := m.git(ctx, "-C", d.Path, "status", "--porcelain")
 	if err != nil {
 		return err
 	}
 	if strings.TrimSpace(status) != "" {
 		return fmt.Errorf("delivery has uncommitted changes")
+	}
+	baseStatus, err := m.git(ctx, "-C", m.base, "status", "--porcelain")
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(baseStatus) != "" {
+		return fmt.Errorf("base workspace has uncommitted changes")
 	}
 	if _, err := m.git(ctx, "-C", m.base, "merge", "--ff-only", d.Branch); err != nil {
 		return err
@@ -220,6 +255,7 @@ func (m *Manager) Apply(ctx context.Context, id string) error {
 	return m.save(d)
 }
 
+// Discard explicitly removes a delivery worktree and persists a tombstone.
 func (m *Manager) Discard(ctx context.Context, id string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -230,10 +266,16 @@ func (m *Manager) Discard(ctx context.Context, id string) error {
 	if d.State == "discarded" {
 		return nil
 	}
-	if err := acquireLease(m.state, id); err != nil {
+	baseLease, err := acquireLease(m.state, "base")
+	if err != nil {
 		return err
 	}
-	defer releaseLease(m.state, id)
+	defer baseLease.Release()
+	deliveryLease, err := acquireLease(m.state, id)
+	if err != nil {
+		return err
+	}
+	defer deliveryLease.Release()
 	if err := m.removeWorktree(ctx, d.Path); err != nil {
 		return err
 	}
@@ -301,24 +343,16 @@ func within(root, path string) bool {
 	rel, err := filepath.Rel(r, p)
 	return err == nil && rel != "." && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
-func acquireLease(root, name string) error {
+func acquireLease(root, name string) (*processlock.Lock, error) {
 	p := filepath.Join(root, "leases", shortHash(name)+".lock")
-	if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
-		return err
-	}
-	f, err := os.OpenFile(p, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	lock, acquired, err := processlock.Try(p)
 	if err != nil {
-		if os.IsExist(err) {
-			return ErrLeaseHeld
-		}
-		return err
+		return nil, err
 	}
-	_, _ = fmt.Fprintf(f, "pid=%d\ntime=%s\n", os.Getpid(), time.Now().UTC().Format(time.RFC3339Nano))
-	_ = f.Close()
-	return nil
-}
-func releaseLease(root, name string) {
-	_ = os.Remove(filepath.Join(root, "leases", shortHash(name)+".lock"))
+	if !acquired {
+		return nil, ErrLeaseHeld
+	}
+	return lock, nil
 }
 
 // ShortPath returns a Maddog-owned short path suitable for Windows worktrees.

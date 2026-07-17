@@ -214,6 +214,93 @@
   --font-sans: var(--font-ui);
 }
 
+.delivery-worktrees {
+  width: min(440px, calc(100vw - 32px));
+  max-height: min(560px, calc(100vh - 96px));
+  overflow: auto;
+  padding: 12px;
+}
+
+.delivery-worktrees__head,
+.delivery-worktrees__create,
+.delivery-worktrees__meta,
+.delivery-worktrees__actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.delivery-worktrees__head {
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+
+.delivery-worktrees__head > div,
+.delivery-worktrees__meta {
+  min-width: 0;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+}
+
+.delivery-worktrees__head span,
+.delivery-worktrees__meta span,
+.delivery-worktrees__inspection,
+.delivery-worktrees__empty {
+  color: var(--fg-dim);
+  font-size: 11px;
+}
+
+.delivery-worktrees__create input {
+  min-width: 0;
+  flex: 1;
+}
+
+.delivery-worktrees__create button,
+.delivery-worktrees__actions button {
+  white-space: nowrap;
+}
+
+.delivery-worktrees__list {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.delivery-worktrees__item {
+  border: 1px solid var(--border-soft);
+  border-radius: 8px;
+  padding: 9px;
+}
+
+.delivery-worktrees__meta strong {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.delivery-worktrees__actions {
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
+
+.delivery-worktrees__inspection {
+  margin-top: 8px;
+  overflow-wrap: anywhere;
+}
+
+.delivery-worktrees__inspection ul {
+  margin: 4px 0 0;
+  padding-left: 18px;
+}
+
+.delivery-worktrees__error {
+  margin-top: 8px;
+  color: var(--danger);
+  font-size: 12px;
+}
+
 :root[data-platform="windows"] {
   --font-ui: "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI",
     "Microsoft YaHei", "Noto Sans SC", Arial, sans-serif;

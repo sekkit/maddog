@@ -148,6 +148,21 @@ minisign -Vm Maddog-darwin-arm64.zip \
   -P RWSw66n0RsoSr6Zhh6qt5YO95YkpCayTOCMFVDNUQSjJYwxoYngNVBSq
 ```
 
+### Signing the production MCP catalog
+
+Strict Reader catalogs use the raw Ed25519 key carried by the same Maddog-owned
+minisign release identity. The private key remains in `MINISIGN_PRIVATE_KEY` and
+is never written to the repository. From `desktop/`, sign a positive-version
+catalog payload with:
+
+```sh
+go run ./cmd/sign catalog catalog.json catalog.signed.json
+```
+
+The command decrypts the existing release secret in memory, refuses a key that
+does not match the embedded production catalog key, and emits the signed JSON
+envelope consumed by `internal/mcpcatalog.FileStore`.
+
 ## Editor seam (Monaco / CodeMirror)
 
 Code and diff rendering go through two components with stable prop contracts and a

@@ -19,35 +19,47 @@ import (
 	"maddog/internal/mcptrust"
 )
 
-// ProductionPublicKeyHex is replaced with Maddog's Ed25519 catalog public key
-// by the release process. An empty value deliberately disables official trust.
-const ProductionPublicKeyHex = ""
+// ProductionPublicKeyHex is Maddog's Ed25519 catalog verification key. It is
+// the raw Ed25519 key already owned by Maddog's minisign release identity; the
+// matching private key remains only in the release signing secret.
+const ProductionPublicKeyHex = "a66187aaade583bde5892909ac933823055433544128c9630c6862780d5414aa"
 
+// Catalog is a versioned set of Maddog-approved MCP identities and tool pins.
 type Catalog struct {
 	Version int     `json:"version"`
 	Entries []Entry `json:"entries"`
 }
+
+// Entry pins one MCP transport identity and its approved tool capabilities.
 type Entry struct {
 	Name, Type, Command string
 	Args                []string
 	URL                 string
 	CapabilityPins      map[string]string `json:"capability_pins,omitempty"`
 }
+
+// Signed wraps a catalog with its detached Ed25519 signature.
 type Signed struct {
 	Payload   Catalog `json:"payload"`
 	Signature []byte  `json:"signature"`
 }
+
+// Pin is an exact stdio command and argument vector.
 type Pin struct {
 	Command string
 	Args    []string
 }
 
+// FileStore persists one signed catalog with rollback protection.
 type FileStore struct {
 	mu   sync.Mutex
 	Path string
 }
 
+// NewFileStore returns a catalog store backed by path.
 func NewFileStore(path string) *FileStore { return &FileStore{Path: path} }
+
+// Save atomically persists a signed catalog unless its version rolls back.
 func (s *FileStore) Save(c Signed) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -70,6 +82,8 @@ func (s *FileStore) Save(c Signed) error {
 	}
 	return os.Rename(tmp, s.Path)
 }
+
+// Load reads and verifies the persisted catalog with key.
 func (s *FileStore) Load(key ed25519.PublicKey) (Signed, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -88,15 +102,21 @@ func (s *FileStore) Load(key ed25519.PublicKey) (Signed, error) {
 }
 
 func canonical(c Catalog) []byte { b, _ := json.Marshal(c); return b }
+
+// Sign signs the canonical catalog payload with a Maddog-owned Ed25519 key.
 func Sign(c Catalog, key ed25519.PrivateKey) Signed {
 	return Signed{Payload: c, Signature: ed25519.Sign(key, canonical(c))}
 }
+
+// Verify checks a signed catalog against key.
 func Verify(s Signed, key ed25519.PublicKey) error {
 	if len(key) != ed25519.PublicKeySize || !ed25519.Verify(key, canonical(s.Payload), s.Signature) {
 		return errors.New("invalid Maddog catalog signature")
 	}
 	return nil
 }
+
+// Matches reports whether command and args exactly match the pin.
 func (p Pin) Matches(command string, args []string) bool {
 	if p.Command != command || len(p.Args) != len(args) {
 		return false
@@ -108,6 +128,8 @@ func (p Pin) Matches(command string, args []string) bool {
 	}
 	return true
 }
+
+// EntryFingerprint returns the canonical SHA-256 fingerprint for entry.
 func EntryFingerprint(e Entry) string {
 	b := canonical(Catalog{Version: 1, Entries: []Entry{e}})
 	h := sha256.Sum256(b)
@@ -122,6 +144,7 @@ type Authority struct {
 	PublicKey ed25519.PublicKey
 }
 
+// ProductionPublicKey returns Maddog's embedded catalog verification key.
 func ProductionPublicKey() ed25519.PublicKey {
 	b, err := hex.DecodeString(ProductionPublicKeyHex)
 	if err != nil || len(b) != ed25519.PublicKeySize {
@@ -130,6 +153,7 @@ func ProductionPublicKey() ed25519.PublicKey {
 	return ed25519.PublicKey(b)
 }
 
+// Check revalidates identity and capability against the current signed catalog.
 func (a Authority) Check(ctx context.Context, identity mcptrust.Identity, capability mcptrust.Capability) error {
 	_ = ctx
 	if a.Store == nil || len(a.PublicKey) != ed25519.PublicKeySize {

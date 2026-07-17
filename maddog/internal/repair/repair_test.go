@@ -73,6 +73,23 @@ func TestStartupGuardReadyDoesNotClearCrashCount(t *testing.T) {
 	}
 }
 
+func TestStartupGuardIgnoresCrashStaleLockFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "startup.json")
+	if err := os.WriteFile(path+".lock", []byte("stale"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	g := NewStartupGuard(path, 2, time.Minute)
+	if _, err := g.Begin(); err != nil {
+		t.Fatalf("stale lock file blocked begin: %v", err)
+	}
+	if err := g.Reset(); err != nil {
+		t.Fatalf("stale lock file blocked repair reset: %v", err)
+	}
+	if status := g.Status(); status.Phase != "clean" || status.ConsecutiveFailures != 0 {
+		t.Fatalf("reset status = %+v", status)
+	}
+}
+
 func TestRepairerReplacesAndRollsBackOnlyOwnedPaths(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, "config", "settings.json")
@@ -152,6 +169,92 @@ func TestUpdateTransactionStagesVerifiesAndCancels(t *testing.T) {
 	got, _ := os.ReadFile(current)
 	if string(got) != "old" {
 		t.Fatalf("rollback got %q", got)
+	}
+	if os.PathSeparator != '\\' {
+		info, err := os.Stat(current)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got, want := info.Mode().Perm(), os.FileMode(0o600); got != want {
+			t.Fatalf("rollback mode = %o, want %o", got, want)
+		}
+	}
+}
+
+func TestUpdateRollbackPreservesExecutableMode(t *testing.T) {
+	if os.PathSeparator == '\\' {
+		t.Skip("Windows does not expose Unix execute permission bits")
+	}
+	dir := t.TempDir()
+	current := filepath.Join(dir, "maddog")
+	if err := os.WriteFile(current, []byte("old"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	tx := NewUpdateTransaction(filepath.Join(dir, "tx"))
+	if err := tx.Prepare([]byte("new"), SHA256([]byte("new"))); err != nil {
+		t.Fatal(err)
+	}
+	err := tx.CommitWithRollback(current, func(_, _ string) error {
+		if err := os.WriteFile(current, []byte("broken"), 0o600); err != nil {
+			return err
+		}
+		return os.ErrPermission
+	})
+	if err == nil {
+		t.Fatal("failed install unexpectedly committed")
+	}
+	info, err := os.Stat(current)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := info.Mode().Perm(), os.FileMode(0o755); got != want {
+		t.Fatalf("rollback mode = %o, want %o", got, want)
+	}
+	got, err := os.ReadFile(current)
+	if err != nil || string(got) != "old" {
+		t.Fatalf("rollback content = %q, err=%v", got, err)
+	}
+}
+
+func TestUpdateReleaseUnitRollsBackEveryInstalledFile(t *testing.T) {
+	dir := t.TempDir()
+	payload := filepath.Join(dir, "maddog-desktop")
+	guard := filepath.Join(dir, "maddog")
+	if err := os.WriteFile(payload, []byte("old-payload"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(guard, []byte("old-guard"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	tx := NewUpdateTransaction(filepath.Join(dir, "tx"))
+	archive := []byte("verified-release-unit")
+	if err := tx.Prepare(archive, SHA256(archive)); err != nil {
+		t.Fatal(err)
+	}
+	err := tx.CommitReleaseUnitWithRollback([]string{payload, guard}, func(string) error {
+		if err := os.WriteFile(payload, []byte("new-payload"), 0o600); err != nil {
+			return err
+		}
+		if err := os.WriteFile(guard, []byte("new-guard"), 0o600); err != nil {
+			return err
+		}
+		return os.ErrPermission
+	})
+	if err == nil {
+		t.Fatal("failed release-unit update unexpectedly committed")
+	}
+	for path, want := range map[string]string{payload: "old-payload", guard: "old-guard"} {
+		got, readErr := os.ReadFile(path)
+		if readErr != nil || string(got) != want {
+			t.Fatalf("rollback %s = %q, err=%v", path, got, readErr)
+		}
+	}
+	if os.PathSeparator != '\\' {
+		payloadInfo, _ := os.Stat(payload)
+		guardInfo, _ := os.Stat(guard)
+		if payloadInfo.Mode().Perm() != 0o755 || guardInfo.Mode().Perm() != 0o700 {
+			t.Fatalf("rollback modes payload=%o guard=%o", payloadInfo.Mode().Perm(), guardInfo.Mode().Perm())
+		}
 	}
 }
 
